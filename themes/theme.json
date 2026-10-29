@@ -1,0 +1,10 @@
+{
+  "active": "cleanroom",
+  "defaultMode": "",
+  "effect": "glass",
+  "fontScale": 1,
+  "custom": {
+    "light": {},
+    "dark": {}
+  }
+}

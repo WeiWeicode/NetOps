@@ -1,0 +1,509 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>E-Learning 配色設定</title>
+<!--
+  配色預覽 / 調整頁。preview.html 由 scripts/make-themes.mjs 依這個檔產生（塞入 palettes.mjs 色票與 theme.json 設定），要改版面改這個檔。
+  開發時開 http://localhost:5203/__themes 可按「套用到系統」直接寫回 theme.json；直接開 preview.html 只能預覽與複製設定。
+-->
+<style>
+  :root {
+    --ui-bg: #f4f5f7; --ui-panel: #ffffff; --ui-line: #dfe2e7; --ui-ink: #1c2330; --ui-mute: #5b6574; --ui-dim: #8b94a3;
+    --ui-accent: #3b5bdb; --ui-accent-ink: #ffffff; --ui-ok: #137a3a; --ui-bad: #c62828; --ui-hover: #eef1f6;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ui-bg: #14171c; --ui-panel: #1c2027; --ui-line: #2e343e; --ui-ink: #e8ebf0; --ui-mute: #a2abb8; --ui-dim: #6f7886;
+      --ui-accent: #7c93f0; --ui-accent-ink: #10141c; --ui-ok: #4ade80; --ui-bad: #f87171; --ui-hover: #252a33;
+      color-scheme: dark;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--ui-bg); color: var(--ui-ink); font: 14px/1.5 system-ui, 'Segoe UI', 'Microsoft JhengHei', 'PingFang TC', sans-serif; }
+  button, input, select { font: inherit; color: inherit; }
+  header.top { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 12px 20px; background: var(--ui-panel); border-bottom: 1px solid var(--ui-line); position: sticky; top: 0; z-index: 5; }
+  header.top h1 { font-size: 18px; margin: 0; }
+  header.top .now { color: var(--ui-mute); font-size: 13px; }
+  header.top .grow { flex: 1; }
+  .seg { display: inline-flex; border: 1px solid var(--ui-line); border-radius: 8px; overflow: hidden; }
+  .seg button { border: 0; background: transparent; padding: 5px 12px; cursor: pointer; }
+  .seg button + button { border-left: 1px solid var(--ui-line); }
+  .seg button.on { background: var(--ui-accent); color: var(--ui-accent-ink); }
+  .btn { border: 1px solid var(--ui-line); background: var(--ui-panel); border-radius: 8px; padding: 6px 14px; cursor: pointer; }
+  .btn:hover { background: var(--ui-hover); }
+  .btn.primary { background: var(--ui-accent); border-color: var(--ui-accent); color: var(--ui-accent-ink); font-weight: 600; }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .msg { font-size: 13px; padding: 4px 10px; border-radius: 6px; }
+  .msg.ok { color: var(--ui-ok); } .msg.bad { color: var(--ui-bad); }
+
+  main { display: grid; grid-template-columns: 260px minmax(0, 1fr) 340px; gap: 16px; padding: 16px 20px; align-items: start; }
+  @media (max-width: 1250px) { main { grid-template-columns: 240px minmax(0, 1fr); } .editor { grid-column: 1 / -1; } }
+  @media (max-width: 760px) { main { grid-template-columns: minmax(0, 1fr); padding: 12px 16px; } }
+  .panel { background: var(--ui-panel); border: 1px solid var(--ui-line); border-radius: 12px; padding: 12px; }
+  .panel h2 { font-size: 14px; margin: 0 0 8px; color: var(--ui-mute); font-weight: 600; }
+
+  /* 配色清單 */
+  .themes { display: flex; flex-direction: column; gap: 8px; }
+  .theme { text-align: left; border: 1px solid var(--ui-line); border-radius: 10px; padding: 8px 10px; background: transparent; cursor: pointer; display: grid; gap: 6px; }
+  .theme:hover { background: var(--ui-hover); }
+  .theme.sel { border-color: var(--ui-accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--ui-accent) 30%, transparent); }
+  .theme .name { font-weight: 600; display: flex; gap: 6px; align-items: center; }
+  .theme .desc { font-size: 12px; color: var(--ui-mute); }
+  .badge { font-size: 11px; padding: 0 6px; border-radius: 99px; background: var(--ui-ok); color: #fff; font-weight: 600; }
+  .badge.edit { background: #d97706; }
+  .sw { display: flex; gap: 3px; align-items: center; font-size: 11px; color: var(--ui-dim); }
+  .sw i { width: 18px; height: 14px; border-radius: 3px; border: 1px solid rgba(128, 128, 128, 0.3); display: inline-block; }
+  .sw span { width: 26px; }
+
+  /* 預覽 */
+  .stage { display: grid; gap: 16px; }
+  .stage.both { grid-template-columns: repeat(auto-fit, minmax(460px, 1fr)); }
+  .stage .cap { font-size: 12px; color: var(--ui-mute); margin-bottom: 4px; }
+
+  /* 迷你 E-Learning 畫面（變數由 JS 依色票設定） */
+  .mock { background: var(--app-bg); color: var(--ink); border-radius: 12px; display: grid; grid-template-columns: 150px minmax(0, 1fr); min-height: 470px; overflow: hidden; font-size: 13px; border: 1px solid var(--line); }
+  @media (max-width: 560px) { .mock { grid-template-columns: minmax(0, 1fr); } .mock .side { display: none; } }
+  .mock .side, .mock .card, .mock .drop { backdrop-filter: blur(var(--blur)) saturate(140%); -webkit-backdrop-filter: blur(var(--blur)) saturate(140%); }
+  .mock .side { background: var(--glass-strong); border-right: 1px solid var(--card-line); padding: 12px 8px; display: flex; flex-direction: column; gap: 2px; }
+  .mock .logo { font-weight: 700; color: var(--ink); padding: 0 6px 8px; }
+  .mock .logo small { display: block; color: var(--dim); font-weight: 400; font-size: 11px; }
+  .mock .grp { font-size: 11px; color: var(--dim); padding: 8px 6px 2px; }
+  .mock .item { padding: 5px 8px; border-radius: 7px; color: var(--text-regular); }
+  .mock .item.on { background: var(--brand50); color: var(--brand600); font-weight: 600; }
+  .mock .body { padding: 14px; display: grid; gap: 12px; align-content: start; min-width: 0; }
+  .mock .head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .mock .head b { font-size: 17px; color: var(--ink); }
+  .mock .head span { color: var(--mute); }
+  .mock .row { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 12px; }
+  @media (max-width: 900px) { .mock .row { grid-template-columns: minmax(0, 1fr); } }
+  .mock .card { background: var(--glass); border: 1px solid var(--card-line); border-radius: 10px; padding: 12px; box-shadow: var(--shadow); min-width: 0; }
+  .mock .title { color: var(--brand600); font-weight: 700; margin-bottom: 6px; }
+  .mock .big { font-size: 30px; font-weight: 700; color: var(--ink); line-height: 1.1; }
+  .mock .mute { color: var(--mute); } .mock .dim { color: var(--dim); font-size: 11px; }
+  .mock .bar { display: flex; height: 7px; border-radius: 9px; overflow: hidden; margin: 8px 0 4px; background: var(--line-lighter); }
+  .mock .bar i { display: block; }
+  .mock table { width: 100%; border-collapse: collapse; }
+  .mock th { text-align: left; color: var(--mute); font-weight: 600; padding: 4px 6px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  .mock td { padding: 5px 6px; border-bottom: 1px solid var(--line-lighter); color: var(--text-regular); }
+  .mock td a { color: var(--brand600); text-decoration: none; }
+  .mock .pill { display: inline-block; padding: 0 8px; border-radius: 99px; font-size: 12px; font-weight: 600; white-space: nowrap; color: var(--c); background: color-mix(in srgb, var(--c) 14%, transparent); border: 1px solid color-mix(in srgb, var(--c) 40%, transparent); }
+  .mock .tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .mock .b { border-radius: 7px; padding: 5px 12px; border: 1px solid var(--line); background: var(--field); color: var(--text-regular); font-weight: 500; }
+  .mock .b.p { background: var(--primary); border-color: var(--primary); color: var(--primary-text); }
+  .mock .b.d { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, transparent); background: color-mix(in srgb, var(--danger) 8%, transparent); }
+  .mock .in { border: 1px solid var(--line); background: var(--field); border-radius: 7px; padding: 5px 10px; color: var(--placeholder); min-width: 150px; }
+  .mock .chip { background: var(--brand100); color: var(--brand700); border-radius: 6px; padding: 1px 8px; font-size: 12px; font-weight: 600; }
+  .mock .layer { position: relative; border-radius: 10px; overflow: hidden; min-height: 120px; background: var(--glass); border: 1px solid var(--line-light); }
+  .mock .layer .mask { position: absolute; inset: 0; background: var(--overlay); display: grid; place-items: center; }
+  .mock .layer .dlg { background: var(--overlay-solid); color: var(--ink); border-radius: 10px; padding: 10px 14px; box-shadow: var(--shadow); min-width: 190px; }
+  .mock .layer .dlg div { color: var(--mute); margin: 2px 0 8px; font-size: 12px; }
+  .mock .drop { background: var(--overlay-solid); border: 1px solid var(--line-light); border-radius: 8px; box-shadow: var(--shadow); padding: 4px; min-width: 140px; }
+  .mock .drop div { padding: 3px 8px; border-radius: 5px; color: var(--text-regular); }
+  .mock .drop div.on { background: var(--brand50); color: var(--brand600); font-weight: 600; }
+
+  /* 調整 */
+  .editor .modes { margin-bottom: 8px; }
+  .group { margin-top: 10px; }
+  .group > div:first-child { font-size: 12px; font-weight: 600; color: var(--ui-mute); margin-bottom: 4px; }
+  .key { display: grid; grid-template-columns: 1fr auto; gap: 2px 6px; align-items: center; padding: 3px 4px; border-radius: 6px; }
+  .key.custom { background: color-mix(in srgb, #d97706 12%, transparent); }
+  .key label { font-size: 13px; } .key label small { color: var(--ui-dim); margin-left: 4px; }
+  .key .vals { grid-column: 1 / -1; display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+  .key input[type=color] { width: 30px; height: 26px; padding: 0; border: 1px solid var(--ui-line); border-radius: 5px; background: none; cursor: pointer; }
+  .key input[type=text] { width: 168px; border: 1px solid var(--ui-line); border-radius: 5px; padding: 2px 6px; background: transparent; font: 12px/1.6 ui-monospace, Consolas, monospace; }
+  .key input.err { border-color: var(--ui-bad); }
+  .key .reset { border: 0; background: none; color: var(--ui-dim); cursor: pointer; font-size: 12px; }
+  .contrast { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; font-size: 13px; }
+  .contrast .bad { color: var(--ui-bad); font-weight: 600; } .contrast .ok { color: var(--ui-ok); }
+  .hint { font-size: 12px; color: var(--ui-mute); margin: 6px 0 0; }
+  textarea.out { width: 100%; height: 140px; font: 12px ui-monospace, Consolas, monospace; margin-top: 8px; }
+</style>
+</head>
+<body>
+<header class="top">
+  <h1>E-Learning 配色設定</h1>
+  <span class="now" id="now"></span>
+  <span class="grow"></span>
+  <span>預覽</span>
+  <div class="seg" id="viewSeg"><button data-v="light">明亮</button><button data-v="dark">暗色</button><button data-v="both">並排</button></div>
+  <span>效果</span>
+  <div class="seg" id="fxSeg"><button data-fx="solid" title="卡片幾乎不透明，長時間看表格不累">實心</button><button data-fx="glass" title="Canva Glassmorphism：彩色背景色塊 + 半透明卡片 + 強模糊">毛玻璃</button></div>
+  <label>預設模式
+    <select id="defaultMode"><option value="">依配色預設</option><option value="light">明亮</option><option value="dark">暗色</option></select>
+  </label>
+  <button class="btn" id="resetBtn">還原</button>
+  <button class="btn" id="copyBtn">複製設定</button>
+  <button class="btn primary" id="applyBtn">套用到系統</button>
+  <span class="msg" id="msg"></span>
+</header>
+
+<main>
+  <section class="panel">
+    <h2>配色（點選預覽）</h2>
+    <div class="themes" id="themes"></div>
+  </section>
+
+  <section class="stage" id="stage"></section>
+
+  <section class="panel editor">
+    <h2>微調選取中的配色</h2>
+    <div class="seg modes" id="editSeg"><button data-m="light">明亮色票</button><button data-m="dark">暗色色票</button></div>
+    <div id="keys"></div>
+    <div class="group">
+      <div>對比檢查（對背景，文字 ≥ 4.5、淡文字 ≥ 3）</div>
+      <div class="contrast" id="contrast"></div>
+    </div>
+    <p class="hint">橘色底 = 已改過的顏色，只套用在選取中的配色。改完按上方「套用到系統」寫入 themes/theme.json，開發中的畫面會自動更新。</p>
+    <textarea class="out" id="out" hidden readonly></textarea>
+  </section>
+</main>
+
+<script>
+const DATA = {"themes":{"solar-navy":{"title":"B｜太陽能深藍 × 陽光橙（預設暗色，SolarMES 使用中）","default":"dark","light":{"bg":["#f3f6fa","#e9eef5"],"halo":["rgba(255, 138, 31, 0.10)","rgba(56, 120, 200, 0.08)"],"glass":"rgba(255, 255, 255, 0.9)","glassStrong":"rgba(255, 255, 255, 0.97)","glow":"rgba(16, 42, 67, 0.14)","ink":"#0b1b2e","mute":"#4a5d73","dim":"#7a8ba0","field":"#ffffff","overlay":"rgba(11, 27, 46, 0.4)","danger":"#c62828","warn":"#a14a05","run":"#137a3a","done":"#526072","brand50":"rgba(224, 112, 10, 0.08)","brand100":"#ffe8d1","brand500":"#f07a12","brand600":"#b85300","brand700":"#8f4000","primary":"#f07a12","primaryText":"#0b1b2e","overlaySolid":"#ffffff","textRegular":"#1f3148","placeholder":"#8a9aae"},"dark":{"bg":["#0b1b2e","#0e2238"],"halo":["rgba(255, 138, 31, 0.10)","rgba(56, 140, 230, 0.10)"],"glass":"rgba(17, 38, 61, 0.82)","glassStrong":"rgba(11, 27, 46, 0.96)","glow":"rgba(120, 160, 210, 0.24)","ink":"#f2f6fa","mute":"#a3b6ca","dim":"#6f86a0","field":"rgba(8, 22, 38, 0.7)","overlay":"rgba(3, 10, 20, 0.7)","danger":"#f87171","warn":"#fbbf24","run":"#34d399","done":"#94a3b8","brand50":"rgba(255, 138, 31, 0.12)","brand100":"#ffe3c7","brand500":"#ff8a1f","brand600":"#ffa451","brand700":"#e0700a","primary":"#ff8a1f","primaryText":"#0b1b2e","overlaySolid":"#11263d","textRegular":"#d5e0eb","placeholder":"#6f86a0"}},"steel-amber":{"title":"A｜鋼鐵灰 × 安全黃（預設暗色，工業現場風）","default":"dark","light":{"bg":["#f1f3f5","#e7eaee"],"halo":["rgba(245, 184, 0, 0.08)","rgba(100, 116, 139, 0.08)"],"glass":"rgba(255, 255, 255, 0.9)","glassStrong":"rgba(255, 255, 255, 0.97)","glow":"rgba(20, 24, 29, 0.14)","ink":"#14181d","mute":"#4b5563","dim":"#7b8490","field":"#ffffff","overlay":"rgba(20, 24, 29, 0.4)","danger":"#c62828","warn":"#8a5a04","run":"#137a3a","done":"#555d69","brand50":"rgba(180, 130, 0, 0.10)","brand100":"#fff3c4","brand500":"#e0a800","brand600":"#8a6500","brand700":"#6b4e00","primary":"#f5b800","primaryText":"#14181d","overlaySolid":"#ffffff","textRegular":"#262d36","placeholder":"#8b949e"},"dark":{"bg":["#14181d","#181d23"],"halo":["rgba(245, 184, 0, 0.06)","rgba(148, 163, 184, 0.05)"],"glass":"rgba(28, 34, 41, 0.9)","glassStrong":"rgba(20, 24, 29, 0.97)","glow":"rgba(154, 167, 180, 0.22)","ink":"#e8edf2","mute":"#9aa7b4","dim":"#6b7784","field":"rgba(16, 20, 24, 0.7)","overlay":"rgba(0, 0, 0, 0.65)","danger":"#ff6b6b","warn":"#f5b800","run":"#3dd68c","done":"#8a96a3","brand50":"rgba(245, 184, 0, 0.12)","brand100":"#fff0bf","brand500":"#f5b800","brand600":"#ffc933","brand700":"#c79500","primary":"#f5b800","primaryText":"#14181d","overlaySolid":"#1c2229","textRegular":"#d3dae2","placeholder":"#6b7784"}},"cleanroom":{"title":"C｜潔淨室白 × 工程藍（預設明亮，亮燈廠區好讀）","default":"light","light":{"bg":["#eef2f6","#e8edf3"],"halo":["rgba(11, 99, 206, 0.05)","rgba(11, 99, 206, 0.04)"],"glass":"rgba(255, 255, 255, 0.96)","glassStrong":"rgba(255, 255, 255, 0.99)","glow":"rgba(15, 27, 42, 0.13)","ink":"#0f1b2a","mute":"#52606f","dim":"#7d8a99","field":"#ffffff","overlay":"rgba(15, 27, 42, 0.4)","danger":"#c62828","warn":"#a14a05","run":"#137a3a","done":"#526072","brand50":"rgba(11, 99, 206, 0.07)","brand100":"#dcebfb","brand500":"#0b63ce","brand600":"#0a58b8","brand700":"#084a9a","primary":"#0b63ce","primaryText":"#ffffff","overlaySolid":"#ffffff","textRegular":"#243447","placeholder":"#8a96a4"},"dark":{"bg":["#0f1720","#121c27"],"halo":["rgba(96, 165, 250, 0.06)","rgba(96, 165, 250, 0.04)"],"glass":"rgba(22, 32, 44, 0.9)","glassStrong":"rgba(15, 23, 32, 0.97)","glow":"rgba(148, 170, 195, 0.2)","ink":"#eef3f8","mute":"#a5b4c4","dim":"#6e7e90","field":"rgba(10, 16, 24, 0.7)","overlay":"rgba(0, 6, 14, 0.7)","danger":"#f87171","warn":"#fbbf24","run":"#4ade80","done":"#94a3b8","brand50":"rgba(96, 165, 250, 0.12)","brand100":"#dbeafe","brand500":"#60a5fa","brand600":"#93c5fd","brand700":"#3b82f6","primary":"#60a5fa","primaryText":"#0f1720","overlaySolid":"#16202c","textRegular":"#d6e0ea","placeholder":"#6e7e90"}},"scada-teal":{"title":"D｜控制室青綠（預設暗色，SCADA 監控風）","default":"dark","light":{"bg":["#eef5f3","#e6efed"],"halo":["rgba(20, 163, 131, 0.07)","rgba(20, 120, 160, 0.05)"],"glass":"rgba(255, 255, 255, 0.9)","glassStrong":"rgba(255, 255, 255, 0.97)","glow":"rgba(15, 110, 90, 0.18)","ink":"#0a1f1b","mute":"#3f5f58","dim":"#72908a","field":"#ffffff","overlay":"rgba(10, 31, 27, 0.4)","danger":"#c62828","warn":"#8a5a04","run":"#0f7a62","done":"#526072","brand50":"rgba(15, 122, 98, 0.08)","brand100":"#d3f3ea","brand500":"#14a383","brand600":"#0f7a62","brand700":"#0b5e4b","primary":"#0f7a62","primaryText":"#ffffff","overlaySolid":"#ffffff","textRegular":"#1c3631","placeholder":"#80a09a"},"dark":{"bg":["#0a1614","#0c1b19"],"halo":["rgba(43, 217, 176, 0.07)","rgba(43, 180, 217, 0.05)"],"glass":"rgba(15, 32, 29, 0.88)","glassStrong":"rgba(10, 22, 20, 0.97)","glow":"rgba(43, 217, 176, 0.22)","ink":"#e6f4f1","mute":"#93b8b0","dim":"#5f837b","field":"rgba(6, 16, 14, 0.7)","overlay":"rgba(0, 8, 6, 0.7)","danger":"#ff6b6b","warn":"#f2c94c","run":"#2bd9b0","done":"#7f9a94","brand50":"rgba(43, 217, 176, 0.10)","brand100":"#c9f7ea","brand500":"#2bd9b0","brand600":"#5fe6c6","brand700":"#1fb894","primary":"#2bd9b0","primaryText":"#06120f","overlaySolid":"#0f201d","textRegular":"#cfe6e1","placeholder":"#5f837b"}},"dma-indigo":{"title":"E｜企業靛藍 × 銀灰（預設明亮，DMA 報表 / 排程）","default":"light","light":{"bg":["#f2f4f9","#eaedf5"],"halo":["rgba(67, 56, 202, 0.07)","rgba(100, 116, 139, 0.06)"],"glass":"rgba(255, 255, 255, 0.92)","glassStrong":"rgba(255, 255, 255, 0.98)","glow":"rgba(30, 27, 75, 0.13)","ink":"#161a33","mute":"#4f5673","dim":"#7e84a0","field":"#ffffff","overlay":"rgba(22, 26, 51, 0.4)","danger":"#c62828","warn":"#a14a05","run":"#137a3a","done":"#565d73","brand50":"rgba(67, 56, 202, 0.07)","brand100":"#e0e7ff","brand500":"#4f46e5","brand600":"#4338ca","brand700":"#3730a3","primary":"#4338ca","primaryText":"#ffffff","overlaySolid":"#ffffff","textRegular":"#262b48","placeholder":"#8c92ad"},"dark":{"bg":["#12142a","#161933"],"halo":["rgba(129, 140, 248, 0.10)","rgba(148, 163, 184, 0.05)"],"glass":"rgba(28, 31, 60, 0.86)","glassStrong":"rgba(18, 20, 42, 0.97)","glow":"rgba(165, 170, 230, 0.22)","ink":"#eef0fb","mute":"#a9aed0","dim":"#727899","field":"rgba(10, 12, 28, 0.7)","overlay":"rgba(4, 5, 16, 0.7)","danger":"#f87171","warn":"#fbbf24","run":"#4ade80","done":"#9ca3bb","brand50":"rgba(129, 140, 248, 0.12)","brand100":"#e0e7ff","brand500":"#818cf8","brand600":"#a5b4fc","brand700":"#6366f1","primary":"#818cf8","primaryText":"#12142a","overlaySolid":"#1c1f3c","textRegular":"#d6d9f0","placeholder":"#727899"}},"ledger-green":{"title":"F｜帳冊綠（預設明亮，像 Excel，業務 / 生管上手快）","default":"light","light":{"bg":["#f3f6f4","#eaefec"],"halo":["rgba(29, 111, 66, 0.06)","rgba(71, 85, 105, 0.05)"],"glass":"rgba(255, 255, 255, 0.95)","glassStrong":"rgba(255, 255, 255, 0.99)","glow":"rgba(20, 50, 35, 0.14)","ink":"#132019","mute":"#4a5a51","dim":"#7b8a82","field":"#ffffff","overlay":"rgba(19, 32, 25, 0.4)","danger":"#c62828","warn":"#a14a05","run":"#1d6f42","done":"#555f69","brand50":"rgba(29, 111, 66, 0.07)","brand100":"#d7f0e1","brand500":"#21a366","brand600":"#1d6f42","brand700":"#155232","primary":"#1d6f42","primaryText":"#ffffff","overlaySolid":"#ffffff","textRegular":"#22332a","placeholder":"#8a9890"},"dark":{"bg":["#111815","#141c18"],"halo":["rgba(82, 201, 138, 0.07)","rgba(148, 163, 184, 0.04)"],"glass":"rgba(24, 34, 29, 0.9)","glassStrong":"rgba(17, 24, 21, 0.97)","glow":"rgba(150, 190, 168, 0.2)","ink":"#ebf3ee","mute":"#a2b8ab","dim":"#6d8276","field":"rgba(8, 14, 11, 0.7)","overlay":"rgba(0, 6, 3, 0.7)","danger":"#f87171","warn":"#fbbf24","run":"#52c98a","done":"#94a3b8","brand50":"rgba(82, 201, 138, 0.11)","brand100":"#d7f0e1","brand500":"#52c98a","brand600":"#7ddaa6","brand700":"#33a86b","primary":"#52c98a","primaryText":"#0c1511","overlaySolid":"#18221d","textRegular":"#d2e2d8","placeholder":"#6d8276"}},"sunrise-gold":{"title":"G｜暖白 × 琥珀金（預設明亮，太陽能品牌感、柔和不刺眼）","default":"light","light":{"bg":["#f8f5ef","#f1ece3"],"halo":["rgba(217, 119, 6, 0.09)","rgba(180, 83, 9, 0.05)"],"glass":"rgba(255, 253, 249, 0.9)","glassStrong":"rgba(255, 253, 249, 0.98)","glow":"rgba(68, 44, 14, 0.14)","ink":"#241a0e","mute":"#5b4c3a","dim":"#8a7a66","field":"#fffdf9","overlay":"rgba(36, 26, 14, 0.4)","danger":"#c62828","warn":"#9a3412","run":"#137a3a","done":"#5d5850","brand50":"rgba(217, 119, 6, 0.09)","brand100":"#fdecc8","brand500":"#d97706","brand600":"#a35205","brand700":"#7c3d04","primary":"#e08a0b","primaryText":"#241a0e","overlaySolid":"#fffdf9","textRegular":"#3a2c1b","placeholder":"#978873"},"dark":{"bg":["#1a1611","#1f1a14"],"halo":["rgba(245, 158, 11, 0.09)","rgba(217, 119, 6, 0.05)"],"glass":"rgba(36, 30, 23, 0.88)","glassStrong":"rgba(26, 22, 17, 0.97)","glow":"rgba(214, 186, 140, 0.2)","ink":"#f7f1e8","mute":"#c2b39f","dim":"#8a7c6a","field":"rgba(14, 11, 8, 0.7)","overlay":"rgba(8, 5, 2, 0.7)","danger":"#f87171","warn":"#fb923c","run":"#4ade80","done":"#a8a29e","brand50":"rgba(245, 158, 11, 0.12)","brand100":"#fdecc8","brand500":"#f59e0b","brand600":"#fbbf24","brand700":"#d97706","primary":"#f59e0b","primaryText":"#1a1611","overlaySolid":"#241e17","textRegular":"#e3d9cb","placeholder":"#8a7c6a"}},"plum-night":{"title":"H｜深夜紫 × 洋紅點綴（預設暗色，儀表板 / 夜間）","default":"dark","light":{"bg":["#f6f3fa","#eeeaf5"],"halo":["rgba(126, 34, 206, 0.07)","rgba(219, 39, 119, 0.05)"],"glass":"rgba(255, 255, 255, 0.9)","glassStrong":"rgba(255, 255, 255, 0.98)","glow":"rgba(46, 16, 101, 0.13)","ink":"#1e1330","mute":"#58496e","dim":"#877a99","field":"#ffffff","overlay":"rgba(30, 19, 48, 0.4)","danger":"#c62828","warn":"#a14a05","run":"#137a3a","done":"#5c5869","brand50":"rgba(126, 34, 206, 0.07)","brand100":"#f3e8ff","brand500":"#a855f7","brand600":"#7e22ce","brand700":"#6b21a8","primary":"#7e22ce","primaryText":"#ffffff","overlaySolid":"#ffffff","textRegular":"#2e2142","placeholder":"#948aa5"},"dark":{"bg":["#140f1f","#181226"],"halo":["rgba(192, 132, 252, 0.11)","rgba(244, 114, 182, 0.07)"],"glass":"rgba(33, 25, 50, 0.84)","glassStrong":"rgba(20, 15, 31, 0.97)","glow":"rgba(196, 170, 235, 0.22)","ink":"#f4effb","mute":"#b5a8cc","dim":"#7c6f94","field":"rgba(10, 7, 18, 0.7)","overlay":"rgba(5, 2, 12, 0.7)","danger":"#fb7185","warn":"#fbbf24","run":"#4ade80","done":"#a49fb3","brand50":"rgba(192, 132, 252, 0.12)","brand100":"#f3e8ff","brand500":"#f472b6","brand600":"#d8b4fe","brand700":"#a855f7","primary":"#c084fc","primaryText":"#140f1f","overlaySolid":"#211932","textRegular":"#ddd3ec","placeholder":"#7c6f94"}},"solar-dma":{"title":"SolarDMA｜明亮 E 企業靛藍 × 暗色 H 深夜紫（預設明亮，E-Learning 使用中）","default":"light","light":{"bg":["#f2f4f9","#eaedf5"],"halo":["rgba(67, 56, 202, 0.07)","rgba(100, 116, 139, 0.06)"],"glass":"rgba(255, 255, 255, 0.92)","glassStrong":"rgba(255, 255, 255, 0.98)","glow":"rgba(30, 27, 75, 0.13)","ink":"#161a33","mute":"#4f5673","dim":"#7e84a0","field":"#ffffff","overlay":"rgba(22, 26, 51, 0.4)","danger":"#c62828","warn":"#a14a05","run":"#137a3a","done":"#565d73","brand50":"rgba(67, 56, 202, 0.07)","brand100":"#e0e7ff","brand500":"#4f46e5","brand600":"#4338ca","brand700":"#3730a3","primary":"#4338ca","primaryText":"#ffffff","overlaySolid":"#ffffff","textRegular":"#262b48","placeholder":"#8c92ad"},"dark":{"bg":["#140f1f","#181226"],"halo":["rgba(192, 132, 252, 0.11)","rgba(244, 114, 182, 0.07)"],"glass":"rgba(33, 25, 50, 0.84)","glassStrong":"rgba(20, 15, 31, 0.97)","glow":"rgba(196, 170, 235, 0.22)","ink":"#f4effb","mute":"#b5a8cc","dim":"#7c6f94","field":"rgba(10, 7, 18, 0.7)","overlay":"rgba(5, 2, 12, 0.7)","danger":"#fb7185","warn":"#fbbf24","run":"#4ade80","done":"#a49fb3","brand50":"rgba(192, 132, 252, 0.12)","brand100":"#f3e8ff","brand500":"#f472b6","brand600":"#d8b4fe","brand700":"#a855f7","primary":"#c084fc","primaryText":"#140f1f","overlaySolid":"#211932","textRegular":"#ddd3ec","placeholder":"#7c6f94"}}},"config":{"active":"cleanroom","defaultMode":"","effect":"glass","fontScale":1,"custom":{"light":{},"dark":{}}},"keys":["bg","halo","glass","glassStrong","glow","ink","mute","dim","field","overlay","danger","warn","run","done","brand50","brand100","brand500","brand600","brand700","primary","primaryText","overlaySolid","textRegular","placeholder","blobs"]}
+const THEMES = DATA.themes
+const LABELS = {
+  bg: '背景漸層（上 / 下）', halo: '背景光暈（左上 / 右下）', glass: '卡片底', glassStrong: '側欄 / 浮層底', glow: '框線基底', field: '輸入框底',
+  overlay: '對話框遮罩', overlaySolid: '下拉選單 / 對話框底', ink: '標題文字', textRegular: '內文', mute: '次要文字', dim: '淡文字', placeholder: '輸入提示文字',
+  primary: '主要按鈕', primaryText: '主要按鈕文字', brand50: '選取底色', brand100: '標籤底色', brand500: '品牌色', brand600: '連結 / 區塊標題', brand700: '標籤文字',
+  blobs: '毛玻璃背景色塊（3 色）',
+  run: '成功 / 進行中', warn: '警告 / 候補', danger: '危險 / 未通過', done: '已完成 / 停用',
+}
+const GROUPS = [
+  ['品牌與按鈕', ['primary', 'primaryText', 'brand500', 'brand600', 'brand700', 'brand100', 'brand50']],
+  ['文字', ['ink', 'textRegular', 'mute', 'dim', 'placeholder']],
+  ['背景', ['bg', 'halo', 'blobs']],
+  ['卡片與框線', ['glass', 'glassStrong', 'glow', 'field', 'overlaySolid', 'overlay']],
+  ['狀態', ['run', 'warn', 'danger', 'done']],
+]
+const HEX_ONLY = ['primary', 'run', 'warn', 'danger', 'done', 'bg', 'blobs', 'brand500']
+const RGBA_ONLY = ['glow']
+const MULTI = { bg: 2, halo: 2, blobs: 3 }
+const HEX = /^#[0-9a-f]{6}$/i
+const RGBA = /^rgba\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(0|1|0?\.\d+)\s*\)$/i
+
+const clone = (o) => JSON.parse(JSON.stringify(o))
+const saved = clone(DATA.config)
+const state = {
+  sel: saved.active,
+  view: 'both',
+  edit: THEMES[saved.active].default === 'dark' ? 'dark' : 'light',
+  defaultMode: saved.defaultMode || '',
+  effect: saved.effect === 'glass' ? 'glass' : 'solid',
+  custom: { [saved.active]: clone(saved.custom) }, // 每套配色各自的微調
+  bad: new Set(),
+}
+const customOf = (name) => (state.custom[name] ??= { light: {}, dark: {} })
+/** 毛玻璃背景色塊：色票沒設定時由品牌色推算（同 make-themes.mjs 的 blobsOf） */
+const mixHex = (hex, to, w) => toHex(rgbOf(hex).map((v, i) => Math.round(v * (1 - w) + rgbOf(to)[i] * w)))
+const deriveBlobs = (p) => [p.brand500, mixHex(p.brand500, '#ec4899', 0.6), mixHex(p.brand500, '#06b6d4', 0.6)]
+const palette = (name, mode) => {
+  const p = { ...THEMES[name][mode], ...customOf(name)[mode] }
+  return { ...p, blobs: p.blobs ?? THEMES[name][mode].blobs ?? deriveBlobs(p) }
+}
+/** 未微調時的值（blobs 依目前品牌色推算） */
+const baseValue = (name, mode, key) => {
+  if (key !== 'blobs') return THEMES[name][mode][key]
+  return THEMES[name][mode].blobs ?? deriveBlobs({ ...THEMES[name][mode], ...customOf(name)[mode] })
+}
+const hasCustom = (name) => ['light', 'dark'].some((m) => Object.keys(customOf(name)[m]).length)
+
+/* 顏色工具 */
+const rgbOf = (c) => {
+  if (HEX.test(c)) return [1, 3, 5].map((i) => parseInt(c.slice(i, i + 2), 16))
+  const m = c.match(RGBA)
+  return m ? [m[1], m[2], m[3]].map(Number) : null
+}
+const alphaOf = (c) => (c.match(RGBA)?.[4] ?? '1')
+const toHex = (rgb) => '#' + rgb.map((v) => Math.max(0, Math.min(255, v)).toString(16).padStart(2, '0')).join('')
+const validColor = (k, v) => (HEX_ONLY.includes(k) ? HEX.test(v) : RGBA_ONLY.includes(k) ? RGBA.test(v) : HEX.test(v) || RGBA.test(v))
+const lum = (rgb) => {
+  const c = rgb.map((v) => v / 255).map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4))
+  return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+}
+const ratio = (a, b) => {
+  const [x, y] = [lum(rgbOf(a)), lum(rgbOf(b))].sort((m, n) => n - m)
+  return (x + 0.05) / (y + 0.05)
+}
+
+/** 色票 → 迷你畫面的 CSS 變數（框線算法同 make-themes.mjs） */
+function vars(p, mode) {
+  const line = (p.glow.match(RGBA) ?? [0, 128, 128, 128]).slice(1, 4).join(', ')
+  return {
+    '--app-bg': `radial-gradient(30rem 22rem at 8% 4%, ${p.halo[0]}, transparent 70%), radial-gradient(26rem 20rem at 94% 90%, ${p.halo[1]}, transparent 70%), linear-gradient(160deg, ${p.bg[0]} 0%, ${p.bg[1]} 100%)`,
+    '--glass': p.glass, '--glass-strong': p.glassStrong, '--ink': p.ink, '--mute': p.mute, '--dim': p.dim, '--field': p.field,
+    '--overlay': p.overlay, '--overlay-solid': p.overlaySolid, '--text-regular': p.textRegular, '--placeholder': p.placeholder,
+    '--brand50': p.brand50, '--brand100': p.brand100, '--brand500': p.brand500, '--brand600': p.brand600, '--brand700': p.brand700,
+    '--primary': p.primary, '--primary-text': p.primaryText, '--run': p.run, '--warn': p.warn, '--danger': p.danger, '--done': p.done,
+    '--line': `rgba(${line}, ${mode === 'light' ? 0.22 : 0.3})`, '--line-light': `rgba(${line}, ${mode === 'light' ? 0.16 : 0.22})`, '--line-lighter': `rgba(${line}, ${mode === 'light' ? 0.11 : 0.15})`,
+    '--shadow': mode === 'light' ? '0 1px 2px rgba(15, 23, 42, 0.06), 0 6px 20px rgba(15, 23, 42, 0.06)' : '0 1px 2px rgba(0, 0, 0, 0.3), 0 10px 30px rgba(0, 0, 0, 0.35)',
+    '--card-line': `rgba(${line}, ${mode === 'light' ? 0.16 : 0.22})`,
+    '--blur': '6px',
+    'color-scheme': mode,
+    ...(state.effect === 'glass' ? glassVars(p, mode) : {}),
+  }
+}
+
+/** 毛玻璃效果（數值同 make-themes.mjs 的 glassBlock） */
+function glassVars(p, mode) {
+  const light = mode === 'light'
+  const a = light ? [0.55, 0.45, 0.4] : [0.45, 0.35, 0.3]
+  const rgba = (hex, al) => `rgba(${rgbOf(hex).join(', ')}, ${al})`
+  const [b1, b2, b3] = p.blobs
+  return {
+    '--blur': light ? '22px' : '24px',
+    '--glass': light ? 'rgba(255, 255, 255, 0.42)' : 'rgba(255, 255, 255, 0.07)',
+    '--glass-strong': light ? 'rgba(255, 255, 255, 0.62)' : rgba(p.bg[0], 0.62),
+    '--card-line': light ? 'rgba(255, 255, 255, 0.65)' : 'rgba(255, 255, 255, 0.14)',
+    '--field': light ? 'rgba(255, 255, 255, 0.55)' : 'rgba(255, 255, 255, 0.06)',
+    '--shadow': light ? '0 8px 32px rgba(31, 38, 135, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.6)' : '0 8px 32px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.08)',
+    '--app-bg': `radial-gradient(22rem 18rem at 10% 8%, ${rgba(b1, a[0])}, transparent 65%), radial-gradient(20rem 17rem at 92% 18%, ${rgba(b2, a[1])}, transparent 65%), radial-gradient(24rem 19rem at 55% 100%, ${rgba(b3, a[2])}, transparent 65%), linear-gradient(160deg, ${p.bg[0]} 0%, ${p.bg[1]} 100%)`,
+  }
+}
+
+const MOCK = `
+  <div class="side">
+    <div class="logo">E-Learning<small>教育訓練平台</small></div>
+    <div class="grp">課程</div>
+    <div class="item on">首頁</div><div class="item">最新內訓課程</div><div class="item">上課通知</div>
+    <div class="grp">線上學習</div>
+    <div class="item">線上課程</div><div class="item">內訓課程測驗</div>
+    <div class="grp">課務管理</div>
+    <div class="item">課程維護</div><div class="item">訓練資料匯出</div>
+  </div>
+  <div class="body">
+    <div class="head"><b>晚安，王小明</b><span>資訊服務部・今年已上課 11 堂</span></div>
+    <div class="row">
+      <div class="card">
+        <div class="title">今年累計時數</div>
+        <div class="big">19 <span class="mute" style="font-size:13px">小時</span></div>
+        <div class="bar"><i style="width:55%;background:var(--brand500)"></i><i style="width:30%;background:var(--run)"></i><i style="width:15%;background:var(--warn)"></i></div>
+        <div class="dim">內訓 10.5・線上 6・外訓 2.5</div>
+      </div>
+      <div class="card">
+        <div class="title">最新內訓課程</div>
+        <table>
+          <tr><th>日期</th><th>課程名稱</th><th>報名</th></tr>
+          <tr><td>10/15</td><td><a>自衛消防編組訓練</a></td><td><span class="pill" style="--c:var(--run)">已報名</span></td></tr>
+          <tr><td>10/22</td><td><a>資安教育訓練</a></td><td><span class="pill" style="--c:var(--warn)">候補 2</span></td></tr>
+          <tr><td>11/03</td><td><a>危害通識教育</a></td><td><span class="pill" style="--c:var(--danger)">未通過</span></td></tr>
+          <tr><td>09/18</td><td><a>誠信守則</a></td><td><span class="pill" style="--c:var(--done)">已完成</span></td></tr>
+        </table>
+      </div>
+    </div>
+    <div class="card tools">
+      <span class="b p">查詢</span><span class="b">匯出 Excel</span><span class="b d">刪除</span>
+      <span class="in">課名、講師、單號</span><span class="chip">工安</span>
+    </div>
+    <div class="row">
+      <div class="drop"><div>全部公司</div><div class="on">GIGASOLAR</div><div>GIGA</div></div>
+      <div class="layer"><div class="mask"><div class="dlg"><b>刪除報名</b><div>確定刪除第 1 場的報名？</div><span class="b">取消</span> <span class="b p">確定</span></div></div></div>
+    </div>
+  </div>`
+
+function renderStage() {
+  const modes = state.view === 'both' ? ['light', 'dark'] : [state.view]
+  const stage = document.getElementById('stage')
+  stage.className = `stage ${state.view === 'both' ? 'both' : ''}`
+  stage.innerHTML = ''
+  for (const mode of modes) {
+    const wrap = document.createElement('div')
+    wrap.innerHTML = `<div class="cap">${THEMES[state.sel].title}・${mode === 'light' ? '明亮' : '暗色'}</div><div class="mock">${MOCK}</div>`
+    const mock = wrap.querySelector('.mock')
+    for (const [k, v] of Object.entries(vars(palette(state.sel, mode), mode))) mock.style.setProperty(k, v)
+    stage.append(wrap)
+  }
+}
+
+function renderThemes() {
+  const box = document.getElementById('themes')
+  box.innerHTML = ''
+  for (const [name, t] of Object.entries(THEMES)) {
+    const b = document.createElement('button')
+    b.className = `theme ${name === state.sel ? 'sel' : ''}`
+    const sw = (mode) => {
+      const p = palette(name, mode)
+      return `<div class="sw"><span>${mode === 'light' ? '明亮' : '暗色'}</span>${[p.bg[0], p.glassStrong, p.primary, p.brand600, p.ink].map((c) => `<i style="background:${c}"></i>`).join('')}</div>`
+    }
+    b.innerHTML = `<div class="name">${name}${name === saved.active ? '<span class="badge">使用中</span>' : ''}${hasCustom(name) ? '<span class="badge edit">已微調</span>' : ''}</div>
+      <div class="desc">${t.title}</div>${sw('light')}${sw('dark')}`
+    b.onclick = () => {
+      state.sel = name
+      state.bad.clear()
+      renderAll()
+    }
+    box.append(b)
+  }
+}
+
+function setValue(key, idx, value) {
+  const mode = state.edit
+  const c = customOf(state.sel)[mode]
+  const base = baseValue(state.sel, mode, key)
+  const id = `${key}:${idx}`
+  if (!validColor(key, value)) {
+    state.bad.add(id)
+    renderButtons()
+    return false
+  }
+  state.bad.delete(id)
+  if (MULTI[key]) {
+    const cur = [...(c[key] ?? base)]
+    cur[idx] = value
+    if (cur.every((v, i) => v === base[i])) delete c[key]
+    else c[key] = cur
+  } else if (value === base) delete c[key]
+  else c[key] = value
+  renderStage()
+  renderThemes()
+  renderContrast()
+  renderButtons()
+  return true
+}
+
+function keyRow(key) {
+  const mode = state.edit
+  const p = palette(state.sel, mode)
+  const isCustom = key in customOf(state.sel)[mode]
+  const row = document.createElement('div')
+  row.className = `key ${isCustom ? 'custom' : ''}`
+  row.innerHTML = `<label>${LABELS[key]}<small>${key}</small></label>${isCustom ? '<button class="reset" title="還原這個顏色">↺ 還原</button>' : '<span></span>'}<div class="vals"></div>`
+  const vals = row.querySelector('.vals')
+  const list = MULTI[key] ? p[key] : [p[key]]
+  list.forEach((val, idx) => {
+    const picker = document.createElement('input')
+    picker.type = 'color'
+    picker.value = toHex(rgbOf(val) ?? [0, 0, 0])
+    const text = document.createElement('input')
+    text.type = 'text'
+    text.value = val
+    text.spellcheck = false
+    picker.oninput = () => {
+      // rgba 的顏色保留原本透明度
+      const v = HEX.test(text.value) || HEX_ONLY.includes(key) ? picker.value : `rgba(${rgbOf(picker.value).join(', ')}, ${alphaOf(text.value)})`
+      text.value = v
+      text.classList.remove('err')
+      setValue(key, idx, v)
+    }
+    picker.onchange = () => renderKeys()
+    text.onchange = () => {
+      const v = text.value.trim()
+      const ok = setValue(key, idx, v)
+      text.classList.toggle('err', !ok)
+      if (ok) renderKeys()
+    }
+    vals.append(picker, text)
+  })
+  row.querySelector('.reset')?.addEventListener('click', () => {
+    delete customOf(state.sel)[mode][key]
+    renderAll()
+  })
+  return row
+}
+
+function renderKeys() {
+  const box = document.getElementById('keys')
+  box.innerHTML = ''
+  for (const [title, keys] of GROUPS) {
+    const g = document.createElement('div')
+    g.className = 'group'
+    g.innerHTML = `<div>${title}</div>`
+    keys.forEach((k) => g.append(keyRow(k)))
+    box.append(g)
+  }
+  document.querySelectorAll('#editSeg button').forEach((b) => b.classList.toggle('on', b.dataset.m === state.edit))
+}
+
+function renderContrast() {
+  const p = palette(state.sel, state.edit)
+  const bg = p.bg[0]
+  const items = [
+    ['標題文字', p.ink, bg, 4.5], ['內文', p.textRegular, bg, 4.5], ['次要文字', p.mute, bg, 4.5], ['淡文字', p.dim, bg, 3],
+    ['連結 / 區塊標題', p.brand600, bg, 4.5], ['主要按鈕文字', p.primaryText, p.primary, 4.5],
+    ['成功', p.run, bg, 4.5], ['警告', p.warn, bg, 4.5], ['危險', p.danger, bg, 4.5], ['已完成', p.done, bg, 4.5],
+  ]
+  document.getElementById('contrast').innerHTML = items
+    .map(([label, fg, back, min]) => {
+      if (!HEX.test(fg) || !HEX.test(back)) return `<span>${label}</span><span class="mute">—</span>`
+      const r = ratio(fg, back)
+      return `<span>${label}</span><span class="${r < min ? 'bad' : 'ok'}">${r.toFixed(1)} ${r < min ? '✗' : '✓'}</span>`
+    })
+    .join('')
+}
+
+/** 要寫入 theme.json 的內容：只保留選取中配色的微調 */
+const output = () => ({ active: state.sel, defaultMode: state.defaultMode, effect: state.effect, custom: clone(customOf(state.sel)) })
+const isDirty = () => JSON.stringify(output()) !== JSON.stringify({ active: saved.active, defaultMode: saved.defaultMode || '', effect: saved.effect === 'glass' ? 'glass' : 'solid', custom: saved.custom })
+const canApply = location.protocol.startsWith('http') && location.pathname.startsWith('/__themes')
+
+function renderButtons() {
+  const apply = document.getElementById('applyBtn')
+  apply.disabled = state.bad.size > 0 || !isDirty()
+  apply.title = canApply ? '' : '要用 npm run dev 開 http://localhost:5203/__themes 才能直接套用'
+  document.getElementById('now').textContent = `系統使用中：${saved.active}${saved.effect === 'glass' ? '・毛玻璃' : '・實心'}${saved.defaultMode ? `（預設${saved.defaultMode === 'dark' ? '暗色' : '明亮'}）` : ''}${isDirty() ? '・有未套用的變更' : ''}`
+  document.querySelectorAll('#viewSeg button').forEach((b) => b.classList.toggle('on', b.dataset.v === state.view))
+  document.querySelectorAll('#fxSeg button').forEach((b) => b.classList.toggle('on', b.dataset.fx === state.effect))
+  document.getElementById('defaultMode').value = state.defaultMode
+}
+
+function renderAll() {
+  renderThemes()
+  renderStage()
+  renderKeys()
+  renderContrast()
+  renderButtons()
+}
+
+const say = (text, ok = true) => {
+  const m = document.getElementById('msg')
+  m.textContent = text
+  m.className = `msg ${ok ? 'ok' : 'bad'}`
+}
+
+document.querySelectorAll('#viewSeg button').forEach((b) => (b.onclick = () => { state.view = b.dataset.v; renderStage(); renderButtons() }))
+document.querySelectorAll('#editSeg button').forEach((b) => (b.onclick = () => { state.edit = b.dataset.m; state.bad.clear(); renderKeys(); renderContrast(); renderButtons() }))
+document.querySelectorAll('#fxSeg button').forEach((b) => (b.onclick = () => { state.effect = b.dataset.fx; renderStage(); renderButtons() }))
+document.getElementById('defaultMode').onchange = (e) => { state.defaultMode = e.target.value; renderButtons() }
+document.getElementById('resetBtn').onclick = () => {
+  state.sel = saved.active
+  state.defaultMode = saved.defaultMode || ''
+  state.effect = saved.effect === 'glass' ? 'glass' : 'solid'
+  state.custom = { [saved.active]: clone(saved.custom) }
+  state.bad.clear()
+  say('已還原為系統目前設定')
+  renderAll()
+}
+document.getElementById('copyBtn').onclick = async () => {
+  const text = JSON.stringify(output(), null, 2)
+  const out = document.getElementById('out')
+  try {
+    await navigator.clipboard.writeText(text)
+    out.hidden = true
+    say('已複製，貼到 themes/theme.json 後執行 npm run themes')
+  } catch {
+    out.hidden = false
+    out.value = text
+    out.select()
+    say('無法自動複製，請複製下方文字貼到 themes/theme.json', false)
+  }
+}
+document.getElementById('applyBtn').onclick = async () => {
+  if (!canApply) return say('請先 npm run dev，再開 http://localhost:5203/__themes 套用；或用「複製設定」', false)
+  try {
+    const res = await fetch('/__themes/apply', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(output()) })
+    const body = await res.json()
+    if (!res.ok) throw new Error(body.message || '套用失敗')
+    Object.assign(saved, clone(output()))
+    say(body.message || '已套用')
+    renderAll()
+  } catch (err) {
+    say(err.message, false)
+  }
+}
+
+renderAll()
+</script>
+</body>
+</html>

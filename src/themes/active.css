@@ -1,0 +1,241 @@
+/* 使用中：cleanroom｜毛玻璃效果｜C｜潔淨室白 × 工程藍（預設明亮，亮燈廠區好讀） */
+/* 由 scripts/make-themes.mjs 依 themes/theme.json 產生（打包時的預設值；正式環境以系統「樣式設定」為準） */
+
+/* MES 調整：玻璃模糊變淡、表格列距變緊（變數在 style.css 使用） */
+
+/* 明亮（Tailwind 預設值） */
+@theme {
+  --color-glass: rgba(255, 255, 255, 0.96);
+  --color-glass-strong: rgba(255, 255, 255, 0.99);
+  --color-glow: rgba(15, 27, 42, 0.13);
+  --color-ink: #0f1b2a;
+  --color-mute: #52606f;
+  --color-dim: #7d8a99;
+  --color-field: #ffffff;
+  --color-overlay: rgba(15, 27, 42, 0.4);
+  --color-danger: #c62828;
+  --color-warn: #a14a05;
+  --color-run: #137a3a;
+  --color-done: #526072;
+  --color-brand-50: rgba(11, 99, 206, 0.07);
+  --color-brand-100: #dcebfb;
+  --color-brand-500: #0b63ce;
+  --color-brand-600: #0a58b8;
+  --color-brand-700: #084a9a;
+}
+
+/* 明亮：其他變數與 Element Plus */
+html:root {
+  --font-scale: 1;
+  --theme-default: light;
+  --glass-blur: 6px;
+  --table-cell-py: 5px;
+
+  --color-glass: rgba(255, 255, 255, 0.96);
+  --color-glass-strong: rgba(255, 255, 255, 0.99);
+  --color-glow: rgba(15, 27, 42, 0.13);
+  --color-ink: #0f1b2a;
+  --color-mute: #52606f;
+  --color-dim: #7d8a99;
+  --color-field: #ffffff;
+  --color-overlay: rgba(15, 27, 42, 0.4);
+  --color-danger: #c62828;
+  --color-warn: #a14a05;
+  --color-run: #137a3a;
+  --color-done: #526072;
+  --color-brand-50: rgba(11, 99, 206, 0.07);
+  --color-brand-100: #dcebfb;
+  --color-brand-500: #0b63ce;
+  --color-brand-600: #0a58b8;
+  --color-brand-700: #084a9a;
+
+  --app-background:
+    radial-gradient(42rem 30rem at 8% 4%, rgba(11, 99, 206, 0.05), transparent 70%),
+    radial-gradient(36rem 28rem at 94% 90%, rgba(11, 99, 206, 0.04), transparent 70%),
+    linear-gradient(160deg, #eef2f6 0%, #e8edf3 100%);
+  --glass-shadow: 0 1px 2px rgba(15, 23, 42, 0.06), 0 6px 20px rgba(15, 23, 42, 0.06);
+  --section-title-color: #0a58b8;
+  --btn-primary-text: #ffffff;
+  --loading-mask: rgba(255, 255, 255, 0.6);
+  background: #eef2f6;
+  color-scheme: light;
+
+  --el-color-primary: #0b63ce;
+  --el-color-primary-light-3: #5492dd;
+  --el-color-primary-light-5: #85b1e7;
+  --el-color-primary-light-7: #b6d0f0;
+  --el-color-primary-light-8: #cee0f5;
+  --el-color-primary-light-9: #e7effa;
+  --el-color-primary-dark-2: #094fa5;
+  --el-color-success: #137a3a;
+  --el-color-success-light-3: #5aa275;
+  --el-color-success-light-5: #89bd9d;
+  --el-color-success-light-7: #b8d7c4;
+  --el-color-success-light-8: #d0e4d8;
+  --el-color-success-light-9: #e7f2eb;
+  --el-color-success-dark-2: #0f622e;
+  --el-color-warning: #a14a05;
+  --el-color-warning-light-3: #bd8050;
+  --el-color-warning-light-5: #d0a582;
+  --el-color-warning-light-7: #e3c9b4;
+  --el-color-warning-light-8: #ecdbcd;
+  --el-color-warning-light-9: #f6ede6;
+  --el-color-warning-dark-2: #813b04;
+  --el-color-danger: #c62828;
+  --el-color-danger-light-3: #d76969;
+  --el-color-danger-light-5: #e39494;
+  --el-color-danger-light-7: #eebfbf;
+  --el-color-danger-light-8: #f4d4d4;
+  --el-color-danger-light-9: #f9eaea;
+  --el-color-danger-dark-2: #9e2020;
+  --el-color-error: #c62828;
+  --el-color-error-light-3: #d76969;
+  --el-color-error-light-5: #e39494;
+  --el-color-error-light-7: #eebfbf;
+  --el-color-error-light-8: #f4d4d4;
+  --el-color-error-light-9: #f9eaea;
+  --el-color-error-dark-2: #9e2020;
+  --el-color-info: #526072;
+  --el-color-info-light-3: #86909c;
+  --el-color-info-light-5: #a9b0b9;
+  --el-color-info-light-7: #cbcfd5;
+  --el-color-info-light-8: #dcdfe3;
+  --el-color-info-light-9: #eeeff1;
+  --el-color-info-dark-2: #424d5b;
+  --el-bg-color: transparent;
+  --el-bg-color-page: transparent;
+  --el-bg-color-overlay: #ffffff;
+  --el-fill-color-blank: #ffffff;
+  --el-fill-color: rgba(15, 27, 42, 0.06);
+  --el-fill-color-light: rgba(15, 27, 42, 0.08);
+  --el-fill-color-lighter: rgba(15, 27, 42, 0.05);
+  --el-border-color: rgba(15, 27, 42, 0.22);
+  --el-border-color-light: rgba(15, 27, 42, 0.16);
+  --el-border-color-lighter: rgba(15, 27, 42, 0.11);
+  --el-border-color-hover: #0b63ce;
+  --el-text-color-primary: #0f1b2a;
+  --el-text-color-regular: #243447;
+  --el-text-color-secondary: #52606f;
+  --el-text-color-placeholder: #8a96a4;
+  --el-mask-color: rgba(15, 27, 42, 0.4);
+}
+
+/* 暗色：<html class="dark"> */
+html.dark:root {
+  --color-glass: rgba(22, 32, 44, 0.9);
+  --color-glass-strong: rgba(15, 23, 32, 0.97);
+  --color-glow: rgba(148, 170, 195, 0.2);
+  --color-ink: #eef3f8;
+  --color-mute: #a5b4c4;
+  --color-dim: #6e7e90;
+  --color-field: rgba(10, 16, 24, 0.7);
+  --color-overlay: rgba(0, 6, 14, 0.7);
+  --color-danger: #f87171;
+  --color-warn: #fbbf24;
+  --color-run: #4ade80;
+  --color-done: #94a3b8;
+  --color-brand-50: rgba(96, 165, 250, 0.12);
+  --color-brand-100: #dbeafe;
+  --color-brand-500: #60a5fa;
+  --color-brand-600: #93c5fd;
+  --color-brand-700: #3b82f6;
+
+  --app-background:
+    radial-gradient(42rem 30rem at 8% 4%, rgba(96, 165, 250, 0.06), transparent 70%),
+    radial-gradient(36rem 28rem at 94% 90%, rgba(96, 165, 250, 0.04), transparent 70%),
+    linear-gradient(160deg, #0f1720 0%, #121c27 100%);
+  --glass-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 10px 30px rgba(0, 0, 0, 0.35);
+  --section-title-color: #93c5fd;
+  --btn-primary-text: #0f1720;
+  --loading-mask: rgba(15, 23, 32, 0.6);
+  background: #0f1720;
+  color-scheme: dark;
+
+  --el-color-primary: #60a5fa;
+  --el-color-primary-light-3: #4373af;
+  --el-color-primary-light-5: #30537d;
+  --el-color-primary-light-7: #1d324b;
+  --el-color-primary-light-8: #132132;
+  --el-color-primary-light-9: #0a1019;
+  --el-color-primary-dark-2: #80b7fb;
+  --el-color-success: #4ade80;
+  --el-color-success-light-3: #349b5a;
+  --el-color-success-light-5: #256f40;
+  --el-color-success-light-7: #164326;
+  --el-color-success-light-8: #0f2c1a;
+  --el-color-success-light-9: #07160d;
+  --el-color-success-dark-2: #6ee599;
+  --el-color-warning: #fbbf24;
+  --el-color-warning-light-3: #b08619;
+  --el-color-warning-light-5: #7e6012;
+  --el-color-warning-light-7: #4b390b;
+  --el-color-warning-light-8: #322607;
+  --el-color-warning-light-9: #191304;
+  --el-color-warning-dark-2: #fccc50;
+  --el-color-danger: #f87171;
+  --el-color-danger-light-3: #ae4f4f;
+  --el-color-danger-light-5: #7c3939;
+  --el-color-danger-light-7: #4a2222;
+  --el-color-danger-light-8: #321717;
+  --el-color-danger-light-9: #190b0b;
+  --el-color-danger-dark-2: #f98d8d;
+  --el-color-error: #f87171;
+  --el-color-error-light-3: #ae4f4f;
+  --el-color-error-light-5: #7c3939;
+  --el-color-error-light-7: #4a2222;
+  --el-color-error-light-8: #321717;
+  --el-color-error-light-9: #190b0b;
+  --el-color-error-dark-2: #f98d8d;
+  --el-color-info: #94a3b8;
+  --el-color-info-light-3: #687281;
+  --el-color-info-light-5: #4a525c;
+  --el-color-info-light-7: #2c3137;
+  --el-color-info-light-8: #1e2125;
+  --el-color-info-light-9: #0f1012;
+  --el-color-info-dark-2: #a9b5c6;
+  --el-bg-color: transparent;
+  --el-bg-color-page: transparent;
+  --el-bg-color-overlay: #16202c;
+  --el-fill-color-blank: rgba(10, 16, 24, 0.7);
+  --el-fill-color: rgba(148, 170, 195, 0.06);
+  --el-fill-color-light: rgba(148, 170, 195, 0.08);
+  --el-fill-color-lighter: rgba(148, 170, 195, 0.05);
+  --el-border-color: rgba(148, 170, 195, 0.3);
+  --el-border-color-light: rgba(148, 170, 195, 0.22);
+  --el-border-color-lighter: rgba(148, 170, 195, 0.15);
+  --el-border-color-hover: #60a5fa;
+  --el-text-color-primary: #eef3f8;
+  --el-text-color-regular: #d6e0ea;
+  --el-text-color-secondary: #a5b4c4;
+  --el-text-color-placeholder: #6e7e90;
+  --el-mask-color: rgba(0, 6, 14, 0.7);
+}
+
+/* 毛玻璃效果（effect = glass） */
+html:root {
+  --glass-blur: 22px;
+  --color-glass: rgba(255, 255, 255, 0.42);
+  --color-glass-strong: rgba(255, 255, 255, 0.62);
+  --color-glow: rgba(255, 255, 255, 0.65);
+  --el-fill-color-blank: rgba(255, 255, 255, 0.55);
+  --glass-shadow: 0 8px 32px rgba(31, 38, 135, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  --app-background:
+    radial-gradient(40rem 32rem at 10% 8%, rgba(11, 99, 206, 0.55), transparent 65%),
+    radial-gradient(36rem 30rem at 92% 18%, rgba(146, 83, 174, 0.45), transparent 65%),
+    radial-gradient(44rem 34rem at 55% 100%, rgba(8, 149, 210, 0.4), transparent 65%),
+    linear-gradient(160deg, #eef2f6 0%, #e8edf3 100%);
+}
+
+html.dark:root {
+  --glass-blur: 24px;
+  --color-glass: rgba(255, 255, 255, 0.07);
+  --color-glass-strong: rgba(15, 23, 32, 0.62);
+  --color-glow: rgba(255, 255, 255, 0.14);
+  --el-fill-color-blank: rgba(255, 255, 255, 0.06);
+  --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  --app-background:
+    radial-gradient(40rem 32rem at 10% 8%, rgba(96, 165, 250, 0.45), transparent 65%),
+    radial-gradient(36rem 30rem at 92% 18%, rgba(180, 109, 192, 0.35), transparent 65%),
+    radial-gradient(44rem 34rem at 55% 100%, rgba(42, 175, 227, 0.3), transparent 65%),
+    linear-gradient(160deg, #0f1720 0%, #121c27 100%);
+}

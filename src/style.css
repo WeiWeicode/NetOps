@@ -1,0 +1,283 @@
+@import "tailwindcss";
+
+/*
+ * ★ 配色在 themes/ 設定，不要改這行：
+ *   themes/theme.json   使用哪套配色（active）、預設明亮 / 暗色、個別顏色微調
+ *   themes/palettes.mjs 各配色色票
+ *   預覽與調整：npm run dev 後開 http://localhost:5203/__themes（或直接開 themes/preview.html 只看不套用）
+ *   active.css 由 scripts/make-themes.mjs 產生（npm run dev / build 會自動執行，手動：npm run themes）
+ */
+@import "./themes/active.css";
+
+/*
+ * 字體大小：所有文字乘上 --font-scale（版面間距不變）
+ *   系統預設：樣式設定的「字體大小」（/api/theme.css 輸出 --font-scale）
+ *   個人設定：右上角 Aa（composables/useFontScale.js，寫在 <html style>，優先於系統預設）
+ * 下面的 Tailwind 字級、Element Plus 字級與元件高度都乘上這個值；100% 時與原本相同
+ */
+:root {
+  --font-scale: 1;
+}
+
+/* 字體整體大一號 */
+@theme {
+  --text-xs: calc(0.8125rem * var(--font-scale));   --text-xs--line-height: calc(1.25rem * var(--font-scale));
+  --text-sm: calc(0.9375rem * var(--font-scale));   --text-sm--line-height: calc(1.5rem * var(--font-scale));
+  --text-base: calc(1.0625rem * var(--font-scale)); --text-base--line-height: calc(1.625rem * var(--font-scale));
+  --text-lg: calc(1.1875rem * var(--font-scale));   --text-lg--line-height: calc(1.75rem * var(--font-scale));
+  --text-xl: calc(1.375rem * var(--font-scale));    --text-xl--line-height: calc(1.875rem * var(--font-scale));
+  --text-2xl: calc(1.625rem * var(--font-scale));   --text-2xl--line-height: calc(2.125rem * var(--font-scale));
+  --text-3xl: calc(1.875rem * var(--font-scale));   --text-3xl--line-height: calc(2.25rem * var(--font-scale));
+}
+
+html:root {
+  --el-font-size-extra-small: calc(13px * var(--font-scale));
+  --el-font-size-small: calc(14px * var(--font-scale));
+  --el-font-size-base: calc(16px * var(--font-scale));
+  --el-font-size-medium: calc(17px * var(--font-scale));
+  --el-font-size-large: calc(19px * var(--font-scale));
+  --el-font-size-extra-large: calc(21px * var(--font-scale));
+  /* 元件高度跟著字體放大，字才不會被切到 */
+  --el-component-size-small: calc(24px * var(--font-scale));
+  --el-component-size: calc(32px * var(--font-scale));
+  --el-component-size-large: calc(40px * var(--font-scale));
+
+  font-family: system-ui, 'Segoe UI', 'Microsoft JhengHei', 'PingFang TC', sans-serif;
+  font-size: 1.0625rem;
+  color: var(--color-ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+.el-button--primary:not(.is-plain):not(.is-text):not(.is-link) {
+  --el-button-text-color: var(--btn-primary-text);
+  --el-button-hover-text-color: var(--btn-primary-text);
+  --el-button-active-text-color: var(--btn-primary-text);
+  font-weight: 600;
+}
+
+.el-table {
+  --el-table-header-bg-color: var(--color-brand-50);
+  --el-table-tr-bg-color: transparent;
+  --el-table-row-hover-bg-color: var(--color-brand-50);
+  /* 數字等寬，流程卡號、料號、重量上下對齊 */
+  font-variant-numeric: tabular-nums;
+}
+
+/* 表格列距：MES 配色設 --table-cell-py: 5px（一頁多看幾筆），玻璃配色維持 Element Plus 預設 8px */
+html .el-table .el-table__cell {
+  padding-top: var(--table-cell-py, 8px);
+  padding-bottom: var(--table-cell-py, 8px);
+}
+
+.el-loading-mask { background-color: var(--loading-mask); }
+
+/*
+ * 配色檔把 --el-bg-color 設成透明，讓表格、卡片透出背景；
+ * 但對話框、確認框、深色 tooltip 等浮在畫面上的元件也用它當底色 / 文字色，會變成透明看不清楚，
+ * 這些一律改用不透明的 --el-bg-color-overlay。
+ * （Element Plus 元件樣式按需載入、排在 style.css 後面，所以加上 html 提高權重）
+ */
+html .el-dialog,
+html .el-drawer { --el-dialog-bg-color: var(--el-bg-color-overlay); --el-drawer-bg-color: var(--el-bg-color-overlay); }
+html .el-message-box { background-color: var(--el-bg-color-overlay); }
+html .el-tour { --el-tour-bg-color: var(--el-bg-color-overlay); }
+html .el-popper.is-dark,
+html .el-popover.is-dark { color: var(--el-bg-color-overlay); --el-popover-title-text-color: var(--el-bg-color-overlay); }
+
+/* 可選資源的卡片式 radio：長名稱換行 */
+.radio-cards .el-radio.is-bordered { height: auto; padding-top: 8px; padding-bottom: 8px; }
+.radio-cards .el-radio__label { white-space: normal; line-height: 1.4; }
+
+body {
+  margin: 0;
+  font-size: calc(1rem * var(--font-scale));
+  min-height: 100svh;
+  background: var(--app-background);
+  background-attachment: fixed;
+}
+
+#app { min-height: 100svh; }
+
+@layer components {
+  /*
+   * 頁面主卡片：填滿畫面剩餘高度（Main.vue 內容區為 h-full 的直向 flex）
+   * <div class="glass page-card"> … <div class="table-fill"><el-table height="100%" …/></div> </div>
+   * 內容比畫面高時卡片跟著變高，改由整頁捲動
+   */
+  .page-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    flex: 1 1 auto;
+    padding: 0.75rem;
+    border-radius: 1rem;
+  }
+  @media (min-width: 768px) {
+    .page-card {
+      padding: 1rem;
+    }
+  }
+  .page-card .section-title {
+    margin: 0;
+  }
+
+  .glass {
+    background: var(--color-glass);
+    border: 1px solid var(--color-glow);
+    /* MES 配色設 --glass-blur: 6px，幾乎不透，長時間看表格不累 */
+    backdrop-filter: blur(var(--glass-blur, 18px)) saturate(140%);
+    -webkit-backdrop-filter: blur(var(--glass-blur, 18px)) saturate(140%);
+    box-shadow: var(--glass-shadow);
+  }
+
+  /*
+   * 生產狀態標籤：<span class="status-pill status-run">進行中</span>
+   * run 進行中 / wait 待處理（待品保）/ danger 異常 / done 完成
+   */
+  .status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0 0.5rem;
+    border-radius: 4px;
+    font-size: calc(0.8125rem * var(--font-scale));
+    line-height: calc(1.5rem * var(--font-scale));
+    white-space: nowrap;
+    color: var(--status-color);
+    background: color-mix(in srgb, var(--status-color) 14%, transparent);
+    border: 1px solid color-mix(in srgb, var(--status-color) 40%, transparent);
+  }
+  .status-run { --status-color: var(--color-run); }
+  .status-wait { --status-color: var(--color-warn); }
+  .status-danger { --status-color: var(--color-danger); }
+  .status-done { --status-color: var(--color-done); }
+
+  .section-title {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-weight: 700;
+    font-size: calc(1.15rem * var(--font-scale));
+    color: var(--section-title-color);
+    padding-left: 0.75rem;
+    border-left: 4px solid var(--color-brand-500);
+    margin: 0 0 1rem;
+  }
+}
+
+:focus-visible {
+  outline: 2px solid var(--el-color-primary);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@media print {
+  body { background: #fff; }
+  .no-print { display: none !important; }
+  /* 主版面固定高度 + 內部捲動，列印時展開成完整頁面 */
+  .app-shell, .app-shell main { height: auto !important; overflow: visible !important; display: block !important; padding-top: 0 !important; }
+}
+
+/* 合併列的分組交替底色（utils/table.js 的 groupRows） */
+html .el-table .row-alt > td.el-table__cell {
+  background-color: var(--color-brand-50);
+}
+
+/* 表格內容不換行（舊系統 word-break:keep-all） */
+html .nowrap-table .cell {
+  white-space: nowrap;
+}
+
+/* 合併儲存格（業務、群組）靠上顯示，長列時不會跑到畫面外 */
+html .el-table td.el-table__cell[rowspan]:not([rowspan="1"]) {
+  vertical-align: top;
+}
+
+/*
+ * 表格區：填滿 .page-card 剩餘高度，表格在裡面捲動（最少 220px，畫面太矮時改由整頁捲動）
+ * 內層絕對定位，不會因為資料多而把卡片撐高；寫在 @layer 外，才蓋得過 Element Plus 的 .el-table { position: relative }
+ */
+.table-fill {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 220px;
+}
+html .table-fill > .el-table,
+html .table-fill > .fill-inner {
+  position: absolute;
+  inset: 0;
+}
+
+/* 小尺寸表格（各頁主表格）：列高壓低，一頁多看幾筆 */
+html .el-table--small .el-table__cell {
+  padding-top: 3px;
+  padding-bottom: 3px;
+}
+html .el-table--small .cell {
+  line-height: 20px;
+}
+
+/* 字體大小：Element Plus 寫死 px 的字級（只列系統有用到的元件），數值同 Element Plus 預設 × --font-scale；html 前綴確保蓋過元件樣式 */
+html .el-button--small { font-size: calc(12px * var(--font-scale)); }
+html .el-input--small { font-size: calc(12px * var(--font-scale)); }
+html .el-input--large { font-size: calc(14px * var(--font-scale)); }
+html .el-form-item__error { font-size: calc(12px * var(--font-scale)); }
+html .el-select__wrapper { font-size: calc(14px * var(--font-scale)); }
+html .el-select--small .el-select__wrapper { font-size: calc(12px * var(--font-scale)); }
+html .el-select--large .el-select__wrapper { font-size: calc(14px * var(--font-scale)); }
+html .el-select-group__title { font-size: calc(12px * var(--font-scale)); }
+html .el-checkbox.el-checkbox--small .el-checkbox__label { font-size: calc(12px * var(--font-scale)); }
+html .el-checkbox.el-checkbox--large .el-checkbox__label { font-size: calc(14px * var(--font-scale)); }
+html .el-radio.el-radio--small .el-radio__label { font-size: calc(12px * var(--font-scale)); }
+html .el-radio.el-radio--large .el-radio__label { font-size: calc(14px * var(--font-scale)); }
+html .el-radio-button--small .el-radio-button__inner { font-size: calc(12px * var(--font-scale)); }
+html .el-date-editor .el-range-separator { font-size: calc(14px * var(--font-scale)); }
+html .el-date-table { font-size: calc(12px * var(--font-scale)); }
+html .el-month-table { font-size: calc(12px * var(--font-scale)); }
+html .el-year-table { font-size: calc(12px * var(--font-scale)); }
+html .el-date-picker__header-label { font-size: calc(16px * var(--font-scale)); }
+html .el-date-range-picker__header div { font-size: calc(16px * var(--font-scale)); }
+html .el-date-range-picker__header-label { font-size: calc(16px * var(--font-scale)); }
+html .el-picker-panel__btn { font-size: calc(12px * var(--font-scale)); }
+html .el-picker-panel__shortcut { font-size: calc(14px * var(--font-scale)); }
+html .el-dropdown-menu--small .el-dropdown-menu__item { font-size: calc(12px * var(--font-scale)); }
+html .el-dropdown-menu--large .el-dropdown-menu__item { font-size: calc(14px * var(--font-scale)); }
+html .el-message__content { font-size: calc(14px * var(--font-scale)); }
+html .el-popper { font-size: calc(12px * var(--font-scale)); }
+html .el-progress__text { font-size: calc(14px * var(--font-scale)); }
+html .el-segmented { font-size: calc(14px * var(--font-scale)); }
+html .el-segmented--small { font-size: calc(14px * var(--font-scale)); }
+html .el-segmented--large { font-size: calc(16px * var(--font-scale)); }
+html .el-switch { font-size: calc(14px * var(--font-scale)); }
+html .el-switch__label { font-size: calc(14px * var(--font-scale)); }
+html .el-switch__label * { font-size: calc(14px * var(--font-scale)); }
+html .el-checkbox { --el-checkbox-font-size: calc(14px * var(--font-scale)); }
+html .el-select { --el-select-input-font-size: calc(14px * var(--font-scale)); }
+html .el-tag { --el-tag-font-size: calc(12px * var(--font-scale)); }
+html .el-badge { --el-badge-font-size: calc(12px * var(--font-scale)); }
+html .el-dialog { --el-dialog-content-font-size: calc(14px * var(--font-scale)); }
+html .el-pagination { --el-pagination-font-size: calc(14px * var(--font-scale)); }
+html .el-popover { --el-popover-title-font-size: calc(16px * var(--font-scale)); }
+html .el-alert { --el-alert-title-font-size: calc(14px * var(--font-scale)); --el-alert-description-font-size: calc(14px * var(--font-scale)); }
+html .el-message-box { --el-messagebox-error-font-size: calc(12px * var(--font-scale)); }
+html .el-tag { height: calc(24px * var(--font-scale)); }
+html .el-tag--small { height: calc(20px * var(--font-scale)); }
+html .el-tag--large { height: calc(32px * var(--font-scale)); }
+/* 元件高度：Element Plus 寫死 px 的高度，跟著字體放大 */
+html .el-button { height: calc(32px * var(--font-scale)); }
+html .el-button.is-link { height: auto; }
+html .el-button--large { --el-button-size: calc(40px * var(--font-scale)); height: var(--el-button-size); }
+html .el-button--small { --el-button-size: calc(24px * var(--font-scale)); height: var(--el-button-size); }
+html .el-select__wrapper { min-height: calc(32px * var(--font-scale)); line-height: calc(24px * var(--font-scale)); }
+html .el-select--large .el-select__wrapper { min-height: calc(40px * var(--font-scale)); line-height: calc(24px * var(--font-scale)); }
+html .el-select--small .el-select__wrapper { min-height: calc(24px * var(--font-scale)); line-height: calc(20px * var(--font-scale)); }
+html .el-input-number { line-height: calc(30px * var(--font-scale)); }
+html .el-input-number--large { line-height: calc(38px * var(--font-scale)); }
+html .el-input-number--small { line-height: calc(22px * var(--font-scale)); }
+html .el-checkbox { --el-checkbox-height: calc(32px * var(--font-scale)); }

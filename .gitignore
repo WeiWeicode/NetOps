@@ -1,0 +1,23 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+
+# 後端設定（含資料庫密碼、JWT 金鑰）；只保留 .env.example 範本
+.env
+.env.*
+!.env.example
+publish/
+# 樣式設定存檔
+uploads/

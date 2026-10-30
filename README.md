@@ -1,5 +1,7 @@
 # 資訊網通管理系統（NetOps）
 
+> 正在規劃接入 GigaNexus Gateway，開發前先讀 [AGENT.md](AGENT.md)、[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)、[docs/IMPL-PLAN.md](docs/IMPL-PLAN.md)。以下內容是目前 IIS 版本的現況。
+
 架構與登入比照 Veeam 備份監控：**Vue 3 + Vite + Tailwind CSS v4 + Element Plus ／ Express 5 + mssql + JWT，部署 IIS + iisnode**
 登入：AD 帳號密碼（`GscSystem.dbo.ADServerInfo`）或入口網站同步登入（`SyncLoginInfo`，系統代碼 `SYNC_PARAGRAM`）
 

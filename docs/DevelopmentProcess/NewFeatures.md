@@ -2,6 +2,12 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。
 
+## 2026-10-30 D0 收尾:確認負責人與 develop
+- 工作項目:D0
+- 內容:負責人確認為佳緯;`develop` 已建立;三個 repo 的文件 MR 已合併,D0 標示完成。
+- 檔案:`AGENT.md`、`docs/ARCHITECTURE.md`、`docs/IMPL-PLAN.md`、`docs/HANDOFF.md`
+- 驗證:文件異動;GitLab API 確認 !1、!20、!18 皆為 merged
+
 ## 2026-10-30 建立接入 Gateway 的規劃與 AI 守則
 - 工作項目:D0
 - 內容:新增 AI 協作準則與規劃文件。決定系統代碼 `netops`、`/netops/`、`netops-api` :51292;後端改 Fastify 5 + TypeScript;登入與權限交給 Gateway;第一版資料存檔案並只經 `infra/store`,未來改由服務直接寫入資料庫。程式尚未改動。

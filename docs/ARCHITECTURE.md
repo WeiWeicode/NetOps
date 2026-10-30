@@ -1,7 +1,7 @@
 # NetOps 架構與決策
 
 > 目標架構與設計決策。工作項目見 [IMPL-PLAN.md](IMPL-PLAN.md),目錄見 [PROJECT-MAP.md](PROJECT-MAP.md)。與 Gateway `docs/` 不一致時以 Gateway 為準,先指出差異。
-> **狀態:規劃(D0)**。程式尚未改動;舊版現況見 [README.md](../README.md)。
+> **狀態:規劃完成(D0),下一步 B0**。程式尚未改動;舊版現況見 [README.md](../README.md)。
 
 ---
 
@@ -151,7 +151,7 @@ netops.app.access                        應用
 
 | # | 問題 | 預設 |
 | --- | --- | --- |
-| Q1 | 專案負責人(目前 commit 作者為 eric) | 待使用者確認 |
-| Q2 | `develop` 分支由 Maintainer 建立(AI 不推送) | 從 `main` 建立 |
+| Q1 | 專案負責人 | 已定案:佳緯 |
+| Q2 | `develop` 分支 | 已完成:從 `main` 建立 |
 | Q3 | 知識庫備份到 NAS 的位置與帳號 | D1 比照附件服務 `docker-backup` |
 | Q4 | 資料庫階段的各項決定(§4.2) | D2 後討論 |

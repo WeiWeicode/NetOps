@@ -4,13 +4,12 @@
 
 ## 目前進度
 
-**D0 文件與登記**進行中。接入 Gateway 的程式尚未開始;舊版繼續在 IIS 運作。
+**D0 文件與登記完成**。接入 Gateway 的程式尚未開始;舊版繼續在 IIS 運作。負責人:佳緯。
 
 ## 下一步
 
-1. 合併 NetOps、工作區、Gateway 的 D0 文件 MR。
-2. 確認專案負責人(ARCHITECTURE Q1);Maintainer 建立 `develop`(Q2)。
-3. 從 `origin/develop` 開分支做 B0 串流驗證,結果決定 AI 採串流或輪詢(D7)。
+1. 確認 GitLab 已保護 `develop`(只有 Maintainer 能合併、不能直接推送)。
+2. 從 `origin/develop` 開分支做 B0 串流驗證,結果決定 AI 採串流或輪詢(D7)。
 
 ## 已知狀況
 

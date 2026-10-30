@@ -74,7 +74,7 @@
 同 `../giga-api-gateway-bff/AGENT.md` §10.10 與工作區 `../AGENT.md` §9(有出入時以 §10.10 為準)。
 
 - 本 repo 的 GitLab remote 是 `origin`(`giganexus/NetOps`);下指令前仍先看 `git remote -v`。
-- 開發在工作分支(`feature/*`、`fix/*`、`docs/*`、`refactor/*`),從最新的 `origin/develop` 開;`develop` 建立前從 `origin/main` 開。開工第一步 `git fetch` 並回報落後基準分支幾個 commit。
+- 開發在工作分支(`feature/*`、`fix/*`、`docs/*`、`refactor/*`),從最新的 `origin/develop` 開。開工第一步 `git fetch` 並回報落後基準分支幾個 commit。
 - 只推送工作分支;`develop`、`main` **只透過 GitLab Merge Request 由 Maintainer 合併**。AI 不得推送 `develop` / `main`、不得 force push。
 - **切換前 `main` 維持舊 IIS 版本**(ARCHITECTURE D12):接入 Gateway 的程式只進 `develop`;舊版緊急修正進 `main` 後,再合回 `develop`。
 - 合併遇到衝突時 AI 立即停止,依 `../AGENT.md` §9.3 列出影響,不自行解衝突。
@@ -87,14 +87,14 @@
 | 項目 | 內容 |
 | --- | --- |
 | 做什麼 | 資訊網通管理系統:PA-560 防火牆 log(流量總覽、安全事件、明細查詢)、AD 事件記錄、AI 問答與分析、網通知識庫(含向量搜尋、外部 IP 自動學習) |
-| 狀態 | **D0 規劃中**。目前程式仍是舊架構:根目錄 `server/`(Express + 自建登入)、`src/`(Vue),部署於 IIS `/NetOps`;尚未接入 Gateway |
+| 狀態 | **D0 文件與登記完成,下一步 B0 串流驗證**。目前程式仍是舊架構:根目錄 `server/`(Express + 自建登入)、`src/`(Vue),部署於 IIS `/NetOps`;尚未接入 Gateway |
 | 系統代碼 / SPA 子路徑 | `netops` / `/netops/` |
 | 服務代碼 / port | `netops-api` / **51292**(Gateway BACKEND-GUIDE §3.3 登記中,不可自行換 port) |
 | API | 對外 `/api/netops/*`,後端 `/v1/*` |
 | 登入 | **後端不實作登入**,只信任 Gateway 的 `X-Internal-Token`;前端用 `@giganexus/web-kit`,未登入導向入口網 `/login`(§7.1) |
 | 資料 | 第一版存檔案,經 `infra/store` 存取,**未來規劃改由服務直接寫入資料庫**(§7.2、ARCHITECTURE D8) |
 | 外部相依 | FTP `10.10.130.66`(log 來源,唯讀)、vLLM `10.10.130.45`、Qdrant `10.10.130.46` |
-| 負責人 | **待確認**(目前 commit 作者為 eric);確認前跨人修改依 Gateway `AGENT.md` §10.5 |
+| 負責人 | 佳緯 |
 | 工作區 | 與 `../giga-api-gateway-bff/`(上位規範、SDK、web-kit、路由表)、`../GigaItApp/`(權限設定、畫面範本)、`../giga-observe/`(監控)同層 |
 | 上位規範 | 前端 `../giga-api-gateway-bff/docs/FRONTEND-GUIDE.md`;後端 `../giga-api-gateway-bff/docs/BACKEND-GUIDE.md` |
 | 專案地圖 | `docs/PROJECT-MAP.md`;**開發新功能後必須更新**(§9) |

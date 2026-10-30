@@ -4,7 +4,7 @@
 
 | 項目 | 內容 | 狀態 |
 | --- | --- | --- |
-| D0 | 文件與登記 | 進行中 |
+| D0 | 文件與登記 | 完成 |
 | B0 | 串流驗證 | 未開始 |
 | B1 | 後端骨架 | 未開始 |
 | B2 | 模組搬移 | 未開始 |
@@ -20,9 +20,9 @@
 - NetOps:`AGENT.md`、`CLAUDE.md`、`GEMINI.md`、`.gitattributes`、MR 範本、`docs/`。
 - 工作區:`AGENT.md` §3、`PROJECT-MAP.md`、`architecture/workspace.json`、`deployment.json`、甘特圖。
 - Gateway:`AGENT.md` §10.2、§10.3,`BACKEND-GUIDE.md` §3.3,`PRD.md` SPA 路徑表。
-- Maintainer 建立 `develop`。
+- 建立 `develop`。
 
-**完成條件**:`npm run arch:check` 通過;架構圖看得到 NetOps;三個 repo 的文件 MR 已合併。
+**完成條件**:`npm run arch:check` 通過;架構圖看得到 NetOps;三個 repo 的文件 MR 已合併(NetOps !1、giganexusai !20、giga-api-gateway-bff !18)。
 
 ## B0 串流驗證
 

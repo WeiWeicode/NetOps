@@ -1,9 +1,9 @@
 # 專案地圖 — NetOps
 
-> **最後更新:2026-10-30**(D0:建立規劃文件;程式尚未改動,仍是舊架構)。
+> **最後更新:2026-11-02**(決策 D13–D18、UI 規劃;這次不改寫 AI;程式尚未改動,仍是舊架構)。
 > 開發新功能後,在同一個變更內更新本文件(`AGENT.md` §9)。只寫結構與職責,細節連到 `docs/`。
 
-資訊網通管理系統:PA-560 防火牆 log、AD 事件、AI 問答與網通知識庫。目標是接入 GigaNexus Gateway(`/netops/`、`netops-api` :51292),目前部署於 IIS `/NetOps`。
+資訊網通管理系統:PA-560 防火牆 log、AD 事件與網通知識庫;AI 問答只留在舊版(ARCHITECTURE D17)。目標是接入 GigaNexus Gateway(`/netops/`、`netops-api` :51292),目前部署於 IIS `/NetOps`。
 
 ---
 
@@ -25,15 +25,15 @@ NetOps/
 └─ public/             favicon、圖片
 ```
 
-## 2. 目標目錄(B1 起建立)
+## 2. 目標目錄(B0 起建立)
 
 ```
 NetOps/
 ├─ backend/                 netops-api
 │  ├─ src/
 │  │  ├─ server.ts、app.ts、config.ts、errors.ts、openapi.ts
-│  │  ├─ modules/{pa,pa-events,ad,ai,kb,ftp}/   routes.ts(介面)+ 核心邏輯
-│  │  └─ infra/{ftp,llm,qdrant,store,jobs}/     外部系統、資料存取、長時間工作
+│  │  ├─ modules/{pa,pa-events,ad,kb,ftp}/   routes.ts(介面)+ 核心邏輯
+│  │  └─ infra/{ftp,store,jobs}/             外部系統、資料存取、長時間工作
 │  └─ test/{unit,integration}/
 ├─ frontend/                Vue 3 SPA(base /netops/)
 ├─ deploy/                  compose、gateway-routes.yaml、gateway-rbac.yaml、env 範本
@@ -46,14 +46,14 @@ NetOps/
 | --- | --- | --- |
 | 介面 | `server/routes/` | `backend/src/modules/*/routes.ts` |
 | 核心 | `server/lib/` 的解析、彙總、研判 | `backend/src/modules/*/`,不依賴 Fastify |
-| 基礎設施 | `server/lib/{ftp,llm,vector}.js`、各模組自行讀寫 `uploads/` | `backend/src/infra/`;資料一律經 `infra/store` |
+| 基礎設施 | `server/lib/{ftp,llm,vector}.js`、各模組自行讀寫 `uploads/` | `backend/src/infra/`;資料一律經 `infra/store`;`llm`、`vector` 留在舊版(D17) |
 
 ## 4. 主要流程
 
 - **Log 匯入**:FTP 串流讀取 → 解析彙總 → 存摘要(原始 log 不落地)。
 - **總覽**:依期間合併摘要回傳。
-- **AI 問答**:問題抽出 IP / Port → 查統計或掃 FTP → 連同知識庫送 vLLM → 串流回傳。
-- **知識庫**:筆記存檔 → 重建匯整檔 → 同步 Qdrant。
+- **AI 問答**(只在舊版,D17):問題抽出 IP / Port → 查統計或掃 FTP → 連同知識庫送 vLLM → 串流回傳。
+- **知識庫**:筆記存檔 → 重建匯整檔;同步 Qdrant 只在舊版。
 
 ## 5. 要改 X → 看哪裡
 
@@ -66,6 +66,8 @@ NetOps/
 | 知識庫與向量 | `server/lib/kb.js`、`server/lib/vector.js`、`server/lib/iplearn.js` |
 | 選單與頁面 | `src/router/menu.js`、`src/views/` |
 | 接入規劃與決策 | `docs/ARCHITECTURE.md`、`docs/IMPL-PLAN.md` |
+| 資料與 AI 流程(現況、過渡期、未來目標) | `docs/FLOW-ARCHITECTURE.md` |
+| 新版畫面與主題色 | `docs/UI-GUIDE.md` |
 
 ## 6. 測試地圖
 
@@ -76,7 +78,7 @@ NetOps/
 | 差異 | 狀態 |
 | --- | --- |
 | 整個後端使用 Express 與 JavaScript、沒有 OpenAPI | B1、B2 處理 |
-| 前端 JavaScript、Element Plus,與 GigaItApp 元件不同 | 保留(ARCHITECTURE D5) |
+| 前端 JavaScript、Element Plus,與 GigaItApp、入口網元件不同 | F1 改用 `src/ui/` 與 TypeScript(ARCHITECTURE D5、`docs/UI-GUIDE.md`) |
 | 自建登入、Bearer Token 存 localStorage | B2、F1 移除 |
 | 回應格式與時間不符 BACKEND-GUIDE §5 | B2 處理 |
 | 資料寫在 `uploads/`、各模組自行讀寫 | B2 集中到 `infra/store`;資料庫為後續階段(D8) |

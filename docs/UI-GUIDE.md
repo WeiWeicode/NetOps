@@ -48,6 +48,8 @@
 | 流量總覽自刻 SVG 每小時長條(允許 / 阻擋堆疊、點選) | `ui/charts/GStackedBars.vue`(NetOps 新增;同步回入口網前要先討論) |
 | `text-danger`、`text-run` 等狀態文字色 | `base.css` 新增 `.c-success`、`.c-warning`、`.c-danger`(語意色混入本文色,四種組合對比 ≥ 5:1;`.tone-*` 只設定 `--tone`) |
 
+知識庫的 Markdown(`v-html`)只能輸出 `composables/markdown.ts` 的結果(marked + DOMPurify),樣式寫在頁面 `.md :deep(...)`;其他頁面不用 `v-html`。
+
 `GTable` 的儲存格插槽內容全是 `v-if` 落空(只剩註解)時會顯示預設值,要留 `<span v-else />`。
 
 **只換畫面,不改功能**:篩選條件、排行點擊帶到明細、知識庫操作都要保留。AI 畫面不改寫,選單放連結到舊版(ARCHITECTURE D17、D18)。

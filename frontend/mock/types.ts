@@ -12,4 +12,6 @@ export interface MockCtx {
   fail: (status: number, code: string, message: string) => void;
   /** 下載檔案(CSV / Markdown);filename 放在 Content-Disposition 的 filename*=UTF-8'' */
   sendFile: (contentType: string, filename: string, text: string) => void;
+  /** 記錄人(「工號 姓名」) */
+  user: string;
 }

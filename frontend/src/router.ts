@@ -155,8 +155,16 @@ const PAGES: PageDef[] = [
   },
   {
     path: 'knowledge',
-    meta: { permission: NETOPS.kbPage, requires: [API.kbRead], title: '知識庫', subtitle: 'Network Knowledge', icon: 'book-open', group: 'knowledge' },
-    view: wip('網通筆記的查詢、新增、修改、刪除與下載;語意搜尋與自動學習不改寫(ARCHITECTURE D17)。'),
+    meta: {
+      permission: NETOPS.kbPage,
+      requires: [API.kbRead],
+      title: '知識庫',
+      subtitle: 'Network Knowledge',
+      icon: 'book-open',
+      group: 'knowledge',
+      description: '網通環境筆記;AI 問答與分析會自動參考(語意搜尋與自動學習在舊版,ARCHITECTURE D17)',
+    },
+    view: page(() => import('./pages/knowledge/Knowledge.vue')),
   },
 ];
 

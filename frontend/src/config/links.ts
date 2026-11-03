@@ -9,6 +9,8 @@ export const LINKS = {
   paAsk: `${LEGACY_NETOPS_URL}/Main/PaAsk`,
   /** 舊版流量總覽(AI 分析在這裡,D17) */
   paDashboard: `${LEGACY_NETOPS_URL}/Main/Dashboard`,
+  /** 舊版知識庫(語意搜尋、外部 IP 自動學習在這裡,D17) */
+  knowledge: `${LEGACY_NETOPS_URL}/Main/Knowledge`,
   adAsk: `${LEGACY_NETOPS_URL}/Main/AdAsk`,
   veeam: 'https://gsmc-web.gigasolar.com.tw/Veeam',
 } as const;

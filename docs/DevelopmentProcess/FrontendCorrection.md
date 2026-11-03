@@ -2,6 +2,12 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。範圍:`frontend/`。
 
+## 2026-11-03 F1 第 2 批:知識庫
+- 工作項目:F1
+- 內容:改寫知識庫,串接 docs/API.md §7(後端 B2-kb !10)。筆記查詢(後端分頁)、閱讀、下載 .md、匯整檔預覽與下載;有 `netops.kb-page.write` 可新增、修改、刪除(對話框,標題 300 字、內容 20,000 字、IP 30 個、標籤 10 個)。Markdown 以 `marked` 轉換後一律經 `DOMPurify`(`composables/markdown.ts`;連結另開分頁並加 rel,禁 style / form / iframe;AGENT.md §7.4)。新增相依 `marked`、`dompurify`(版本同舊版,AGENT.md §7.4 要求 DOMPurify)。不改寫(D17):語意搜尋、向量同步、外部 IP 自動學習、在 AI 問答請 AI 記錄 → 連到舊版。假 API `mock/kb.ts`(含惡意 HTML 範例)。
+- 檔案:`frontend/src/pages/knowledge/Knowledge.vue`、`frontend/src/api/kb.ts`、`frontend/src/composables/markdown.ts`、`frontend/src/config/links.ts`、`frontend/mock/kb.ts`、`frontend/package.json`
+- 驗證:見 MR 描述
+
 ## 2026-11-03 F1 第 2 批:Log 明細查詢(PA、AD)
 - 工作項目:F1
 - 內容:改寫防火牆與 AD 的 Log 明細查詢。AD 串接 docs/API.md §6.2(後端分頁、匯出由後端產生,期間最長 31 天);PA 照 §4.3 改工作模式(送出 → 進度 → 分頁讀結果、停止 = 取消工作、匯出;期間最長 31 天、Port 格式檢查、stopReason 含 closed / error),串接後端 B2-logs(!11);本機 `MOCK` 模式用 `mock/paLog.ts`。網址條件只收白名單與格式正確的值(`composables/searchQuery.ts`),時間接受 `YYYY-MM-DD`(整天)、`YYYY-MM-DDTHH:mm` 與舊版 `YYYY/MM/DD HH:mm`,送 API 時轉 ISO 8601 含時區。展開列改對話框。下載改共用 `api/gateway.ts` 的 `download()`(fetch Blob、帶 CSRF、不帶 Bearer)。

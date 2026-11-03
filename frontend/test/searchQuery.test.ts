@@ -30,5 +30,6 @@ describe('filenameOf', () => {
     expect(filenameOf(`attachment; filename="a.csv"; filename*=UTF-8''${encodeURIComponent('網通知識庫匯整.md')}`, 'x')).toBe('網通知識庫匯整.md');
     expect(filenameOf('attachment; filename="a.csv"', 'x')).toBe('a.csv');
     expect(filenameOf(null, 'x.csv')).toBe('x.csv');
+    expect(filenameOf(`attachment; filename*=UTF-8''${encodeURIComponent('../a/b:c.md')}`, 'x')).toBe('.._a_b_c.md');
   });
 });

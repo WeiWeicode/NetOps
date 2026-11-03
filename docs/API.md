@@ -438,7 +438,7 @@ AI 相關(語意搜尋、向量同步、外部 IP 自動學習)不搬移(ARCHITE
 | 409 | `NETOPS_IMPORT_QUEUE_FULL` | 分析佇列已滿 |
 | 409 | `NETOPS_KB_LIMIT` | 知識庫筆記已達上限 |
 | 422 | `NETOPS_EXPORT_TOO_LARGE` | 匯出筆數超過上限 |
-| 502 | `NETOPS_FTP_UNAVAILABLE` | FTP 連線或讀取失敗(訊息含 FTP 回應,不含帳密) |
+| 502 | `NETOPS_FTP_UNAVAILABLE` | FTP 連線或讀取失敗。訊息為「動作 + FTP 路徑:原因」,原因只有分類(連線逾時、拒絕連線、找不到主機、連線中斷、TLS 憑證驗證失敗、帳號或密碼錯誤(FTP 530)、檔案或目錄不存在,或沒有權限(FTP 550)…),不含 FTP 主機、port 與原始錯誤;原始錯誤只寫服務日誌。匯入狀態的 `lastSyncError`、檔案的 `error`、工作的 `error.message` 同樣規則 |
 | 503 | `NETOPS_FTP_NOT_CONFIGURED` | 未設定 FTP(只會在 dev) |
 | 503 | `NETOPS_FTP_BUSY` | FTP 連線名額都在使用中(匯入或查詢進行中,測試區只有 1 條),等候 25 秒仍拿不到;請稍後再試 |
 | 503 | `NETOPS_NOT_READY` | 資料目錄無法讀寫(`/readyz`) |

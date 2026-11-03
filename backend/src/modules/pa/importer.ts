@@ -189,7 +189,7 @@ export function createTrafficImporter({ ftp, store, ftpConfig, log }: { ftp: Ftp
       opened?.abort();
       // 取消的檔案維持原本狀態(下次同步再分析)
       if (controller.signal.aborted) return;
-      log.error({ file: item.path, err }, '[匯入] 分析失敗');
+      log.error({ file: item.path, err, cause: (err as { cause?: unknown }).cause }, '[匯入] 分析失敗');
       index.files[item.path] = { ...(index.files[item.path] ?? {}), name: item.name, size: item.size, modified: modKey(item.modified), status: 'error', error: errorText(err), analyzedAt: new Date().toISOString() };
       job.failed++;
     } finally {
@@ -309,6 +309,7 @@ export function createTrafficImporter({ ftp, store, ftpConfig, log }: { ftp: Ftp
     } catch (err) {
       job.lastSyncAt = new Date().toISOString();
       job.lastSyncError = errorText(err);
+      log.error({ err, cause: (err as { cause?: unknown }).cause }, '[匯入] 同步失敗');
       throw err;
     } finally {
       job.syncing = false;

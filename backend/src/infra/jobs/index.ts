@@ -221,7 +221,8 @@ export class JobRunner {
       }
     } catch (err) {
       if (job.status === 'running') {
-        if (!(err instanceof AppError)) this.onError?.(job.kind, err);
+        // 非預期錯誤與外部系統錯誤(帶 cause,例如 FTP)都寫日誌;回應只有 toError 的訊息
+        if (!(err instanceof AppError) || (err as { cause?: unknown }).cause) this.onError?.(job.kind, err);
         job.error = toError(signal.aborted ? signal.reason : err);
         this.finish(job, 'failed');
       }

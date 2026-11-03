@@ -1,5 +1,5 @@
 /**
- * 假 Gateway:PA Log 明細查詢(docs/API.md §4.3,工作模式;後端 feature/netops-b2-logs 合併前前端先接這裡)。
+ * 假 Gateway:PA Log 明細查詢(docs/API.md §4.3,工作模式;只在 MOCK 模式,實際由後端 B2-logs 提供)。
  * 工作約 4 秒完成,期間回報進度;結果、分頁、匯出、取消都照 API.md。也提供 GET /pa/options。
  */
 import type { MockCtx } from './types.ts';

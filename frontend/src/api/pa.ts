@@ -1,6 +1,6 @@
 /**
  * 防火牆 PA-560 TRAFFIC(docs/API.md §4.1;後端 B2-pa 已實作),需要 netops.pa.read。
- * 明細查詢(§4.3)需要 netops.pa-log.read,在明細查詢頁另寫。
+ * 明細查詢(§4.3)需要 netops.pa-log.read。
  */
 import { http } from './gateway';
 import type { ImportStatus } from './ftp';
@@ -58,7 +58,10 @@ export interface PaOptions {
   actions: string[];
 }
 
-// ---------- Log 明細查詢與匯出(§4.3,工作模式;待後端 feature/netops-b2-logs,目前接假 API) ----------
+// ---------- Log 明細查詢與匯出(§4.3,工作模式;後端 B2-logs) ----------
+
+/** 期間最長 31 天 */
+export const PA_SEARCH_MAX_DAYS = 31;
 
 export const PA_SEARCH_KEYS = ['src', 'dst', 'ip', 'port', 'proto', 'app', 'rule', 'action', 'fromZone', 'toZone', 'user', 'country', 'q'] as const;
 export type PaSearchKey = (typeof PA_SEARCH_KEYS)[number];
@@ -75,8 +78,8 @@ export interface PaSearchResult {
   filesScanned: number;
   scanned: number;
   seconds: number;
-  /** '' 全部掃完 | 'limit' 達筆數上限 | 'timeout' 超過掃描秒數(結果不完整) */
-  stopReason: '' | 'limit' | 'timeout';
+  /** '' 全部掃完 | 'limit' 達筆數上限 | 'timeout' 超過掃描秒數或等不到 FTP 連線 | 'closed' 服務關閉 | 'error' 讀取失敗(後三者結果不完整) */
+  stopReason: '' | 'limit' | 'timeout' | 'closed' | 'error';
 }
 
 export interface PaLogRow {

@@ -4,7 +4,7 @@
 
 ## 2026-11-03 F1 第 2 批:Log 明細查詢
 - 工作項目:F1
-- 內容:防火牆與 AD 的 Log 明細查詢改用新版畫面;AD 串接後端,PA 待後端(假 API);細節見 `FrontendCorrection.md`。
+- 內容:防火牆與 AD 的 Log 明細查詢改用新版畫面;PA、AD 都串接後端;細節見 `FrontendCorrection.md`。
 - 檔案:`frontend/`、`docs/`
 - 驗證:見 `FrontendCorrection.md` 同日紀錄
 

@@ -4,14 +4,25 @@
  *   依時間挑出已分析的檔案,後端從 FTP 串流逐列篩選(原始 log 不落地)。改成工作模式(ARCHITECTURE D6):
  *   送出 → 每 1.5 秒查詢進度 → 完成後分頁讀取結果(每頁 50 筆)、匯出 CSV(後端產生)。可隨時停止;離開頁面自動取消。
  *   流量總覽點選會帶 ?from=&to=&src=… 進來並自動查詢;網址條件只收白名單與格式正確的值(composables/searchQuery.ts)。
- *   **待後端**:§4.3 在 feature/netops-b2-logs 尚未合併,目前只接本機假 API(mock/paLog.ts)。
+ *   期間最長 31 天;目的 Port 只能是數字與逗號(後端同樣檢查)。
  */
 import { computed, onMounted, reactive, ref, shallowRef, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { describeError, download } from '@/api/gateway';
 import { fmtNum, fmtSize, fmtTime } from '@/api/format';
-import { actionOf, pa, PA_FIELD_LABELS, PA_SEARCH_KEYS, paLog, type PaLogRow, type PaOptions, type PaSearchBody, type PaSearchKey } from '@/api/pa';
-import { localToIso, pickQuery, toLocalInput } from '@/composables/searchQuery';
+import {
+  actionOf,
+  pa,
+  PA_FIELD_LABELS,
+  PA_SEARCH_KEYS,
+  PA_SEARCH_MAX_DAYS,
+  paLog,
+  type PaLogRow,
+  type PaOptions,
+  type PaSearchBody,
+  type PaSearchKey,
+} from '@/api/pa';
+import { cameFromApp, isPorts, localToIso, pickQuery, toLocalInput } from '@/composables/searchQuery';
 import { useJob } from '@/composables/useJob';
 import { toast } from '@/ui';
 
@@ -27,18 +38,24 @@ const form = reactive<Record<PaSearchKey, string> & { from: string; to: string }
 const formError = computed(() => {
   if (!form.from || !form.to) return '請選擇查詢時間';
   if (form.from > form.to) return '開始時間不可晚於結束時間';
+  if ((new Date(form.to).getTime() - new Date(form.from).getTime()) / 86_400_000 > PA_SEARCH_MAX_DAYS) return `期間最長 ${PA_SEARCH_MAX_DAYS} 天`;
+  if (form.port.trim() && !isPorts(form.port.trim())) return '目的 Port 請輸入數字,多個以逗號分隔';
   return '';
 });
 
 // ---------- 下拉選項(期間內出現過的值;網址帶進來的值不在清單時也保留) ----------
 const options = shallowRef<PaOptions>({ apps: [], rules: [], zones: [], actions: [] });
+let optSeq = 0;
 async function loadOptions() {
   const from = form.from.slice(0, 10);
   if (!from) return;
+  const my = ++optSeq;
   try {
-    options.value = await pa.options(from, form.to.slice(0, 10) || from);
+    const r = await pa.options(from, form.to.slice(0, 10) || from);
+    if (my === optSeq) options.value = r;
   } catch {
     // 選項只是方便輸入,失敗時仍可查詢(下拉只剩目前的值)
+    if (my === optSeq) options.value = { apps: [], rules: [], zones: [], actions: [] };
   }
 }
 watch(() => [form.from.slice(0, 10), form.to.slice(0, 10)], loadOptions);
@@ -65,6 +82,8 @@ const page = ref(1);
 const rowsLoading = ref(false);
 const rowsError = ref<Error | null>(null);
 let rowsSeq = 0;
+/** 畫面上資料的頁碼(GTable 換頁時已先改了 page;失敗要還原) */
+let shownPage = 1;
 
 async function fetchRows(p: number) {
   const id = job.job.value?.id;
@@ -77,9 +96,12 @@ async function fetchRows(p: number) {
     if (my !== rowsSeq) return;
     rows.value = r.items;
     total.value = r.total;
-    page.value = r.page;
+    page.value = shownPage = r.page;
   } catch (e) {
-    if (my === rowsSeq) rowsError.value = e as Error;
+    if (my === rowsSeq) {
+      rowsError.value = e as Error;
+      page.value = shownPage;
+    }
   } finally {
     if (my === rowsSeq) rowsLoading.value = false;
   }
@@ -92,6 +114,8 @@ watch(result, (r) => {
 });
 
 function search() {
+  // 查詢中按 Enter 不重送(要重查請先停止)
+  if (job.running.value) return;
   if (formError.value) return toast.warning(formError.value);
   const cond = Object.fromEntries(PA_SEARCH_KEYS.map((k) => [k, form[k].trim()]).filter(([, v]) => v)) as Partial<Record<PaSearchKey, string>>;
   // 條件記在網址:重新整理或分享連結可還原(時間用本地時間,不含時區)
@@ -100,6 +124,7 @@ function search() {
   rowsSeq++;
   rows.value = [];
   total.value = 0;
+  page.value = shownPage = 1;
   void job.start(body);
 }
 
@@ -111,7 +136,9 @@ const stopText = computed(() => {
   const r = result.value;
   if (!r) return '';
   if (r.stopReason === 'limit') return `已達上限 ${fmtNum(r.limit)} 筆,後面還有資料,請縮小時間或加條件`;
-  if (r.stopReason === 'timeout') return `掃描超過時間上限,只查了 ${r.filesScanned} / ${r.files} 個檔案,結果不完整;請縮小時間或加條件`;
+  if (r.stopReason === 'timeout') return `掃描超過時間上限或等不到 FTP 連線,只查了 ${r.filesScanned} / ${r.files} 個檔案,結果不完整;請縮小時間或加條件`;
+  if (r.stopReason === 'closed') return `服務正在關閉,只查了 ${r.filesScanned} / ${r.files} 個檔案,結果不完整;請稍後重新查詢`;
+  if (r.stopReason === 'error') return `讀取 FTP 時發生錯誤,只查了 ${r.filesScanned} / ${r.files} 個檔案,結果不完整;請稍後重新查詢`;
   return '';
 });
 
@@ -151,11 +178,12 @@ const localMinute = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${
 
 onMounted(async () => {
   const q = route.query;
-  Object.assign(form, pickQuery(q, PA_SEARCH_KEYS, { proto: (v) => /^[a-z0-9-]{1,16}$/i.test(v), port: (v) => /^\d{1,5}(\s*,\s*\d{1,5})*$/.test(v) }));
+  Object.assign(form, pickQuery(q, PA_SEARCH_KEYS, { proto: (v) => /^[a-z0-9-]{1,16}$/i.test(v), port: isPorts }));
   const from = toLocalInput(q.from);
   if (from) {
     Object.assign(form, { from, to: toLocalInput(q.to || q.from, true) || toLocalInput(q.from, true) });
-    search();
+    // 從總覽點選進來才自動查詢;外部連結只填條件
+    if (cameFromApp()) search();
     return;
   }
   // 預設:最新一天有資料的最後一小時(同舊版)
@@ -188,8 +216,6 @@ const asRow = (r: unknown) => r as PaLogRow;
 
 <template>
   <div class="stack" style="--gap: 16px">
-    <GAlert tone="info" title="待後端">明細查詢 API(docs/API.md §4.3)尚未合併,本機以假資料示範;測試區要等後端 feature/netops-b2-logs 上線。</GAlert>
-
     <GCard padding="sm">
       <form class="stack" style="--gap: 12px" @submit.prevent="search">
         <div class="filters">

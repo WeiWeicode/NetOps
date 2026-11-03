@@ -10,7 +10,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { AD_EXPORT_MAX, AD_LEVEL, AD_SEARCH_MAX_DAYS, ad, adLog, type AdDays, type AdEventQuery, type AdEventRow } from '@/api/ad';
 import { describeError, download } from '@/api/gateway';
 import { fmtNum, fmtTime } from '@/api/format';
-import { isEventIds, localToIso, pickQuery, toLocalInput } from '@/composables/searchQuery';
+import { cameFromApp, isEventIds, localToIso, pickQuery, toLocalInput } from '@/composables/searchQuery';
 import { toast } from '@/ui';
 
 const PAGE_SIZE = 50;
@@ -47,6 +47,8 @@ const page = ref(1);
 const loading = ref(false);
 const error = ref<Error | null>(null);
 let seq = 0;
+/** 畫面上資料的頁碼(GTable 換頁時已先改了 page;失敗要還原,頁碼才與資料一致) */
+let shownPage = 1;
 
 function buildQuery(): AdEventQuery {
   const cond = Object.fromEntries(KEYS.map((k) => [k, form[k].trim()]).filter(([, v]) => v));
@@ -62,9 +64,12 @@ async function fetchPage(p: number) {
     const r = await adLog.search(applied.value, p, PAGE_SIZE);
     if (my !== seq) return;
     result.value = r;
-    page.value = r.page;
+    page.value = shownPage = r.page;
   } catch (e) {
-    if (my === seq) error.value = e as Error;
+    if (my === seq) {
+      error.value = e as Error;
+      if (result.value) page.value = shownPage;
+    }
   } finally {
     if (my === seq) loading.value = false;
   }
@@ -91,11 +96,7 @@ async function exportCsv() {
   exporting.value = true;
   try {
     const stamp = (s: string) => s.slice(0, 16).replace(/\D/g, '');
-    await download(
-      '/api/netops/ad/events/export',
-      { ...adLog.exportQuery(applied.value) },
-      `AD_log_${stamp(applied.value.from)}_${stamp(applied.value.to)}.csv`,
-    );
+    await download(adLog.exportPath, adLog.exportQuery(applied.value), `AD_log_${stamp(applied.value.from)}_${stamp(applied.value.to)}.csv`);
   } catch (e) {
     toast.fromError(e, '匯出失敗');
   } finally {
@@ -120,7 +121,8 @@ onMounted(async () => {
   if (from) {
     // 只有日期時補上 00:00 / 23:59
     Object.assign(form, { from, to: toLocalInput(q.to || q.from, true) || toLocalInput(q.from, true) });
-    search();
+    // 從總覽點選進來才自動查詢;外部連結只填條件
+    if (cameFromApp()) search();
   } else {
     const day = meta.value?.days[0]?.day;
     if (day) Object.assign(form, { from: `${day}T00:00`, to: `${day}T23:59` });

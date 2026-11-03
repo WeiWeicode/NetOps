@@ -4,7 +4,7 @@
 
 ## 2026-11-03 F1 第 2 批:Log 明細查詢(PA、AD)
 - 工作項目:F1
-- 內容:改寫防火牆與 AD 的 Log 明細查詢。AD 串接 docs/API.md §6.2(後端分頁、匯出由後端產生,期間最長 31 天);PA 照 §4.3 改工作模式(送出 → 進度 → 分頁讀結果、停止 = 取消工作、匯出),**待後端** `feature/netops-b2-logs`,目前只接假 API `mock/paLog.ts`。網址條件只收白名單與格式正確的值(`composables/searchQuery.ts`),時間接受 `YYYY-MM-DD`(整天)、`YYYY-MM-DDTHH:mm` 與舊版 `YYYY/MM/DD HH:mm`,送 API 時轉 ISO 8601 含時區。展開列改對話框。下載改共用 `api/gateway.ts` 的 `download()`(fetch Blob、帶 CSRF、不帶 Bearer)。
+- 內容:改寫防火牆與 AD 的 Log 明細查詢。AD 串接 docs/API.md §6.2(後端分頁、匯出由後端產生,期間最長 31 天);PA 照 §4.3 改工作模式(送出 → 進度 → 分頁讀結果、停止 = 取消工作、匯出;期間最長 31 天、Port 格式檢查、stopReason 含 closed / error),串接後端 B2-logs(!11);本機 `MOCK` 模式用 `mock/paLog.ts`。網址條件只收白名單與格式正確的值(`composables/searchQuery.ts`),時間接受 `YYYY-MM-DD`(整天)、`YYYY-MM-DDTHH:mm` 與舊版 `YYYY/MM/DD HH:mm`,送 API 時轉 ISO 8601 含時區。展開列改對話框。下載改共用 `api/gateway.ts` 的 `download()`(fetch Blob、帶 CSRF、不帶 Bearer)。
 - 檔案:`frontend/src/pages/{firewall,ad}/Search.vue`、`frontend/src/api/{ad,pa,gateway}.ts`、`frontend/src/composables/searchQuery.ts`、`frontend/mock/{ad,paLog,types,gateway}.ts`、`frontend/src/router.ts`
 - 驗證:見 MR 描述
 

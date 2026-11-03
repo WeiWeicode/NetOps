@@ -80,6 +80,7 @@ export async function download(path: ApiPath, query: Query | undefined, fallback
   if (res.status === 401 && !retried) {
     if (await refreshSession()) return download(path, query, fallbackName, true);
     redirectToLogin();
+    return;
   }
   if (!res.ok) {
     const requestId = res.headers.get('X-Request-Id');
@@ -99,7 +100,8 @@ export async function download(path: ApiPath, query: Query | undefined, fallback
   document.body.appendChild(a);
   a.click();
   a.remove();
-  setTimeout(() => URL.revokeObjectURL(href), 0);
+  // 太早撤銷時部分瀏覽器(Firefox、Safari)下載會失敗
+  setTimeout(() => URL.revokeObjectURL(href), 30_000);
 }
 
 /** 錯誤訊息附 requestId 前 12 碼,方便回報時查日誌(AGENT.md §5);欄位錯誤(details)一併列出 */

@@ -134,4 +134,5 @@ export const adLog = {
       query: { ...q, issueOnly: q.issueOnly || undefined, page, pageSize },
     }),
   exportQuery: (q: AdEventQuery) => ({ ...q, issueOnly: q.issueOnly || undefined }),
+  exportPath: '/api/netops/ad/events/export' as const,
 };

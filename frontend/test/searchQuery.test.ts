@@ -14,7 +14,7 @@ describe('明細查詢的網址條件', () => {
   });
 
   it('送 API 的時間含時區', () => {
-    expect(localToIso('2026-11-02T08:30')).toMatch(/^2026-11-02T08:30:00[+-]\d{2}:\d{2}$/);
+    expect(localToIso('2026-11-02T08:30')).toBe('2026-11-02T08:30:00+08:00');
     expect(localToIso('x')).toBe('');
   });
 

@@ -76,7 +76,7 @@ D13:骨架直接留用;AI 不在這次範圍,不做串流驗證(D7、D17)。
 
 其他類型 log 的**匯入**放在 b2-pa(FTP Log 檔案頁同時列 TRAFFIC 與其他類型目錄),總覽 API 在 b2-ad。
 
-**狀態:完成(2026-11-03,!8–!11 合併並部署測試區)**。四批都以同一批假 log 與舊版 `server/lib` 比對一致(`SUMMARY_VERSION` = 4);模組只經 `infra/store` 讀寫;每批都經 `security-auditor`、`code-reviewer` 審查並修正(含兩個 High:IP 萬用字元 ReDoS、知識庫標籤換行偽造記錄人);`backend/` 從未相依 `mssql`、`activedirectory2`、`jsonwebtoken`(只在舊版根目錄 `package.json`,D12 不動)。後續修正:!20(DELETE 在 OpenAPI 宣告 204)、FTP 錯誤訊息不外露主機(待合併)。行為規格見 `docs/Gherkin/`(!18)。
+**狀態:完成(2026-11-03,!8–!11 合併並部署測試區)**。四批都以同一批假 log 與舊版 `server/lib` 比對一致(`SUMMARY_VERSION` = 4);模組只經 `infra/store` 讀寫;每批都經 `security-auditor`、`code-reviewer` 審查並修正(含兩個 High:IP 萬用字元 ReDoS、知識庫標籤換行偽造記錄人);`backend/` 從未相依 `mssql`、`activedirectory2`、`jsonwebtoken`(只在舊版根目錄 `package.json`,D12 不動)。後續修正:!20(DELETE 在 OpenAPI 宣告 204)、FTP 錯誤訊息不外露主機(!22,待合併)。行為規格見 `docs/Gherkin/`(!18)。
 
 **完成條件**:以同一批假 log 比對舊版與新版摘要完全一致(`SUMMARY_VERSION` 不變);模組內沒有直接讀寫資料檔;`security-auditor`、`code-reviewer` 審查完成;不再相依 `mssql`、`activedirectory2`、`jsonwebtoken`。
 

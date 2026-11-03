@@ -69,8 +69,16 @@ const PAGES: PageDef[] = [
   },
   {
     path: 'firewall/events',
-    meta: { permission: NETOPS.paEvents, requires: [API.paRead], title: '安全事件', subtitle: 'PA-560 Events', icon: 'shield-alert', group: 'firewall' },
-    view: wip('TRAFFIC 以外的 log:威脅、URL 過濾、資料過濾、WildFire、解密、GlobalProtect、User-ID。'),
+    meta: {
+      permission: NETOPS.paEvents,
+      requires: [API.paRead],
+      title: '安全事件',
+      subtitle: 'PA-560 Events',
+      icon: 'shield-alert',
+      group: 'firewall',
+      description: 'TRAFFIC 以外的 log:威脅、URL 過濾、資料過濾、WildFire、解密、GlobalProtect、User-ID',
+    },
+    view: page(() => import('./pages/firewall/Events.vue')),
   },
   {
     path: 'firewall/search',

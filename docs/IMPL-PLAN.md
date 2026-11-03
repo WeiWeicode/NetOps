@@ -83,7 +83,7 @@ D13:骨架直接留用;AI 不在這次範圍,不做串流驗證(D7、D17)。
 依 [UI-GUIDE.md](UI-GUIDE.md)(D5):
 
 1. **框架**:`frontend/` 從入口網框架複製(TypeScript、`src/ui/`、外框、`base: '/netops/'`、`@giganexus/web-kit`),換上工程藍主題色,先跑通空頁與權限。
-2. **畫面**:由低風險到高風險逐頁改寫,每頁對照舊版功能:FTP Log 檔案 → 明細查詢 → AD 事件總覽 → 安全事件 → 流量總覽 → 知識庫。
+2. **畫面**:由低風險到高風險逐頁改寫,每頁對照舊版功能:FTP Log 檔案 → 明細查詢 → AD 事件總覽 → 安全事件 `feature/netops-f1-pa-events` → 流量總覽 → 知識庫。
 3. **收尾**:移除 `Login.vue`、`SyncLogin.vue`、`stores/token.js`、舊配色系統與 Element Plus、Tailwind。
 
 - **不改寫**(D17):`PaAsk.vue`、`AiAnalysis.vue`、`TranslateBox.vue`,以及知識庫頁的語意搜尋與自動學習區塊。

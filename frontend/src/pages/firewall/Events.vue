@@ -1,0 +1,298 @@
+<script setup lang="ts">
+/**
+ * 防火牆 › 安全事件(docs/API.md §4.2;舊版 src/views/PaEvents.vue):
+ *   PA-560 TRAFFIC 以外的 log(威脅、URL 過濾、資料過濾、WildFire、解密、GlobalProtect、User-ID),每種類型一個分段:
+ *   KPI、每小時事件數、排行;資料來自 FTP 各類型目錄,「FTP Log 檔案」同步分析後才有。?type= 記住目前類型。
+ *   點排行中含 IP 的項目 → 另開舊版 AI 問答並帶入問題(AI 不改寫,ARCHITECTURE D17、D18)。
+ *   分析中、摘要讀不到的檔案(missing)都要提示結果不完整(AGENT.md §5)。
+ */
+import { computed, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
+import { describeError } from '@/api/gateway';
+import { fmtNum, fmtShort, fmtTime } from '@/api/format';
+import { paEvents, type PaEventOverview, type PaEventType } from '@/api/paEvents';
+import TopList from '@/components/TopList.vue';
+import { daysBetween } from '@/composables/dates';
+import { legacyAskUrl } from '@/config/links';
+
+const MAX_DAYS = 92;
+const route = useRoute();
+const router = useRouter();
+
+// ---------- 類型 ----------
+const types = ref<PaEventType[]>([]);
+const typesError = ref<Error | null>(null);
+const typesLoading = ref(false);
+const type = ref(typeof route.query.type === 'string' ? route.query.type : '');
+const current = computed(() => types.value.find((t) => t.type === type.value));
+const typeOptions = computed(() => types.value.map((t) => ({ label: `${t.label}${t.rows ? `(${fmtShort(t.rows)})` : ''}`, value: t.type })));
+
+async function loadTypes() {
+  typesLoading.value = true;
+  try {
+    types.value = (await paEvents.types()).types;
+    typesError.value = null;
+    if (!current.value && types.value.length) type.value = types.value[0]!.type;
+    else resetRange(false);
+  } catch (e) {
+    typesError.value = e as Error;
+  } finally {
+    typesLoading.value = false;
+  }
+}
+
+// ---------- 期間 ----------
+const range = reactive({ from: '', to: '' });
+/** 換類型:預設該類型最新一天(force = false 時已選的期間保留,重新整理用) */
+function resetRange(force = true) {
+  const days = current.value?.days ?? [];
+  if (!force && range.from && days.length) return;
+  const d = days[0] ?? '';
+  Object.assign(range, { from: d, to: d });
+  if (!d) data.value = null;
+}
+const rangeError = computed(() => {
+  if (!range.from || !range.to) return current.value?.days.length ? '請選擇開始與結束日期' : '';
+  if (range.from > range.to) return '開始日期不可晚於結束日期';
+  if (daysBetween(range.from, range.to) > MAX_DAYS) return `期間最長 ${MAX_DAYS} 天`;
+  return '';
+});
+watch(type, (t) => {
+  if (route.query.type !== t) void router.replace({ query: { ...route.query, type: t } });
+  // 換類型:丟掉舊類型的資料與進行中的請求,避免標題已換、內容還是舊類型
+  seq++;
+  data.value = null;
+  loadError.value = null;
+  loading.value = false;
+  resetRange();
+});
+
+// ---------- 摘要 ----------
+const data = shallowRef<PaEventOverview | null>(null);
+const loading = ref(false);
+const loadError = ref<Error | null>(null);
+let seq = 0;
+
+async function load() {
+  if (!type.value) return;
+  // 期間無效時不顯示舊期間的結果
+  if (rangeError.value) {
+    seq++;
+    data.value = null;
+    loading.value = false;
+    return;
+  }
+  const my = ++seq;
+  loading.value = true;
+  loadError.value = null;
+  try {
+    const r = await paEvents.overview(type.value, range.from, range.to);
+    if (my === seq) data.value = r;
+  } catch (e) {
+    if (my === seq) loadError.value = e as Error;
+  } finally {
+    if (my === seq) loading.value = false;
+  }
+}
+// 改類型或日期時稍等再送出(期間最長 92 天,連續修改不要每次都送)
+const DEBOUNCE_MS = 300;
+let debounce: ReturnType<typeof setTimeout> | undefined;
+watch(
+  () => [type.value, range.from, range.to],
+  () => {
+    clearTimeout(debounce);
+    debounce = setTimeout(load, DEBOUNCE_MS);
+  },
+);
+onBeforeUnmount(() => clearTimeout(debounce));
+
+const incomplete = computed(() => {
+  const d = data.value;
+  if (!d) return '';
+  const why = [
+    d.import.busy ? '分析進行中' : '',
+    d.missing ? `${d.missing} 個已分析的檔案讀不到摘要` : '',
+    d.import.failed ? `${d.import.failed} 個檔案分析失敗` : '',
+  ];
+  return why.filter(Boolean).join('、');
+});
+
+/** 每小時事件數:單日只顯示「時」,多日加上日期 */
+const hourChart = computed(() => {
+  const h = data.value?.hours ?? [];
+  const multiDay = data.value ? data.value.from !== data.value.to : false;
+  return {
+    labels: h.map((x) => (multiDay ? x.hour.slice(5, 13).replace('T', ' ') : x.hour.slice(11, 13))),
+    series: [{ name: '事件數', values: h.map((x) => x.n), area: true }],
+  };
+});
+
+// 排行的語氣(危險 / 注意);同舊版
+const DANGER = new Set(['highName', 'extSrc', 'blockHost', 'blockSrc', 'failIp', 'failUser', 'error', 'bad']);
+const WARN = new Set(['upload', 'upSrc', 'name', 'thrCategory']);
+const toneOf = (k: string) => (DANGER.has(k) ? 'danger' : WARN.has(k) ? 'warning' : 'primary');
+/** KPI 值是壞消息時標紅(嚴重度、動作、結果) */
+const BAD_VALUES = /^(critical|high|failure|block|block-url|deny|drop|reset|Blocked|malware|phishing|grayware)/i;
+const tops = computed(() => (data.value?.tops ?? []).filter((t) => t.items.length));
+
+/** IPv4(每段 0–255,前後不接數字或點) */
+const IP = /(?<![\d.])(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)(?![\d.])/;
+const hasIp = (key: string) => IP.test(key);
+/** 排行點選:內容含 IP 就另開舊版 AI 問答並帶入問題(由使用者在舊版送出) */
+function pick(key: string) {
+  const ip = key.match(IP)?.[0];
+  if (!ip) return;
+  window.open(legacyAskUrl(`${ip} 在${current.value?.label ?? ''} log 的狀況,有沒有問題?`, range.from, range.to), '_blank', 'noopener,noreferrer');
+}
+
+async function refresh() {
+  clearTimeout(debounce);
+  const before = `${type.value}|${range.from}|${range.to}`;
+  await loadTypes();
+  // 第一次載入時 loadTypes 會設定類型與期間,由 watch 載入;沒變才自己載入
+  if (`${type.value}|${range.from}|${range.to}` === before) await load();
+}
+
+onMounted(refresh);
+</script>
+
+<template>
+  <div class="stack" style="--gap: 16px">
+    <Teleport to="#page-actions" defer>
+      <GButton icon="refresh" :loading="loading || typesLoading" @click="() => void refresh()">重新整理</GButton>
+    </Teleport>
+
+    <GAlert v-if="typesError" tone="danger" title="無法取得 log 類型">{{ describeError(typesError) }}</GAlert>
+
+    <GCard v-if="types.length" padding="sm">
+      <div class="stack" style="--gap: 12px">
+        <GSegmented v-model="type" size="sm" :options="typeOptions" class="types" />
+        <div class="filters">
+          <GInput v-model="range.from" type="date" label="開始日期" :disabled="!current?.days.length" class="date" />
+          <GInput v-model="range.to" type="date" label="結束日期" :disabled="!current?.days.length" class="date" />
+          <p class="small muted hint">
+            <template v-if="data?.timeMin">{{ data.label }}:{{ fmtTime(data.timeMin) }} ~ {{ fmtTime(data.timeMax) }},{{ data.files }} 個 log 檔</template>
+            <template v-if="current?.days.length"> · 已分析 {{ current.days.at(-1) }} ~ {{ current.days[0] }}({{ current.days.length }} 天)</template>
+          </p>
+        </div>
+        <p v-if="rangeError" class="small c-danger err">{{ rangeError }}</p>
+      </div>
+    </GCard>
+
+    <GCard v-if="!typesLoading && !typesError && !types.length">
+      <GEmpty icon="shield-alert" title="沒有設定其他類型 log 的 FTP 目錄" description="請系統負責人在 netops-api 設定威脅、URL 等 log 的 FTP 目錄" />
+    </GCard>
+    <GCard v-else-if="current && !current.days.length && !typesLoading">
+      <GEmpty
+        icon="folder"
+        :title="`還沒有${current.label} log 的分析資料`"
+        :description="`FTP 目錄 ${current.dir}。到「FTP Log 檔案」同步新檔案,系統會從 FTP 讀取並產生統計(原始 log 不存本機)。`"
+      >
+        <RouterLink :to="{ path: '/firewall/files', query: { path: current.dir } }"
+          ><GButton variant="primary" icon="folder">前往 FTP Log 檔案</GButton></RouterLink
+        >
+      </GEmpty>
+    </GCard>
+    <GCard v-else-if="loadError && !data">
+      <GEmpty tone="danger" icon="shield-alert" title="無法載入安全事件" :description="describeError(loadError)">
+        <GButton icon="refresh" @click="load">重試</GButton>
+      </GEmpty>
+    </GCard>
+    <div v-else-if="!data && current" class="grid grid-auto">
+      <GCard v-for="i in 4" :key="i" padding="sm"><GSkeleton :lines="3" /></GCard>
+    </div>
+
+    <template v-if="data && current?.days.length">
+      <GAlert v-if="loadError" tone="danger">重新載入失敗,以下是上次的結果:{{ describeError(loadError) }}</GAlert>
+      <GAlert v-if="incomplete" tone="warning" title="結果不完整">{{ incomplete }};統計只含已分析的檔案,沒有出現不代表沒有發生。</GAlert>
+
+      <!-- KPI -->
+      <div class="grid kpis">
+        <GStatCard label="事件數" :value="fmtShort(data.rows)" icon="activity" :hint="`${fmtNum(data.rows)} 次(已乘上重複次數)`" />
+        <GCard v-for="k in data.kpis" :key="k.key" padding="sm" :title="k.title">
+          <ul class="kpi">
+            <li v-for="x in k.items.slice(0, 6)" :key="x.key">
+              <span class="ellipsis" :class="BAD_VALUES.test(x.key) ? 'c-danger strong' : ''">{{ x.key }}</span>
+              <span class="num muted">{{ fmtNum(x.n) }}</span>
+            </li>
+          </ul>
+          <p v-if="!k.items.length" class="small muted">沒有資料</p>
+        </GCard>
+      </div>
+
+      <!-- 每小時 -->
+      <GCard v-if="data.hours.length > 1" title="每小時事件數" icon="clock">
+        <GAreaChart :labels="hourChart.labels" :series="hourChart.series" :height="180" unit=" 次" />
+      </GCard>
+
+      <!-- 排行 -->
+      <div class="grid tops">
+        <TopList
+          v-for="t in tops"
+          :key="t.key"
+          :title="t.title"
+          :items="t.items"
+          :tone="toneOf(t.key)"
+          :pickable="hasIp"
+          pick-hint="另開舊版 AI 問答查詢這個 IP"
+          @pick="pick"
+        />
+      </div>
+      <p class="xs faint"><GIcon name="sparkles" :size="12" /> 點排行中含 IP 的項目,會另開舊版 AI 問答並帶入問題(同時參考防火牆流量與這些 log)。</p>
+    </template>
+  </div>
+</template>
+
+<style scoped>
+.types {
+  max-width: 100%;
+  overflow-x: auto;
+}
+.types :deep(button) {
+  white-space: nowrap;
+}
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  align-items: flex-end;
+}
+.date {
+  width: 180px;
+}
+.hint {
+  margin: 0 0 8px;
+}
+.err {
+  margin: 0;
+}
+.kpis {
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+}
+.kpi {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+  font-size: var(--fs-sm);
+}
+.kpi li {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+.tops {
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+}
+@media (max-width: 760px) {
+  .date {
+    flex: 1 1 140px;
+    width: auto;
+  }
+  .tops {
+    grid-template-columns: 1fr;
+  }
+}
+</style>

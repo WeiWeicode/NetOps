@@ -5,7 +5,7 @@
 | 項目 | 內容 | 狀態 |
 | --- | --- | --- |
 | D0 | 文件與登記 | 完成 |
-| B0 | 最小骨架部署 | 程式完成,待合併與測試區驗證 |
+| B0 | 最小骨架部署 | 完成 |
 | B1 | 後端骨架 | 未開始 |
 | B2 | 模組搬移 | 未開始 |
 | F1 | 前端框架與畫面改寫 | 未開始 |
@@ -34,7 +34,14 @@ D13:骨架直接留用;AI 不在這次範圍,不做串流驗證(D7、D17)。
 - `deploy/`、`.gitlab-ci.yml`(只有 `netops-api`)、測試區上游與路由、API Key(機密腳本由使用者執行)。
 - 一支驗證用路由:`GET /api/netops/ping`(後端 `/v1/ping`,權限 `netops.ping.read`),回傳登入者身分。
 
-**狀態(2026-11-03)**:`backend/`、`deploy/docker-compose.yml`、`deploy/host2-set-secrets.sh`、`.gitlab-ci.yml` 已完成,`npm run typecheck`、`npm test`(11 項)、`npm run build` 通過;上游與路由由服務啟動時自動註冊為草稿,不另寫登記腳本。監控 Key 先留空檔(giga-observe 拓樸屬 D1)。待:使用者在主機 2 執行機密腳本 → 合併 `develop` → 發佈草稿、指派權限 → 驗證下列完成條件。
+**狀態:完成(2026-11-03)**。NetOps !4 合併(`develop` e53f8da)。上游與路由由服務啟動時自動註冊為草稿,不另寫登記腳本;監控 Key 先留空檔(giga-observe 拓樸屬 D1)。驗證結果:
+
+| 完成條件 | 結果 |
+| --- | --- |
+| `develop` 合併後 CI 部署成功 | Pipeline #629 成功;容器 healthy,日誌「API 已註冊為草稿」,路由發佈後生效 |
+| 已登入的瀏覽器經 Gateway 呼叫得到驗證路由 | `GET /api/netops/ping` 回 200,帶出 S112009 的工號、姓名、部門與角色 |
+| 沒有權限回 403 | 指派 `netops.ping.read` 前同一帳號回 403 `PERMISSION_DENIED` |
+| 直連服務沒有 Token 回 401 | 容器內 `GET /v1/ping` 回 401 `NETOPS_INTERNAL_TOKEN_INVALID` |
 
 **完成條件**:`develop` 合併後 CI 部署成功;已登入的瀏覽器經 `Traefik → Nginx → BFF` 呼叫得到驗證路由;沒有權限回 403;直連服務沒有 Token 回 401。
 

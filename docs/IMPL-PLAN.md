@@ -7,7 +7,7 @@
 | D0 | 文件與登記 | 完成 |
 | B0 | 最小骨架部署 | 完成 |
 | B1 | 後端骨架 | 進行中(MR 審查) |
-| B2 | 模組搬移 | 未開始 |
+| B2 | 模組搬移 | 進行中 |
 | F1 | 前端框架與畫面改寫 | 未開始 |
 | D1 | 測試區部署 | 未開始 |
 | D2 | 驗收與切換 | 未開始 |
@@ -64,6 +64,17 @@ D13:骨架直接留用;AI 不在這次範圍,不做串流驗證(D7、D17)。
 4. Log 明細查詢與匯出(改工作模式,D6)
 
 **不搬移**(D17,留在舊版 IIS):`routes/ai.js`、`lib/evidence.js`、`lib/llm.js`、`lib/vector.js`、`lib/iplearn.js`。`lib/flows.js` 只搬匯入寫入的部分,連線組合統計照常產生。
+
+**狀態**(分批 MR,堆疊):
+
+| 批次 | 內容 | 狀態 |
+| --- | --- | --- |
+| `feature/netops-b2-pa` | `infra/ftp`(唯讀、連線上限)、PA TRAFFIC 與其他類型 log 的匯入、流量總覽、FTP Log 檔案(PA) | MR 審查中 |
+| `feature/netops-b2-ad` | 安全事件總覽、AD 匯入與總覽、AD 明細與匯出、FTP Log 檔案(AD) | 未開始 |
+| `feature/netops-b2-kb` | 知識庫 | 未開始 |
+| `feature/netops-b2-logs` | PA Log 明細查詢與匯出(工作模式) | 未開始 |
+
+其他類型 log 的**匯入**放在 b2-pa(FTP Log 檔案頁同時列 TRAFFIC 與其他類型目錄),總覽 API 在 b2-ad。
 
 **完成條件**:以同一批假 log 比對舊版與新版摘要完全一致(`SUMMARY_VERSION` 不變);模組內沒有直接讀寫資料檔;`security-auditor`、`code-reviewer` 審查完成;不再相依 `mssql`、`activedirectory2`、`jsonwebtoken`。
 

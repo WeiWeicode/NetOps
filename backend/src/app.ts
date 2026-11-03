@@ -15,6 +15,11 @@ import { AppError } from './errors.js';
 import { JobRunner } from './infra/jobs/index.js';
 import { DataFileError } from './infra/store/files.js';
 import { createStore, type Store } from './infra/store/index.js';
+import { createFtp, type Ftp } from './infra/ftp/index.js';
+import ftpRoutes from './modules/ftp/routes.js';
+import { createEventImporter } from './modules/pa-events/importer.js';
+import { createTrafficImporter } from './modules/pa/importer.js';
+import paRoutes from './modules/pa/routes.js';
 import pingRoutes from './modules/ping/routes.js';
 import { swaggerOptions } from './openapi.js';
 
@@ -33,7 +38,8 @@ declare module 'fastify' {
   }
 }
 
-export async function buildApp(config: Config): Promise<FastifyInstance> {
+/** deps:測試時注入假 FTP(AGENT.md §9);正式執行一律由設定建立 */
+export async function buildApp(config: Config, deps: { ftp?: Ftp } = {}): Promise<FastifyInstance> {
   const app = Fastify({
     logger: { level: config.logLevel, redact: ['req.headers["x-internal-token"]'] },
     // 沿用 Gateway 傳下來的 X-Request-Id,寫入每一筆日誌(§5.2)
@@ -99,5 +105,28 @@ export async function buildApp(config: Config): Promise<FastifyInstance> {
   app.get('/openapi.json', noAuth, async () => app.swagger());
 
   await app.register(pingRoutes);
+
+  // PA 匯入(背景同步在程序內執行,單一容器,D9)
+  const ftp = deps.ftp ?? createFtp(config.ftp);
+  const paDeps = { ftp, store: app.store.pa, ftpConfig: config.ftp, log: app.log };
+  const traffic = createTrafficImporter(paDeps);
+  const events = createEventImporter(paDeps);
+  app.addHook('onReady', async () => {
+    traffic.start();
+    events.start();
+  });
+  app.addHook('onClose', async () => {
+    traffic.stop();
+    events.stop();
+  });
+  await app.register(paRoutes, { traffic });
+  await app.register(ftpRoutes, {
+    ftp,
+    traffic,
+    events,
+    logDir: config.ftp?.logDir ?? '',
+    root: config.ftp?.root ?? '',
+    pattern: config.ftp?.pattern.source ?? '',
+  });
   return app;
 }

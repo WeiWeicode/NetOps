@@ -1,7 +1,7 @@
 # NetOps API
 
 > `netops-api` 的對外介面:前端(F1)照本文件串接。決策見 [ARCHITECTURE.md](ARCHITECTURE.md),工作項目見 [IMPL-PLAN.md](IMPL-PLAN.md)。
-> **狀態:B1 定稿**。各模組在 B2 分批實作,「批次」欄是預定交付的 MR;實作與本文件不同時,以 MR 描述的「API 變更」為準並同步更新本文件。
+> **狀態:B1 定稿;B2-pa 已實作 §4.1、§5.1**。各模組在 B2 分批實作,「批次」欄是預定交付的 MR;實作與本文件不同時,以 MR 描述的「API 變更」為準並同步更新本文件。
 > 欄位的完整定義以服務的 `/openapi.json` 為準(上架時匯入 Gateway);本文件寫路徑、權限、請求與回應格式。
 
 ---
@@ -56,6 +56,7 @@ PA 匯入在背景佇列執行;同步、分析只是送進佇列,畫面輪詢狀
   "total": 12, "done": 3, "failed": 0, "queued": 8,
   "startedAt": "2026-11-03T00:30:00.000Z", "finishedAt": null,
   "lastSyncAt": "2026-11-03T00:30:00.000Z", "lastSyncError": "",
+  "syncing": false,                 // 正在列出 FTP 目錄(同步在背景執行)
   "autoSyncMinutes": 0,
   "running": [ { "path": "/PA-560_traffic_….csv", "name": "PA-560_traffic_….csv", "size": 123456, "read": 4567, "rows": 890, "seconds": 3 } ]
 }
@@ -115,6 +116,7 @@ PA 匯入在背景佇列執行;同步、分析只是送進佇列,畫面輪詢狀
 {
   "from": "2026-11-01", "to": "2026-11-02",
   "files": 12,                                   // 期間內已分析的檔案數;0 表示沒有資料(不是沒有流量)
+  "missing": 0,                                  // 已分析但摘要讀不到的檔案數;大於 0 表示總覽不完整
   "import": { "busy": false, "failed": 0 },      // 有檔案還在分析或分析失敗時,總覽可能不完整
   "rows": 3600000, "allow": 3500000, "block": 100000,
   "bytes": 123456789, "sent": 23456789, "recv": 100000000,
@@ -152,7 +154,7 @@ PA 匯入在背景佇列執行;同步、分析只是送進佇列,畫面輪詢狀
 // GET /pa-events/overview?type=threat&from=2026-11-01&to=2026-11-02
 {
   "type": "threat", "label": "威脅", "from": "2026-11-01", "to": "2026-11-02",
-  "files": 4, "import": { "busy": false, "failed": 0 },
+  "files": 4, "missing": 0, "import": { "busy": false, "failed": 0 },
   "rows": 5200,
   "timeMin": "2026-11-01T00:03:11+08:00", "timeMax": "2026-11-02T23:50:02+08:00",
   "hours": [ { "hour": "2026-11-01T00:00:00+08:00", "n": 210 } ],

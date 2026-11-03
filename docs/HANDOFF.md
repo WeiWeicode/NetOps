@@ -4,17 +4,20 @@
 
 ## 目前進度
 
-**D0 文件與登記完成,D13–D18 與 UI 規劃已定案**。接入 Gateway 的程式尚未開始;舊版繼續在 IIS 運作。**這次不改寫 AI 功能**,未來由 AI 中控台提供,切換後舊版留著給 AI 用(D17、D18)。負責人:佳緯。
+**B0 最小骨架程式完成,待合併與測試區驗證**(2026-11-03,`feature/netops-b0`)。`backend/` 有內部 Token 驗證、統一錯誤格式、`/healthz`、`/readyz`、`/openapi.json`、`setupGateway` 與驗證路由 `GET /api/netops/ping`(`netops.ping.read`);CI 只部署 `netops-api` 到主機 2。舊版繼續在 IIS 運作。**這次不改寫 AI 功能**,未來由 AI 中控台提供,切換後舊版留著給 AI 用(D17、D18)。負責人:佳緯。
 
 ## 下一步
 
 1. 確認 GitLab 已保護 `develop`(只有 Maintainer 能合併、不能直接推送);現有 Token 沒有 Protected Branch 讀取權限,要在 GitLab 畫面確認。
-2. 從 `origin/develop` 開分支做 B0:最小骨架部署(D13)。
+2. B0 合併前:使用者在主機 2 WSL 執行 `sudo sh deploy/host2-set-secrets.sh`(API Key、`netops.env`)。
+3. B0 合併後:確認 CI `deploy-api-test` 成功與自動註冊草稿 → GigaItApp「服務與路由」發佈 → 把 `netops.ping.read` 指派給負責人 → 驗證 IMPL-PLAN B0 完成條件(200 / 403 / 401)。
+4. 接著做 B1 後端骨架。
 
 ## 已知狀況
 
 - 主機 2、3 的 Windows 端 TCP 連得到 FTP;容器內未驗證。
-- 工作區 AGENT §5 記載主機 3 WSL 查不到外部 DNS,與 2026-11-02 實測不一致(ARCHITECTURE D10);工作區文件未修改。
+- 主機 2 Runner 能否接 NetOps 的 job 未查證(Token 沒有 Runner 讀取權限);其他專案都用 `windows-runner`。
+- B0 監控 Key 為空檔,監控停用;D1 登記 giga-observe 拓樸後補上。
 - 舊版關閉知識庫寫入的做法還沒確認(IMPL-PLAN D2)。
 - `scripts/dc/ADLog-FtpBackup-3.ps1` 寫死 FTP 帳號名稱,密碼走憑證檔,版控內沒有密碼。
 - 資料庫是後續階段,不在這次範圍(ARCHITECTURE §4.2)。

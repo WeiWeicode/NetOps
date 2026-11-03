@@ -2,6 +2,12 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。
 
+## 2026-11-03 B0 最小骨架部署
+- 工作項目:B0
+- 內容:新增 `backend/`(netops-api,由 Gateway `samples/node-backend` 複製)、驗證路由 `GET /api/netops/ping`(權限 `netops.ping.read`)、`deploy/` 與 `.gitlab-ci.yml`(只部署 `netops-api` 到主機 2)。上游與路由由啟動時自動註冊為草稿。ARCHITECTURE D10 改為主機 3 WSL 已可連外。舊版程式未改動。
+- 檔案:`backend/`、`deploy/`、`.gitlab-ci.yml`、`docs/ARCHITECTURE.md`、`docs/IMPL-PLAN.md`、`docs/HANDOFF.md`、`docs/PROJECT-MAP.md`
+- 驗證:`cd backend && npm run typecheck && npm test && npm run build` 通過(11 項);本機啟動確認 `/healthz` 200、`/v1/ping` 無 Token 401
+
 ## 2026-11-02 新增流程架構文件
 - 內容:以 Mermaid 記錄現況、過渡期與未來目標的資料與 AI 流程。程式尚未改動。
 - 檔案:`docs/FLOW-ARCHITECTURE.md`(新增)、`docs/ARCHITECTURE.md`、`docs/PROJECT-MAP.md`、`AGENT.md`

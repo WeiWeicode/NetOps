@@ -2,6 +2,12 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。
 
+## 2026-11-03 B0 測試區驗證完成
+- 工作項目:B0
+- 內容:NetOps !4 合併後在測試區驗證 B0 四項完成條件全部通過,B0 改為完成。`netops.ping.read` 指派給 `it-admin`(先誤派到沒有成員的 `gw-it-admin`)。
+- 檔案:`docs/IMPL-PLAN.md`、`docs/HANDOFF.md`、`docs/ARCHITECTURE.md`
+- 驗證:CI Pipeline #629 成功;瀏覽器經 Gateway 呼叫 `/api/netops/ping`:無權限 403、指派後 200;主機 2 容器內直連 `/v1/ping` 無 Token 401
+
 ## 2026-11-03 B0 最小骨架部署
 - 工作項目:B0
 - 內容:新增 `backend/`(netops-api,由 Gateway `samples/node-backend` 複製)、驗證路由 `GET /api/netops/ping`(權限 `netops.ping.read`)、`deploy/` 與 `.gitlab-ci.yml`(只部署 `netops-api` 到主機 2)。上游與路由由啟動時自動註冊為草稿。ARCHITECTURE D10 改為主機 3 WSL 已可連外。舊版程式未改動。

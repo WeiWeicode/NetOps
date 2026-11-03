@@ -1,7 +1,7 @@
 # NetOps API
 
 > `netops-api` 的對外介面:前端(F1)照本文件串接。決策見 [ARCHITECTURE.md](ARCHITECTURE.md),工作項目見 [IMPL-PLAN.md](IMPL-PLAN.md)。
-> **狀態:B1 定稿;B2-pa 已實作 §4.1、§5.1**。各模組在 B2 分批實作,「批次」欄是預定交付的 MR;實作與本文件不同時,以 MR 描述的「API 變更」為準並同步更新本文件。
+> **狀態:B1 定稿;B2-pa 已實作 §4.1、§5.1;B2-ad 已實作 §4.2、§5.2、§6**。各模組在 B2 分批實作,「批次」欄是預定交付的 MR;實作與本文件不同時,以 MR 描述的「API 變更」為準並同步更新本文件。
 > 欄位的完整定義以服務的 `/openapi.json` 為準(上架時匯入 Gateway);本文件寫路徑、權限、請求與回應格式。
 
 ---
@@ -16,8 +16,8 @@
 | 身分 | 前端不帶 Token;BFF 依 Cookie 換成 `X-Internal-Token`。API 權限(`x-permission`)由 BFF 檢查,沒有權限回 403 `PERMISSION_DENIED` |
 | 格式 | JSON、UTF-8、camelCase。成功直接回資料本身(不再包 `{ status, data, message }`),提示訊息由前端組 |
 | 錯誤 | `{ code, message, requestId, details? }`;`message` 可直接顯示。代碼見 §8 |
-| 日期參數 | `from`、`to` 為 `YYYY-MM-DD`(含當天);`to` 省略時等於 `from` |
-| 時間參數 | ISO 8601 含時區,精確到分鐘,例 `2026-11-03T08:30:00+08:00`;秒以下忽略 |
+| 日期參數 | `from`、`to` 為 `YYYY-MM-DD`(含當天);`to` 省略時等於 `from`。總覽與選項(§4.1、§4.2、§6.1)期間最長 92 天,超過回 400 |
+| 時間參數 | ISO 8601 含時區,精確到分鐘,例 `2026-11-03T08:30:00+08:00`;秒忽略(`to` 含該分鐘的 59 秒) |
 | 回應時間 | log 內的時間(PA、AD 都是設備當地時間)一律輸出 `+08:00`,例 `2026-11-03T08:30:15+08:00`;系統時間(分析時間、工作建立時間)輸出 UTC `Z` |
 | 每小時統計 | `hour` 為該小時開始時間,例 `2026-11-03T08:00:00+08:00` |
 | 分頁 | `page`(從 1 開始)、`pageSize`(預設 50、上限 100);回應 `{ items, total, page, pageSize }`。數量有上限的清單(日期、類型、單一 FTP 目錄)不分頁 |
@@ -298,7 +298,11 @@ FTP 唯讀(AGENT.md §7.4):「刪除分析結果」只刪本系統的摘要,不�
   "lastResult": { "days": 30, "imported": [ { "day": "2026-11-02", "events": 5300 } ] } }
 ```
 
-**`POST /ftp/ad/syncs`**(無 body):背景比對每個日期資料夾,有變更才重新匯入;回 **202** + `GET /ftp/ad/status` 的內容。正在同步時回 409 `NETOPS_AD_SYNC_BUSY`。
+`dir`、`autoSyncMinutes` 與 `lastResult.imported[].day`(`YYYY-MM-DD`)同上。
+
+**`POST /ftp/ad/syncs`**(無 body):背景比對每個日期資料夾,有變更才重新匯入;回 **202** + `GET /ftp/ad/status` 的內容。正在同步時回 409 `NETOPS_AD_SYNC_BUSY`;沒有設定 FTP 時回 503 `NETOPS_FTP_NOT_CONFIGURED`。
+
+多人同時送出清單工作時共用同一次 FTP 列表,不會多佔 FTP 連線;工作執行上限 3 分鐘。
 
 **`POST /ftp/ad/imports`**:`{ "days": ["2026-11-02"] }`(1–60 天)不比對、一律重新匯入;回 **202**,同上。
 
@@ -319,7 +323,7 @@ FTP 唯讀(AGENT.md §7.4):「刪除分析結果」只刪本系統的摘要,不�
 // GET /ad/days
 {
   "days": [ { "day": "2026-11-02", "events": 5300, "importedAt": "2026-11-03T00:10:00.000Z", "files": [ { "name": "Security_GSMC-DC1.csv", "channel": "Security", "rows": 5000 } ] } ],
-  "import": { "running": false, "lastSyncAt": "2026-11-03T00:10:00.000Z", "lastSyncError": "" },
+  "import": { "running": false, "lastSyncAt": "2026-11-03T00:10:00.000Z", "lastSyncError": "" },   // 失敗時只回「同步失敗,詳見 FTP Log 檔案頁」,細節在 GET /ftp/ad/status(ftp.read)
   "channels": { "Security": "安全性", "System": "系統", "Directory_Service": "目錄服務", "DNS_Server": "DNS 伺服器" },
   "securityEvents": { "4625": "登入失敗" }
 }
@@ -328,7 +332,7 @@ FTP 唯讀(AGENT.md §7.4):「刪除分析結果」只刪本系統的摘要,不�
 {
   "from": "2026-11-01", "to": "2026-11-02",
   "days": 2,                                       // 期間內已匯入的天數;少於期間天數表示有日期沒有資料
-  "total": 10600, "byChannel": { "Security": 10000 }, "byLevel": { "information": 10000 },
+  "total": 10600, "byChannel": { "Security": 10000 }, "byLevel": { "info": 9000, "audit_failure": 1000 },   // 等級:info、warning、error、critical、audit_success、audit_failure
   "timeMin": "2026-11-01T00:00:01+08:00", "timeMax": "2026-11-02T23:59:59+08:00",
   "hours": [ { "hour": "2026-11-01T00:00:00+08:00", "n": 400, "issue": 3 } ],
   "events": [ { "channel": "Security", "eventId": 4625, "level": "audit_failure", "provider": "…", "n": 30,
@@ -353,7 +357,7 @@ FTP 唯讀(AGENT.md §7.4):「刪除分析結果」只刪本系統的摘要,不�
 
 - `from`、`to`:時間參數(§1);`eventId` 可用逗號分隔多個;`issueOnly=true` 只看需要注意的事件。
 - 期間最長 31 天(超過回 400 `VALIDATION_FAILED`)。
-- 匯出上限 20,000 筆,超過回 422 `NETOPS_EXPORT_TOO_LARGE`(請縮小條件)。
+- 匯出上限 20,000 筆,超過回 422 `NETOPS_EXPORT_TOO_LARGE`(請縮小條件)。欄位同舊版畫面匯出(時間、記錄、事件 ID、等級、來源、主機、帳號、執行者、對象、群組、來源 IP、工作站、原因、訊息);以 `=`、`+`、`-`、`@` 開頭的文字前面加 `'`,避免 Excel 當成公式。
 
 ```jsonc
 // GET /ad/events(新的在前)

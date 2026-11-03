@@ -12,8 +12,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { EVENT_DIR_ENV } from '../../config.js';
 import { ensureDir, removeFile, writeAtomic } from './files.js';
+import { createAdStore, type AdStore } from './ad.js';
 import { createPaStore, type PaStore } from './pa.js';
 
+export type { AdStore } from './ad.js';
 export type { PaIndex, PaStore } from './pa.js';
 
 /** 各資料的子目錄(相對資料目錄;與舊版 uploads/ 相同) */
@@ -28,6 +30,8 @@ export interface Store {
   ready(): Promise<boolean>;
   /** PA TRAFFIC 與其他類型 log 的分析結果 */
   pa: PaStore;
+  /** AD 事件(一天一份) */
+  ad: AdStore;
 }
 
 export function createStore(dataDir: string): Store {
@@ -37,6 +41,7 @@ export function createStore(dataDir: string): Store {
 
   return {
     pa: createPaStore(root, Object.keys(EVENT_DIR_ENV)),
+    ad: createAdStore(root),
     async ready() {
       const probe = path.join(root, `.ready-${process.pid}`);
       try {

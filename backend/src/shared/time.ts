@@ -41,11 +41,15 @@ export function timeIn(v: string, field: string): string {
   return `${d.getUTCFullYear()}/${pad(d.getUTCMonth() + 1)}/${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
 }
 
-/** 期間(日期):to 省略時等於 from;to 早於 from 回 400 */
+/** 總覽期間上限(天):合併摘要在程序內計算,期間太長會卡住事件迴圈並超過路由逾時 */
+export const OVERVIEW_MAX_DAYS = 92;
+
+/** 期間(日期):to 省略時等於 from;to 早於 from、超過 OVERVIEW_MAX_DAYS 天回 400 */
 export function dayRange(q: { from: string; to?: string }): { from: string; to: string } {
   const from = dayIn(q.from, 'from');
   const to = q.to ? dayIn(q.to, 'to') : from;
   if (to < from) throw validation('to', '結束日期不可早於開始日期');
+  if (Date.parse(to.replace(/\//g, '-')) - Date.parse(from.replace(/\//g, '-')) >= OVERVIEW_MAX_DAYS * 86400_000) throw validation('to', `查詢期間最長 ${OVERVIEW_MAX_DAYS} 天`);
   return { from, to };
 }
 

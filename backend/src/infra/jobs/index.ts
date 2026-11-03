@@ -50,10 +50,12 @@ export interface JobRunnerOptions {
   retainMs?: number;
   /** 最多保留幾筆(含已完成;超過時先丟最舊的已完成工作) */
   maxRetained?: number;
+  /** 每人最多保留幾筆已完成的工作(超過時先丟自己最舊的,不影響別人的結果) */
+  maxRetainedPerOwner?: number;
   now?: () => number;
 }
 
-export const JOB_DEFAULTS = { maxActivePerOwner: 2, maxActive: 6, concurrency: 2, retainMs: 30 * 60_000, maxRetained: 100 } as const;
+export const JOB_DEFAULTS = { maxActivePerOwner: 2, maxActive: 6, concurrency: 2, retainMs: 30 * 60_000, maxRetained: 100, maxRetainedPerOwner: 10 } as const;
 /** 執行時間上限的範圍(setTimeout 超過 2^31-1 會立刻觸發) */
 const MAX_TIMEOUT_MS = 60 * 60_000;
 
@@ -87,6 +89,9 @@ export class JobRunner {
     if (active.filter((j) => j.owner === owner).length >= this.opt.maxActivePerOwner)
       throw new AppError(409, 'NETOPS_JOB_LIMIT_EXCEEDED', `每人最多同時 ${this.opt.maxActivePerOwner} 個工作,請等候完成或先取消`);
     if (active.length >= this.opt.maxActive) throw new AppError(409, 'NETOPS_JOB_LIMIT_EXCEEDED', '系統工作已滿,請稍後再試');
+    // 每人保留的已完成工作有上限(新工作完成後最多保留 maxRetainedPerOwner 筆)
+    const mine = [...this.jobs.values()].filter((j) => j.owner === owner && j.settled).sort((a, b) => a.expiresAt - b.expiresAt);
+    for (const j of mine.slice(0, Math.max(0, mine.length - this.opt.maxRetainedPerOwner + 1))) this.jobs.delete(j.id);
     const job: Job<R> = {
       id: randomUUID(),
       kind,
@@ -115,9 +120,16 @@ export class JobRunner {
     return this.view(this.find(id, owner, kind) as Job<R>);
   }
 
-  /** 取消:狀態立即改為 cancelled(已結束的工作不變);不存在或不是本人回 404(路由層決定是否視為成功) */
-  cancel(id: string, owner: string, kind?: string): JobView {
+  /**
+   * 取消:狀態立即改為 cancelled(已結束的工作不變);不存在或不是本人回 404(路由層決定是否視為成功)
+   * discard:已結束的工作直接移除(釋放結果佔用的記憶體)
+   */
+  cancel(id: string, owner: string, kind?: string, { discard = false }: { discard?: boolean } = {}): JobView {
     const job = this.find(id, owner, kind);
+    if (discard && job.settled) {
+      this.jobs.delete(id);
+      return this.view(job);
+    }
     if (job.status === 'queued') {
       this.queue.splice(this.queue.indexOf(job), 1);
       job.settled = true;

@@ -10,7 +10,11 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { EVENT_DIR_ENV } from '../../config.js';
 import { ensureDir, removeFile, writeAtomic } from './files.js';
+import { createPaStore, type PaStore } from './pa.js';
+
+export type { PaIndex, PaStore } from './pa.js';
 
 /** 各資料的子目錄(相對資料目錄;與舊版 uploads/ 相同) */
 export const LAYOUT = {
@@ -22,6 +26,8 @@ export const LAYOUT = {
 export interface Store {
   /** 資料目錄可寫入才回 true(/readyz 使用;不回傳路徑) */
   ready(): Promise<boolean>;
+  /** PA TRAFFIC 與其他類型 log 的分析結果 */
+  pa: PaStore;
 }
 
 export function createStore(dataDir: string): Store {
@@ -30,6 +36,7 @@ export function createStore(dataDir: string): Store {
   for (const sub of Object.values(LAYOUT)) ensureDir(path.join(root, sub));
 
   return {
+    pa: createPaStore(root, Object.keys(EVENT_DIR_ENV)),
     async ready() {
       const probe = path.join(root, `.ready-${process.pid}`);
       try {

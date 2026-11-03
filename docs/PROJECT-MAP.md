@@ -1,6 +1,6 @@
 # 專案地圖 — NetOps
 
-> **最後更新:2026-11-03**(B1:`infra/store`、`infra/jobs`、完整設定、`docs/API.md`;舊版程式未改動)。
+> **最後更新:2026-11-03**(B2-pa:`infra/ftp`、PA 匯入、流量總覽、FTP Log 檔案;舊版程式未改動)。
 > 開發新功能後,在同一個變更內更新本文件(`AGENT.md` §9)。只寫結構與職責,細節連到 `docs/`。
 
 資訊網通管理系統:PA-560 防火牆 log、AD 事件與網通知識庫;AI 問答只留在舊版(ARCHITECTURE D17)。目標是接入 GigaNexus Gateway(`/netops/`、`netops-api` :51292),目前部署於 IIS `/NetOps`。
@@ -37,8 +37,14 @@ NetOps/
 │  │  ├─ errors.ts、openapi.ts、print-openapi.ts
 │  │  ├─ infra/store/       資料存取邊界(D8):模組只呼叫具名函式;/readyz 檢查資料目錄
 │  │  ├─ infra/jobs/        長時間工作(D6):本人才能查、數量與時間上限、程序重啟後失效
-│  │  └─ modules/ping/routes.ts   GET /v1/ping(對外 /api/netops/ping,netops.ping.read)
-│  ├─ test/unit/            app(OpenAPI、Token、readyz)、config、jobs
+│  │  ├─ infra/ftp/         FTP 唯讀(列目錄、串流下載);連線上限 FTP_MAX_CONNECTIONS
+│  │  ├─ shared/            時間轉換(核心本地時間 ↔ ISO 8601)、共用 schema
+│  │  └─ modules/
+│  │     ├─ ping/routes.ts  GET /v1/ping(對外 /api/netops/ping,netops.ping.read)
+│  │     ├─ pa/             core/palog.js(舊版逐字)、core/flows.js、importer.ts(TRAFFIC 匯入)、routes.ts(總覽)
+│  │     ├─ pa-events/      core/paevents.js(舊版逐字)、importer.ts(其他類型 log 匯入)
+│  │     └─ ftp/routes.ts   FTP Log 檔案(PA)
+│  ├─ test/unit/            app、config、jobs、store、pa(與舊版摘要比對);test/fixtures 假 log、假 FTP
 │  └─ Dockerfile、.npmrc(@giganexus/* 取自 GitLab npm Registry)
 └─ deploy/
    ├─ docker-compose.yml    netops-api 加入 Gateway 網路,不對主機發佈 port
@@ -80,7 +86,7 @@ NetOps/
 
 | 要改 | 看哪裡 |
 | --- | --- |
-| PA 研判或摘要欄位 | `server/lib/palog.js`(`SUMMARY_VERSION` 要加 1) |
+| PA 研判或摘要欄位 | 舊版 `server/lib/palog.js`、新版 `backend/src/modules/pa/core/palog.js`(切換前兩邊一起改;`SUMMARY_VERSION` 要加 1) |
 | 其他 log 欄位與排行 | `server/lib/paevents.js` |
 | AD 事件解析 | `server/lib/adlog.js`、`scripts/dc/` |
 | AI 提示與流程 | `server/routes/ai.js`、`server/lib/evidence.js`、`server/lib/llm.js` |

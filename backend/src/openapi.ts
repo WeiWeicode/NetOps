@@ -28,7 +28,12 @@ export const SYSTEM_CODE = 'netops';
  * 讀 / 寫分開,讀取以 .read 結尾(ARCHITECTURE §5)。畫面節點由 deploy/gateway-rbac.yaml 登記(D1),以 includes 綁定這些權限。
  * 新權限預設沒有人擁有,由系統負責人在 GigaItApp 指派(D15)。
  */
-export const PERMISSIONS = [{ code: 'netops.ping.read', name: 'NetOps 連線驗證:查詢' }];
+export const PERMISSIONS = [
+  { code: 'netops.ping.read', name: 'NetOps 連線驗證:查詢' },
+  { code: 'netops.pa.read', name: 'NetOps PA 防火牆:查詢' },
+  { code: 'netops.ftp.read', name: 'NetOps FTP Log 檔案:查詢' },
+  { code: 'netops.ftp.write', name: 'NetOps FTP Log 檔案:同步與管理' },
+];
 
 /** project:開發專案(package.json gateway.project,由 SDK loadGatewayEnv 讀取) */
 export function swaggerOptions(serviceCode: string, project: string): SwaggerOptions {

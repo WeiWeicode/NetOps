@@ -6,6 +6,8 @@
     "lib": ["ES2023"],
     "types": ["node"],
     "strict": true,
+    "allowJs": true,
+    "checkJs": false,
     "noUncheckedIndexedAccess": true,
     "skipLibCheck": true,
     "isolatedModules": true,

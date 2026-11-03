@@ -21,6 +21,7 @@
   "dependencies": {
     "@fastify/swagger": "9.9.1",
     "@giganexus/backend-sdk": "^0.3.0",
+    "basic-ftp": "6.2.3",
     "fastify": "5.12.5"
   },
   "devDependencies": {

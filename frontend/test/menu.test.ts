@@ -104,6 +104,12 @@ describe('一般連結', () => {
     expect(menu.find((g) => g.key === 'approval')!.children.map((p) => p.title)).toEqual(['表單下載', 'AI 問答(舊版)']);
   });
 
+  it('BFF 有排序時,連結仍排在功能頁之後', () => {
+    const menuOf = bff({ 'portal.approval.read': { sort: 30 }, 'portal.form.read': { sort: 10 } });
+    const menu = buildMenu(GROUPS, [PAGES[3]!, LINK, PAGES[4]!], { can: all, menuOf });
+    expect(menu.find((g) => g.key === 'approval')!.children.map((p) => p.path)).toEqual(['/forms', '/approval', 'link:ask']);
+  });
+
   it('連結不參與目前位置判斷', () => {
     const menu = buildMenu(GROUPS, [LINK], { can: all });
     expect(findActive(menu, '/link:ask')).toBeNull();

@@ -14,4 +14,3 @@ export async function ensureMe(): Promise<NetopsMe | null> {
   if (stale && me) loadedAt = Date.now();
   return me;
 }
-

@@ -82,7 +82,8 @@ export function buildMenu(groups: readonly MenuGroupDef[], pages: readonly MenuP
         icon: hasIcon(m?.icon) ? m!.icon! : (d?.g.icon ?? 'layers'),
         sort: m?.sort ?? null,
         order: d?.i ?? 999,
-        children: items.sort(bySort).map(({ sort: _s, order: _o, ...c }) => c),
+        // 一般連結一律排在同群組的功能頁之後(連結沒有 BFF 排序)
+        children: items.sort((a, b) => Number(!!a.href) - Number(!!b.href) || bySort(a, b)).map(({ sort: _s, order: _o, ...c }) => c),
       };
     })
     .sort(bySort)

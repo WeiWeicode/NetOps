@@ -2,18 +2,18 @@
  * 路由(History 模式,base = /netops/;FRONTEND-GUIDE §4.2):
  *   第一層:選單群組(MENU_GROUPS,BFF 代碼 netops.group.*;ARCHITECTURE §5)
  *   第二層:功能頁(TabbedPage),meta 定義標題與 Tab;MENU_PAGES 由這裡的路由產生,另加一般連結(D11、D18)
- *   第三層:Tab = 子路由(重新整理停在同一個 Tab)
+ *   第三層:Tab = 子路由(重新整理停在同一個 Tab);F1 第 1 批各頁還沒有 Tab,逐頁改寫時加入 meta.tabs
  * 守衛(同入口網與 GigaItApp;FRONTEND-GUIDE §7.4):
  *   BFF 無法連線 → /unavailable;未登入 → 入口網 /login?redirect=/netops/...;
  *   沒有 netops.app.access → 整頁導回入口網 /?denied=netops(不可停在本系統造成迴圈);
- *   任一層缺少 meta.permission(選單 / Tab)或 meta.requires(API 讀取權限)→ 同頁第一個可看的 Tab,否則 /403。
+ *   任一層缺少 meta.permission(選單 / Tab)或 meta.requires(API 讀取權限)→ 同頁第一個可看的 Tab,否則 /403(判斷在 composables/guard.ts)。
  *   前端只是體驗,BFF 一定會再以 API 權限檢查。
  */
 import { redirectToLogin } from '@giganexus/web-kit';
 import { createRouter, createWebHistory, type RouteMeta, type RouteRecordRaw } from 'vue-router';
 import { can, canAll, menuOf } from './api/gateway';
 import { API, NETOPS } from './api/perms';
-import { DENIED_URL, hasCurrentApp, resolveApps } from './composables/apps';
+import { decideGuard } from './composables/guard';
 import { buildMenu, type MenuGroupDef, type MenuPage } from './composables/menu';
 import { ensureMe } from './composables/session';
 import { LINKS } from './config/links';
@@ -46,15 +46,15 @@ export const MENU_GROUPS: readonly MenuGroupDef[] = [
 ];
 
 /** 開發中的頁面(F1 逐頁改寫,UI-GUIDE §3);改寫完成時換成正式頁面 */
-function wip(summary: string, plan?: string[]): Pick<RouteRecordRaw, 'component' | 'props'> {
-  return { component: () => import('./pages/WipPage.vue'), props: { summary, plan, docs: ['NetOps docs/IMPL-PLAN.md F1', 'NetOps docs/UI-GUIDE.md §3'] } };
+function wip(summary: string, plan?: string[]): RouteRecordRaw {
+  return { path: '', component: () => import('./pages/WipPage.vue'), props: { summary, plan, docs: ['NetOps docs/IMPL-PLAN.md F1', 'NetOps docs/UI-GUIDE.md §3'] } };
 }
 
 interface PageDef {
   path: string;
   meta: Required<Pick<RouteMeta, 'permission' | 'title' | 'subtitle' | 'icon' | 'group'>> & Pick<RouteMeta, 'requires' | 'description'>;
-  /** 單一內容(沒有 Tab) */
-  view: Pick<RouteRecordRaw, 'component' | 'props'>;
+  /** 單一內容(沒有 Tab;子路由 path '') */
+  view: RouteRecordRaw;
 }
 
 /** 功能頁(ARCHITECTURE §5 權限草案;選單順序同舊版 src/router/menu.js) */
@@ -103,8 +103,9 @@ const PAGES: PageDef[] = [
 
 /** 一般連結(另開分頁;D11、D18) */
 const LINK_PAGES: MenuPage[] = [
-  { path: 'link:pa-ask', href: LINKS.paAsk, group: 'firewall', title: 'AI 問答(舊版)', icon: 'sparkles' },
-  { path: 'link:ad-ask', href: LINKS.adAsk, group: 'ad', title: 'AI 問答(舊版)', icon: 'sparkles' },
+  // AI 問答查的是 PA / AD 資料:有對應的讀取權限才顯示
+  { path: 'link:pa-ask', href: LINKS.paAsk, group: 'firewall', title: 'AI 問答(舊版)', icon: 'sparkles', requires: [API.paRead] },
+  { path: 'link:ad-ask', href: LINKS.adAsk, group: 'ad', title: 'AI 問答(舊版)', icon: 'sparkles', requires: [API.adRead] },
   { path: 'link:veeam', href: LINKS.veeam, group: 'other', title: 'Veeam 備份監控', icon: 'database' },
 ];
 
@@ -118,7 +119,7 @@ const shell: RouteRecordRaw = {
         path: p.path,
         component: TabbedPage,
         meta: { ...p.meta },
-        children: [{ path: '', ...p.view, meta: {} } as RouteRecordRaw],
+        children: [p.view],
       }),
     ),
     { path: '403', component: () => import('./pages/Forbidden.vue'), meta: { title: '沒有權限' } },
@@ -152,7 +153,7 @@ const MENU_PAGES: MenuPage[] = [
   ...PAGES.map((p) => ({ path: `/${p.path}`, group: p.meta.group, title: p.meta.title, icon: p.meta.icon, permission: p.meta.permission, requires: p.meta.requires })),
   ...LINK_PAGES,
 ];
-// 一般連結排在同群組功能頁之後
+/** 側欄選單(AppLayout 使用) */
 export const netopsMenus = () =>
   buildMenu(MENU_GROUPS, MENU_PAGES, {
     can,
@@ -184,34 +185,25 @@ router.beforeEach(async (to) => {
     // BFF 無法連線(非 401):顯示維護頁,不導向登入
     return { path: '/unavailable', query: { redirect: to.fullPath } };
   }
-  if (!me) {
-    redirectToLogin();
-    return false;
-  }
-  // 應用層守衛:沒有本系統的應用權限 → 回入口網並帶提示參數(不可停在本系統造成迴圈)
-  if (!hasCurrentApp(resolveApps(me))) {
-    location.replace(DENIED_URL);
-    return false;
-  }
-  // 頁面守衛:任一層缺少選單 / Tab 權限或 API 讀取權限 → 403
-  const denied = to.matched.some((r) => (r.meta.permission && !can(r.meta.permission)) || !canAll(r.meta.requires));
-  if (denied) {
-    // 有此功能頁、只是目前的 Tab 沒權限:改到同頁第一個有權限的 Tab
-    const page = to.matched[1];
-    const pageOk = page && (!page.meta.permission || can(page.meta.permission)) && canAll(page.meta.requires);
-    if (pageOk) {
-      const rec = pageOf(page.path);
-      const t = rec ? firstTab(rec) : null;
-      if (t && t !== to.path) return t;
-    }
-    // 預設首頁(流量總覽)沒有權限時改到第一個可見功能
-    if (to.path === '/firewall/dashboard' && to.redirectedFrom?.path === '/') {
-      const first = firstAllowed();
-      if (first && first !== to.path) return first;
-    }
-    return '/403';
-  }
-  return true;
+  const page = to.matched[1];
+  const d = decideGuard({
+    me,
+    matched: to.matched.map((r) => r.meta),
+    path: to.path,
+    fromRoot: to.redirectedFrom?.path === '/',
+    can,
+    pageFirstTab: () => {
+      const rec = page && pageOf(page.path);
+      return rec ? firstTab(rec) : null;
+    },
+    firstAllowed,
+  });
+  if (d.kind === 'allow') return true;
+  if (d.kind === 'redirect') return d.to;
+  if (d.kind === 'login') redirectToLogin();
+  // 回入口網並帶提示參數(不可停在本系統造成迴圈)
+  else location.replace(d.url);
+  return false;
 });
 
 router.afterEach((to) => {

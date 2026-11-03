@@ -20,3 +20,6 @@ export const looseObject = (description: string) => ({ type: 'object', additiona
 export const importStatus = looseObject('匯入狀態 ImportStatus(docs/API.md §1.2)');
 
 export const ACCEPTED = { 202: looseObject('已送出,在背景執行') };
+
+/** 成功、沒有內容(取消工作、刪除筆記;冪等 DELETE) */
+export const NO_CONTENT = { 204: { type: 'null', description: '成功,沒有內容' } } as const;

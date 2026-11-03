@@ -1,6 +1,6 @@
 # 專案地圖 — NetOps
 
-> **最後更新:2026-11-03**(F1 第 2 批:FTP Log 檔案(PA、AD)改寫;F1 第 1 批:新增 `frontend/` 框架;B2-ad:安全事件總覽、AD 匯入 / 總覽 / 明細 / 匯出、FTP Log 檔案(AD);舊版程式未改動)。
+> **最後更新:2026-11-03**(F1 第 2 批:FTP Log 檔案(PA、AD)、AD 事件總覽改寫;F1 第 1 批:新增 `frontend/` 框架;B2-ad:安全事件總覽、AD 匯入 / 總覽 / 明細 / 匯出、FTP Log 檔案(AD);舊版程式未改動)。
 > 開發新功能後,在同一個變更內更新本文件(`AGENT.md` §9)。只寫結構與職責,細節連到 `docs/`。
 
 資訊網通管理系統:PA-560 防火牆 log、AD 事件與網通知識庫;AI 問答只留在舊版(ARCHITECTURE D17)。目標是接入 GigaNexus Gateway(`/netops/`、`netops-api` :51292),目前部署於 IIS `/NetOps`。
@@ -52,11 +52,11 @@ NetOps/
 │  │  ├─ ui/                全域元件與設計 token(入口網 src/ui/,只換 tokens.css 顏色)
 │  │  ├─ layouts/           AppLayout(兩層側欄、頂列)、TabbedPage
 │  │  ├─ router.ts          選單群組、功能頁、一般連結、路由守衛(應用 / 頁面權限)
-│  │  ├─ api/               gateway.ts(web-kit 包裝)、perms.ts(權限代碼)、netops.ts、ftp.ts(/api/netops/*,docs/API.md)、jobs.ts(工作狀態)、format.ts(顯示格式)
-│  │  ├─ composables/       apps、guard(守衛判斷)、menu、session、theme、useJob(工作模式輪詢)、ftpFiles(FTP 清單的純函式)
+│  │  ├─ api/               gateway.ts(web-kit 包裝)、perms.ts(權限代碼)、netops.ts、ftp.ts、ad.ts(/api/netops/*,docs/API.md)、jobs.ts(工作狀態)、format.ts(顯示格式)
+│  │  ├─ composables/       apps、guard(守衛判斷)、menu、session、theme、useJob(工作模式輪詢)、usePolling(背景工作狀態輪詢)、ftpFiles(FTP 清單的純函式)、dates
 │  │  ├─ config/links.ts    舊版 AI 問答、Veeam 連結(D11、D18)
 │  │  └─ pages/             firewall/、ad/(已改寫的頁面)、WipPage(改寫中)、Forbidden、NotFound、Unavailable
-│  ├─ mock/                 本機假 Gateway(gateway.ts;MOCK=admin|viewer|noapp|anon,只在 dev)與各模組假 API(ftp.ts)
+│  ├─ mock/                 本機假 Gateway(gateway.ts;MOCK=admin|viewer|noapp|anon,只在 dev)與各模組假 API(ftp.ts、ad.ts)
 │  └─ test/                 vitest:選單、路由守衛、應用層守衛、風格、工作輪詢、FTP 清單
 └─ deploy/
    ├─ docker-compose.yml    netops-api 加入 Gateway 網路,不對主機發佈 port

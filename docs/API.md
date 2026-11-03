@@ -1,7 +1,7 @@
 # NetOps API
 
 > `netops-api` 的對外介面:前端(F1)照本文件串接。決策見 [ARCHITECTURE.md](ARCHITECTURE.md),工作項目見 [IMPL-PLAN.md](IMPL-PLAN.md)。
-> **狀態:B1 定稿;B2-pa 已實作 §4.1、§5.1**。各模組在 B2 分批實作,「批次」欄是預定交付的 MR;實作與本文件不同時,以 MR 描述的「API 變更」為準並同步更新本文件。
+> **狀態:B1 定稿;B2-pa 已實作 §4.1、§5.1;B2-ad 已實作 §4.2、§5.2、§6**。各模組在 B2 分批實作,「批次」欄是預定交付的 MR;實作與本文件不同時,以 MR 描述的「API 變更」為準並同步更新本文件。
 > 欄位的完整定義以服務的 `/openapi.json` 為準(上架時匯入 Gateway);本文件寫路徑、權限、請求與回應格式。
 
 ---
@@ -298,6 +298,8 @@ FTP 唯讀(AGENT.md §7.4):「刪除分析結果」只刪本系統的摘要,不�
   "lastResult": { "days": 30, "imported": [ { "day": "2026-11-02", "events": 5300 } ] } }
 ```
 
+`dir`、`autoSyncMinutes` 與 `lastResult.imported[].day`(`YYYY-MM-DD`)同上。
+
 **`POST /ftp/ad/syncs`**(無 body):背景比對每個日期資料夾,有變更才重新匯入;回 **202** + `GET /ftp/ad/status` 的內容。正在同步時回 409 `NETOPS_AD_SYNC_BUSY`。
 
 **`POST /ftp/ad/imports`**:`{ "days": ["2026-11-02"] }`(1–60 天)不比對、一律重新匯入;回 **202**,同上。
@@ -328,7 +330,7 @@ FTP 唯讀(AGENT.md §7.4):「刪除分析結果」只刪本系統的摘要,不�
 {
   "from": "2026-11-01", "to": "2026-11-02",
   "days": 2,                                       // 期間內已匯入的天數;少於期間天數表示有日期沒有資料
-  "total": 10600, "byChannel": { "Security": 10000 }, "byLevel": { "information": 10000 },
+  "total": 10600, "byChannel": { "Security": 10000 }, "byLevel": { "info": 9000, "audit_failure": 1000 },   // 等級:info、warning、error、critical、audit_success、audit_failure
   "timeMin": "2026-11-01T00:00:01+08:00", "timeMax": "2026-11-02T23:59:59+08:00",
   "hours": [ { "hour": "2026-11-01T00:00:00+08:00", "n": 400, "issue": 3 } ],
   "events": [ { "channel": "Security", "eventId": 4625, "level": "audit_failure", "provider": "…", "n": 30,
@@ -353,7 +355,7 @@ FTP 唯讀(AGENT.md §7.4):「刪除分析結果」只刪本系統的摘要,不�
 
 - `from`、`to`:時間參數(§1);`eventId` 可用逗號分隔多個;`issueOnly=true` 只看需要注意的事件。
 - 期間最長 31 天(超過回 400 `VALIDATION_FAILED`)。
-- 匯出上限 20,000 筆,超過回 422 `NETOPS_EXPORT_TOO_LARGE`(請縮小條件)。
+- 匯出上限 20,000 筆,超過回 422 `NETOPS_EXPORT_TOO_LARGE`(請縮小條件)。欄位同舊版畫面匯出(時間、記錄、事件 ID、等級、來源、主機、帳號、執行者、對象、群組、來源 IP、工作站、原因、訊息);以 `=`、`+`、`-`、`@` 開頭的文字前面加 `'`,避免 Excel 當成公式。
 
 ```jsonc
 // GET /ad/events(新的在前)

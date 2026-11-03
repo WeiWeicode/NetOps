@@ -16,8 +16,12 @@ import { JobRunner } from './infra/jobs/index.js';
 import { DataFileError } from './infra/store/files.js';
 import { createStore, type Store } from './infra/store/index.js';
 import { createFtp, type Ftp } from './infra/ftp/index.js';
+import { createAdImporter } from './modules/ad/importer.js';
+import adRoutes from './modules/ad/routes.js';
+import adFtpRoutes from './modules/ftp/ad-routes.js';
 import ftpRoutes from './modules/ftp/routes.js';
 import { createEventImporter } from './modules/pa-events/importer.js';
+import paEventRoutes from './modules/pa-events/routes.js';
 import { createTrafficImporter } from './modules/pa/importer.js';
 import paRoutes from './modules/pa/routes.js';
 import pingRoutes from './modules/ping/routes.js';
@@ -111,14 +115,20 @@ export async function buildApp(config: Config, deps: { ftp?: Ftp } = {}): Promis
   const paDeps = { ftp, store: app.store.pa, ftpConfig: config.ftp, log: app.log };
   const traffic = createTrafficImporter(paDeps);
   const events = createEventImporter(paDeps);
+  const ad = createAdImporter({ ftp, store: app.store.ad, ftpConfig: config.ftp, log: app.log });
   app.addHook('onReady', async () => {
     traffic.start();
     events.start();
+    ad.start();
   });
   app.addHook('onClose', async () => {
+    ad.stop();
     await Promise.all([traffic.stop(), events.stop()]);
   });
   await app.register(paRoutes, { traffic });
+  await app.register(paEventRoutes, { events });
+  await app.register(adRoutes, { ad });
+  await app.register(adFtpRoutes, { ad });
   await app.register(ftpRoutes, {
     ftp,
     traffic,

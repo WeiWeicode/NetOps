@@ -12,6 +12,8 @@ export interface FakeFtp extends Ftp {
   /** 下一次讀檔時中途斷線(測試傳輸不完整) */
   failNext: boolean;
   opened: number;
+  /** 每段之間延遲幾毫秒(模擬慢速 FTP,測試取消與工作上限) */
+  chunkDelayMs: number;
   /** abort() 被呼叫的次數(讀取失敗時要中斷傳輸) */
   aborted: number;
 }
@@ -40,6 +42,7 @@ export function createFakeFtp(root = '/'): FakeFtp {
     files,
     failNext: false,
     opened: 0,
+    chunkDelayMs: 0,
     aborted: 0,
     put(p, data, modified = new Date('2026-11-03T00:05:00Z')) {
       files.set(p, { data: Buffer.isBuffer(data) ? data : Buffer.from(data), modified });
@@ -65,6 +68,7 @@ export function createFakeFtp(root = '/'): FakeFtp {
       const done = (async () => {
         for (let i = 0; i < data.length && !aborted; i += 64 * 1024) {
           if (!stream.write(data.subarray(i, i + 64 * 1024))) await new Promise((r) => stream.once('drain', r));
+          if (ftp.chunkDelayMs) await new Promise((r) => setTimeout(r, ftp.chunkDelayMs));
         }
         if (!aborted) stream.end();
       })();

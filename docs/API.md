@@ -1,7 +1,7 @@
 # NetOps API
 
 > `netops-api` 的對外介面:前端(F1)照本文件串接。決策見 [ARCHITECTURE.md](ARCHITECTURE.md),工作項目見 [IMPL-PLAN.md](IMPL-PLAN.md)。
-> **狀態:B1 定稿;B2-pa 已實作 §4.1、§5.1;B2-ad 已實作 §4.2、§5.2、§6;B2-kb 已實作 §7**。各模組在 B2 分批實作,「批次」欄是預定交付的 MR;實作與本文件不同時,以 MR 描述的「API 變更」為準並同步更新本文件。
+> **狀態:B1 定稿;B2-pa 已實作 §4.1、§5.1;B2-ad 已實作 §4.2、§5.2、§6;B2-kb 已實作 §7;B2-logs 已實作 §4.3(B2 全部完成)**。各模組在 B2 分批實作,「批次」欄是預定交付的 MR;實作與本文件不同時,以 MR 描述的「API 變更」為準並同步更新本文件。
 > 欄位的完整定義以服務的 `/openapi.json` 為準(上架時匯入 Gateway);本文件寫路徑、權限、請求與回應格式。
 
 ---
@@ -175,7 +175,7 @@ PA 匯入在背景佇列執行;同步、分析只是送進佇列,畫面輪詢狀
 | GET | `/api/netops/pa/log-searches/{id}` | `netops.pa-log.read` | 工作狀態;完成時 `result` 為查詢摘要(不含資料列) |
 | GET | `/api/netops/pa/log-searches/{id}/rows?page&pageSize` | `netops.pa-log.read` | 查詢結果分頁(工作完成後) |
 | GET | `/api/netops/pa/log-searches/{id}/export` | `netops.pa-log.read` | 下載查詢結果 CSV(UTF-8 BOM,欄名中文) |
-| DELETE | `/api/netops/pa/log-searches/{id}` | `netops.pa-log.read` | 取消(冪等),回 204 |
+| DELETE | `/api/netops/pa/log-searches/{id}` | `netops.pa-log.read` | 取消(冪等),回 204;已完成的工作則丟棄結果、釋放記憶體 |
 
 ```jsonc
 // POST /pa/log-searches(from / to 必填;其他條件選填,與舊版相同)
@@ -187,10 +187,13 @@ PA 匯入在背景佇列執行;同步、分析只是送進佇列,畫面輪詢狀
 }
 ```
 
-- IP 條件:完全相同、萬用字元(`10.10.*`)、CIDR(`10.10.0.0/16`);同時比對 NAT 位址。
+- IP 條件:完全相同、萬用字元(`10.10.*`)、CIDR(`10.10.0.0/16`);同時比對 NAT 位址。只能用 IP / CIDR 字元,`*` 最多 4 個(連續的視為一個),否則 400。
+- 同時只執行 1 個明細查詢,其他排隊(`status: queued`);每人保留最近 5 筆已完成的結果。
 - `action`:`allow`、`block`(非 allow)、或 PA 的動作原文。
 - `limit` 預設與上限都是設定 `PA_SEARCH_LIMIT`(預設 2,000,可設 1–10,000;結果保留在記憶體 30 分鐘,調高前先估記憶體)。
+- 期間最長 31 天(超過回 400);`port` 只能是數字、逗號與空白。
 - 期間內沒有已分析的檔案時,建立工作直接回 404 `NETOPS_PA_NO_DATA`(請先到 FTP Log 檔案同步)。
+- 工作執行上限為掃描秒數 + 60 秒;`progress` 為 `{ filesScanned, files, rows, found }`,每掃完一個檔案更新。
 - 查詢與匯入共用 FTP 連線名額(測試區 1 條):匯入進行中時,查詢會排隊等候(工作狀態維持 `running`、`progress.filesScanned` 不動)。
 
 ```jsonc
@@ -199,7 +202,8 @@ PA 匯入在背景佇列執行;同步、分析只是送進佇列,畫面輪詢狀
   "from": "2026-11-02T08:00:00+08:00", "to": "2026-11-02T09:00:00+08:00",
   "total": 120, "limit": 2000,
   "files": 2, "filesScanned": 2, "scanned": 845000, "seconds": 12.3,
-  "stopReason": ""          // "" 全部掃完 | "limit" 達筆數上限 | "timeout" 超過掃描秒數(結果不完整)
+  "stopReason": ""          // "" 全部掃完 | "limit" 達筆數上限 | "timeout" 超過掃描秒數或等不到 FTP 連線(結果不完整,匯出檔名加「_不完整」)
+                            // FTP 讀取失敗時工作為 failed,原因在 error
 }
 
 // GET /pa/log-searches/{id}/rows:依時間排序;欄位順序同舊版 ROW_FIELDS

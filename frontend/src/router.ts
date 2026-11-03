@@ -2,7 +2,7 @@
  * 路由(History 模式,base = /netops/;FRONTEND-GUIDE §4.2):
  *   第一層:選單群組(MENU_GROUPS,BFF 代碼 netops.group.*;ARCHITECTURE §5)
  *   第二層:功能頁(TabbedPage),meta 定義標題與 Tab;MENU_PAGES 由這裡的路由產生,另加一般連結(D11、D18)
- *   第三層:Tab = 子路由(重新整理停在同一個 Tab);F1 第 1 批各頁還沒有 Tab,逐頁改寫時加入 meta.tabs
+ *   第三層:Tab = 子路由(重新整理停在同一個 Tab)(目前各頁都只有單一內容,需要時加入 meta.tabs)
  * 守衛(同入口網與 GigaItApp;FRONTEND-GUIDE §7.4):
  *   BFF 無法連線 → /unavailable;未登入 → 入口網 /login?redirect=/netops/...;
  *   沒有 netops.app.access → 整頁導回入口網 /?denied=netops(不可停在本系統造成迴圈);
@@ -44,11 +44,6 @@ export const MENU_GROUPS: readonly MenuGroupDef[] = [
   // 只放一般連結,不在 BFF 登記(沒有可授予的節點;有應用權限即可看到)
   { key: 'other', code: 'netops.group.other', title: '其他系統', icon: 'external' },
 ];
-
-/** 開發中的頁面(F1 逐頁改寫,UI-GUIDE §3);改寫完成時換成正式頁面 */
-function wip(summary: string, plan?: string[]): RouteRecordRaw {
-  return { path: '', component: () => import('./pages/WipPage.vue'), props: { summary, plan, docs: ['NetOps docs/IMPL-PLAN.md F1', 'NetOps docs/UI-GUIDE.md §3'] } };
-}
 
 /** 已改寫的頁面(單一內容) */
 const page = (component: NonNullable<RouteRecordRaw['component']>): RouteRecordRaw => ({ path: '', component });

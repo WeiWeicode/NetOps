@@ -6,7 +6,7 @@
 | --- | --- | --- |
 | D0 | 文件與登記 | 完成 |
 | B0 | 最小骨架部署 | 完成 |
-| B1 | 後端骨架 | 未開始 |
+| B1 | 後端骨架 | 進行中(MR 審查) |
 | B2 | 模組搬移 | 未開始 |
 | F1 | 前端框架與畫面改寫 | 未開始 |
 | D1 | 測試區部署 | 未開始 |
@@ -51,6 +51,8 @@ D13:骨架直接留用;AI 不在這次範圍,不做串流驗證(D7、D17)。
 - `docs/API.md` 建立舊路徑 → 新路徑對照;移除 `auth`、`jump`、`ai` 與 `kb` 的 `learn-ips`、`vector-sync`,數量以實際盤點為準。
 
 **完成條件**:`npm test` 通過;本機無 Token 回 401;OpenAPI 必填欄位檢查通過。
+
+**狀態:MR 審查中(`feature/netops-b1`)**。盤點舊版 41 支 API:搬移 27、移除 14([API.md](API.md) §9)。`docs/API.md` 寫完全部模組的路徑與格式(B2 各批照此實作);設定新增資料目錄 `NETOPS_DATA_DIR` 與 FTP(`FTP_PASSWORD_FILE`),test / prod 缺少時啟動失敗;`/readyz` 檢查資料目錄;`infra/jobs` 工作只有本人可查、有上限與保留時間。測試區需先執行 `deploy/host2-set-secrets.sh` 補 FTP 密碼與資料目錄才能部署。
 
 ## B2 模組搬移
 

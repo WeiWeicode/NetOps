@@ -3,8 +3,10 @@
 #   在主機 2 的 WSL:sudo sh host2-set-secrets.sh
 # 產生(已存在的不覆寫;要重建先刪除該檔):
 #   /srv/giganexus/netops-secrets/   gw_api_key(Gateway CLI client:create --code netops-api;自動註冊 OpenAPI 草稿用)、
-#                                    monitor_api_key(B0 為空檔:giga-observe 拓樸尚未登記 netops-api,監控停用;D1 刪除後改寫為 ingest Key)
-#   /srv/giganexus/deploy/netops.env Compose 變數(範本 test.env.example)
+#                                    monitor_api_key(B0 為空檔:giga-observe 拓樸尚未登記 netops-api,監控停用;D1 刪除後改寫為 ingest Key)、
+#                                    ftp_password(FTP 唯讀帳號密碼,執行時隱藏輸入;B1)
+#   /srv/giga-netops/test            資料目錄(uid 1000 可寫;B1)
+#   /srv/giganexus/deploy/netops.env Compose 變數(範本 test.env.example;FTP_USER 執行時輸入)
 # 注意:client:create 再次執行即換發,舊金鑰立即失效;gw_api_key 已存在時本腳本不會重建
 set -eu
 # 暫存檔(含 Key)只有本人可讀,結束或中斷時刪除
@@ -35,6 +37,16 @@ fi
 # ---------- giga-observe 監控 Key(B0 留空檔,監控停用;D1 登記拓樸後刪除此檔,改用 createApiKey.js 建立) ----------
 [ -f "$D/monitor_api_key" ] || : > "$D/monitor_api_key"
 
+# ---------- FTP 密碼(B1;舊版 IIS server/.env 的 FTP_PWD 同一個帳號,隱藏輸入,不顯示、不寫進歷史) ----------
+if [ ! -s "$D/ftp_password" ]; then
+  [ -t 0 ] || { echo "請在終端機執行(要隱藏輸入 FTP 密碼)" >&2; exit 1; }
+  printf 'FTP 密碼(與舊版 FTP_USER 同一個帳號;輸入時不顯示):'
+  # 中斷時恢復終端機回顯,並保留刪除暫存目錄
+  stty -echo; trap 'stty echo; rm -rf "$TMP"' EXIT; IFS= read -r FTP_PWD; stty echo; echo
+  [ -n "$FTP_PWD" ] || { echo "未輸入 FTP 密碼" >&2; exit 1; }
+  printf '%s' "$FTP_PWD" > "$D/ftp_password"; unset FTP_PWD
+fi
+
 # 只限縮檔案(目錄需讓 CI 的 docker compose 讀得到 secret 路徑)
 chown 1000:1000 "$D"/*; chmod 400 "$D"/*
 
@@ -45,8 +57,23 @@ add GW_ENV test
 add GW_BASE_URL https://giganexus-test.gigasolar.com.tw
 add GW_NETWORK giganexus-gw_default
 add NETOPS_SECRETS_DIR "$D"
+add NETOPS_DATA_HOST_DIR /srv/giga-netops/test
+add FTP_HOST 10.10.130.66
+if ! grep -q '^FTP_USER=.' "$ENV_FILE"; then
+  printf 'FTP 帳號(FTP_USER):'; read -r FTP_USER
+  [ -n "$FTP_USER" ] || { echo "未輸入 FTP 帳號" >&2; exit 1; }
+  sed -i '/^FTP_USER=/d' "$ENV_FILE"; echo "FTP_USER=$FTP_USER" >> "$ENV_FILE"; echo "netops.env 新增 FTP_USER"
+fi
+add FTP_MAX_CONNECTIONS 1
+add FTP_SYNC_MINUTES 0
 # 不含機密;umask 077 建出的檔案 CI(gitlab-runner)讀不到,改為所有人可讀
 chmod 644 "$ENV_FILE"
 
+# ---------- 資料目錄(B1;WSL 檔案系統,容器以 uid 1000 寫入;第一版不自動清除,D16) ----------
+mkdir -p /srv/giga-netops/test
+chown 1000:1000 /srv/giga-netops/test
+chmod 750 /srv/giga-netops/test
+
 ls -l "$D"
+echo "FTP 目錄若與預設不同(舊版 server/.env 的 FTP_ROOT、FTP_LOG_DIR、FTP_AD_DIR…),請在 $ENV_FILE 補上同名變數。"
 echo "完成。之後 develop 合併由 CI 部署 netops-api;部署後在 GigaItApp「服務與路由」審查 netops-api 的路由草稿並發佈。"

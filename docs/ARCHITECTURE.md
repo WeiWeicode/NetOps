@@ -1,7 +1,7 @@
 # NetOps 架構與決策
 
 > 目標架構與設計決策。工作項目見 [IMPL-PLAN.md](IMPL-PLAN.md),目錄見 [PROJECT-MAP.md](PROJECT-MAP.md),現況、過渡期與未來目標的流程見 [FLOW-ARCHITECTURE.md](FLOW-ARCHITECTURE.md)。與 Gateway `docs/` 不一致時以 Gateway 為準,先指出差異。
-> **狀態:B0 完成,下一步 B1**(`netops-api` 骨架已部署測試區);舊版程式未改動,現況見 [README.md](../README.md)。
+> **狀態:B0 完成,B1 MR 審查中**(`netops-api` 骨架已部署測試區;API 介面見 [API.md](API.md));舊版程式未改動,現況見 [README.md](../README.md)。
 
 ---
 
@@ -107,7 +107,7 @@ flowchart LR
 
 ## 5. 權限草案
 
-BFF 以 API 權限檢查;畫面節點由 `deploy/gateway-rbac.yaml` 登記並以 `includes` 綁定。上線前以實際路由為準。
+BFF 以 API 權限檢查;畫面節點由 `deploy/gateway-rbac.yaml` 登記並以 `includes` 綁定。上線前以實際路由為準;每支 API 用哪個權限見 [API.md](API.md) §2(B1 盤點後沿用下列代碼,沒有新增)。
 
 ```text
 netops.ping.read                         連線驗證 API(B0,GET /api/netops/ping;不綁畫面節點)
@@ -144,6 +144,7 @@ netops.app.access                        應用
 | 舊版與新版長期並行(D18) | FTP 負載加倍;舊版 AI 的知識庫落後;舊版要繼續維護 | 新舊都控制 FTP 連線數;只保留 AI 功能的使用;AI 中控台接入後停用舊版 |
 | 長時間掃描阻塞事件迴圈 | `/healthz` 延遲,誤判上游異常 | B2 量測;必要時移到 worker thread |
 | 容器連不到 FTP | 功能不可用 | 主機 2、3 Windows 端 TCP 已通;D1 在容器內再驗證 |
+| FTP 預設明文傳輸(帳密與 log 內容) | 同網段可竊聽 | 沿用舊版;帳號只給唯讀。確認 FTP 伺服器支援 FTPS 後設 `FTP_SECURE=1`(正式區不允許略過憑證驗證) |
 | 測試區與舊系統同時同步 | FTP 負載加倍 | 測試區連線數設 1 |
 | 畫面改寫時漏掉舊功能 | 切換後使用者少了操作 | F1 逐頁對照舊版功能;只換畫面,不同時改功能 |
 | 資料目錄持續成長 | 第一版不自動清除(D16),其他 log 與 AD 事件的量未量測 | D1 後量測實際用量 |

@@ -1,0 +1,27 @@
+{
+  "name": "@giganexus/netops-web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "資訊網通管理系統前端:子路徑 /netops/,登入與權限經 Gateway web-kit(單一入口),API 為同網域 /api/netops/*(BFF 轉 netops-api)",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "vue-tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@giganexus/web-kit": "^0.3.0",
+    "lucide-vue-next": "1.0.0",
+    "vue": "3.5.43",
+    "vue-router": "5.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "6.0.9",
+    "typescript": "6.0.3",
+    "vite": "8.3.1",
+    "vitest": "5.0.2",
+    "vue-tsc": "3.3.11"
+  }
+}

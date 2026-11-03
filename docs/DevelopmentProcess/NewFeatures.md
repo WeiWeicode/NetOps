@@ -2,6 +2,12 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。
 
+## 2026-11-03 F1 第 1 批:前端框架
+- 工作項目:F1
+- 內容:新增 `frontend/` 框架(入口網 `src/ui/` + 工程藍主題、權限選單、應用層守衛、一般連結),頁面先佔位;細節見 `FrontendCorrection.md`。
+- 檔案:`frontend/`、`.gitlab-ci.yml`、`docs/`
+- 驗證:見 `FrontendCorrection.md` 同日紀錄
+
 ## 2026-11-03 B0 測試區驗證完成
 - 工作項目:B0
 - 內容:NetOps !4 合併後在測試區驗證 B0 四項完成條件全部通過,B0 改為完成。`netops.ping.read` 指派給 `it-admin`(先誤派到沒有成員的 `gw-it-admin`)。

@@ -8,7 +8,7 @@
 | B0 | 最小骨架部署 | 完成 |
 | B1 | 後端骨架 | 未開始 |
 | B2 | 模組搬移 | 未開始 |
-| F1 | 前端框架與畫面改寫 | 未開始 |
+| F1 | 前端框架與畫面改寫 | 進行中(框架) |
 | D1 | 測試區部署 | 未開始 |
 | D2 | 驗收與切換 | 未開始 |
 | 後續 | 服務寫入資料庫 | 未排程(ARCHITECTURE §4.2) |
@@ -77,6 +77,8 @@ D13:骨架直接留用;AI 不在這次範圍,不做串流驗證(D7、D17)。
 - 頁面依權限顯示,下載帶 CSRF、不再帶 Bearer。
 - 無權限導回 `/?denied=netops`。
 - Veeam、舊版 AI 問答改一般連結(D11、D18)。
+
+**狀態:進行中**。分批:① 框架 `feature/netops-f1-frame`(`frontend/` 空頁、權限、選單、連結、`/api/netops/ping`,本機假 Gateway `MOCK=admin|viewer|noapp`);② 畫面逐頁;③ 收尾。
 
 **完成條件**:`netops-admin`、`netops-viewer` 與無權限帳號各自看到正確畫面;舊版功能逐頁對照無遺漏;四種風格組合 × 1440px / 375px 都用瀏覽器看過;`vue-tsc` 通過;不再相依 `element-plus`、`tailwindcss`;無寫死 `/` 開頭的資源路徑。
 

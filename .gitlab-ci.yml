@@ -1,7 +1,7 @@
 # NetOps Pipeline(Runner:主機 2 WSL shell executor,tag windows-runner;與 Gateway 同一台主機;IMPL-PLAN B0)
-#   check            所有分支:netops-api 型別檢查、單元測試、建置
+#   check            所有分支:netops-api、netops-web(frontend/)型別檢查、單元測試、建置
 #   deploy-api-test  develop:在主機 2 建置並更新 netops-api(加入 Gateway 網路);啟動後自動註冊路由草稿
-# 只部署 netops-api;SPA(F1)、gateway-rbac.yaml、Nginx /netops/ location 於 D1 加入。
+# 只部署 netops-api;SPA 只做檢查不部署(F1),SPA 部署、gateway-rbac.yaml、Nginx /netops/ location 於 D1 加入。
 # 舊版 IIS 程式(根目錄 server/、src/)不在 Pipeline 內,切換前 main 維持舊版(ARCHITECTURE D12),本檔沒有 main 的工作。
 # 主機需有:${NETOPS_SECRETS_DIR} 機密與 ${NETOPS_ENV_FILE}(deploy/host2-set-secrets.sh 產生);Gateway 已部署(giganexus-gw_default 網路);
 #           npm Registry Token 同其他專案(${NPM_TOKEN_FILE})
@@ -21,6 +21,17 @@ check:backend:
   script:
     - export GITLAB_NPM_TOKEN="$(cat "$NPM_TOKEN_FILE")"
     - cd backend
+    - npm ci --no-audit --no-fund
+    - npm run typecheck
+    - npm test
+    - npm run build
+
+check:frontend:
+  <<: *runner
+  stage: check
+  script:
+    - export GITLAB_NPM_TOKEN="$(cat "$NPM_TOKEN_FILE")"
+    - cd frontend
     - npm ci --no-audit --no-fund
     - npm run typecheck
     - npm test

@@ -1,7 +1,7 @@
 # NetOps 架構與決策
 
 > 目標架構與設計決策。工作項目見 [IMPL-PLAN.md](IMPL-PLAN.md),目錄見 [PROJECT-MAP.md](PROJECT-MAP.md),現況、過渡期與未來目標的流程見 [FLOW-ARCHITECTURE.md](FLOW-ARCHITECTURE.md)。與 Gateway `docs/` 不一致時以 Gateway 為準,先指出差異。
-> **狀態:B0 完成,下一步 B1**(`netops-api` 骨架已部署測試區);舊版程式未改動,現況見 [README.md](../README.md)。
+> **狀態:B0 完成,B1 MR 審查中**(`netops-api` 骨架已部署測試區;API 介面見 [API.md](API.md));舊版程式未改動,現況見 [README.md](../README.md)。
 
 ---
 
@@ -107,7 +107,7 @@ flowchart LR
 
 ## 5. 權限草案
 
-BFF 以 API 權限檢查;畫面節點由 `deploy/gateway-rbac.yaml` 登記並以 `includes` 綁定。上線前以實際路由為準。
+BFF 以 API 權限檢查;畫面節點由 `deploy/gateway-rbac.yaml` 登記並以 `includes` 綁定。上線前以實際路由為準;每支 API 用哪個權限見 [API.md](API.md) §2(B1 盤點後沿用下列代碼,沒有新增)。
 
 ```text
 netops.ping.read                         連線驗證 API(B0,GET /api/netops/ping;不綁畫面節點)

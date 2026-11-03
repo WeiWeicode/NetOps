@@ -7,7 +7,10 @@
 # 上游與路由:服務啟動後由 setupGateway 自動註冊為 Gateway 草稿(上游 netops-api、位址 SERVICE_ADVERTISE_URL、路由、權限代碼),
 #   在 GigaItApp「服務與路由」審查發佈後才生效
 # 機密(NETOPS_SECRETS_DIR,uid 1000 可讀;deploy/host2-set-secrets.sh 產生):
-#   gw_api_key(Gateway CLI client:create --code netops-api)、monitor_api_key(giga-observe 服務 netops-api;B0 為空檔,監控停用,D1 補上)
+#   gw_api_key(Gateway CLI client:create --code netops-api)、monitor_api_key(giga-observe 服務 netops-api;B0 為空檔,監控停用,D1 補上)、
+#   ftp_password(FTP 10.10.130.66 唯讀帳號;B1)
+# 資料目錄(B1):主機 NETOPS_DATA_HOST_DIR(/srv/giga-netops/test,WSL 檔案系統、uid 1000 可寫)掛到容器 /data;只經 infra/store 存取
+# FTP 目錄與同步:FTP_ROOT、FTP_LOG_DIR、FTP_AD_DIR、FTP_*_DIR 未設定時用程式預設值(backend/src/config.ts,與舊版相同)
 # 單一容器(ARCHITECTURE D9):背景工作在程序內執行,不要加 replicas
 name: giganexus-netops-${GW_ENV:?GW_ENV 必須設定(test / prod)}
 
@@ -29,7 +32,28 @@ services:
       MONITOR_URL: ${MONITOR_URL:-http://observe-api:51202}
       MONITOR_API_KEY_FILE: /run/secrets/monitor_api_key
       RELEASE_SHA: ${RELEASE_SHA:-dev}
-    secrets: [gw_api_key, monitor_api_key]
+      NETOPS_DATA_DIR: /data
+      FTP_HOST: ${FTP_HOST:?FTP_HOST 必須設定}
+      FTP_USER: ${FTP_USER:?FTP_USER 必須設定}
+      FTP_PASSWORD_FILE: /run/secrets/ftp_password
+      FTP_ROOT: ${FTP_ROOT:-}
+      FTP_LOG_DIR: ${FTP_LOG_DIR:-}
+      FTP_PATTERN: ${FTP_PATTERN:-}
+      FTP_AD_DIR: ${FTP_AD_DIR:-}
+      FTP_THREAT_DIR: ${FTP_THREAT_DIR:-}
+      FTP_URL_DIR: ${FTP_URL_DIR:-}
+      FTP_DATA_FILTER_DIR: ${FTP_DATA_FILTER_DIR:-}
+      FTP_WILDFIRE_DIR: ${FTP_WILDFIRE_DIR:-}
+      FTP_DECRYPTION_DIR: ${FTP_DECRYPTION_DIR:-}
+      FTP_GLOBALPROTECT_DIR: ${FTP_GLOBALPROTECT_DIR:-}
+      FTP_USERID_DIR: ${FTP_USERID_DIR:-}
+      # 測試區 1 條(與舊版同時同步,控制 FTP 負載;AGENT.md §6)
+      FTP_MAX_CONNECTIONS: ${FTP_MAX_CONNECTIONS:-1}
+      # 0 = 不自動同步,只在 FTP Log 檔案頁手動同步
+      FTP_SYNC_MINUTES: ${FTP_SYNC_MINUTES:-0}
+    volumes:
+      - ${NETOPS_DATA_HOST_DIR:?NETOPS_DATA_HOST_DIR 必須設定}:/data
+    secrets: [gw_api_key, monitor_api_key, ftp_password]
     networks:
       gateway:
         aliases: [netops-api]
@@ -39,6 +63,8 @@ secrets:
     file: ${NETOPS_SECRETS_DIR:?NETOPS_SECRETS_DIR 必須設定}/gw_api_key
   monitor_api_key:
     file: ${NETOPS_SECRETS_DIR}/monitor_api_key
+  ftp_password:
+    file: ${NETOPS_SECRETS_DIR}/ftp_password
   # 建置用:GitLab npm Registry 讀取 Token(環境變數 GITLAB_NPM_TOKEN;CI 由主機機密檔讀入)
   npm_token:
     environment: GITLAB_NPM_TOKEN

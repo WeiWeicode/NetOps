@@ -10,7 +10,8 @@ COPY src/ src/
 RUN npm run build && npm prune --omit=dev
 
 FROM node:22-alpine
-ENV NODE_ENV=production PORT=51292
+# PA / AD log 與知識庫的時間是台灣當地時間(舊版 IIS 主機時區);Node 內建 ICU 時區資料,不需 tzdata
+ENV NODE_ENV=production PORT=51292 TZ=Asia/Taipei
 WORKDIR /app
 COPY --from=build /app/node_modules node_modules/
 COPY --from=build /app/dist dist/

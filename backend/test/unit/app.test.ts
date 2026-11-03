@@ -2,10 +2,14 @@
  * netops-api 骨架自我檢查(IMPL-PLAN B0):npm test
  *   - OpenAPI 符合 BACKEND-GUIDE.md §6.1,且每個 operation 都有 description 與 x-gherkin
  *   - X-Internal-Token 驗證與錯誤格式(§4.2、§5.3);健康檢查不需 Token
- *   - 部署區設定(dev / test / prod)與服務代碼
+ *   - 部署區設定(dev / test / prod)與服務代碼;設定細節見 config.test.ts
+ *   - /readyz 檢查資料目錄(infra/store)
  */
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import http from 'node:http';
+import os from 'node:os';
+import path from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { after, before, describe, it } from 'node:test';
 import { exportJWK, generateKeyPair, SignJWT } from 'jose';
@@ -17,6 +21,7 @@ const CODE = /^[a-z][a-z0-9-]*(\.[a-z0-9-]+){2,}$/;
 
 let app: FastifyInstance;
 let jwks: http.Server;
+let dataDir: string;
 let sign: (claims: Record<string, unknown>, opts?: { aud?: string; iss?: string; exp?: string }) => Promise<string>;
 
 before(async () => {
@@ -27,12 +32,14 @@ before(async () => {
   const jwksUrl = `http://127.0.0.1:${(jwks.address() as AddressInfo).port}/.well-known/jwks.json`;
   sign = (claims, { aud = 'netops-api', iss = 'giganexus-bff', exp = '60s' } = {}) =>
     new SignJWT(claims).setProtectedHeader({ alg: 'ES256', kid: 'test' }).setIssuer(iss).setAudience(aud).setExpirationTime(exp).sign(privateKey);
-  app = await buildApp(loadConfig({ GW_ENV: 'dev', SERVICE_CODE: 'netops-api', GW_JWKS_URL: jwksUrl, LOG_LEVEL: 'silent' }));
+  dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'netops-app-'));
+  app = await buildApp(loadConfig({ GW_ENV: 'dev', SERVICE_CODE: 'netops-api', GW_JWKS_URL: jwksUrl, LOG_LEVEL: 'silent', NETOPS_DATA_DIR: dataDir }));
 });
 
 after(async () => {
   await app.close();
   jwks.close();
+  fs.rmSync(dataDir, { recursive: true, force: true });
 });
 
 describe('OpenAPI(BACKEND-GUIDE.md §6.1)', () => {
@@ -64,6 +71,19 @@ describe('X-Internal-Token 與錯誤格式', () => {
 
   it('/healthz、/readyz、/openapi.json 不需 Token', async () => {
     for (const url of ['/healthz', '/readyz', '/openapi.json']) assert.equal((await get(url)).statusCode, 200, url);
+  });
+
+  it('資料目錄無法寫入時 /readyz 回 503 NETOPS_NOT_READY,不帶出路徑', async () => {
+    const orig = app.store.ready;
+    app.store.ready = async () => false;
+    try {
+      const res = await get('/readyz');
+      assert.equal(res.statusCode, 503);
+      assert.deepEqual(res.json(), { code: 'NETOPS_NOT_READY', message: '資料目錄無法讀寫', requestId: 'req-1' });
+      assert.ok(!res.body.includes(dataDir));
+    } finally {
+      app.store.ready = orig;
+    }
   });
 
   it('缺少 Token 回 401 NETOPS_INTERNAL_TOKEN_INVALID,格式 { code, message, requestId }', async () => {
@@ -119,7 +139,8 @@ describe('部署區設定', () => {
 
   it('test 自動註冊,缺少必要設定時啟動失敗', () => {
     assert.throws(() => loadConfig({ ...base, GW_ENV: 'test' }), /GW_API_KEY_FILE、SERVICE_ADVERTISE_URL/);
-    const c = loadConfig({ ...base, GW_ENV: 'test', GW_API_KEY: 'k', SERVICE_ADVERTISE_URL: 'http://netops-api:51292' });
+    const full = { GW_API_KEY: 'k', SERVICE_ADVERTISE_URL: 'http://netops-api:51292', NETOPS_DATA_DIR: '/data', FTP_HOST: 'ftp', FTP_USER: 'u', FTP_PASSWORD: 'p' };
+    const c = loadConfig({ ...base, GW_ENV: 'test', ...full });
     assert.equal(c.gateway.autoRegister, true);
   });
 

@@ -7,7 +7,8 @@ import { describe, it } from 'node:test';
 import { loadConfig } from '../../src/config.js';
 import { AppError } from '../../src/errors.js';
 import { createFtp, ftpReason, Semaphore, unavailable } from '../../src/infra/ftp/index.js';
-import { createTestApp } from '../helpers.js';
+import { errorText } from '../../src/modules/pa/importer.js';
+import { createTestApp, waitFor } from '../helpers.js';
 
 const code = (c: string) => (err: unknown) => err instanceof AppError && err.code === c;
 
@@ -81,6 +82,13 @@ describe('FTP 錯誤訊息(不外露主機、port 與原始錯誤)', () => {
     for (const [err, reason] of cases) assert.equal(ftpReason(err), reason);
   });
 
+  it('分析狀態的錯誤訊息用白名單:已分類的照實,其他回固定訊息', () => {
+    assert.equal(errorText(unavailable('FTP 連線失敗', sys('ECONNRESET', 'read ECONNRESET 10.10.130.66:21'))), 'FTP 連線失敗:連線中斷');
+    assert.equal(errorText(Object.assign(new Error('不是 PA 防火牆匯出的 CSV'), { status: 400 })), '不是 PA 防火牆匯出的 CSV');
+    assert.equal(errorText(new Error('FTP 傳輸不完整(10 / 20 bytes)')), 'FTP 傳輸不完整(10 / 20 bytes)');
+    for (const raw of [new Error('socket hang up 10.10.130.66:21'), Object.assign(new Error('EACCES /srv/giga-netops/test/palogs'), { path: '/srv' })]) assert.equal(errorText(raw), '分析失敗(詳見服務日誌)');
+  });
+
   it('502 的訊息只有分類過的原因,原始錯誤放在 cause', () => {
     const raw = sys('ECONNREFUSED', 'connect ECONNREFUSED 10.10.130.66:21');
     const e = unavailable('FTP 連線失敗', raw);
@@ -129,7 +137,10 @@ describe('FTP 錯誤訊息(不外露主機、port 與原始錯誤)', () => {
       assert.ok(!res.body.includes('10.10.130.66'));
       // 同步失敗的 lastSyncError 也只有分類過的訊息
       await t.call({ method: 'POST', url: '/v1/ftp/pa/syncs' });
-      await new Promise((r) => setTimeout(r, 50));
+      await waitFor(async () => {
+        const s = (await t.call({ url: '/v1/ftp/pa/status' })).json();
+        return !s.traffic.syncing && Boolean(s.traffic.lastSyncAt);
+      });
       const st = (await t.call({ url: '/v1/ftp/pa/status' })).json();
       assert.equal(st.traffic.lastSyncError, 'FTP 連線失敗:拒絕連線');
       assert.ok(!JSON.stringify(st).includes('10.10.130.66'));

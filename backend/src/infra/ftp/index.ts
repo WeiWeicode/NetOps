@@ -125,8 +125,9 @@ export function ftpReason(err: unknown): string {
   if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') return '找不到主機';
   if (code === 'ECONNRESET' || code === 'EPIPE') return '連線中斷';
   if (code === 'ETIMEDOUT' || /timeout/i.test(msg)) return '連線逾時';
-  if (/cert|self.signed|tls|ssl/i.test(code + msg)) return 'TLS 憑證驗證失敗';
-  if (/超過 \d+ MB 上限/.test(msg)) return msg;
+  // Node TLS 的錯誤碼(CERT_*、DEPTH_ZERO_SELF_SIGNED_CERT、SELF_SIGNED_CERT_IN_CHAIN、UNABLE_TO_*、ERR_TLS_*、ERR_SSL_*)
+  if (/^(CERT_|DEPTH_ZERO_|SELF_SIGNED_|UNABLE_TO_|ERR_TLS_|ERR_SSL_|HOSTNAME_MISMATCH|ERR_TLS)/.test(code)) return 'TLS 憑證驗證失敗';
+  if ((err as { tooLarge?: boolean })?.tooLarge) return `檔案超過 ${DOWNLOAD_MAX_BYTES / 1024 / 1024} MB 上限`;
   return '連線或傳輸失敗';
 }
 
@@ -204,7 +205,7 @@ export function createFtp(config: FtpConfig | null): Ftp {
               new Writable({
                 write(chunk: Buffer, _e, cb) {
                   size += chunk.length;
-                  if (size > DOWNLOAD_MAX_BYTES) return cb(new Error(`檔案超過 ${DOWNLOAD_MAX_BYTES / 1024 / 1024} MB 上限`));
+                  if (size > DOWNLOAD_MAX_BYTES) return cb(Object.assign(new Error('檔案超過大小上限'), { tooLarge: true }));
                   chunks.push(chunk);
                   cb();
                 },

@@ -7,7 +7,8 @@
 - 內容:`infra/ftp` 的 502 `NETOPS_FTP_UNAVAILABLE` 原本把 basic-ftp 的原始錯誤(可能含 FTP 主機 IP 與 port,例如 `connect ECONNREFUSED 10.10.130.66:21`)接在訊息後面,經 API 回應、匯入狀態 `lastSyncError`、FTP 檔案清單的 `error` 與工作的 `error.message` 傳給有 `netops.ftp.read`、`netops.pa-log.read` 的人。改成只回分類過的原因(`ftpReason`:逾時、拒絕連線、找不到主機、連線中斷、TLS、FTP 回應碼),原始錯誤放在 `cause`,由錯誤處理、匯入與工作的日誌寫出。FTP 路徑照舊(畫面上本來就看得到)。
 - 已知:修正前已寫進分析狀態的錯誤訊息(測試區,以及 D14 從舊版複製的資料)維持原文,重新分析或同步後覆寫。
 - 檔案:`backend/src/infra/ftp/index.ts`、`backend/src/app.ts`、`backend/src/infra/jobs/index.ts`、`backend/src/modules/{pa,pa-events,ad}/importer.ts`、`backend/test/unit/{ftp,jobs}.test.ts`、`docs/API.md` §8
-- 驗證:`npm run typecheck`、`npm test`(115 項通過,含連到本機未開的 port,確認訊息不含主機與 port)、`npm run build`
+- 審查後:分析狀態的 `errorText` 改白名單(已分類的 AppError、核心格式錯誤、「FTP 傳輸不完整」照實,其他回固定訊息);檔案大小上限改固定文字;外部錯誤(帶 cause)才在錯誤處理寫 error 日誌,預期內的 503 不記;自動同步失敗不重複記錄;TLS 只比對 Node 的錯誤碼。
+- 驗證:`npm run typecheck`、`npm test`(116 項通過,含連到本機未開的 port,確認訊息不含主機與 port)、`npm run build`;`security-auditor`(無 High / Medium)、`code-reviewer`(無必修)審查後修正
 
 ## 2026-11-03 B2-logs:PA Log 明細查詢與匯出(工作模式)
 - 工作項目:B2

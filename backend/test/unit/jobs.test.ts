@@ -175,6 +175,29 @@ describe('JobRunner', () => {
     assert.throws(() => jobs.submit('t', 'S3', untilAbort, { timeoutMs: 5000 }), code('NETOPS_JOB_ABORTED'));
   });
 
+  it('每人保留的已完成工作有上限,只丟自己最舊的', async () => {
+    const jobs = new JobRunner({ maxRetainedPerOwner: 2, maxActivePerOwner: 10, maxActive: 10 });
+    const other = jobs.submit('t', 'S2', async () => 0, { timeoutMs: 1000 });
+    const ids: string[] = [];
+    for (let i = 0; i < 3; i++) {
+      ids.push(jobs.submit('t', 'S1', async () => i, { timeoutMs: 1000 }).id);
+      await tick();
+    }
+    assert.throws(() => jobs.get(ids[0]!, 'S1'), code('NETOPS_JOB_NOT_FOUND'));
+    assert.equal(jobs.get(ids[2]!, 'S1').status, 'done');
+    assert.equal(jobs.get(other.id, 'S2').status, 'done');
+  });
+
+  it('discard:已結束的工作取消時直接移除;執行中的照常取消', async () => {
+    const jobs = new JobRunner();
+    const done = jobs.submit('t', 'S1', async () => 1, { timeoutMs: 1000 });
+    await tick();
+    jobs.cancel(done.id, 'S1', undefined, { discard: true });
+    assert.throws(() => jobs.get(done.id, 'S1'), code('NETOPS_JOB_NOT_FOUND'));
+    const running = jobs.submit('t', 'S1', untilAbort, { timeoutMs: 5000 });
+    assert.equal(jobs.cancel(running.id, 'S1', undefined, { discard: true }).status, 'cancelled');
+  });
+
   it('timeoutMs 超出範圍時拒絕(避免 setTimeout 溢位立刻觸發)', () => {
     const jobs = new JobRunner();
     for (const t of [0, -1, Number.NaN, 2 ** 31]) assert.throws(() => jobs.submit('t', 'S1', async () => 1, { timeoutMs: t }), /timeoutMs/);

@@ -20,9 +20,12 @@ import { createAdImporter } from './modules/ad/importer.js';
 import adRoutes from './modules/ad/routes.js';
 import adFtpRoutes from './modules/ftp/ad-routes.js';
 import ftpRoutes from './modules/ftp/routes.js';
+import kbRoutes from './modules/kb/routes.js';
+import { createKbService } from './modules/kb/service.js';
 import { createEventImporter } from './modules/pa-events/importer.js';
 import paEventRoutes from './modules/pa-events/routes.js';
 import { createTrafficImporter } from './modules/pa/importer.js';
+import logRoutes from './modules/pa/log-routes.js';
 import paRoutes from './modules/pa/routes.js';
 import pingRoutes from './modules/ping/routes.js';
 import { swaggerOptions } from './openapi.js';
@@ -126,9 +129,11 @@ export async function buildApp(config: Config, deps: { ftp?: Ftp } = {}): Promis
     await Promise.all([traffic.stop(), events.stop()]);
   });
   await app.register(paRoutes, { traffic });
+  await app.register(logRoutes, { ftp, traffic, parallel: config.ftp?.maxConnections ?? 1, limit: config.search.limit, seconds: config.search.seconds });
   await app.register(paEventRoutes, { events });
   await app.register(adRoutes, { ad });
   await app.register(adFtpRoutes, { ad });
+  await app.register(kbRoutes, { kb: createKbService(app.store.kb, app.log) });
   await app.register(ftpRoutes, {
     ftp,
     traffic,

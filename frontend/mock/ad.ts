@@ -134,7 +134,103 @@ function overview(from: string, to: string) {
   };
 }
 
-export function handleAd({ method, path, url, need, send, fail }: MockCtx): boolean {
+/** 假的 AD 事件明細(依期間平均分布) */
+function events(from: string, to: string) {
+  const a = new Date(from).getTime();
+  const b = new Date(to).getTime();
+  const n = Math.min(240, Math.max(0, Math.round((b - a) / 600_000)));
+  const KINDS = [
+    {
+      channel: 'Security',
+      eventId: 4625,
+      level: 'audit_failure',
+      levelText: '稽核失敗',
+      reason: '使用者名稱或密碼錯誤(0xC000006A)',
+      message: '帳戶無法登入。\n失敗原因:使用者名稱或密碼錯誤',
+    },
+    { channel: 'Security', eventId: 4624, level: 'audit_success', levelText: '稽核成功', reason: '', message: '帳戶已成功登入。' },
+    { channel: 'Security', eventId: 4728, level: 'audit_success', levelText: '稽核成功', reason: '', message: '成員已新增到啟用安全性的全域群組。' },
+    { channel: 'System', eventId: 7036, level: 'info', levelText: '資訊', reason: '', message: '服務進入執行狀態。' },
+    { channel: 'DNS_Server', eventId: 4013, level: 'error', levelText: '錯誤', reason: '', message: 'DNS 伺服器正在等候 AD 初始同步。' },
+  ];
+  return Array.from({ length: n }, (_, i) => {
+    const k = KINDS[i % KINDS.length]!;
+    const t = new Date(a + ((b - a) * i) / Math.max(1, n));
+    const pad = (x: number) => String(x).padStart(2, '0');
+    return {
+      time: `${t.getFullYear()}-${pad(t.getMonth() + 1)}-${pad(t.getDate())}T${pad(t.getHours())}:${pad(t.getMinutes())}:${pad(t.getSeconds())}+08:00`,
+      ...k,
+      provider: k.channel === 'Security' ? 'Microsoft-Windows-Security-Auditing' : 'Service Control Manager',
+      computer: 'GSMC-DC1',
+      recordId: String(100000 + i),
+      account: k.channel === 'Security' ? ['S112009', 'guest', 'S113001'][i % 3]! : '',
+      domain: k.channel === 'Security' ? 'GSMC' : '',
+      ip: k.eventId === 4625 ? '10.10.1.5' : '',
+      workstation: k.eventId === 4625 ? 'PC01' : '',
+      actor: k.eventId === 4728 ? 'GSMC\\admin' : '',
+      target: k.eventId === 4728 ? 'svc-backup2' : '',
+      group: k.eventId === 4728 ? 'Domain Admins' : '',
+      privileged: k.eventId === 4728,
+    };
+  }).reverse();
+}
+
+export function handleAd({ method, path, url, need, send, fail, sendFile }: MockCtx): boolean {
+  if (method === 'GET' && (path === '/api/netops/ad/events' || path === '/api/netops/ad/events/export')) {
+    if (!need('netops.ad-log.read')) return true;
+    const p = url.searchParams;
+    const from = p.get('from') ?? '';
+    const to = p.get('to') ?? '';
+    if (!from || !to || Number.isNaN(Date.parse(from)) || Number.isNaN(Date.parse(to)))
+      return (fail(400, 'VALIDATION_FAILED', 'from / to 必須是 ISO 8601 含時區'), true);
+    if ((Date.parse(to) - Date.parse(from)) / 86_400_000 > 31) return (fail(400, 'VALIDATION_FAILED', '期間最長 31 天'), true);
+    const all = events(from, to);
+    const ids = (p.get('eventId') ?? '')
+      .split(',')
+      .map((x) => x.trim())
+      .filter(Boolean);
+    const q = (p.get('q') ?? '').toLowerCase();
+    const rows = all.filter(
+      (e) =>
+        (!p.get('channel') || e.channel === p.get('channel')) &&
+        (!p.get('level') || e.level === p.get('level')) &&
+        (!ids.length || ids.includes(String(e.eventId))) &&
+        (!p.get('account') || e.account.includes(p.get('account')!)) &&
+        (!p.get('ip') || e.ip === p.get('ip')) &&
+        (!q || `${e.message} ${e.reason}`.toLowerCase().includes(q)) &&
+        (p.get('issueOnly') !== 'true' || ['audit_failure', 'warning', 'error', 'critical'].includes(e.level)),
+    );
+    if (path.endsWith('/export')) {
+      const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+      const head = ['時間', '記錄', '事件 ID', '等級', '來源', '主機', '帳號', '執行者', '對象', '群組', '來源 IP', '工作站', '原因', '訊息'];
+      const lines = rows.map((e) =>
+        [
+          e.time,
+          CHANNELS[e.channel as keyof typeof CHANNELS] ?? e.channel,
+          e.eventId,
+          e.levelText,
+          e.provider,
+          e.computer,
+          e.account,
+          e.actor,
+          e.target,
+          e.group,
+          e.ip,
+          e.workstation,
+          e.reason,
+          e.message,
+        ]
+          .map(esc)
+          .join(','),
+      );
+      sendFile('text/csv; charset=utf-8', 'AD_log.csv', `\uFEFF${[head.map(esc).join(','), ...lines].join('\r\n')}`);
+      return true;
+    }
+    const page = Math.max(1, Number(p.get('page')) || 1);
+    const pageSize = Math.min(100, Math.max(1, Number(p.get('pageSize')) || 50));
+    send(200, { items: rows.slice((page - 1) * pageSize, page * pageSize), total: rows.length, page, pageSize, scanned: all.length });
+    return true;
+  }
   if (method === 'GET' && path === '/api/netops/ad/days') {
     if (!need('netops.ad.read')) return true;
     send(200, {

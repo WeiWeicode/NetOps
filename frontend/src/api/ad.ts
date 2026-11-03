@@ -87,3 +87,51 @@ export const AD_LEVEL: Record<AdLevel, { label: string; tone: string }> = {
   audit_success: { label: '稽核成功', tone: 'success' },
   info: { label: '資訊', tone: 'neutral' },
 };
+
+// ---------- 明細查詢與匯出(§6.2;資料已在本機,同步回應) ----------
+
+export interface AdEventRow {
+  time: string;
+  eventId: number;
+  level: AdLevel;
+  levelText: string;
+  provider: string;
+  computer: string;
+  recordId: string;
+  channel: string;
+  message: string;
+  account: string;
+  domain: string;
+  ip: string;
+  workstation: string;
+  reason: string;
+  actor: string;
+  target: string;
+  group: string;
+  privileged: boolean;
+}
+
+/** 查詢條件:from / to 為 ISO 8601 含時區;eventId 逗號分隔 */
+export interface AdEventQuery {
+  from: string;
+  to: string;
+  channel?: string;
+  level?: string;
+  eventId?: string;
+  q?: string;
+  account?: string;
+  ip?: string;
+  issueOnly?: boolean;
+}
+
+/** 期間最長 31 天;匯出最多 20,000 筆(超過 422 NETOPS_EXPORT_TOO_LARGE) */
+export const AD_SEARCH_MAX_DAYS = 31;
+export const AD_EXPORT_MAX = 20_000;
+
+export const adLog = {
+  search: (q: AdEventQuery, page: number, pageSize: number) =>
+    http.get<{ items: AdEventRow[]; total: number; page: number; pageSize: number; scanned: number }>('/api/netops/ad/events', {
+      query: { ...q, issueOnly: q.issueOnly || undefined, page, pageSize },
+    }),
+  exportQuery: (q: AdEventQuery) => ({ ...q, issueOnly: q.issueOnly || undefined }),
+};

@@ -91,7 +91,7 @@ D13:骨架直接留用;AI 不在這次範圍,不做串流驗證(D7、D17)。
 - 無權限導回 `/?denied=netops`。
 - Veeam、舊版 AI 問答改一般連結(D11、D18)。
 
-**狀態:進行中**。分批:① 框架 `feature/netops-f1-frame`(已合併:`frontend/` 空頁、權限、選單、連結、`/api/netops/ping`,本機假 Gateway `MOCK=admin|viewer|noapp`);② 畫面逐頁,每頁一個 MR:FTP Log 檔案 `feature/netops-f1-ftp`(PA、AD)→ AD 事件總覽 `feature/netops-f1-ad-events` → 安全事件 → 流量總覽 `feature/netops-f1-pa-dashboard`;明細查詢與知識庫的後端合併前先接假 API(待後端);③ 收尾。
+**狀態:進行中**。分批:① 框架 `feature/netops-f1-frame`(已合併:`frontend/` 空頁、權限、選單、連結、`/api/netops/ping`,本機假 Gateway `MOCK=admin|viewer|noapp`);② 畫面逐頁,每頁一個 MR:FTP Log 檔案 `feature/netops-f1-ftp`(PA、AD)→ AD 事件總覽 `feature/netops-f1-ad-events` → 安全事件 → 流量總覽 `feature/netops-f1-pa-dashboard`;Log 明細查詢 `feature/netops-f1-search`(AD 接真實 API;PA 待後端,先接假 API)→ 知識庫(待後端,先接假 API);③ 收尾。
 
 **完成條件**:`netops-admin`、`netops-viewer` 與無權限帳號各自看到正確畫面;舊版功能逐頁對照無遺漏;四種風格組合 × 1440px / 375px 都用瀏覽器看過;`vue-tsc` 通過;不再相依 `element-plus`、`tailwindcss`;無寫死 `/` 開頭的資源路徑。
 

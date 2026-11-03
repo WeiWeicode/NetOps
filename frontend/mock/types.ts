@@ -10,4 +10,6 @@ export interface MockCtx {
   need: (perm: string) => boolean;
   send: (status: number, body: unknown) => void;
   fail: (status: number, code: string, message: string) => void;
+  /** 下載檔案(CSV / Markdown);filename 放在 Content-Disposition 的 filename*=UTF-8'' */
+  sendFile: (contentType: string, filename: string, text: string) => void;
 }

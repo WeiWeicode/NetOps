@@ -10,6 +10,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Plugin } from 'vite';
 import { handleAd } from './ad.ts';
 import { handleFtp } from './ftp.ts';
+import { handlePaLog } from './paLog.ts';
 import { handlePa } from './pa.ts';
 import { handlePaEvents } from './paEvents.ts';
 import type { MockCtx } from './types.ts';
@@ -79,7 +80,7 @@ async function readBody(req: IncomingMessage): Promise<unknown> {
 }
 
 /** 各模組的假 API(依序嘗試,處理了就回 true) */
-const HANDLERS: ((ctx: MockCtx) => boolean)[] = [handleFtp, handleAd, handlePaEvents, handlePa];
+const HANDLERS: ((ctx: MockCtx) => boolean)[] = [handleFtp, handleAd, handlePaEvents, handlePa, handlePaLog];
 const fail = (res: ServerResponse, status: number, code: string, message: string) => send(res, status, { code, message, requestId: rid() });
 
 export function mockGateway(role: string | undefined): Plugin | null {
@@ -117,6 +118,13 @@ export function mockGateway(role: string | undefined): Plugin | null {
           need,
           send: (status, body) => send(res, status, body),
           fail: (status, code, message) => fail(res, status, code, message),
+          sendFile: (contentType, filename, text) => {
+            res.statusCode = 200;
+            res.setHeader('X-Request-Id', rid());
+            res.setHeader('Content-Type', contentType);
+            res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`);
+            res.end(text);
+          },
         };
         // 模擬網路延遲,看得到載入狀態
         await new Promise((r) => setTimeout(r, 250));

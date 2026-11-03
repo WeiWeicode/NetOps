@@ -62,6 +62,8 @@ describe('OpenAPI(BACKEND-GUIDE.md §6.1)', () => {
     for (const p of doc['x-permissions'] as { code: string }[]) assert.match(p.code, /^netops\.[a-z0-9-]+\.(read|write)$/, `權限代碼格式:${p.code}`);
     assert.equal(doc.paths['/healthz'], undefined, '健康檢查不應出現在 OpenAPI');
     assert.equal(doc.paths['/v1/ping'].get['x-permission'], 'netops.ping.read');
+    // 冪等 DELETE 回 204(docs/API.md §1.1、§7):OpenAPI 要宣告,Gateway 匯入後才看得到正確的回應
+    for (const p of ['/v1/pa/log-searches/{id}', '/v1/ftp/ad/listings/{id}', '/v1/kb/notes/{id}']) assert.ok(doc.paths[p].delete.responses['204'], `${p} DELETE 缺少 204`);
   });
 });
 

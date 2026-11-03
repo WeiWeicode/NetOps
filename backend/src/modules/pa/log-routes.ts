@@ -9,7 +9,7 @@ import { AppError } from '../../errors.js';
 import type { Ftp, FtpStream } from '../../infra/ftp/index.js';
 import { JobRunner, ownerOf } from '../../infra/jobs/index.js';
 import { toCsv } from '../../shared/csv.js';
-import { ACCEPTED, looseObject, TIME } from '../../shared/schemas.js';
+import { ACCEPTED, looseObject, NO_CONTENT, TIME } from '../../shared/schemas.js';
 import { logTimeOut, timeIn, validation } from '../../shared/time.js';
 import { cancelQuietly } from '../ftp/ad-routes.js';
 import { buildFilter, buildPrefilter, ROW_FIELDS } from './core/palog.js';
@@ -303,6 +303,7 @@ const logRoutes: FastifyPluginAsync<{ ftp: Ftp; traffic: TrafficImporter; parall
         'x-permission': 'netops.pa-log.read',
         'x-gherkin': ['場景: 取消工作', '  當 呼叫 DELETE /api/netops/pa/log-searches/{id}', '  那麼 回應 204', '  而且 再呼叫一次也回 204'].join('\n'),
         params: ID,
+        response: NO_CONTENT,
       },
     },
     async (req, reply) => {

@@ -7,7 +7,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import { AppError } from '../../errors.js';
 import { ownerOf } from '../../infra/jobs/index.js';
 import type { AdImporter } from '../ad/importer.js';
-import { ACCEPTED, DAY, looseObject } from '../../shared/schemas.js';
+import { ACCEPTED, DAY, looseObject, NO_CONTENT } from '../../shared/schemas.js';
 import { dayIn, dayOut } from '../../shared/time.js';
 
 const KIND = 'ad-ftp-listing';
@@ -90,6 +90,7 @@ const adFtpRoutes: FastifyPluginAsync<{ ad: AdImporter }> = async (app, { ad }) 
         'x-permission': 'netops.ftp.read',
         'x-gherkin': ['場景: 取消工作', '  當 呼叫 DELETE /api/netops/ftp/ad/listings/{id}', '  那麼 回應 204', '  而且 再呼叫一次也回 204'].join('\n'),
         params: ID,
+        response: NO_CONTENT,
       },
     },
     async (req, reply) => {

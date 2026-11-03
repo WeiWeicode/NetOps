@@ -5,7 +5,7 @@
  */
 import type { FastifyPluginAsync, FastifyReply } from 'fastify';
 import { AppError } from '../../errors.js';
-import { looseObject } from '../../shared/schemas.js';
+import { looseObject, NO_CONTENT } from '../../shared/schemas.js';
 import { logTimeOut } from '../../shared/time.js';
 import type { KbService, Note, NoteInput } from './service.js';
 
@@ -199,6 +199,7 @@ const kbRoutes: FastifyPluginAsync<{ kb: KbService }> = async (app, { kb }) => {
         'x-permission': 'netops.kb.write',
         'x-gherkin': ['場景: 刪除筆記', '  當 呼叫 DELETE /api/netops/kb/notes/{id}', '  那麼 回應 204', '  而且 再呼叫一次也回 204'].join('\n'),
         params: ID,
+        response: NO_CONTENT,
       },
     },
     async (req, reply) => {

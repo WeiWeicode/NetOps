@@ -1,6 +1,6 @@
 # 專案地圖 — NetOps
 
-> **最後更新:2026-11-03**(F1 第 2 批:FTP Log 檔案(PA、AD)、AD 事件總覽、安全事件、流量總覽、Log 明細查詢(PA 待後端)改寫;F1 第 1 批:新增 `frontend/` 框架;B2-ad:安全事件總覽、AD 匯入 / 總覽 / 明細 / 匯出、FTP Log 檔案(AD);舊版程式未改動)。
+> **最後更新:2026-11-03**(F1 第 2 批:FTP Log 檔案(PA、AD)、AD 事件總覽、安全事件、流量總覽、Log 明細查詢(PA 待後端)改寫;F1 第 1 批:新增 `frontend/` 框架;B2-logs:PA Log 明細查詢與匯出,B2 後端模組搬移完成;舊版程式未改動)。
 > 開發新功能後,在同一個變更內更新本文件(`AGENT.md` §9)。只寫結構與職責,細節連到 `docs/`。
 
 資訊網通管理系統:PA-560 防火牆 log、AD 事件與網通知識庫;AI 問答只留在舊版(ARCHITECTURE D17)。目標是接入 GigaNexus Gateway(`/netops/`、`netops-api` :51292),目前部署於 IIS `/NetOps`。
@@ -41,9 +41,11 @@ NetOps/
 │  │  ├─ shared/            時間轉換(核心本地時間 ↔ ISO 8601)、共用 schema、匯出 CSV
 │  │  └─ modules/
 │  │     ├─ ping/routes.ts  GET /v1/ping(對外 /api/netops/ping,netops.ping.read)
-│  │     ├─ pa/             core/palog.js(舊版逐字)、core/flows.js、importer.ts(TRAFFIC 匯入)、routes.ts(總覽)
+│  │     ├─ pa/             core/palog.js(舊版逐字)、core/flows.js、core/scan.js、importer.ts(TRAFFIC 匯入)、routes.ts(總覽)、
+│  │     │                  log-routes.ts(明細查詢與匯出,工作模式)
 │  │     ├─ pa-events/      core/paevents.js(舊版逐字)、importer.ts(其他類型 log 匯入)、routes.ts(安全事件總覽)
 │  │     ├─ ad/             core/adlog.js(舊版逐字)、importer.ts(AD 匯入)、routes.ts(總覽、明細、匯出)
+│  │     ├─ kb/             core/notes.js(舊版 kb.js 的格式與匯整)、service.ts、routes.ts
 │  │     └─ ftp/            routes.ts(PA)、ad-routes.ts(AD;清單為工作模式)
 │  ├─ test/unit/            app、config、jobs、store、ftp、pa / ad(與舊版結果比對);test/fixtures 假 log、假 AD 匯出檔、假 FTP
 │  └─ Dockerfile、.npmrc(@giganexus/* 取自 GitLab npm Registry)
@@ -103,7 +105,7 @@ NetOps/
 | 其他 log 欄位與排行 | `server/lib/paevents.js` |
 | AD 事件解析 | 舊版 `server/lib/adlog.js`、新版 `backend/src/modules/ad/core/adlog.js`(切換前兩邊一起改)、`scripts/dc/` |
 | AI 提示與流程 | `server/routes/ai.js`、`server/lib/evidence.js`、`server/lib/llm.js` |
-| 知識庫與向量 | `server/lib/kb.js`、`server/lib/vector.js`、`server/lib/iplearn.js` |
+| 知識庫 | 新版 `backend/src/modules/kb/`;向量與自動學習只在舊版 `server/lib/vector.js`、`iplearn.js`(D17) |
 | 選單與頁面 | 舊版 `src/router/menu.js`、`src/views/`;新版 `frontend/src/router.ts`、`frontend/src/pages/` |
 | 新版權限代碼(前端) | `frontend/src/api/perms.ts`(ARCHITECTURE §5) |
 | 新版 API、權限代碼 | `docs/API.md`(介面定稿)、`backend/src/modules/*/routes.ts`、`backend/src/openapi.ts` |

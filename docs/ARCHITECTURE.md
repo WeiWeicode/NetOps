@@ -1,7 +1,7 @@
 # NetOps 架構與決策
 
 > 目標架構與設計決策。工作項目見 [IMPL-PLAN.md](IMPL-PLAN.md),目錄見 [PROJECT-MAP.md](PROJECT-MAP.md),現況、過渡期與未來目標的流程見 [FLOW-ARCHITECTURE.md](FLOW-ARCHITECTURE.md)。與 Gateway `docs/` 不一致時以 Gateway 為準,先指出差異。
-> **狀態:規劃完成(D0),下一步 B0**。程式尚未改動;舊版現況見 [README.md](../README.md)。
+> **狀態:B0 最小骨架待合併**(`backend/`、`deploy/`、`.gitlab-ci.yml`);舊版程式未改動,現況見 [README.md](../README.md)。
 
 ---
 
@@ -55,7 +55,7 @@ flowchart LR
 | D7 | **移到 AI 中控台**(2026-11-02):AI 分析與問答的傳輸方式(POST + SSE + heartbeat,或工作 + 輪詢)不在這次驗證 | 新版沒有 AI 就不需要串流;BFF 會串流轉送,但 undici 與 Nginx 都有 60 秒閒置逾時,Nginx 預設緩衝,開發 AI 中控台時先實測 |
 | D8 | **第一版存檔案,未來改由服務直接寫入資料庫**;現在只做 `infra/store` 邊界,不做資料庫實作 | 先完成接入,不讓資料遷移擴大這次範圍;保留換儲存時不動 API 與核心的空間(§4) |
 | D9 | 單一容器;背景工作在程序內執行 | 目前有記憶體索引與排程狀態;多實例會重複同步 |
-| D10 | **移到 AI 中控台**(2026-11-02):外部 IP 自動學習要用 LLM 整理筆記,新版不搬移,也不是切換條件 | 開發時要驗證 HTTPS 與 DNS 對外。工作區 AGENT §5 記載主機 3 WSL 查不到外部 DNS,但 2026-11-02 在主機 3 WSL 實測可解析 `dns.google`、`rdap.arin.net` 回 200,兩者不一致;其他登記處、DNS 反查與容器內都未驗證 |
+| D10 | **移到 AI 中控台**(2026-11-02):外部 IP 自動學習要用 LLM 整理筆記,新版不搬移,也不是切換條件 | 開發時要驗證 HTTPS 與 DNS 對外。主機 3 WSL 已可連外(工作區 AGENT §5 於 2026-11-03 更新;2026-11-02 實測可解析 `dns.google`、`rdap.arin.net` 回 200);其他登記處、DNS 反查與容器內都未驗證 |
 | D11 | Veeam 入口先改一般連結,使用者另行登入 | 同步登入要直接寫 `PortalSolar.SyncLoginInfo`,不符合 Gateway §10.4;Veeam 接入平台後再評估 |
 | D12 | `main` 在切換前維持舊 IIS 版本,接入程式只進 `develop`;測試區驗收後才切換 | 舊系統切換前持續運作,有回滾路徑 |
 | D13 | B0 直接做最小骨架並部署到測試區,不做串流驗證(D7) | 部署、上游、路由與 API Key 之後都用得到,先打通可以提早發現問題 |
@@ -110,6 +110,7 @@ flowchart LR
 BFF 以 API 權限檢查;畫面節點由 `deploy/gateway-rbac.yaml` 登記並以 `includes` 綁定。上線前以實際路由為準。
 
 ```text
+netops.ping.read                         連線驗證 API(B0,GET /api/netops/ping;不綁畫面節點)
 netops.app.access                        應用
 ├─ netops.group.firewall                 防火牆 PA-560
 │  ├─ netops.pa-dashboard.read           流量總覽     → netops.pa.read

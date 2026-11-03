@@ -1,0 +1,49 @@
+# netops-api 部署到測試區(主機 2,與 Gateway 同一台;IMPL-PLAN B0)。CI deploy-api-test 於 develop 執行:
+#   docker compose --env-file <主機受保護目錄>/netops.env -f deploy/docker-compose.yml build --pull netops-api
+#   docker compose --env-file <主機受保護目錄>/netops.env -f deploy/docker-compose.yml up -d --wait netops-api
+#
+# 網路:加入 Gateway 的 Docker 網路(GW_NETWORK),別名 netops-api → BFF 以 http://netops-api:51292 轉入 /api/netops/*
+#   不對主機發佈 port:使用者與其他主機連不到服務,只有 Gateway 容器網路可連入(ARCHITECTURE §2)
+# 上游與路由:服務啟動後由 setupGateway 自動註冊為 Gateway 草稿(上游 netops-api、位址 SERVICE_ADVERTISE_URL、路由、權限代碼),
+#   在 GigaItApp「服務與路由」審查發佈後才生效
+# 機密(NETOPS_SECRETS_DIR,uid 1000 可讀;deploy/host2-set-secrets.sh 產生):
+#   gw_api_key(Gateway CLI client:create --code netops-api)、monitor_api_key(giga-observe 服務 netops-api;B0 為空檔,監控停用,D1 補上)
+# 單一容器(ARCHITECTURE D9):背景工作在程序內執行,不要加 replicas
+name: giganexus-netops-${GW_ENV:?GW_ENV 必須設定(test / prod)}
+
+services:
+  netops-api:
+    image: ${NETOPS_IMAGE_PREFIX:-giganexus}/netops-api:${IMAGE_TAG:-dev}
+    build:
+      context: ../backend
+      secrets: [npm_token]
+    restart: unless-stopped
+    environment:
+      GW_ENV: ${GW_ENV}
+      SERVICE_CODE: netops-api
+      GW_BASE_URL: ${GW_BASE_URL:?GW_BASE_URL 必須設定}
+      # 同一 Docker 網路直連 bff-1 取 JWKS(不經 Nginx 的內網白名單;同 file-api、portal-api)
+      GW_JWKS_URL: ${GW_JWKS_URL:-http://bff-1:3000/.well-known/jwks.json}
+      GW_API_KEY_FILE: /run/secrets/gw_api_key
+      SERVICE_ADVERTISE_URL: http://netops-api:51292
+      MONITOR_URL: ${MONITOR_URL:-http://observe-api:51202}
+      MONITOR_API_KEY_FILE: /run/secrets/monitor_api_key
+      RELEASE_SHA: ${RELEASE_SHA:-dev}
+    secrets: [gw_api_key, monitor_api_key]
+    networks:
+      gateway:
+        aliases: [netops-api]
+
+secrets:
+  gw_api_key:
+    file: ${NETOPS_SECRETS_DIR:?NETOPS_SECRETS_DIR 必須設定}/gw_api_key
+  monitor_api_key:
+    file: ${NETOPS_SECRETS_DIR}/monitor_api_key
+  # 建置用:GitLab npm Registry 讀取 Token(環境變數 GITLAB_NPM_TOKEN;CI 由主機機密檔讀入)
+  npm_token:
+    environment: GITLAB_NPM_TOKEN
+
+networks:
+  gateway:
+    external: true
+    name: ${GW_NETWORK:-giganexus-gw_default}

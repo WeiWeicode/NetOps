@@ -1,6 +1,6 @@
 # 專案地圖 — NetOps
 
-> **最後更新:2026-11-02**(決策 D13–D18、UI 規劃;這次不改寫 AI;程式尚未改動,仍是舊架構)。
+> **最後更新:2026-11-03**(B0:新增 `backend/` 最小骨架、`deploy/`、`.gitlab-ci.yml`;舊版程式未改動)。
 > 開發新功能後,在同一個變更內更新本文件(`AGENT.md` §9)。只寫結構與職責,細節連到 `docs/`。
 
 資訊網通管理系統:PA-560 防火牆 log、AD 事件與網通知識庫;AI 問答只留在舊版(ARCHITECTURE D17)。目標是接入 GigaNexus Gateway(`/netops/`、`netops-api` :51292),目前部署於 IIS `/NetOps`。
@@ -25,7 +25,25 @@ NetOps/
 └─ public/             favicon、圖片
 ```
 
-## 2. 目標目錄(B0 起建立)
+## 2. 新版目錄(B0 已建立骨架)
+
+```
+NetOps/
+├─ .gitlab-ci.yml           check:backend(所有分支)、deploy-api-test(develop → 主機 2)
+├─ backend/                 netops-api :51292(Fastify 5 + TypeScript,由 Gateway samples/node-backend 複製)
+│  ├─ src/
+│  │  ├─ server.ts、app.ts  啟動;內部 Token 驗證、錯誤格式、/healthz、/readyz、/openapi.json、setupGateway
+│  │  ├─ config.ts、errors.ts、openapi.ts、print-openapi.ts
+│  │  └─ modules/ping/routes.ts   GET /v1/ping(對外 /api/netops/ping,netops.ping.read)
+│  ├─ test/unit/app.test.ts
+│  └─ Dockerfile、.npmrc(@giganexus/* 取自 GitLab npm Registry)
+└─ deploy/
+   ├─ docker-compose.yml    netops-api 加入 Gateway 網路,不對主機發佈 port
+   ├─ host2-set-secrets.sh  主機 2 機密與 netops.env(使用者執行)
+   └─ test.env.example
+```
+
+## 2.1 目標目錄(B1 起補齊)
 
 ```
 NetOps/
@@ -65,13 +83,15 @@ NetOps/
 | AI 提示與流程 | `server/routes/ai.js`、`server/lib/evidence.js`、`server/lib/llm.js` |
 | 知識庫與向量 | `server/lib/kb.js`、`server/lib/vector.js`、`server/lib/iplearn.js` |
 | 選單與頁面 | `src/router/menu.js`、`src/views/` |
+| 新版 API、權限代碼 | `backend/src/modules/*/routes.ts`、`backend/src/openapi.ts` |
+| 新版部署 | `.gitlab-ci.yml`、`deploy/` |
 | 接入規劃與決策 | `docs/ARCHITECTURE.md`、`docs/IMPL-PLAN.md` |
 | 資料與 AI 流程(現況、過渡期、未來目標) | `docs/FLOW-ARCHITECTURE.md` |
 | 新版畫面與主題色 | `docs/UI-GUIDE.md` |
 
 ## 6. 測試地圖
 
-目前沒有自動化測試,只有 `scripts/` 的手動探測。B1、B2 起建立 `backend/test/`。
+`backend/test/unit/`:OpenAPI 必填欄位、內部 Token 驗證與錯誤格式、部署區設定(`cd backend && npm test`)。舊版沒有自動化測試,只有 `scripts/` 的手動探測;B2 搬移時補上模組測試。
 
 ## 7. 已知差異(與 Gateway §10.7.2)
 

@@ -2,6 +2,12 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。
 
+## 2026-11-03 收工:B2 完成、交接與待決定事項
+- 工作項目:B2、D1
+- 內容:B2 四批(!8–!11)合併並部署測試區,IMPL-PLAN、PROJECT-MAP、ARCHITECTURE 狀態更新為完成。HANDOFF 新增「2026-11-03 收工」:明天的合併順序、D1 下一步(跨 repo,要使用者同意)、待使用者決定的 6 件事、舊版知識庫複製前先備份。依 Gherkin 規格(!18)發現的不一致修正文件:工作上限依類型分開計算、AD 檔案清單每人保留 10 筆(API.md §1.1、§5.2);下載為 GET 不需 CSRF(IMPL-PLAN F1)。
+- 檔案:`docs/HANDOFF.md`、`docs/IMPL-PLAN.md`、`docs/PROJECT-MAP.md`、`docs/ARCHITECTURE.md`、`docs/API.md`
+- 驗證:對照 `develop`、各 MR 狀態與程式(`backend/src/infra/jobs/index.ts`、`backend/src/modules/pa/log-routes.ts`)
+
 ## 2026-11-03 F1 完成:文件整理
 - 工作項目:F1
 - 內容:依主串規則,功能 MR(!16 起)不改 PROJECT-MAP、HANDOFF、IMPL-PLAN,F1 完成後在本 MR 一次整理:專案地圖的 `frontend/` 目錄與「要改 X」、測試地圖、已知差異;IMPL-PLAN 與 HANDOFF 的 F1 狀態與 MR 合併順序。只改 F1 段落。

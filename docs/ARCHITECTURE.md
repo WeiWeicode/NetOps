@@ -1,7 +1,7 @@
 # NetOps 架構與決策
 
 > 目標架構與設計決策。工作項目見 [IMPL-PLAN.md](IMPL-PLAN.md),目錄見 [PROJECT-MAP.md](PROJECT-MAP.md),現況、過渡期與未來目標的流程見 [FLOW-ARCHITECTURE.md](FLOW-ARCHITECTURE.md)。與 Gateway `docs/` 不一致時以 Gateway 為準,先指出差異。
-> **狀態:B0 完成,B1 MR 審查中**(`netops-api` 骨架已部署測試區;API 介面見 [API.md](API.md));舊版程式未改動,現況見 [README.md](../README.md)。
+> **狀態:B0、B1、B2 完成並部署測試區;F1 MR 審查中;下一步 D1**(API 介面見 [API.md](API.md),行為規格見 `docs/Gherkin/`);舊版程式未改動,現況見 [README.md](../README.md)。
 
 ---
 

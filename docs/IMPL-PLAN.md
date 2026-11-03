@@ -7,7 +7,7 @@
 | D0 | 文件與登記 | 完成 |
 | B0 | 最小骨架部署 | 完成 |
 | B1 | 後端骨架 | 完成 |
-| B2 | 模組搬移 | 進行中 |
+| B2 | 模組搬移 | 完成 |
 | F1 | 前端框架與畫面改寫 | 完成(MR 審查) |
 | D1 | 測試區部署 | 未開始 |
 | D2 | 驗收與切換 | 未開始 |
@@ -71,10 +71,12 @@ D13:骨架直接留用;AI 不在這次範圍,不做串流驗證(D7、D17)。
 | --- | --- | --- |
 | `feature/netops-b2-pa` | `infra/ftp`(唯讀、連線上限)、PA TRAFFIC 與其他類型 log 的匯入、流量總覽、FTP Log 檔案(PA) | 已合併(!8) |
 | `feature/netops-b2-ad` | 安全事件總覽、AD 匯入與總覽、AD 明細與匯出、FTP Log 檔案(AD) | 已合併(!9) |
-| `feature/netops-b2-kb` | 知識庫 | MR 審查中(!10) |
-| `feature/netops-b2-logs` | PA Log 明細查詢與匯出(工作模式) | MR 審查中(!11) |
+| `feature/netops-b2-kb` | 知識庫 | 已合併(!10) |
+| `feature/netops-b2-logs` | PA Log 明細查詢與匯出(工作模式) | 已合併(!11),測試區驗證通過 |
 
 其他類型 log 的**匯入**放在 b2-pa(FTP Log 檔案頁同時列 TRAFFIC 與其他類型目錄),總覽 API 在 b2-ad。
+
+**狀態:完成(2026-11-03,!8–!11 合併並部署測試區)**。四批都以同一批假 log 與舊版 `server/lib` 比對一致(`SUMMARY_VERSION` = 4);模組只經 `infra/store` 讀寫;每批都經 `security-auditor`、`code-reviewer` 審查並修正(含兩個 High:IP 萬用字元 ReDoS、知識庫標籤換行偽造記錄人);`backend/` 從未相依 `mssql`、`activedirectory2`、`jsonwebtoken`(只在舊版根目錄 `package.json`,D12 不動)。後續修正:!20(DELETE 在 OpenAPI 宣告 204)、FTP 錯誤訊息不外露主機(待合併)。行為規格見 `docs/Gherkin/`(!18)。
 
 **完成條件**:以同一批假 log 比對舊版與新版摘要完全一致(`SUMMARY_VERSION` 不變);模組內沒有直接讀寫資料檔;`security-auditor`、`code-reviewer` 審查完成;不再相依 `mssql`、`activedirectory2`、`jsonwebtoken`。
 
@@ -87,7 +89,7 @@ D13:骨架直接留用;AI 不在這次範圍,不做串流驗證(D7、D17)。
 3. **收尾**:移除 `Login.vue`、`SyncLogin.vue`、`stores/token.js`、舊配色系統與 Element Plus、Tailwind。
 
 - **不改寫**(D17):`PaAsk.vue`、`AiAnalysis.vue`、`TranslateBox.vue`,以及知識庫頁的語意搜尋與自動學習區塊。
-- 頁面依權限顯示,下載帶 CSRF、不再帶 Bearer。
+- 頁面依權限顯示;寫入(`POST` / `PUT` / `DELETE`)經 web-kit 帶 CSRF,下載(`GET`)經 web-kit、不需 CSRF,都不帶 Bearer。
 - 無權限導回 `/?denied=netops`。
 - Veeam、舊版 AI 問答改一般連結(D11、D18)。
 

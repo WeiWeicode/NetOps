@@ -4,10 +4,12 @@
  *   MOCK=viewer  netops-viewer:全部 .read,沒有 netops.ftp.write、netops.kb.write 與管理按鈕
  *   MOCK=noapp   已登入但沒有 netops.app.access(應導回入口網 /?denied=netops)
  *   MOCK=anon    未登入(/api/auth/me 回 401,應導向 /login)
- * 回應格式以 docs/API.md 為準;後端尚未實作的 API 也在這裡提供假資料。
+ * 回應格式以 docs/API.md 為準;各模組的假 API 在 mock/<模組>.ts(後端尚未實作的也在這裡提供假資料)。
  */
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Plugin } from 'vite';
+import { handleFtp } from './ftp.ts';
+import type { MockCtx } from './types.ts';
 
 type Role = 'admin' | 'viewer' | 'noapp' | 'anon';
 type LoggedIn = Exclude<Role, 'anon'>;
@@ -55,10 +57,26 @@ function me(role: LoggedIn) {
 const rid = () => `mock-${Date.now().toString(36)}`;
 function send(res: ServerResponse, status: number, body: unknown) {
   res.statusCode = status;
-  res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.setHeader('X-Request-Id', rid());
+  if (status === 204) return void res.end();
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.end(JSON.stringify(body));
 }
+
+/** 讀 JSON body(假 Gateway 只處理小量 JSON) */
+async function readBody(req: IncomingMessage): Promise<unknown> {
+  const chunks: Buffer[] = [];
+  for await (const c of req) chunks.push(c as Buffer);
+  const text = Buffer.concat(chunks).toString('utf8');
+  try {
+    return text ? JSON.parse(text) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** 各模組的假 API(依序嘗試,處理了就回 true) */
+const HANDLERS: ((ctx: MockCtx) => boolean)[] = [handleFtp];
 const fail = (res: ServerResponse, status: number, code: string, message: string) => send(res, status, { code, message, requestId: rid() });
 
 export function mockGateway(role: string | undefined): Plugin | null {
@@ -69,7 +87,7 @@ export function mockGateway(role: string | undefined): Plugin | null {
     name: 'netops-mock-gateway',
     apply: 'serve',
     configureServer(server) {
-      server.middlewares.use((req: IncomingMessage, res: ServerResponse, next: () => void) => {
+      server.middlewares.use(async (req: IncomingMessage, res: ServerResponse, next: () => void) => {
         const url = new URL(req.url ?? '/', 'http://mock');
         const path = url.pathname;
         // 入口網首頁與登入頁的替身:守衛導回 / 或 /login 時停在這裡(否則 Vite 會把 / 轉回 /netops/ 造成迴圈)
@@ -87,7 +105,20 @@ export function mockGateway(role: string | undefined): Plugin | null {
           if (!need('netops.ping.read')) return;
           return send(res, 200, { service: 'netops-api', emp: m.user.employeeNo, name: m.user.name, dept: m.user.department, roles: m.roles, requestId: rid(), time: new Date().toISOString() });
         }
-        return fail(res, 404, 'NOT_FOUND', `假 Gateway 沒有 ${req.method} ${path}`);
+        const method = req.method ?? 'GET';
+        const ctx: MockCtx = {
+          method,
+          path,
+          url,
+          body: method === 'GET' ? undefined : await readBody(req),
+          need,
+          send: (status, body) => send(res, status, body),
+          fail: (status, code, message) => fail(res, status, code, message),
+        };
+        // 模擬網路延遲,看得到載入狀態
+        await new Promise((r) => setTimeout(r, 250));
+        for (const h of HANDLERS) if (h(ctx)) return;
+        return fail(res, 404, 'NETOPS_NOT_FOUND', `假 Gateway 沒有 ${method} ${path}`);
       });
     },
   };

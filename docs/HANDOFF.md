@@ -16,7 +16,7 @@
 ## 已知狀況
 
 - 主機 2、3 的 Windows 端 TCP 連得到 FTP;容器內未驗證。
-- 主機 2 Runner 能否接 NetOps 的 job 未查證(Token 沒有 Runner 讀取權限);其他專案都用 `windows-runner`。
+- 主機 2 `windows-runner` 已能接 NetOps 的 job(2026-11-03 `feature/netops-b0` Pipeline #627 `check:backend` 成功);`deploy-api-test` 合併 develop 後才會跑。
 - B0 監控 Key 為空檔,監控停用;D1 登記 giga-observe 拓樸後補上。
 - 舊版關閉知識庫寫入的做法還沒確認(IMPL-PLAN D2)。
 - `scripts/dc/ADLog-FtpBackup-3.ps1` 寫死 FTP 帳號名稱,密碼走憑證檔,版控內沒有密碼。

@@ -133,14 +133,22 @@ export function createAdImporter({ ftp, store, ftpConfig, log }: { ftp: Ftp; sto
    * FTP 上的日期資料夾與匯入狀態(FTP Log 檔案頁;工作模式)
    * state:new 未匯入 / changed 檔案有變 / done 已匯入 / orphan 已匯入但 FTP 上已沒有這個資料夾
    */
-  async function listRemote(signal?: AbortSignal) {
+  /** 同時有多個清單請求時共用同一次 FTP 列表(避免重複送出工作佔滿 FTP 連線) */
+  let listing: ReturnType<typeof listDays> | null = null;
+  function listRemote() {
+    listing ??= listDays().finally(() => {
+      listing = null;
+    });
+    return listing;
+  }
+
+  async function listDays() {
     const root = ftp.safePath(ftpConfig?.adDir ?? '/');
-    return ftp.withSession(
+    const days = await ftp.withSession(
       async (s) => {
         const dirs = (await s.list(root)).filter((d) => d.dir && DAY_RE.test(d.name));
         const out = [];
         for (const d of dirs) {
-          if (signal?.aborted) break;
           const files = await csvFiles(s, d.path);
           const local = readDay(d.name);
           const st = !local ? 'new' : local.sig === sigOf(files) ? 'done' : 'changed';
@@ -169,10 +177,10 @@ export function createAdImporter({ ftp, store, ftpConfig, log }: { ftp: Ftp; sto
             files: local.files.map((x) => ({ name: x.name, size: x.size, modified: x.modified, channel: x.channel ?? '', rows: x.rows, error: x.error ?? '' })),
           });
         }
-        return { dir: root, days: out.sort((a, b) => b.day.localeCompare(a.day)) };
+        return out.sort((a, b) => b.day.localeCompare(a.day));
       },
-      { signal },
     );
+    return { dir: root, days };
   }
 
   /** 刪除指定日期的匯入結果(FTP 上的檔案不動;之後同步會重新匯入) */
@@ -264,5 +272,8 @@ export function createAdImporter({ ftp, store, ftpConfig, log }: { ftp: Ftp; sto
     return { rows: all.filter(test) as AdEvent[], scanned: all.length };
   }
 
-  return { status, days, listRemote, forget, sync, start, stop, summary, daysInRange, search };
+  /** 是否有設定 FTP(沒有時同步、匯入直接回 503,不在背景才失敗) */
+  const configured = () => Boolean(ftpConfig);
+
+  return { status, configured, days, listRemote, forget, sync, start, stop, summary, daysInRange, search };
 }

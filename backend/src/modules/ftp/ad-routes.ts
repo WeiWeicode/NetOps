@@ -11,7 +11,7 @@ import { ACCEPTED, DAY, looseObject } from '../../shared/schemas.js';
 import { dayIn, dayOut } from '../../shared/time.js';
 
 const KIND = 'ad-ftp-listing';
-const LISTING_TIMEOUT_MS = 5 * 60_000;
+const LISTING_TIMEOUT_MS = 3 * 60_000;
 const DAYS = { type: 'array', minItems: 1, maxItems: 60, items: DAY } as const;
 const ID = { type: 'object', required: ['id'], properties: { id: { type: 'string', format: 'uuid' } } } as const;
 
@@ -22,8 +22,10 @@ const adFtpRoutes: FastifyPluginAsync<{ ad: AdImporter }> = async (app, { ad }) 
   const busy = () => new AppError(409, 'NETOPS_AD_SYNC_BUSY', 'AD 正在同步中,請稍後再試');
   /** 背景執行同步;錯誤記在 lastSyncError */
   const runSync = (opts?: { days: string[]; force: boolean }) => {
+    if (!ad.configured()) throw new AppError(503, 'NETOPS_FTP_NOT_CONFIGURED', '尚未設定 FTP(FTP_HOST)');
     if (ad.status().running) throw busy();
-    void ad.sync(opts).catch(() => undefined);
+    // 錯誤記在 lastSyncError(畫面看得到),同時寫日誌
+    void ad.sync(opts).catch((err) => app.log.error({ err }, '[AD 同步] 失敗'));
   };
 
   app.post(
@@ -45,7 +47,8 @@ const adFtpRoutes: FastifyPluginAsync<{ ad: AdImporter }> = async (app, { ad }) 
       },
     },
     async (req, reply) => {
-      const job = app.jobs.submit(KIND, ownerOf(req.identity), async ({ signal }) => listingOut(await ad.listRemote(signal)), { timeoutMs: LISTING_TIMEOUT_MS });
+      // 同時有多個清單工作時共用同一次 FTP 列表(importer.listRemote),不會多佔 FTP 連線
+      const job = app.jobs.submit(KIND, ownerOf(req.identity), async () => listingOut(await ad.listRemote()), { timeoutMs: LISTING_TIMEOUT_MS });
       return reply.status(202).send(job);
     },
   );

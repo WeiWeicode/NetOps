@@ -38,6 +38,14 @@ describe('files', () => {
   });
 });
 
+describe('toCsv', () => {
+  it('公式字元(含全形、前面有空白)加上 \'', async () => {
+    const { toCsv } = await import('../../src/shared/csv.js');
+    const out = toCsv(['a'], [['=1+1'], [' +x'], ['＝SUM(A1)'], ['-'], ['ok'], [-5]]);
+    assert.deepEqual(out.replace(/^\uFEFF/, '').trim().split('\r\n'), ['a', "'=1+1", "' +x", "'＝SUM(A1)", "'-", 'ok', '-5']);
+  });
+});
+
 describe('createStore', () => {
   it('建立各資料子目錄;可寫入時 ready 為 true', async () => {
     const dir = path.join(tmp, 'data');

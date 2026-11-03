@@ -193,6 +193,39 @@ describe('FTP Log 檔案 API(AD)', () => {
   });
 });
 
+describe('與舊版資料相容', () => {
+  it('舊版複製過來的資料(同樣的簽章格式)不會被判定為已變更', async () => {
+    const day = '20261103';
+    const files: [string, string][] = [['Security.csv', securityCsv(day, 20, 50)]];
+    const modified = new Date('2026-11-04T00:01:00Z');
+    for (const [n, b] of files) ftp.put(`${AD}/${day}/${n}`, b, modified);
+    // 舊版 adimport.js 的 sigOf:`${name}:${size}:${modifiedAt.toISOString()}`
+    const sig = files.map(([n, b]) => `${n}:${Buffer.byteLength(b)}:${modified.toISOString()}`).sort().join('|');
+    fs.writeFileSync(path.join(t.dataDir, 'adlogs', `${day}.json`), JSON.stringify({ day, sig, importedAt: '2026-11-04T00:10:00.000Z', files: [], events: [] }));
+    const res = await t.call({ method: 'POST', url: '/v1/ftp/ad/listings' });
+    const { id } = res.json();
+    await waitFor(async () => (await t.call({ url: `/v1/ftp/ad/listings/${id}` })).json().status === 'done');
+    const d = (await t.call({ url: `/v1/ftp/ad/listings/${id}` })).json().result.days.find((x: { day: string }) => x.day === '2026-11-03');
+    assert.equal(d.state, 'done');
+  });
+
+  it('總覽期間超過 92 天回 400', async () => {
+    assert.equal((await t.call({ url: '/v1/ad/overview?from=2026-01-01&to=2026-11-01' })).statusCode, 400);
+    assert.equal((await t.call({ url: '/v1/pa-events/overview?type=threat&from=2026-01-01&to=2026-11-01' })).statusCode, 400);
+  });
+
+  it('沒有設定 FTP 時同步回 503', async () => {
+    const a = await createTestApp({ env: { FTP_HOST: '' } });
+    try {
+      const res = await a.call({ method: 'POST', url: '/v1/ftp/ad/syncs' });
+      assert.equal(res.statusCode, 503);
+      assert.equal(res.json().code, 'NETOPS_FTP_NOT_CONFIGURED');
+    } finally {
+      await a.close();
+    }
+  });
+});
+
 describe('PA 安全事件總覽', () => {
   it('類型清單與總覽 = 舊版 mergeEventSummaries', async () => {
     const p = '/threat/PA-560_threat_2026_11_02_last_calendar_day_0.csv';

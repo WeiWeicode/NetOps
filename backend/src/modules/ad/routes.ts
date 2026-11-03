@@ -69,7 +69,8 @@ const adRoutes: FastifyPluginAsync<{ ad: AdImporter }> = async (app, { ad }) => 
       const st = ad.status();
       return {
         days: ad.days().map((d) => ({ ...d, day: dayOut(d.day) })),
-        import: { running: st.running, lastSyncAt: st.lastSyncAt, lastSyncError: st.lastSyncError },
+        // 錯誤細節(可能含 FTP 主機資訊)只給有 FTP 權限的人看(GET /ftp/ad/status)
+        import: { running: st.running, lastSyncAt: st.lastSyncAt, lastSyncError: st.lastSyncError ? '同步失敗,詳見 FTP Log 檔案頁' : '' },
         channels: CHANNELS,
         securityEvents: SECURITY_EVENTS,
       };

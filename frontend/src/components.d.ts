@@ -32,6 +32,7 @@ declare module 'vue' {
     GDonut: (typeof import('./ui/charts/GDonut.vue'))['default'];
     GRing: (typeof import('./ui/charts/GRing.vue'))['default'];
     GSparkline: (typeof import('./ui/charts/GSparkline.vue'))['default'];
+    GStackedBars: (typeof import('./ui/charts/GStackedBars.vue'))['default'];
   }
   interface ComponentCustomProperties {
     $can: (code: string) => boolean;

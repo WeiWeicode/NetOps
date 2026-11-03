@@ -45,6 +45,7 @@
 | --- | --- |
 | `el-table` 勾選欄(`type="selection"`) | `GTable` 的 `#cell-sel` 放 `GCheckbox`,表格上方「全選目前清單」(`GTable` 不擴充,與入口網同步) |
 | `el-table` 可展開列 | 列尾按鈕開 `GModal` 顯示明細(AD 每日檔案) |
+| 流量總覽自刻 SVG 每小時長條(允許 / 阻擋堆疊、點選) | `ui/charts/GStackedBars.vue`(NetOps 新增;同步回入口網前要先討論) |
 | `text-danger`、`text-run` 等狀態文字色 | `base.css` 新增 `.c-success`、`.c-warning`、`.c-danger`(語意色混入本文色,四種組合對比 ≥ 5:1;`.tone-*` 只設定 `--tone`) |
 
 `GTable` 的儲存格插槽內容全是 `v-if` 落空(只剩註解)時會顯示預設值,要留 `<span v-else />`。

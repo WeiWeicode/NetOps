@@ -7,6 +7,8 @@ export const LEGACY_NETOPS_URL = 'https://gsmc-web.gigasolar.com.tw/NetOps';
 
 export const LINKS = {
   paAsk: `${LEGACY_NETOPS_URL}/Main/PaAsk`,
+  /** 舊版流量總覽(AI 分析在這裡,D17) */
+  paDashboard: `${LEGACY_NETOPS_URL}/Main/Dashboard`,
   adAsk: `${LEGACY_NETOPS_URL}/Main/AdAsk`,
   veeam: 'https://gsmc-web.gigasolar.com.tw/Veeam',
 } as const;

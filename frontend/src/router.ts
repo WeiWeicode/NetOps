@@ -64,8 +64,16 @@ interface PageDef {
 const PAGES: PageDef[] = [
   {
     path: 'firewall/dashboard',
-    meta: { permission: NETOPS.paDashboard, requires: [API.paRead], title: '流量總覽', subtitle: 'PA-560 Traffic', icon: 'shield-check', group: 'firewall' },
-    view: wip('PA-560 TRAFFIC log 的流量統計、排行與趨勢;點排行可帶條件到明細查詢。', ['改用 ui/charts 圖表,不足時先擴充元件']),
+    meta: {
+      permission: NETOPS.paDashboard,
+      requires: [API.paRead],
+      title: '流量總覽',
+      subtitle: 'PA-560 Traffic',
+      icon: 'shield-check',
+      group: 'firewall',
+      description: 'TRAFFIC log 的流量統計、排行與趨勢;點排行或長條帶條件到明細查詢',
+    },
+    view: page(() => import('./pages/firewall/Dashboard.vue')),
   },
   {
     path: 'firewall/events',

@@ -31,12 +31,15 @@ export interface NoteInput {
 
 export type KbService = ReturnType<typeof createKbService>;
 
+/** 筆記總數上限(避免塞爆磁碟;每次寫入都要重產匯整檔) */
+export const KB_MAX_NOTES = 5000;
+
 const notFound = () => new AppError(404, 'NETOPS_KB_NOTE_NOT_FOUND', '找不到這則筆記');
 const checkId = (id: string) => {
   if (!ID_RE.test(String(id))) throw new AppError(400, 'VALIDATION_FAILED', '參數驗證失敗', [{ field: 'id', message: '筆記代號不正確' }]);
 };
 
-export function createKbService(store: KbStore) {
+export function createKbService(store: KbStore, log?: { warn(obj: object, msg: string): void }) {
   let cache: { sig: string; notes: Note[] } | null = null;
   let all: { sig: string; text: string; order: string[]; updated: string; count: number } | null = null;
 
@@ -45,7 +48,11 @@ export function createKbService(store: KbStore) {
     const files = store.listNotes();
     const sig = files.map((f) => `${f.id}:${f.version}`).join('|');
     if (cache?.sig !== sig) {
-      const notes = files.map((f) => parse(f.id, store.readNote(f.id) ?? '') as Note);
+      // 列舉後才被刪除的檔案略過
+      const notes = files.flatMap((f) => {
+        const text = store.readNote(f.id);
+        return text === null ? [] : [parse(f.id, text) as Note];
+      });
       notes.sort((a, b) => b.updated.localeCompare(a.updated));
       cache = { sig, notes };
     }
@@ -74,10 +81,18 @@ export function createKbService(store: KbStore) {
   function saveNote(input: NoteInput, author: string, id?: string): Note {
     if (!String(input.content ?? '').trim()) throw new AppError(400, 'VALIDATION_FAILED', '參數驗證失敗', [{ field: 'content', message: '筆記內容不可空白' }]);
     const old = id ? getNote(id) : null;
-    const note = buildNote(input as Parameters<typeof buildNote>[0], author, old, (now: string) => `${now.replace(/\D/g, '').slice(0, 12)}-${crypto.randomBytes(3).toString('hex')}`) as Note;
+    if (!old && store.listNotes().length >= KB_MAX_NOTES) throw new AppError(409, 'NETOPS_KB_LIMIT', `筆記已達上限 ${KB_MAX_NOTES} 則`);
+    // 新增時代號(分鐘 + 亂數)萬一重複就重新產生,不覆蓋既有筆記
+    const newId = (now: string) => {
+      for (let i = 0; i < 10; i++) {
+        const candidate = `${now.replace(/\D/g, '').slice(0, 12)}-${crypto.randomBytes(3).toString('hex')}`;
+        if (store.readNote(candidate) === null) return candidate;
+      }
+      throw new Error('無法產生不重複的筆記代號');
+    };
+    const note = buildNote(input as Parameters<typeof buildNote>[0], author, old, newId) as Note;
     store.writeNote(note.id, serialize(note));
-    cache = null;
-    compilation();
+    refresh();
     return note;
   }
 
@@ -85,11 +100,20 @@ export function createKbService(store: KbStore) {
   function deleteNote(id: string): boolean {
     checkId(id);
     const removed = store.deleteNote(id);
-    if (removed) {
-      cache = null;
-      compilation();
-    }
+    if (removed) refresh();
     return removed;
+  }
+
+  /** 寫入後清快取並重產匯整檔;重產失敗不影響已寫入的筆記(下次讀取時再重產) */
+  function refresh() {
+    cache = null;
+    all = null;
+    try {
+      compilation();
+    } catch (err) {
+      all = null;
+      log?.warn({ err }, '重新產生知識庫匯整檔失敗,下次讀取時再試');
+    }
   }
 
   const search = (q?: string) => searchNotes(listNotes().notes, q) as Note[];

@@ -3,6 +3,8 @@
  *   一則一個 .md:檔案開頭是 --- 包住的欄位(title / ips / tags / author / created / updated / updatedBy / source),下面是 Markdown 內容
  *   匯整檔:全部筆記整理成一份(目錄 + 各則內容)
  * 只搬純函式;讀寫檔案改由 infra/store(kb),AI 用的 notesForAi 與向量同步事件不搬移(ARCHITECTURE D17)。
+ * 與舊版不同(資安修正):標籤與 serialize 的每個欄位都壓成一行,換行不能再插入假的欄位或提早結束 --- 區塊
+ *   (舊版標籤只以逗號分隔,內含換行時可偽造 author / created)。
  */
 
 const pad = (n) => String(n).padStart(2, '0')
@@ -45,11 +47,11 @@ export function serialize(n) {
   return [
     '---',
     `title: ${oneLine(n.title)}`,
-    `ips: ${n.ips.join(', ')}`,
-    `tags: ${n.tags.join(', ')}`,
+    `ips: ${oneLine(n.ips.join(', '))}`,
+    `tags: ${oneLine(n.tags.join(', '))}`,
     `author: ${oneLine(n.author)}`,
-    `created: ${n.created}`,
-    `updated: ${n.updated}`,
+    `created: ${oneLine(n.created)}`,
+    `updated: ${oneLine(n.updated)}`,
     `updatedBy: ${oneLine(n.updatedBy)}`,
     `source: ${oneLine(n.source).slice(0, 300)}`,
     '---',
@@ -70,7 +72,7 @@ export function buildNote({ title, ips, tags, content, source }, author, old, ne
     id: old?.id ?? newId(now),
     title: oneLine(title).slice(0, 120) || text.split('\n')[0].replace(/^#+\s*/, '').slice(0, 60),
     ips: listText(ips).filter((x) => /^[\d.:a-f/*]+$/i.test(x)).slice(0, 30),
-    tags: listText(tags, false).slice(0, 10),
+    tags: listText(tags, false).map(oneLine).filter(Boolean).slice(0, 10),
     author: old?.author || author,
     created: old?.created || now,
     updated: now,

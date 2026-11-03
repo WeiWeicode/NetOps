@@ -131,7 +131,7 @@ export async function buildApp(config: Config, deps: { ftp?: Ftp } = {}): Promis
   await app.register(paEventRoutes, { events });
   await app.register(adRoutes, { ad });
   await app.register(adFtpRoutes, { ad });
-  await app.register(kbRoutes, { kb: createKbService(app.store.kb) });
+  await app.register(kbRoutes, { kb: createKbService(app.store.kb, app.log) });
   await app.register(ftpRoutes, {
     ftp,
     traffic,

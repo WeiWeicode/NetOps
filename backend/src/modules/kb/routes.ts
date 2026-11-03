@@ -14,8 +14,9 @@ const noteOut = (n: Note) => ({ ...n, created: logTimeOut(n.created), updated: l
 const ID = { type: 'object', required: ['id'], properties: { id: { type: 'string', pattern: '^[\\w-]{6,64}$' } } } as const;
 const LIST = (maxItems: number) => ({
   anyOf: [
-    { type: 'array', maxItems: 100, items: { type: 'string', maxLength: 100 } },
-    { type: 'string', maxLength: 3000 },
+    // 不可含換行(壓成一行仍保留這道檢查,直接回 400)
+    { type: 'array', maxItems: 100, items: { type: 'string', maxLength: 100, pattern: '^[^\\r\\n]*$' } },
+    { type: 'string', maxLength: 3000, pattern: '^[^\\r\\n]*$' },
   ],
   description: `陣列,或以逗號 / 頓號分隔的文字;最多保留 ${maxItems} 個`,
 });
@@ -24,7 +25,7 @@ const NOTE_BODY = {
   required: ['content'],
   additionalProperties: false,
   properties: {
-    title: { type: 'string', maxLength: 300 },
+    title: { type: 'string', maxLength: 300, pattern: '^[^\\r\\n]*$' },
     ips: LIST(30),
     tags: LIST(10),
     content: { type: 'string', minLength: 1, maxLength: 20000 },
@@ -37,6 +38,7 @@ const NOTE = looseObject('筆記 { id, title, ips, tags, author, created, update
 const sendMarkdown = (reply: FastifyReply, name: string, text: string) =>
   reply
     .header('content-type', 'text/markdown; charset=utf-8')
+    .header('x-content-type-options', 'nosniff')
     .header('content-disposition', `attachment; filename*=UTF-8''${encodeURIComponent(name)}`)
     .send(text);
 
@@ -147,7 +149,7 @@ const kbRoutes: FastifyPluginAsync<{ kb: KbService }> = async (app, { kb }) => {
       schema: {
         operationId: 'netops.kb.create',
         summary: '新增知識庫筆記',
-        description: '新增一則筆記;內容必填(上限 20,000 字),IP 最多 30 個、標籤最多 10 個;記錄人為登入者的工號與姓名。回 201 與筆記。',
+        description: '新增一則筆記;內容必填(上限 20,000 字),IP 最多 30 個、標籤最多 10 個,標題與標籤不可含換行;記錄人為登入者的工號與姓名。回 201 與筆記;總數上限 5,000 則(409 NETOPS_KB_LIMIT)。',
         tags: ['知識庫'],
         'x-permission': 'netops.kb.write',
         'x-gherkin': [
@@ -174,7 +176,7 @@ const kbRoutes: FastifyPluginAsync<{ kb: KbService }> = async (app, { kb }) => {
       schema: {
         operationId: 'netops.kb.update',
         summary: '修改知識庫筆記',
-        description: '以請求內容取代筆記的標題、IP、標籤、內容與來源;保留原記錄人與建立時間,更新修改人與時間。不存在回 404。',
+        description: '以請求內容取代筆記的標題、IP、標籤與內容(source 省略時保留原值,同舊版);保留原記錄人與建立時間,更新修改人與時間。不存在回 404。',
         tags: ['知識庫'],
         'x-permission': 'netops.kb.write',
         'x-gherkin': ['場景: 修改筆記', '  當 呼叫 PUT /api/netops/kb/notes/{id}', '  那麼 回應 200', '  而且 updatedBy 為登入者'].join('\n'),

@@ -130,6 +130,63 @@ describe('知識庫 API', () => {
     assert.ok(!(await t.call({ url: '/v1/kb/compilation' })).body.includes('改標題'));
   });
 
+  it('標籤或標題含換行回 400;service 直接傳入時也壓成一行,不能偽造記錄人與建立時間', async () => {
+    for (const payload of [{ tags: ['x\nauthor: A001 主管\ncreated: 2020/01/01 00:00\n---'], content: 'c' }, { tags: 'x\r\n---', content: 'c' }, { title: 'a\nb', content: 'c' }]) {
+      assert.equal((await t.call({ method: 'POST', url: '/v1/kb/notes', payload })).statusCode, 400, JSON.stringify(payload));
+    }
+    const n = kb.saveNote({ tags: ['x\nauthor: A001 主管\ncreated: 2020/01/01 00:00\n---'], ips: ['10.0.0.1\nauthor: x'], content: '內容' }, 'S112009 佳緯');
+    const back = kb.getNote(n.id);
+    assert.equal(back.author, 'S112009 佳緯');
+    assert.notEqual(back.created, '2020/01/01 00:00');
+    assert.equal(back.content, '內容');
+    assert.deepEqual(back.ips, []);
+  });
+
+  it('手動修改或刪除 .md、刪除匯整檔後,快取與匯整檔會重新產生', async () => {
+    const dir = path.join(t.dataDir, 'knowledge');
+    const first = (await t.call({ url: '/v1/kb/compilation' })).body;
+    // 修改時間要不同(某些檔案系統精度較粗)
+    const f = path.join(dir, '202611011030-a1b2c3.md');
+    fs.writeFileSync(f, NOTES['202611011030-a1b2c3']!.replace('FTP 伺服器', 'FTP 主機'));
+    fs.utimesSync(f, new Date(), new Date(Date.now() + 5000));
+    assert.equal((await t.call({ url: '/v1/kb/notes/202611011030-a1b2c3' })).json().title, 'FTP 主機');
+    const second = (await t.call({ url: '/v1/kb/compilation' })).body;
+    assert.ok(second.includes('FTP 主機') && !first.includes('FTP 主機'));
+    fs.rmSync(path.join(dir, '_knowledge-all.md'));
+    assert.ok((await t.call({ url: '/v1/kb/compilation' })).body.includes('FTP 主機'));
+    assert.ok(fs.existsSync(path.join(dir, '_knowledge-all.md')));
+    // 手動刪除 .md(用新增的筆記,不動共用的測試資料)
+    const n = (await t.call({ method: 'POST', url: '/v1/kb/notes', payload: { title: '手動刪除', content: 'x' } })).json();
+    const count = (await t.call({ url: '/v1/kb/notes' })).json().compilation.count;
+    fs.rmSync(path.join(dir, `${n.id}.md`));
+    const list = (await t.call({ url: '/v1/kb/notes' })).json();
+    assert.equal(list.compilation.count, count - 1);
+    assert.ok(!(await t.call({ url: '/v1/kb/compilation' })).body.includes('手動刪除'));
+  });
+
+  it('匯整檔重產失敗時,筆記仍寫入成功,下次讀取恢復', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'netops-kb-fail-'));
+    try {
+      fs.mkdirSync(path.join(tmp, 'knowledge'));
+      const real = createKbStore(tmp);
+      let fail = true;
+      const warned: unknown[] = [];
+      const svc = createKbService({ ...real, writeCompilation: (text) => (fail ? (() => { throw new Error('ENOSPC'); })() : real.writeCompilation(text)) }, { warn: (o) => warned.push(o) });
+      const n = svc.saveNote({ content: '內容' }, 'S112009 佳緯');
+      assert.equal(svc.getNote(n.id).content, '內容');
+      assert.equal(warned.length, 1);
+      fail = false;
+      assert.equal(svc.compilation().count, 1);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('下載有 nosniff', async () => {
+    const md = await t.call({ url: '/v1/kb/compilation' });
+    assert.equal(md.headers['x-content-type-options'], 'nosniff');
+  });
+
   it('內容空白、超過上限、修改不存在的筆記', async () => {
     assert.equal((await t.call({ method: 'POST', url: '/v1/kb/notes', payload: { content: '   ' } })).statusCode, 400);
     assert.equal((await t.call({ method: 'POST', url: '/v1/kb/notes', payload: { content: 'x'.repeat(20001) } })).statusCode, 400);

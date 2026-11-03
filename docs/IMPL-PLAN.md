@@ -69,8 +69,8 @@ D13:骨架直接留用;AI 不在這次範圍,不做串流驗證(D7、D17)。
 
 | 批次 | 內容 | 狀態 |
 | --- | --- | --- |
-| `feature/netops-b2-pa` | `infra/ftp`(唯讀、連線上限)、PA TRAFFIC 與其他類型 log 的匯入、流量總覽、FTP Log 檔案(PA) | MR 審查中(!8) |
-| `feature/netops-b2-ad` | 安全事件總覽、AD 匯入與總覽、AD 明細與匯出、FTP Log 檔案(AD) | MR 審查中(!9) |
+| `feature/netops-b2-pa` | `infra/ftp`(唯讀、連線上限)、PA TRAFFIC 與其他類型 log 的匯入、流量總覽、FTP Log 檔案(PA) | 已合併(!8) |
+| `feature/netops-b2-ad` | 安全事件總覽、AD 匯入與總覽、AD 明細與匯出、FTP Log 檔案(AD) | 已合併(!9) |
 | `feature/netops-b2-kb` | 知識庫 | MR 審查中 |
 | `feature/netops-b2-logs` | PA Log 明細查詢與匯出(工作模式) | 未開始 |
 

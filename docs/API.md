@@ -404,7 +404,8 @@ AI 相關(語意搜尋、向量同步、外部 IP 自動學習)不搬移(ARCHITE
 }
 
 // POST /kb/notes、PUT /kb/notes/{id} 請求(content 必填,上限 20,000 字;ips 最多 30 個、tags 最多 10 個;
-// ips、tags 可以是陣列或逗號 / 頓號分隔的文字,同舊版;ips 只保留 IP / 網段格式)
+// ips、tags 可以是陣列或逗號 / 頓號分隔的文字,同舊版;ips 只保留 IP / 網段格式;title、ips、tags 不可含換行(400);
+// 總數上限 5,000 則(409 NETOPS_KB_LIMIT);PUT 省略 source 時保留原值)
 { "title": "…", "ips": ["10.10.130.0/24"], "tags": ["FTP"], "content": "…", "source": "" }
 // 回應:筆記本身(POST 回 201)
 ```
@@ -431,6 +432,7 @@ AI 相關(語意搜尋、向量同步、外部 IP 自動學習)不搬移(ARCHITE
 | 409 | `NETOPS_JOB_NOT_DONE` | 工作尚未完成(或失敗、已取消),沒有結果可分頁或匯出 |
 | 409 | `NETOPS_AD_SYNC_BUSY` | AD 正在同步 |
 | 409 | `NETOPS_IMPORT_QUEUE_FULL` | 分析佇列已滿 |
+| 409 | `NETOPS_KB_LIMIT` | 知識庫筆記已達上限 |
 | 422 | `NETOPS_EXPORT_TOO_LARGE` | 匯出筆數超過上限 |
 | 502 | `NETOPS_FTP_UNAVAILABLE` | FTP 連線或讀取失敗(訊息含 FTP 回應,不含帳密) |
 | 503 | `NETOPS_FTP_NOT_CONFIGURED` | 未設定 FTP(只會在 dev) |

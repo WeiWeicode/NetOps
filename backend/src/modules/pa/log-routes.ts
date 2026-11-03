@@ -7,7 +7,7 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { AppError } from '../../errors.js';
 import type { Ftp, FtpStream } from '../../infra/ftp/index.js';
-import { ownerOf } from '../../infra/jobs/index.js';
+import { JobRunner, ownerOf } from '../../infra/jobs/index.js';
 import { toCsv } from '../../shared/csv.js';
 import { ACCEPTED, looseObject, TIME } from '../../shared/schemas.js';
 import { logTimeOut, timeIn, validation } from '../../shared/time.js';
@@ -60,6 +60,7 @@ interface SearchResult {
   scanned: number;
   seconds: number;
   stopReason: '' | 'limit' | 'timeout' | 'closed' | 'error';
+  /** 完成後取消(DELETE)時清空,釋放記憶體 */
   rows: (string | number)[][];
 }
 
@@ -78,13 +79,24 @@ type ScanFiles = (
 ) => Promise<{ scanned: number; rows: number; filesScanned: number; files: number; seconds: number; stopReason: SearchResult['stopReason'] }>;
 const scan = scanFiles as unknown as ScanFiles;
 
+/**
+ * IP 條件:只允許 IP / CIDR 字元與最多 4 個 *(萬用字元)。核心 ipMatcher 會把每個 * 轉成 .* 的正規表示式,
+ * 連續或大量的 * 會讓比對時間指數成長、卡住整個服務(ReDoS;舊版同樣有此問題,核心依 D4 不改,在這裡擋)
+ */
+const IP = { type: 'string', maxLength: 64, pattern: '^[0-9a-fA-F:./]*(\\*[0-9a-fA-F:./]*){0,4}$' } as const;
+/** 連續的 * 合併成一個(意義相同) */
+const ipCond = (v?: string) => (v ? v.replace(/\*+/g, '*') : v);
+
 const text = (max: number) => ({ type: 'string', maxLength: max });
 const ID = { type: 'object', required: ['id'], properties: { id: { type: 'string', format: 'uuid' } } } as const;
 
 const logRoutes: FastifyPluginAsync<{ ftp: Ftp; traffic: TrafficImporter; parallel: number; limit: number; seconds: number }> = async (app, { ftp, traffic, parallel, limit, seconds }) => {
+  // 明細查詢專用:同時只執行 1 個(其餘排隊),FTP 連線至少留給匯入輪流使用;每人保留 5 筆結果(資料列佔記憶體)
+  const jobs = new JobRunner({ concurrency: 1, maxRetainedPerOwner: 5 }, (kind, err) => app.log.error({ err, kind }, '工作執行發生非預期錯誤'));
+  app.addHook('onClose', async () => jobs.close());
   /** 狀態查詢:結果只回摘要,資料列走 /rows 分頁(回應不會太大) */
   const view = (id: string, owner: string) => {
-    const job = app.jobs.get<SearchResult>(id, owner, KIND);
+    const job = jobs.get<SearchResult>(id, owner, KIND);
     if (!job.result) return job;
     const { rows: _rows, ...summary } = job.result;
     return { ...job, result: summary };
@@ -119,9 +131,9 @@ const logRoutes: FastifyPluginAsync<{ ftp: Ftp; traffic: TrafficImporter; parall
           properties: {
             from: TIME,
             to: TIME,
-            src: text(64),
-            dst: text(64),
-            ip: text(64),
+            src: IP,
+            dst: IP,
+            ip: IP,
             port: { type: 'string', maxLength: 200, pattern: '^[\\d,\\s]*$' },
             proto: text(20),
             app: text(100),
@@ -139,7 +151,7 @@ const logRoutes: FastifyPluginAsync<{ ftp: Ftp; traffic: TrafficImporter; parall
       },
     },
     async (req, reply) => {
-      const b = req.body;
+      const b = { ...req.body, src: ipCond(req.body.src), dst: ipCond(req.body.dst), ip: ipCond(req.body.ip) };
       const from = timeIn(b.from, 'from');
       const to = timeIn(b.to, 'to');
       if (to < from) throw validation('to', '結束時間不可早於開始時間');
@@ -148,23 +160,48 @@ const logRoutes: FastifyPluginAsync<{ ftp: Ftp; traffic: TrafficImporter; parall
       if (!files.length) throw new AppError(404, 'NETOPS_PA_NO_DATA', '這段時間沒有已分析的 log 檔,請先到「FTP Log 檔案」同步');
       const max = Math.min(b.limit ?? limit, limit);
       const filter = buildFilter({ ...b, from, to });
-      const job = app.jobs.submit<SearchResult>(
+      const job = jobs.submit<SearchResult>(
         KIND,
         ownerOf(req.identity),
         async ({ signal, progress }) => {
           const rows: (string | number)[][] = [];
-          const r = await scan(files, {
-            prefilter: buildPrefilter(b) as ((line: string) => boolean) | null,
-            parallel,
-            seconds,
-            isClosed: () => signal.aborted,
-            openStream: (p: string) => ftp.openStream(p, { signal }),
-            onProgress: (p) => progress({ ...p, found: rows.length }),
-            onRow: (rec, raw) => {
-              if (filter(rec, raw)) rows.push(FIELDS.map((k) => rec[k] ?? ''));
-              if (rows.length >= max) return false;
-            },
-          });
+          // 本次掃描自己的中止訊號:工作取消時連動;掃描結束(含失敗)一律中止,不留還在佔 FTP 連線的 worker;
+          // 掃描期限過後(scan.js 每 2 秒檢查一次,多給 3 秒)叫醒還在排隊等 FTP 連線的 worker
+          const local = new AbortController();
+          const onAbort = () => local.abort(signal.reason);
+          signal.addEventListener('abort', onAbort, { once: true });
+          let deadlineHit = false;
+          const deadline = setTimeout(() => {
+            deadlineHit = true;
+            local.abort();
+          }, (seconds + 3) * 1000);
+          let last = { filesScanned: 0, files: files.length, rows: 0 };
+          let r: Awaited<ReturnType<ScanFiles>>;
+          try {
+            r = await scan(files, {
+              prefilter: buildPrefilter(b) as ((line: string) => boolean) | null,
+              parallel,
+              seconds,
+              isClosed: () => signal.aborted,
+              openStream: (p: string) => ftp.openStream(p, { signal: local.signal }),
+              onProgress: (p) => {
+                last = p;
+                progress({ ...p, found: rows.length });
+              },
+              onRow: (rec, raw) => {
+                if (filter(rec, raw)) rows.push(FIELDS.map((k) => rec[k] ?? ''));
+                if (rows.length >= max) return false;
+              },
+            });
+          } catch (err) {
+            // 等 FTP 連線等到超過掃描秒數:回已找到的部分結果,標成 timeout(不完整)
+            if (!deadlineHit || signal.aborted) throw err;
+            r = { scanned: 0, rows: last.rows, filesScanned: last.filesScanned, files: files.length, seconds, stopReason: 'timeout' };
+          } finally {
+            clearTimeout(deadline);
+            signal.removeEventListener('abort', onAbort);
+            local.abort();
+          }
           rows.sort((x, y) => String(x[TIME_INDEX]).localeCompare(String(y[TIME_INDEX])));
           const kept = rows.slice(0, max);
           return {
@@ -221,7 +258,7 @@ const logRoutes: FastifyPluginAsync<{ ftp: Ftp; traffic: TrafficImporter; parall
       },
     },
     async (req) => {
-      const r = app.jobs.result<SearchResult>(req.params.id, ownerOf(req.identity), KIND);
+      const r = jobs.result<SearchResult>(req.params.id, ownerOf(req.identity), KIND);
       const page = req.query.page ?? 1;
       const pageSize = req.query.pageSize ?? 50;
       return { items: r.rows.slice((page - 1) * pageSize, page * pageSize).map(rowOut), total: r.rows.length, page, pageSize };
@@ -244,9 +281,10 @@ const logRoutes: FastifyPluginAsync<{ ftp: Ftp; traffic: TrafficImporter; parall
       },
     },
     async (req, reply) => {
-      const r = app.jobs.result<SearchResult>(req.params.id, ownerOf(req.identity), KIND);
+      const r = jobs.result<SearchResult>(req.params.id, ownerOf(req.identity), KIND);
       const rows = r.rows.map((row) => row.map((v, i) => (i === TIME_INDEX ? logTimeOut(String(v)) : v)));
-      const name = `PA_log_${r.from.slice(0, 16).replace(/\D/g, '')}_${r.to.slice(0, 16).replace(/\D/g, '')}.csv`;
+      // 掃描逾時的結果不完整,檔名標出來(AGENT.md §5)
+      const name = `PA_log_${r.from.slice(0, 16).replace(/\D/g, '')}_${r.to.slice(0, 16).replace(/\D/g, '')}${r.stopReason === 'timeout' ? '_不完整' : ''}.csv`;
       return reply
         .header('content-type', 'text/csv; charset=utf-8')
         .header('content-disposition', `attachment; filename*=UTF-8''${encodeURIComponent(name)}`)
@@ -260,7 +298,7 @@ const logRoutes: FastifyPluginAsync<{ ftp: Ftp; traffic: TrafficImporter; parall
       schema: {
         operationId: 'netops.pa-log.search-cancel',
         summary: '取消 PA Log 明細查詢',
-        description: '取消自己的明細工作並中斷 FTP 掃描;已結束、已逾期或不存在也回 204(冪等)。',
+        description: '取消自己的明細工作並中斷 FTP 掃描;已完成的工作則丟棄結果(之後查詢回 404)。已逾期或不存在也回 204(冪等)。',
         tags: ['PA Log 明細'],
         'x-permission': 'netops.pa-log.read',
         'x-gherkin': ['場景: 取消工作', '  當 呼叫 DELETE /api/netops/pa/log-searches/{id}', '  那麼 回應 204', '  而且 再呼叫一次也回 204'].join('\n'),
@@ -268,7 +306,8 @@ const logRoutes: FastifyPluginAsync<{ ftp: Ftp; traffic: TrafficImporter; parall
       },
     },
     async (req, reply) => {
-      cancelQuietly(() => app.jobs.cancel(req.params.id, ownerOf(req.identity), KIND));
+      // 已完成的工作:取消即丟棄結果,釋放記憶體(資料列最多 PA_SEARCH_LIMIT 筆 × 28 欄)
+      cancelQuietly(() => jobs.cancel(req.params.id, ownerOf(req.identity), KIND, { discard: true }));
       return reply.status(204).send();
     },
   );

@@ -104,6 +104,15 @@ describe('同一批假 log:舊版與新版明細結果一致', () => {
   });
 });
 
+describe('PA Log 明細 API(IP 萬用字元)', () => {
+  it('連續的 * 合併後與單一 * 結果相同,且很快完成', async () => {
+    const a = await finish((await submit({ ...range, src: '10.10.*.5', limit: 100 })).json().id);
+    const b = await finish((await submit({ ...range, src: '10.10.***.5', limit: 100 })).json().id);
+    assert.equal(a.status, 'done');
+    assert.equal(b.result.total, a.result.total);
+  });
+});
+
 describe('PA Log 明細 API', () => {
   it('狀態:進度與摘要;匯出 CSV', async () => {
     const res = await submit({ ...range, src: '10.10.1.5', limit: 30 });
@@ -129,9 +138,10 @@ describe('PA Log 明細 API', () => {
       assert.equal(res.statusCode, 404, url);
       assert.equal(res.json().code, 'NETOPS_JOB_NOT_FOUND');
     }
-    for (let i = 0; i < 2; i++) assert.equal((await t.call({ method: 'DELETE', url: `/v1/pa/log-searches/${id}` })).statusCode, 204);
     assert.equal((await t.call({ method: 'DELETE', url: `/v1/pa/log-searches/${id}`, emp: 'S999999' })).statusCode, 204);
     assert.equal((await t.call({ url: `/v1/pa/log-searches/${id}` })).json().status, 'done', '別人取消不影響');
+    for (let i = 0; i < 2; i++) assert.equal((await t.call({ method: 'DELETE', url: `/v1/pa/log-searches/${id}` })).statusCode, 204);
+    assert.equal((await t.call({ url: `/v1/pa/log-searches/${id}` })).statusCode, 404, '已完成的工作取消後丟棄結果');
   });
 
   it('執行中取消:狀態 cancelled,沒有結果', async () => {
@@ -139,19 +149,29 @@ describe('PA Log 明細 API', () => {
     await t.call({ method: 'POST', url: '/v1/ftp/pa/analyses', payload: { items: [{ path: '/PA-560_traffic_2026_11_04_last_calendar_day_0.csv' }] } });
     await waitFor(async () => !(await t.call({ url: '/v1/ftp/pa/status' })).json().traffic.busy, 30000);
     ftp.chunkDelayMs = 200;
-    const { id } = (await submit({ from: '2026-11-03T00:00:00+08:00', to: '2026-11-03T23:59:00+08:00', q: 'no-such-text' })).json();
-    assert.equal((await t.call({ method: 'DELETE', url: `/v1/pa/log-searches/${id}` })).statusCode, 204);
-    const job = await finish(id);
-    ftp.chunkDelayMs = 0;
-    assert.equal(job.status, 'cancelled');
-    assert.equal((await t.call({ url: `/v1/pa/log-searches/${id}/rows` })).json().code, 'NETOPS_JOB_NOT_DONE');
+    try {
+      const aborted = ftp.aborted;
+      const { id } = (await submit({ from: '2026-11-03T00:00:00+08:00', to: '2026-11-03T23:59:00+08:00', q: 'no-such-text' })).json();
+      await new Promise((r) => setTimeout(r, 300));
+      assert.equal((await t.call({ method: 'DELETE', url: `/v1/pa/log-searches/${id}` })).statusCode, 204);
+      const job = await finish(id);
+      assert.equal(job.status, 'cancelled');
+      assert.equal((await t.call({ url: `/v1/pa/log-searches/${id}/rows` })).json().code, 'NETOPS_JOB_NOT_DONE');
+      // FTP 傳輸已中斷、連線名額已釋放:下一個查詢照常完成
+      await waitFor(() => ftp.aborted > aborted || ftp.opened > 0);
+      ftp.chunkDelayMs = 0;
+      const next = await finish((await submit({ ...range, src: '10.10.1.6', limit: 5 })).json().id);
+      assert.equal(next.status, 'done');
+    } finally {
+      ftp.chunkDelayMs = 0;
+    }
   });
 
   it('期間沒有資料回 404;超過 31 天、時間沒有時區、Port 格式錯誤回 400', async () => {
     const nd = await submit({ from: '2020-01-01T00:00:00+08:00', to: '2020-01-01T01:00:00+08:00' });
     assert.equal(nd.statusCode, 404);
     assert.equal(nd.json().code, 'NETOPS_PA_NO_DATA');
-    for (const p of [{ from: '2026-09-01T00:00:00+08:00', to: '2026-11-02T00:00:00+08:00' }, { from: '2026-11-01T00:00', to: '2026-11-02T00:00' }, { ...range, port: '443;rm' }, { ...range, limit: 999999 }]) {
+    for (const p of [{ from: '2026-09-01T00:00:00+08:00', to: '2026-11-02T00:00:00+08:00' }, { from: '2026-11-01T00:00', to: '2026-11-02T00:00' }, { ...range, port: '443;rm' }, { ...range, limit: 999999 }, { ...range, src: '*'.repeat(10) + 'x' }, { ...range, ip: '1*2*3*4*5*6' }, { ...range, dst: 'a;b' }]) {
       assert.equal((await submit(p)).statusCode, 400, JSON.stringify(p));
     }
   });
@@ -159,13 +179,15 @@ describe('PA Log 明細 API', () => {
   it('每人同時最多 2 個進行中的工作', async () => {
     const big = { from: '2026-11-03T00:00:00+08:00', to: '2026-11-03T23:59:00+08:00', q: 'no-such-text' };
     ftp.chunkDelayMs = 200;
-    const ids = [];
-    for (let i = 0; i < 2; i++) ids.push((await submit(big, 'S777777')).json().id);
-    const third = await submit(big, 'S777777');
-    assert.equal(third.statusCode, 409);
-    assert.equal(third.json().code, 'NETOPS_JOB_LIMIT_EXCEEDED');
-    for (const id of ids) await t.call({ method: 'DELETE', url: `/v1/pa/log-searches/${id}`, emp: 'S777777' });
-    for (const id of ids) await finish(id, 'S777777');
-    ftp.chunkDelayMs = 0;
+    const ids: string[] = [];
+    try {
+      for (let i = 0; i < 2; i++) ids.push((await submit(big, 'S777777')).json().id);
+      const third = await submit(big, 'S777777');
+      assert.equal(third.statusCode, 409);
+      assert.equal(third.json().code, 'NETOPS_JOB_LIMIT_EXCEEDED');
+    } finally {
+      for (const id of ids) await t.call({ method: 'DELETE', url: `/v1/pa/log-searches/${id}`, emp: 'S777777' });
+      ftp.chunkDelayMs = 0;
+    }
   });
 });

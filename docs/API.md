@@ -175,7 +175,7 @@ PA 匯入在背景佇列執行;同步、分析只是送進佇列,畫面輪詢狀
 | GET | `/api/netops/pa/log-searches/{id}` | `netops.pa-log.read` | 工作狀態;完成時 `result` 為查詢摘要(不含資料列) |
 | GET | `/api/netops/pa/log-searches/{id}/rows?page&pageSize` | `netops.pa-log.read` | 查詢結果分頁(工作完成後) |
 | GET | `/api/netops/pa/log-searches/{id}/export` | `netops.pa-log.read` | 下載查詢結果 CSV(UTF-8 BOM,欄名中文) |
-| DELETE | `/api/netops/pa/log-searches/{id}` | `netops.pa-log.read` | 取消(冪等),回 204 |
+| DELETE | `/api/netops/pa/log-searches/{id}` | `netops.pa-log.read` | 取消(冪等),回 204;已完成的工作則丟棄結果、釋放記憶體 |
 
 ```jsonc
 // POST /pa/log-searches(from / to 必填;其他條件選填,與舊版相同)
@@ -187,7 +187,8 @@ PA 匯入在背景佇列執行;同步、分析只是送進佇列,畫面輪詢狀
 }
 ```
 
-- IP 條件:完全相同、萬用字元(`10.10.*`)、CIDR(`10.10.0.0/16`);同時比對 NAT 位址。
+- IP 條件:完全相同、萬用字元(`10.10.*`)、CIDR(`10.10.0.0/16`);同時比對 NAT 位址。只能用 IP / CIDR 字元,`*` 最多 4 個(連續的視為一個),否則 400。
+- 同時只執行 1 個明細查詢,其他排隊(`status: queued`);每人保留最近 5 筆已完成的結果。
 - `action`:`allow`、`block`(非 allow)、或 PA 的動作原文。
 - `limit` 預設與上限都是設定 `PA_SEARCH_LIMIT`(預設 2,000,可設 1–10,000;結果保留在記憶體 30 分鐘,調高前先估記憶體)。
 - 期間最長 31 天(超過回 400);`port` 只能是數字、逗號與空白。
@@ -201,7 +202,8 @@ PA 匯入在背景佇列執行;同步、分析只是送進佇列,畫面輪詢狀
   "from": "2026-11-02T08:00:00+08:00", "to": "2026-11-02T09:00:00+08:00",
   "total": 120, "limit": 2000,
   "files": 2, "filesScanned": 2, "scanned": 845000, "seconds": 12.3,
-  "stopReason": ""          // "" 全部掃完 | "limit" 達筆數上限 | "timeout" 超過掃描秒數(結果不完整) | "error" 讀取失敗
+  "stopReason": ""          // "" 全部掃完 | "limit" 達筆數上限 | "timeout" 超過掃描秒數或等不到 FTP 連線(結果不完整,匯出檔名加「_不完整」)
+                            // FTP 讀取失敗時工作為 failed,原因在 error
 }
 
 // GET /pa/log-searches/{id}/rows:依時間排序;欄位順序同舊版 ROW_FIELDS

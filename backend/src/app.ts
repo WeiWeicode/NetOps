@@ -13,6 +13,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import type { Config } from './config.js';
 import { AppError } from './errors.js';
 import { JobRunner } from './infra/jobs/index.js';
+import { DataFileError } from './infra/store/files.js';
 import { createStore, type Store } from './infra/store/index.js';
 import pingRoutes from './modules/ping/routes.js';
 import { swaggerOptions } from './openapi.js';
@@ -79,6 +80,11 @@ export async function buildApp(config: Config): Promise<FastifyInstance> {
         ),
       );
     if (e.statusCode && e.statusCode < 500) return reply.status(e.statusCode).send(errorBody('VALIDATION_FAILED', '請求格式錯誤', req.id));
+    // 資料檔損壞不當成沒有資料(AGENT.md §5);回應不帶檔名,細節只寫日誌
+    if (err instanceof DataFileError) {
+      req.log.error({ err }, '資料檔無法讀取');
+      return reply.status(500).send(errorBody('NETOPS_DATA_CORRUPT', '資料檔損壞或無法讀取,請通知系統負責人', req.id));
+    }
     req.log.error({ err }, '非預期錯誤');
     return reply.status(500).send(errorBody('INTERNAL_ERROR', '系統發生錯誤', req.id));
   });

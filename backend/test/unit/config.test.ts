@@ -56,9 +56,11 @@ describe('FTP', () => {
     assert.ok(c.ftp.pattern.test('PA-560_traffic_2026_10_16_last_calendar_day_0.csv'));
   });
 
-  it('正式區不接受明文 FTP_PASSWORD', () => {
+  it('正式區不接受明文 FTP_PASSWORD(同時設定 _FILE 也拒絕)與 FTP_TLS_INSECURE', () => {
     const prod = { ...base, GW_ENV: 'prod', GW_API_KEY_FILE: secret, SERVICE_ADVERTISE_URL: 'http://netops-api:51292', NETOPS_DATA_DIR: tmp };
     assert.throws(() => loadConfig({ ...prod, FTP_HOST: 'h', FTP_USER: 'u', FTP_PASSWORD: 'p' }), /正式區不可用 FTP_PASSWORD 明文設定/);
+    assert.throws(() => loadConfig({ ...prod, ...ftp, FTP_PASSWORD: 'p' }), /正式區不可用 FTP_PASSWORD 明文設定/);
+    assert.throws(() => loadConfig({ ...prod, ...ftp, FTP_TLS_INSECURE: '1' }), /正式區不可設定 FTP_TLS_INSECURE/);
     assert.equal(loadConfig({ ...prod, ...ftp }).ftp?.password, 'from-file');
   });
 
@@ -71,11 +73,27 @@ describe('FTP', () => {
   });
 
   it('目錄正規化;設成 - 表示不匯入該類型', () => {
-    const c = loadConfig({ ...base, GW_ENV: 'dev', FTP_HOST: 'h', FTP_ROOT: 'my-data\\', FTP_URL_DIR: '-', FTP_AD_DIR: '//AD//' });
-    assert.equal(c.ftp?.root, '/my-data');
+    const c = loadConfig({ ...base, GW_ENV: 'dev', FTP_HOST: 'h', FTP_LOG_DIR: 'my-data\\', FTP_URL_DIR: '-', FTP_AD_DIR: '//AD//' });
+    assert.equal(c.ftp?.root, '/');
     assert.equal(c.ftp?.logDir, '/my-data');
     assert.equal(c.ftp?.eventDirs.url, '');
     assert.equal(c.ftp?.adDir, '/AD');
+  });
+
+  it('開關只接受 1 / 0 / true / false', () => {
+    const dev = { ...base, GW_ENV: 'dev', FTP_HOST: 'h' };
+    assert.equal(loadConfig({ ...dev, FTP_SECURE: 'true' }).ftp?.secure, true);
+    assert.equal(loadConfig({ ...dev, FTP_SECURE: '0' }).ftp?.secure, false);
+    assert.throws(() => loadConfig({ ...dev, FTP_SECURE: 'yes' }), /FTP_SECURE 只能是/);
+  });
+
+  it('匯入目錄必須在 FTP_ROOT 之下;.. 會先正規化', () => {
+    const dev = { ...base, GW_ENV: 'dev', FTP_HOST: 'h', FTP_ROOT: '/my-data' };
+    assert.throws(() => loadConfig({ ...dev, FTP_LOG_DIR: '/other' }), /FTP_LOG_DIR、FTP_AD_DIR、FTP_THREAT_DIR.* 必須在 FTP_ROOT/);
+    const off = { FTP_THREAT_DIR: '-', FTP_URL_DIR: '-', FTP_DATA_FILTER_DIR: '-', FTP_WILDFIRE_DIR: '-', FTP_DECRYPTION_DIR: '-', FTP_GLOBALPROTECT_DIR: '-', FTP_USERID_DIR: '/my-data/user-id' };
+    const c = loadConfig({ ...dev, ...off, FTP_LOG_DIR: '/my-data/pa/../traffic', FTP_AD_DIR: '/my-data/AD' });
+    assert.equal(c.ftp?.logDir, '/my-data/traffic');
+    assert.throws(() => loadConfig({ ...dev, ...off, FTP_AD_DIR: '/my-data/../etc' }), /FTP_AD_DIR 必須在 FTP_ROOT/);
   });
 
   it('數字超出範圍或規則寫錯時啟動失敗', () => {

@@ -20,7 +20,7 @@
 | 時間參數 | ISO 8601 含時區,精確到分鐘,例 `2026-11-03T08:30:00+08:00`;秒以下忽略 |
 | 回應時間 | log 內的時間(PA、AD 都是設備當地時間)一律輸出 `+08:00`,例 `2026-11-03T08:30:15+08:00`;系統時間(分析時間、工作建立時間)輸出 UTC `Z` |
 | 每小時統計 | `hour` 為該小時開始時間,例 `2026-11-03T08:00:00+08:00` |
-| 分頁 | `page`(從 1 開始)、`pageSize`(預設 50、上限 100);回應 `{ items, total, page, pageSize }` |
+| 分頁 | `page`(從 1 開始)、`pageSize`(預設 50、上限 100);回應 `{ items, total, page, pageSize }`。數量有上限的清單(日期、類型、單一 FTP 目錄)不分頁 |
 | 長時間工作 | 超過路由逾時的操作改成「送出工作 → 查詢結果」(ARCHITECTURE D6、§7):建立回 **202** 與工作狀態,前端每 1–2 秒查詢一次 |
 | 下載 | 回 `Content-Disposition: attachment; filename*=UTF-8''…`;前端以 `fetch` 取得 Blob 下載(帶 CSRF,不帶 Bearer) |
 | 資料不完整 | 摘要與查詢回應會帶出檔案數、掃描範圍或匯入狀態;**沒有資料不等於沒有發生**(AGENT.md §5),畫面要顯示這些欄位 |
@@ -28,7 +28,9 @@
 
 ### 1.1 工作狀態(Job)
 
-明細查詢、AD 的 FTP 檔案清單使用工作模式。工作**只有建立者本人可查與取消**,別人的工作回 404;只存在記憶體,服務重新啟動後失效(回 404 `NETOPS_JOB_NOT_FOUND`,前端提示重新送出);完成後保留 30 分鐘。每人同時最多 2 個進行中的工作,超過回 409 `NETOPS_JOB_LIMIT_EXCEEDED`。
+明細查詢、AD 的 FTP 檔案清單使用工作模式。工作**只有建立者本人可查與取消**,別人的工作回 404;只存在記憶體,服務重新啟動後失效(回 404 `NETOPS_JOB_NOT_FOUND`,前端提示重新送出);完成後保留 30 分鐘。每人同時最多 2 個、全系統最多 6 個進行中的工作,超過回 409 `NETOPS_JOB_LIMIT_EXCEEDED`(取消後,要等工作真正停止才釋放名額,通常幾秒內)。
+
+取消一律用 `DELETE …/{id}`,回 **204**;工作已結束、已逾期或不存在也回 204(冪等,BFF 重試時不會報錯)。取消後再查詢,`status` 為 `cancelled`。
 
 ```jsonc
 {
@@ -78,6 +80,8 @@ PA 匯入在背景佇列執行;同步、分析只是送進佇列,畫面輪詢狀
 | `netops.kb.write` | 知識庫:編輯 | §7 寫入 |
 
 稽核:Log 明細查詢與匯出、知識庫下載設 `x-audit-level: meta`。
+
+取消工作(`DELETE …/{id}`)用該工作的**讀取**權限:只能取消自己送出的工作,不改變業務資料,因此不另設寫入權限(ARCHITECTURE §5)。
 
 ---
 
@@ -183,7 +187,7 @@ PA 匯入在背景佇列執行;同步、分析只是送進佇列,畫面輪詢狀
 
 - IP 條件:完全相同、萬用字元(`10.10.*`)、CIDR(`10.10.0.0/16`);同時比對 NAT 位址。
 - `action`:`allow`、`block`(非 allow)、或 PA 的動作原文。
-- `limit` 上限為設定 `PA_SEARCH_LIMIT`(預設 2,000)。
+- `limit` 預設與上限都是設定 `PA_SEARCH_LIMIT`(預設 2,000,可設 1–10,000;結果保留在記憶體 30 分鐘,調高前先估記憶體)。
 - 期間內沒有已分析的檔案時,建立工作直接回 404 `NETOPS_PA_NO_DATA`(請先到 FTP Log 檔案同步)。
 
 ```jsonc
@@ -263,6 +267,7 @@ FTP 唯讀(AGENT.md §7.4):「刪除分析結果」只刪本系統的摘要,不�
 | --- | --- | --- | --- |
 | POST | `/api/netops/ftp/ad/listings` | `netops.ftp.read` | `GET /ad/browse`(改工作模式) |
 | GET | `/api/netops/ftp/ad/listings/{id}` | `netops.ftp.read` | 同上 |
+| DELETE | `/api/netops/ftp/ad/listings/{id}` | `netops.ftp.read` | 取消(冪等,204) |
 | GET | `/api/netops/ftp/ad/status` | `netops.ftp.read` | `GET /ad/days` 的 `job` |
 | POST | `/api/netops/ftp/ad/syncs` | `netops.ftp.write` | `POST /ad/sync` |
 | POST | `/api/netops/ftp/ad/imports` | `netops.ftp.write` | `POST /ad/import` |
@@ -376,6 +381,7 @@ AI 相關(語意搜尋、向量同步、外部 IP 自動學習)不搬移(ARCHITE
 | DELETE | `/api/netops/kb/notes/{id}` | `netops.kb.write` | `DELETE /kb/:id` |
 
 - `q`:關鍵字以空白分隔,全部符合(標題、內容、IP、標籤、記錄人)。依更新時間新的在前。
+- 清單每筆含完整 `content`(與舊版相同,畫面直接顯示選取的筆記);單則最長 20,000 字,`pageSize` 預設 50。
 - 舊版回應的 `admin` 拿掉:能否編輯由前端依權限 `netops.kb.write`(畫面節點 `netops.kb-page.write`)判斷。
 - 記錄人改用 Gateway 身分的「工號 姓名」(AGENT.md §7.1)。
 - `id` 格式 `^[\w-]{6,64}$`,不符合回 400。
@@ -407,20 +413,23 @@ AI 相關(語意搜尋、向量同步、外部 IP 自動學習)不搬移(ARCHITE
 | 400 | `VALIDATION_FAILED` | 參數驗證失敗(附 `details`) |
 | 401 | `NETOPS_INTERNAL_TOKEN_INVALID` | 沒有或無效的內部 Token(只會在直連服務時發生) |
 | 403 | `NETOPS_FTP_PATH_FORBIDDEN` | FTP 路徑超出可瀏覽的根目錄 |
+| 403 | `NETOPS_JOB_OWNER_UNKNOWN` | 身分沒有工號也沒有 sub,不能建立工作(正常經 Gateway 不會發生) |
 | 404 | `NETOPS_NOT_FOUND` | 找不到此 API |
 | 404 | `NETOPS_JOB_NOT_FOUND` | 工作不存在、不是本人的、已逾期或服務重新啟動後失效 |
 | 404 | `NETOPS_PA_NO_DATA` | 期間內沒有已分析的 PA log 檔 |
 | 404 | `NETOPS_KB_NOTE_NOT_FOUND` | 找不到筆記 |
-| 409 | `NETOPS_JOB_LIMIT_EXCEEDED` | 進行中的工作超過上限 |
+| 409 | `NETOPS_JOB_LIMIT_EXCEEDED` | 進行中的工作超過上限(每人或全系統) |
 | 409 | `NETOPS_JOB_NOT_DONE` | 工作尚未完成(或失敗、已取消),沒有結果可分頁或匯出 |
 | 409 | `NETOPS_AD_SYNC_BUSY` | AD 正在同步 |
 | 422 | `NETOPS_EXPORT_TOO_LARGE` | 匯出筆數超過上限 |
 | 502 | `NETOPS_FTP_UNAVAILABLE` | FTP 連線或讀取失敗(訊息含 FTP 回應,不含帳密) |
 | 503 | `NETOPS_FTP_NOT_CONFIGURED` | 未設定 FTP(只會在 dev) |
 | 503 | `NETOPS_NOT_READY` | 資料目錄無法讀寫(`/readyz`) |
+| 500 | `NETOPS_DATA_CORRUPT` | 本系統的資料檔損壞或無法讀取(不當成沒有資料;請通知系統負責人) |
+| 503 | `NETOPS_JOB_ABORTED` | 服務正在關閉,不接受新工作 |
 | 500 | `INTERNAL_ERROR` | 非預期錯誤 |
 
-工作失敗時,`error.code` 可能是上表的代碼,或 `NETOPS_JOB_TIMEOUT`(超過執行時間上限)、`NETOPS_JOB_FAILED`(非預期錯誤)。
+工作失敗時,`error.code` 可能是上表的代碼,或 `NETOPS_JOB_TIMEOUT`(超過執行時間上限)、`NETOPS_JOB_ABORTED`(服務關閉時中止)、`NETOPS_JOB_FAILED`(非預期錯誤)。
 
 ---
 

@@ -109,9 +109,83 @@ describe('JobRunner', () => {
     assert.equal(jobs.get(ids[2]!, 'S1').status, 'done');
   });
 
-  it('沒有工號時以 sub 為擁有者;沒有身分時不能建立工作', () => {
-    assert.equal(ownerOf({ emp: 'S112009', sub: '1' }), 'S112009');
-    assert.equal(ownerOf({ sub: 'client:x' }), 'client:x');
-    assert.throws(() => new JobRunner().submit('t', ownerOf(null), async () => 1, { timeoutMs: 1 }), code('DATA_ACCESS_DENIED'));
+  it('擁有者以工號為主、沒有工號用 sub,兩者加前綴不會撞名;沒有身分時不能建立工作', () => {
+    assert.equal(ownerOf({ emp: 'S112009', sub: '1' }), 'emp:S112009');
+    assert.equal(ownerOf({ sub: 'S112009' }), 'sub:S112009');
+    assert.throws(() => new JobRunner().submit('t', ownerOf(null), async () => 1, { timeoutMs: 1 }), code('NETOPS_JOB_OWNER_UNKNOWN'));
+  });
+
+  it('執行中的工作結束後,排隊的工作自動開始', async () => {
+    const jobs = new JobRunner({ concurrency: 1 });
+    let release!: () => void;
+    const a = jobs.submit('t', 'S1', () => new Promise<number>((r) => (release = () => r(1))), { timeoutMs: 1000 });
+    const b = jobs.submit('t', 'S2', async () => 2, { timeoutMs: 1000 });
+    assert.equal(jobs.get(b.id, 'S2').status, 'queued');
+    assert.throws(() => jobs.result(a.id, 'S1'), code('NETOPS_JOB_NOT_DONE'));
+    release();
+    await tick();
+    await tick();
+    assert.equal(jobs.get(a.id, 'S1').status, 'done');
+    assert.equal(jobs.get(b.id, 'S2').status, 'done');
+  });
+
+  it('取消後狀態立即改變,但名額要等工作真正停止才釋放', async () => {
+    const jobs = new JobRunner({ maxActivePerOwner: 1 });
+    let stop!: () => void;
+    // 不理會 signal 的工作:取消後仍在跑
+    const a = jobs.submit('t', 'S1', () => new Promise<number>((r) => (stop = () => r(1))), { timeoutMs: 5000 });
+    assert.equal(jobs.cancel(a.id, 'S1').status, 'cancelled');
+    assert.throws(() => jobs.submit('t', 'S1', untilAbort, { timeoutMs: 5000 }), code('NETOPS_JOB_LIMIT_EXCEEDED'));
+    stop();
+    await tick();
+    await tick();
+    assert.equal(jobs.get(a.id, 'S1').status, 'cancelled');
+    jobs.submit('t', 'S1', untilAbort, { timeoutMs: 5000 });
+    jobs.close();
+  });
+
+  it('取消後工作仍正常回傳時維持 cancelled,不會變成 done', async () => {
+    const jobs = new JobRunner();
+    let id = '';
+    let seen!: AbortSignal;
+    const j = jobs.submit('t', 'S1', async ({ signal }) => {
+      await Promise.resolve();
+      jobs.cancel(id, 'S1');
+      seen = signal;
+      return 1;
+    }, { timeoutMs: 1000 });
+    id = j.id;
+    await tick();
+    assert.ok(seen.aborted);
+    assert.equal(jobs.get(j.id, 'S1').status, 'cancelled');
+    assert.throws(() => jobs.result(j.id, 'S1'), code('NETOPS_JOB_NOT_DONE'));
+  });
+
+  it('close() 讓排隊與執行中的工作失敗,之後不接受新工作', async () => {
+    const jobs = new JobRunner({ concurrency: 1 });
+    const a = jobs.submit('t', 'S1', untilAbort, { timeoutMs: 5000 });
+    const b = jobs.submit('t', 'S2', untilAbort, { timeoutMs: 5000 });
+    jobs.close();
+    await tick();
+    for (const [id, o] of [[a.id, 'S1'], [b.id, 'S2']] as const) {
+      const v = jobs.get(id, o);
+      assert.equal(v.status, 'failed');
+      assert.equal(v.error?.code, 'NETOPS_JOB_ABORTED');
+    }
+    assert.throws(() => jobs.submit('t', 'S3', untilAbort, { timeoutMs: 5000 }), code('NETOPS_JOB_ABORTED'));
+  });
+
+  it('timeoutMs 超出範圍時拒絕(避免 setTimeout 溢位立刻觸發)', () => {
+    const jobs = new JobRunner();
+    for (const t of [0, -1, Number.NaN, 2 ** 31]) assert.throws(() => jobs.submit('t', 'S1', async () => 1, { timeoutMs: t }), /timeoutMs/);
+  });
+
+  it('查詢回傳複本,改動不影響工作', async () => {
+    const jobs = new JobRunner();
+    const j = jobs.submit('t', 'S1', async ({ progress }) => (progress({ n: 1 }), 1), { timeoutMs: 1000 });
+    await tick();
+    const v = jobs.get(j.id, 'S1');
+    v.progress!.n = 99;
+    assert.deepEqual(jobs.get(j.id, 'S1').progress, { n: 1 });
   });
 });

@@ -39,9 +39,10 @@ fi
 
 # ---------- FTP 密碼(B1;舊版 IIS server/.env 的 FTP_PWD 同一個帳號,隱藏輸入,不顯示、不寫進歷史) ----------
 if [ ! -s "$D/ftp_password" ]; then
+  [ -t 0 ] || { echo "請在終端機執行(要隱藏輸入 FTP 密碼)" >&2; exit 1; }
   printf 'FTP 密碼(與舊版 FTP_USER 同一個帳號;輸入時不顯示):'
   # 中斷時恢復終端機回顯,並保留刪除暫存目錄
-  stty -echo; trap 'stty echo; rm -rf "$TMP"' EXIT; read -r FTP_PWD; stty echo; echo
+  stty -echo; trap 'stty echo; rm -rf "$TMP"' EXIT; IFS= read -r FTP_PWD; stty echo; echo
   [ -n "$FTP_PWD" ] || { echo "未輸入 FTP 密碼" >&2; exit 1; }
   printf '%s' "$FTP_PWD" > "$D/ftp_password"; unset FTP_PWD
 fi

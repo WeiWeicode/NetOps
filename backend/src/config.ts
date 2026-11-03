@@ -66,8 +66,11 @@ export interface Config {
 /** 空字串視同未設定(Compose 的 ${X:-} 會傳空字串) */
 const str = (env: NodeJS.ProcessEnv, key: string, fallback = ''): string => env[key]?.trim() || fallback;
 
-/** FTP 路徑:一律以 / 開頭、結尾不帶 /(根目錄為 /) */
-export const ftpPath = (p: string): string => ('/' + p.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')).replace(/\/{2,}/g, '/');
+/** FTP 路徑:一律以 / 開頭、結尾不帶 /(根目錄為 /);.. 先正規化掉 */
+export const ftpPath = (p: string): string => path.posix.normalize('/' + p.replace(/\\/g, '/')).replace(/\/+$/, '') || '/';
+
+/** 是否在 root 之下(含 root 本身) */
+const under = (p: string, root: string) => root === '/' || p === root || p.startsWith(root + '/');
 
 /** 整數設定;不是整數或超出範圍時啟動失敗 */
 function int(env: NodeJS.ProcessEnv, key: string, fallback: number, min: number, max: number): number {
@@ -78,11 +81,21 @@ function int(env: NodeJS.ProcessEnv, key: string, fallback: number, min: number,
   return n;
 }
 
+/** 開關:只接受 1 / 0 / true / false,其他值啟動失敗(避免寫錯時悄悄關掉加密) */
+function bool(env: NodeJS.ProcessEnv, key: string): boolean {
+  const raw = str(env, key).toLowerCase();
+  if (!raw || raw === '0' || raw === 'false') return false;
+  if (raw === '1' || raw === 'true') return true;
+  throw new GatewayEnvError(`${key} 只能是 1 / 0 / true / false:${raw}`);
+}
+
 /**
  * 機密:<NAME>_FILE 優先;dev / test 可用明文 <NAME>,正式區只接受 _FILE。
  * 讀不到檔案時啟動失敗(訊息不含機密內容)。
  */
 export function readSecret(env: NodeJS.ProcessEnv, name: string, gwEnv: GwEnv): string {
+  // 正式區連同時設定明文也拒絕:明文會留在容器環境變數(docker inspect 看得到)
+  if (str(env, name) && gwEnv === 'prod') throw new GatewayEnvError(`正式區不可用 ${name} 明文設定,請改用 ${name}_FILE(Docker secret)`);
   const file = str(env, `${name}_FILE`);
   if (file) {
     try {
@@ -91,7 +104,6 @@ export function readSecret(env: NodeJS.ProcessEnv, name: string, gwEnv: GwEnv): 
       throw new GatewayEnvError(`無法讀取 ${name}_FILE:${(err as NodeJS.ErrnoException).code ?? 'ERROR'}`);
     }
   }
-  if (str(env, name) && gwEnv === 'prod') throw new GatewayEnvError(`正式區不可用 ${name} 明文設定,請改用 ${name}_FILE(Docker secret)`);
   return str(env, name);
 }
 
@@ -118,18 +130,26 @@ function loadFtp(env: NodeJS.ProcessEnv, gwEnv: GwEnv): FtpConfig | null {
       return [type, v === '-' ? '' : ftpPath(v)];
     }),
   ) as Record<EventType, string>;
+  const logDir = ftpPath(str(env, 'FTP_LOG_DIR', root));
+  const adDir = ftpPath(str(env, 'FTP_AD_DIR', '/AD_Log_Backup'));
+  // 所有匯入目錄都要在可瀏覽的根目錄之下,否則畫面看不到、刪除也找不到
+  const dirs: [string, string][] = [['FTP_LOG_DIR', logDir], ['FTP_AD_DIR', adDir], ...Object.entries(EVENT_DIR_ENV).map(([t, [key]]): [string, string] => [key, eventDirs[t as EventType]])];
+  const outside = dirs.filter(([, dir]) => dir && !under(dir, root));
+  if (outside.length) throw new GatewayEnvError(`${outside.map(([k]) => k).join('、')} 必須在 FTP_ROOT(${root})之下`);
+  const tlsInsecure = bool(env, 'FTP_TLS_INSECURE');
+  if (tlsInsecure && gwEnv === 'prod') throw new GatewayEnvError('正式區不可設定 FTP_TLS_INSECURE');
   return {
     host,
     port: int(env, 'FTP_PORT', 21, 1, 65535),
     user,
     password,
-    secure: str(env, 'FTP_SECURE') === '1',
-    tlsInsecure: str(env, 'FTP_TLS_INSECURE') === '1',
+    secure: bool(env, 'FTP_SECURE'),
+    tlsInsecure,
     root,
-    logDir: ftpPath(str(env, 'FTP_LOG_DIR', root)),
+    logDir,
     pattern: re,
     eventDirs,
-    adDir: ftpPath(str(env, 'FTP_AD_DIR', '/AD_Log_Backup')),
+    adDir,
     maxConnections: int(env, 'FTP_MAX_CONNECTIONS', 1, 1, 6),
     syncMinutes: int(env, 'FTP_SYNC_MINUTES', 0, 0, 1440),
   };

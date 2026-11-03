@@ -54,14 +54,14 @@
 | `api/jobs.feature` | 14 | 14 | 0 | 0 | 0 | 整個功能 |
 | `pa/overview.feature` | 9 | 7 | 0 | 2 | 0 | 2 |
 | `pa-events/overview.feature` | 4 | 4 | 0 | 0 | 0 | 1 |
-| `pa-log-searches/search.feature` | 21 | 19 | 0 | 2 | 0 | 整個功能 + 6 |
+| `pa-log-searches/search.feature` | 21 | 18 | 0 | 3 | 0 | 整個功能 + 6 |
 | `ftp/pa-files.feature` | 16 | 14 | 0 | 2 | 0 | 5 |
-| `ftp/ad-files.feature` | 14 | 14 | 0 | 0 | 0 | 4 |
-| `ad/events.feature` | 11 | 11 | 0 | 0 | 0 | 4 |
+| `ftp/ad-files.feature` | 14 | 13 | 0 | 1 | 0 | 4 |
+| `ad/events.feature` | 11 | 10 | 0 | 1 | 0 | 4 |
 | `kb/notes.feature` | 18 | 16 | 0 | 2 | 0 | 7 |
 | `ui/navigation.feature` | 10 | 8 | 0 | 1 | 2 | 1 |
 | `ui/requests.feature` | 9 | 2 | 1 | 2 | 4 | 2 |
-| **合計** | **140** | **120** | **5** | **11** | **6** | **35 + 2 個功能** |
+| **合計** | **140** | **117** | **5** | **14** | **6** | **35 + 2 個功能** |
 
 (場景數含 `場景大綱`;數字以 §5 的腳本輸出為準。)
 
@@ -153,6 +153,7 @@ cd backend && npm run -s openapi > ../openapi.tmp.json && node ../docs/Gherkin/c
 | 3 | IMPL-PLAN F1「下載帶 CSRF」↔ FRONTEND-GUIDE §6 | Gateway 規定 CSRF 只用在 `POST` / `PUT` / `PATCH` / `DELETE`;新版的下載(匯出、`.md`、匯整檔)都是 `GET`,不需要 CSRF | IMPL-PLAN 改成「下載經 web-kit、不帶 Bearer」(docs MR 統一處理) |
 | 4 | `x-gherkin`「沒有權限時拒絕」(ping)等 401 / 403 場景 | 由 BFF 回應,netops-api 的單元測試無法驗證 | 標 `@e2e`,在測試區驗(B0 已驗 ping) |
 | 5 | F1 `frontend/src/config/links.ts:4`(origin/feature/netops-f1-pa-dashboard) | 舊版 NetOps 正式網址標 TODO,待使用者確認;AI 問答連結依賴它 | 使用者確認網址 |
+| 6 | 匯出的 `/openapi.json` ↔ API.md §1.1、§4.3、§5.2、§7 | `DELETE /pa/log-searches/{id}`、`/ftp/ad/listings/{id}`、`/kb/notes/{id}` 實際回 204,但路由沒有宣告 204,OpenAPI 的 responses 只有預設的 200 | 另開 fix 分支在這三支路由的 response schema 加 204 |
 
 ## 8. `@pending-ui`(F1 進行中)
 

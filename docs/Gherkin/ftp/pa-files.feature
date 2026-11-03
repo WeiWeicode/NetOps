@@ -109,7 +109,7 @@
     # 來源: backend/src/modules/pa/importer.ts:56
     @untested @changed
     場景: 分析佇列已滿
-      假如 佇列中已有 5,000 個檔案
+      假如 TRAFFIC 或其他類型 log 的佇列中已有 5,000 個檔案(兩種佇列各自計算)
       當 再分析更多檔案
       那麼 回應 409,code 為 "NETOPS_IMPORT_QUEUE_FULL"
 

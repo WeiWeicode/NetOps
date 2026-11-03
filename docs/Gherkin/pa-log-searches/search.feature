@@ -183,7 +183,7 @@
       那麼 新的工作 status 為 "queued",前一個完成後才開始
 
     # 來源: backend/src/modules/pa/log-routes.ts:95
-    @auto @changed
+    @untested @changed
     場景: 每人保留最近 5 次查詢結果
       假如 S112009 已有 5 個已完成的明細查詢
       當 再送出一個並完成

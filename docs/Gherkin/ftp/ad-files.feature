@@ -92,7 +92,7 @@
       而且 匯入的事件與舊版 parseAdCsv + 去除重複 + 排序的結果相同(UTF-16 / UTF-8、跨行訊息、新舊檔名重複)
 
     # 來源: backend/src/modules/ftp/ad-routes.ts:131
-    @auto
+    @untested
     場景: 正在同步
       假如 AD 正在同步
       當 呼叫 POST /api/netops/ftp/ad/syncs

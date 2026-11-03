@@ -95,7 +95,7 @@
       而且 內容以 UTF-8 BOM 開頭,欄名為「時間、記錄、事件 ID、等級、來源、主機、帳號、執行者、對象、群組、來源 IP、工作站、原因、訊息」
 
     # 來源: backend/src/modules/ad/routes.ts:180
-    @auto
+    @untested
     場景: 超過 20000 筆
       當 條件符合的事件超過上限
       那麼 回應 422 NETOPS_EXPORT_TOO_LARGE

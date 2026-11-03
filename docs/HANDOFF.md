@@ -9,8 +9,8 @@
 ## 下一步
 
 1. 確認 GitLab 已保護 `develop`(只有 Maintainer 能合併、不能直接推送);現有 Token 沒有 Protected Branch 讀取權限,要在 GitLab 畫面確認。
-2. B1 後端骨架 MR 審查中(`feature/netops-b1`);**合併前**在主機 2 重新執行 `sudo sh deploy/host2-set-secrets.sh`(補 FTP 帳號、隱藏輸入密碼、建立 `/srv/giga-netops/test`),否則部署會因缺少設定啟動失敗。
-3. B2 依 `docs/API.md` 分批:`feature/netops-b2-pa` → `-ad` → `-kb` → `-logs`(堆疊 MR,狀態見 IMPL-PLAN B2)。
+2. B1、B2 前兩批已合併(!7、!8、!9),但測試區部署失敗:要先在主機 2 執行新版 `sudo sh deploy/host2-set-secrets.sh`(補 FTP 帳號、隱藏輸入密碼、建立 `/srv/giga-netops/test`),再重跑 develop 的 deploy-api-test。
+3. B2 後兩批審查中:知識庫(!10)、PA Log 明細(`feature/netops-b2-logs`,依賴 !10)。合併後發佈路由草稿、指派權限,並在容器內驗 FTP(IMPL-PLAN D1)。
 
 ## 已知狀況
 

@@ -1,6 +1,6 @@
 # 專案地圖 — NetOps
 
-> **最後更新:2026-11-03**(B2-kb:知識庫;舊版程式未改動)。
+> **最後更新:2026-11-03**(B2-logs:PA Log 明細查詢與匯出;B2 後端模組搬移完成;舊版程式未改動)。
 > 開發新功能後,在同一個變更內更新本文件(`AGENT.md` §9)。只寫結構與職責,細節連到 `docs/`。
 
 資訊網通管理系統:PA-560 防火牆 log、AD 事件與網通知識庫;AI 問答只留在舊版(ARCHITECTURE D17)。目標是接入 GigaNexus Gateway(`/netops/`、`netops-api` :51292),目前部署於 IIS `/NetOps`。
@@ -41,7 +41,8 @@ NetOps/
 │  │  ├─ shared/            時間轉換(核心本地時間 ↔ ISO 8601)、共用 schema、匯出 CSV
 │  │  └─ modules/
 │  │     ├─ ping/routes.ts  GET /v1/ping(對外 /api/netops/ping,netops.ping.read)
-│  │     ├─ pa/             core/palog.js(舊版逐字)、core/flows.js、importer.ts(TRAFFIC 匯入)、routes.ts(總覽)
+│  │     ├─ pa/             core/palog.js(舊版逐字)、core/flows.js、core/scan.js、importer.ts(TRAFFIC 匯入)、routes.ts(總覽)、
+│  │     │                  log-routes.ts(明細查詢與匯出,工作模式)
 │  │     ├─ pa-events/      core/paevents.js(舊版逐字)、importer.ts(其他類型 log 匯入)、routes.ts(安全事件總覽)
 │  │     ├─ ad/             core/adlog.js(舊版逐字)、importer.ts(AD 匯入)、routes.ts(總覽、明細、匯出)
 │  │     ├─ kb/             core/notes.js(舊版 kb.js 的格式與匯整)、service.ts、routes.ts

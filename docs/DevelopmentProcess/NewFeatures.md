@@ -8,6 +8,12 @@
 - 檔案:`frontend/`、`.gitlab-ci.yml`、`docs/`
 - 驗證:見 `FrontendCorrection.md` 同日紀錄
 
+## 2026-11-03 B1 API 介面定稿
+- 工作項目:B1
+- 內容:新增 `docs/API.md`,寫完全部模組(PA、安全事件、FTP、AD、知識庫)的新路徑、權限、請求與回應格式,給 F1 前端串接。盤點舊版 41 支 API:搬移 27、移除 14(登入、跳轉、配色、AI、外部 IP 學習、向量同步)。Log 明細查詢與 AD 的 FTP 檔案清單改工作模式(D6);FTP 同步與 AD 匯入改為背景執行、回 202;時間一律 ISO 8601 含時區;清單改 `page` / `pageSize` 分頁。權限沿用 ARCHITECTURE §5,沒有新增代碼。
+- 檔案:`docs/API.md`、`docs/ARCHITECTURE.md`、`docs/IMPL-PLAN.md`、`docs/HANDOFF.md`、`docs/PROJECT-MAP.md`
+- 驗證:對照 `server/index.js`、`server/routes/*.js` 逐支盤點
+
 ## 2026-11-03 B0 測試區驗證完成
 - 工作項目:B0
 - 內容:NetOps !4 合併後在測試區驗證 B0 四項完成條件全部通過,B0 改為完成。`netops.ping.read` 指派給 `it-admin`(先誤派到沒有成員的 `gw-it-admin`)。

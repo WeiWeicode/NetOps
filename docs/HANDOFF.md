@@ -11,7 +11,8 @@
 ## 下一步
 
 1. 確認 GitLab 已保護 `develop`(只有 Maintainer 能合併、不能直接推送);現有 Token 沒有 Protected Branch 讀取權限,要在 GitLab 畫面確認。
-2. 做 B1 後端骨架(IMPL-PLAN B1)。
+2. B1 後端骨架 MR 審查中(`feature/netops-b1`);**合併前**在主機 2 重新執行 `sudo sh deploy/host2-set-secrets.sh`(補 FTP 帳號、隱藏輸入密碼、建立 `/srv/giga-netops/test`),否則部署會因缺少設定啟動失敗。
+3. B2 依 `docs/API.md` 分批:`feature/netops-b2-pa` → `-ad` → `-kb` → `-logs`(堆疊 MR,狀態見 IMPL-PLAN B2)。
 
 ## 已知狀況
 
@@ -22,3 +23,4 @@
 - 舊版關閉知識庫寫入的做法還沒確認(IMPL-PLAN D2)。
 - `scripts/dc/ADLog-FtpBackup-3.ps1` 寫死 FTP 帳號名稱,密碼走憑證檔,版控內沒有密碼。
 - 資料庫是後續階段,不在這次範圍(ARCHITECTURE §4.2)。
+- 舊版 `palog.js` 的 `readLog` 讀 `.gz` 時,若來源串流比解壓先關閉會提早結束(測試以 `Readable.from` 一次送完整個檔案時重現,讀到 0 筆);FTP 串流分段送時正常。核心照 D4 原封不動搬移,沒有修改;FTP 上目前是否有 `.gz` 檔、實際是否受影響未確認。

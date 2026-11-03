@@ -1,7 +1,7 @@
 # NetOps API
 
 > `netops-api` 的對外介面:前端(F1)照本文件串接。決策見 [ARCHITECTURE.md](ARCHITECTURE.md),工作項目見 [IMPL-PLAN.md](IMPL-PLAN.md)。
-> **狀態:B1 定稿;B2-pa 已實作 §4.1、§5.1;B2-ad 已實作 §4.2、§5.2、§6**。各模組在 B2 分批實作,「批次」欄是預定交付的 MR;實作與本文件不同時,以 MR 描述的「API 變更」為準並同步更新本文件。
+> **狀態:B1 定稿;B2-pa 已實作 §4.1、§5.1;B2-ad 已實作 §4.2、§5.2、§6;B2-kb 已實作 §7**。各模組在 B2 分批實作,「批次」欄是預定交付的 MR;實作與本文件不同時,以 MR 描述的「API 變更」為準並同步更新本文件。
 > 欄位的完整定義以服務的 `/openapi.json` 為準(上架時匯入 Gateway);本文件寫路徑、權限、請求與回應格式。
 
 ---
@@ -403,7 +403,8 @@ AI 相關(語意搜尋、向量同步、外部 IP 自動學習)不搬移(ARCHITE
   "compilation": { "count": 120, "updated": "2026-11-02T10:30:00+08:00", "chars": 18000 }    // 匯整檔資訊
 }
 
-// POST /kb/notes、PUT /kb/notes/{id} 請求(content 必填,上限 20,000 字;ips 最多 30 個、tags 最多 10 個)
+// POST /kb/notes、PUT /kb/notes/{id} 請求(content 必填,上限 20,000 字;ips 最多 30 個、tags 最多 10 個;
+// ips、tags 可以是陣列或逗號 / 頓號分隔的文字,同舊版;ips 只保留 IP / 網段格式)
 { "title": "…", "ips": ["10.10.130.0/24"], "tags": ["FTP"], "content": "…", "source": "" }
 // 回應:筆記本身(POST 回 201)
 ```
@@ -425,6 +426,7 @@ AI 相關(語意搜尋、向量同步、外部 IP 自動學習)不搬移(ARCHITE
 | 404 | `NETOPS_JOB_NOT_FOUND` | 工作不存在、不是本人的、已逾期或服務重新啟動後失效 |
 | 404 | `NETOPS_PA_NO_DATA` | 期間內沒有已分析的 PA log 檔 |
 | 404 | `NETOPS_KB_NOTE_NOT_FOUND` | 找不到筆記 |
+| 403 | `NETOPS_KB_AUTHOR_UNKNOWN` | 身分沒有工號與姓名,不能編輯筆記(正常經 Gateway 不會發生) |
 | 409 | `NETOPS_JOB_LIMIT_EXCEEDED` | 進行中的工作超過上限(每人或全系統) |
 | 409 | `NETOPS_JOB_NOT_DONE` | 工作尚未完成(或失敗、已取消),沒有結果可分頁或匯出 |
 | 409 | `NETOPS_AD_SYNC_BUSY` | AD 正在同步 |

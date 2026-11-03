@@ -35,6 +35,8 @@ export const PERMISSIONS = [
   { code: 'netops.ftp.write', name: 'NetOps FTP Log 檔案:同步與管理' },
   { code: 'netops.ad.read', name: 'NetOps AD 事件:查詢' },
   { code: 'netops.ad-log.read', name: 'NetOps AD Log 明細:查詢' },
+  { code: 'netops.kb.read', name: 'NetOps 知識庫:查詢' },
+  { code: 'netops.kb.write', name: 'NetOps 知識庫:編輯' },
 ];
 
 /** project:開發專案(package.json gateway.project,由 SDK loadGatewayEnv 讀取) */

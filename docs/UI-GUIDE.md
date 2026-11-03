@@ -1,7 +1,7 @@
 # NetOps — 前端 UI 規範
 
 > **UI 全域套用**:頁面只組合 `src/ui/` 的全域元件與設計 token,不在頁面裡各自刻按鈕、卡片、表格、表單、對話框的樣式。
-> 元件、版面與規則沿用 `../giga-Portal/docs/UI-GUIDE.md`、`../GigaItApp/docs/UI-GUIDE.md`,本文件只寫**差異**。決策見 [ARCHITECTURE.md](ARCHITECTURE.md) D5。**狀態:規劃中,F1 實作**;目前畫面仍是舊版 Element Plus。
+> 元件、版面與規則沿用 `../giga-Portal/docs/UI-GUIDE.md`、`../GigaItApp/docs/UI-GUIDE.md`,本文件只寫**差異**。決策見 [ARCHITECTURE.md](ARCHITECTURE.md) D5。**狀態:F1 實作中**(框架完成,頁面逐頁改寫);舊版 `src/` 仍是 Element Plus,切換前保留(D12)。
 
 ---
 
@@ -20,7 +20,8 @@
 | --- | --- | --- |
 | `--c-primary` | `#0369a1` | `#38bdf8` |
 
-- 其餘色階(`--grad-*`、`--bg`、`--text*`、光暈、圖表色)在 F1 依主色調整,語意色 `info / success / warning / danger` 沿用入口網。
+- 其餘色階(`--grad-*`、`--bg`、`--text*`、光暈、圖表色)在 F1 依主色調整,語意色 `info / success / warning / danger` 沿用入口網。F1 實際值:明亮主色文字 `--c-primary-text` `#075985`、底色 `--bg` `#f2f7fb`;黑暗底色 `#07111a`、主色按鈕文字 `--on-primary` `#03121c`;圖表第 4 色改用綠色(與主色區隔)。
+- 四種組合實測(2026-11-03):`--text-3` 對底色最低 5.05:1,主要按鈕文字最低 5.36:1。
 - 玻璃 / 扁平 × 明亮 / 黑暗四種組合的文字對比至少 4.5:1(大字 3:1),以瀏覽器實際檢查。
 - 偏好記在瀏覽器:`netops.theme`、`netops.style`。
 

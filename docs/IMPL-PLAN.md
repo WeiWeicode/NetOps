@@ -6,9 +6,9 @@
 | --- | --- | --- |
 | D0 | 文件與登記 | 完成 |
 | B0 | 最小骨架部署 | 完成 |
-| B1 | 後端骨架 | 進行中(MR 審查) |
+| B1 | 後端骨架 | 完成 |
 | B2 | 模組搬移 | 進行中 |
-| F1 | 前端框架與畫面改寫 | 未開始 |
+| F1 | 前端框架與畫面改寫 | 進行中(框架) |
 | D1 | 測試區部署 | 未開始 |
 | D2 | 驗收與切換 | 未開始 |
 | 後續 | 服務寫入資料庫 | 未排程(ARCHITECTURE §4.2) |
@@ -52,7 +52,7 @@ D13:骨架直接留用;AI 不在這次範圍,不做串流驗證(D7、D17)。
 
 **完成條件**:`npm test` 通過;本機無 Token 回 401;OpenAPI 必填欄位檢查通過。
 
-**狀態:MR 審查中(`feature/netops-b1`)**。盤點舊版 41 支 API:搬移 27、移除 14([API.md](API.md) §9)。`docs/API.md` 寫完全部模組的路徑與格式(B2 各批照此實作);設定新增資料目錄 `NETOPS_DATA_DIR` 與 FTP(`FTP_PASSWORD_FILE`),test / prod 缺少時啟動失敗;`/readyz` 檢查資料目錄;`infra/jobs` 工作只有本人可查、有上限與保留時間。測試區需先執行 `deploy/host2-set-secrets.sh` 補 FTP 密碼與資料目錄才能部署。
+**狀態:完成(2026-11-03 合併 !7,測試區 #640 部署)**。盤點舊版 41 支 API:搬移 27、移除 14([API.md](API.md) §9)。`docs/API.md` 寫完全部模組的路徑與格式(B2 各批照此實作);設定新增資料目錄 `NETOPS_DATA_DIR` 與 FTP(`FTP_PASSWORD_FILE`),test / prod 缺少時啟動失敗;`/readyz` 檢查資料目錄;`infra/jobs` 工作只有本人可查、有上限與保留時間。測試區需先執行 `deploy/host2-set-secrets.sh` 補 FTP 密碼與資料目錄才能部署。
 
 ## B2 模組搬移
 
@@ -71,7 +71,7 @@ D13:骨架直接留用;AI 不在這次範圍,不做串流驗證(D7、D17)。
 | --- | --- | --- |
 | `feature/netops-b2-pa` | `infra/ftp`(唯讀、連線上限)、PA TRAFFIC 與其他類型 log 的匯入、流量總覽、FTP Log 檔案(PA) | 已合併(!8) |
 | `feature/netops-b2-ad` | 安全事件總覽、AD 匯入與總覽、AD 明細與匯出、FTP Log 檔案(AD) | 已合併(!9) |
-| `feature/netops-b2-kb` | 知識庫 | MR 審查中 |
+| `feature/netops-b2-kb` | 知識庫 | MR 審查中(!10) |
 | `feature/netops-b2-logs` | PA Log 明細查詢與匯出(工作模式) | 未開始 |
 
 其他類型 log 的**匯入**放在 b2-pa(FTP Log 檔案頁同時列 TRAFFIC 與其他類型目錄),總覽 API 在 b2-ad。
@@ -90,6 +90,8 @@ D13:骨架直接留用;AI 不在這次範圍,不做串流驗證(D7、D17)。
 - 頁面依權限顯示,下載帶 CSRF、不再帶 Bearer。
 - 無權限導回 `/?denied=netops`。
 - Veeam、舊版 AI 問答改一般連結(D11、D18)。
+
+**狀態:進行中**。分批:① 框架 `feature/netops-f1-frame`(`frontend/` 空頁、權限、選單、連結、`/api/netops/ping`,本機假 Gateway `MOCK=admin|viewer|noapp`);② 畫面逐頁;③ 收尾。
 
 **完成條件**:`netops-admin`、`netops-viewer` 與無權限帳號各自看到正確畫面;舊版功能逐頁對照無遺漏;四種風格組合 × 1440px / 375px 都用瀏覽器看過;`vue-tsc` 通過;不再相依 `element-plus`、`tailwindcss`;無寫死 `/` 開頭的資源路徑。
 

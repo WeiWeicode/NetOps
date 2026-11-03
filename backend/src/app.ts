@@ -20,6 +20,8 @@ import { createAdImporter } from './modules/ad/importer.js';
 import adRoutes from './modules/ad/routes.js';
 import adFtpRoutes from './modules/ftp/ad-routes.js';
 import ftpRoutes from './modules/ftp/routes.js';
+import kbRoutes from './modules/kb/routes.js';
+import { createKbService } from './modules/kb/service.js';
 import { createEventImporter } from './modules/pa-events/importer.js';
 import paEventRoutes from './modules/pa-events/routes.js';
 import { createTrafficImporter } from './modules/pa/importer.js';
@@ -129,6 +131,7 @@ export async function buildApp(config: Config, deps: { ftp?: Ftp } = {}): Promis
   await app.register(paEventRoutes, { events });
   await app.register(adRoutes, { ad });
   await app.register(adFtpRoutes, { ad });
+  await app.register(kbRoutes, { kb: createKbService(app.store.kb, app.log) });
   await app.register(ftpRoutes, {
     ftp,
     traffic,

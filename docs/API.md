@@ -191,6 +191,7 @@ PA 匯入在背景佇列執行;同步、分析只是送進佇列,畫面輪詢狀
 - `action`:`allow`、`block`(非 allow)、或 PA 的動作原文。
 - `limit` 預設與上限都是設定 `PA_SEARCH_LIMIT`(預設 2,000,可設 1–10,000;結果保留在記憶體 30 分鐘,調高前先估記憶體)。
 - 期間內沒有已分析的檔案時,建立工作直接回 404 `NETOPS_PA_NO_DATA`(請先到 FTP Log 檔案同步)。
+- 查詢與匯入共用 FTP 連線名額(測試區 1 條):匯入進行中時,查詢會排隊等候(工作狀態維持 `running`、`progress.filesScanned` 不動)。
 
 ```jsonc
 // 完成時的 result
@@ -250,13 +251,13 @@ FTP 唯讀(AGENT.md §7.4):「刪除分析結果」只刪本系統的摘要,不�
 
 **`POST /ftp/pa/syncs`**(無 body):在背景列出 TRAFFIC 與各類型目錄,把新的、已變更、上次失敗的檔案加入分析佇列;回 **202** `{ traffic: ImportStatus, events: ImportStatus }`。結果看 `GET /ftp/pa/status` 的 `lastSyncAt`、`lastSyncError` 與佇列。
 
-**`POST /ftp/pa/analyses`**:分析選取的檔案(重新分析也用這個)。
+**`POST /ftp/pa/analyses`**:分析選取的檔案(重新分析也用這個)。只接受 TRAFFIC 目錄(符合檔名規則)與各類型目錄下的 log 檔;大小與修改時間以 FTP 上的實際值為準(舊版由畫面傳入,`size`、`modified` 仍接受但不使用)。不在 FTP 上、不是 log 或不在這些目錄的檔案算在 `skipped`。佇列上限 5,000 個檔案,超過回 409 `NETOPS_IMPORT_QUEUE_FULL`。
 
 ```jsonc
 // 請求(1–500 筆)
-{ "items": [ { "path": "/PA-560_traffic_….csv", "size": 123456, "modified": "2026-11-03T00:05:00.000Z" } ] }
+{ "items": [ { "path": "/PA-560_traffic_….csv" } ] }
 // 回應
-{ "added": 1 }
+{ "added": 1, "skipped": 0 }
 ```
 
 **`DELETE /ftp/pa/analyses`**:取消佇列並中斷分析中的檔案;回 `{ "cancelled": 3 }`(重複呼叫回 0)。
@@ -423,9 +424,11 @@ AI 相關(語意搜尋、向量同步、外部 IP 自動學習)不搬移(ARCHITE
 | 409 | `NETOPS_JOB_LIMIT_EXCEEDED` | 進行中的工作超過上限(每人或全系統) |
 | 409 | `NETOPS_JOB_NOT_DONE` | 工作尚未完成(或失敗、已取消),沒有結果可分頁或匯出 |
 | 409 | `NETOPS_AD_SYNC_BUSY` | AD 正在同步 |
+| 409 | `NETOPS_IMPORT_QUEUE_FULL` | 分析佇列已滿 |
 | 422 | `NETOPS_EXPORT_TOO_LARGE` | 匯出筆數超過上限 |
 | 502 | `NETOPS_FTP_UNAVAILABLE` | FTP 連線或讀取失敗(訊息含 FTP 回應,不含帳密) |
 | 503 | `NETOPS_FTP_NOT_CONFIGURED` | 未設定 FTP(只會在 dev) |
+| 503 | `NETOPS_FTP_BUSY` | FTP 連線名額都在使用中(匯入或查詢進行中,測試區只有 1 條),等候 25 秒仍拿不到;請稍後再試 |
 | 503 | `NETOPS_NOT_READY` | 資料目錄無法讀寫(`/readyz`) |
 | 500 | `NETOPS_DATA_CORRUPT` | 本系統的資料檔損壞或無法讀取(不當成沒有資料;請通知系統負責人) |
 | 503 | `NETOPS_JOB_ABORTED` | 服務正在關閉,不接受新工作 |

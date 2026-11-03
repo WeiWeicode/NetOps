@@ -251,6 +251,37 @@ describe('FTP Log 檔案 API(PA)', () => {
     assert.equal(o.missing, 1);
   });
 
+  it('標頭不對的檔案:標成 error 並中斷 FTP 傳輸,不影響後面的檔案', async () => {
+    const bad = '/PA-560_traffic_bad_header.csv';
+    const good = '/PA-560_traffic_2026_11_06_last_calendar_day_0.csv';
+    ftp.put(bad, 'hello,world\n' + 'x,y\n'.repeat(200000));
+    ftp.put(good, trafficCsv('2026/11/05', 200, 11));
+    const before = ftp.aborted;
+    const res = await t.call({ method: 'POST', url: '/v1/ftp/pa/analyses', payload: { items: [{ path: bad }, { path: good }] } });
+    assert.deepEqual(res.json(), { added: 2, skipped: 0 });
+    await waitFor(async () => !(await t.call({ url: '/v1/ftp/pa/status' })).json().traffic.busy);
+    assert.equal(index()[bad].status, 'error');
+    assert.match(index()[bad].error, /不是 PA 防火牆匯出的 CSV/);
+    assert.ok(ftp.aborted > before, '讀取失敗要中斷傳輸');
+    assert.equal(index()[good].status, 'done', '連線名額已釋放,下一個檔案照常分析');
+  });
+
+  it('只接受 TRAFFIC 與各類型目錄下的 log 檔;大小與時間以 FTP 為準,忽略呼叫端的值', async () => {
+    ftp.put('/other/PA-560_traffic_x.csv', trafficCsv('2026/11/05', 10, 12));
+    ftp.put('/notes.docx', 'x');
+    const res = await t.call({
+      method: 'POST',
+      url: '/v1/ftp/pa/analyses',
+      payload: { items: [{ path: '/other/PA-560_traffic_x.csv' }, { path: '/notes.docx' }, { path: '/not-on-ftp.csv' }, { path: TRAFFIC[0]!, size: 0, modified: 'garbage' }] },
+    });
+    assert.equal(res.statusCode, 200, res.body);
+    assert.deepEqual(res.json(), { added: 1, skipped: 3 });
+    await waitFor(async () => !(await t.call({ url: '/v1/ftp/pa/status' })).json().traffic.busy);
+    assert.equal(index()[TRAFFIC[0]!].modified, MODIFIED);
+    assert.equal(index()[TRAFFIC[0]!].size, ftp.files.get(TRAFFIC[0]!)!.data.length);
+    assert.equal(index()['/other/PA-560_traffic_x.csv'], undefined);
+  });
+
   it('取消:重複呼叫回 0', async () => {
     assert.deepEqual((await t.call({ method: 'DELETE', url: '/v1/ftp/pa/analyses' })).json(), { cancelled: 0 });
   });

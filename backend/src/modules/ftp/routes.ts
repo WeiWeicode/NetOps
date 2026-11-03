@@ -5,7 +5,7 @@
  */
 import path from 'node:path';
 import type { FastifyPluginAsync } from 'fastify';
-import type { Ftp } from '../../infra/ftp/index.js';
+import type { Ftp, FtpEntry } from '../../infra/ftp/index.js';
 import type { EventImporter } from '../pa-events/importer.js';
 import type { RemoteFile, TrafficImporter } from '../pa/importer.js';
 import { ACCEPTED, looseObject } from '../../shared/schemas.js';
@@ -31,7 +31,7 @@ const ftpRoutes: FastifyPluginAsync<{ ftp: Ftp; traffic: TrafficImporter; events
         description: '列出 FTP 目錄(預設 TRAFFIC 目錄)的資料夾與檔案,以及每個檔案的分析狀態(new / changed / done / error / queued / running)。不可超出 FTP 根目錄;FTP 只讀取。',
         tags: ['FTP Log 檔案'],
         'x-permission': 'netops.ftp.read',
-        'x-timeout-ms': 45000,
+        'x-timeout-ms': 60000,
         'x-gherkin': [
           '場景: 瀏覽 TRAFFIC 目錄',
           '  當 呼叫 GET /api/netops/ftp/pa/files',
@@ -98,13 +98,13 @@ const ftpRoutes: FastifyPluginAsync<{ ftp: Ftp; traffic: TrafficImporter; events
     },
   );
 
-  app.post<{ Body: { items: { path: string; size?: number; modified?: string | null }[] } }>(
+  app.post<{ Body: { items: { path: string }[] } }>(
     '/v1/ftp/pa/analyses',
     {
       schema: {
         operationId: 'netops.ftp.pa-analyze',
         summary: '分析選取的 PA log 檔',
-        description: '把選取的 FTP 檔案加入分析佇列(重新分析也用這個);已在佇列或分析中的會略過。依路徑交給 TRAFFIC 或其他類型的匯入程式。',
+        description: '把選取的 FTP 檔案加入分析佇列(重新分析也用這個);已在佇列或分析中的會略過。只接受 TRAFFIC 目錄與各類型目錄下的 log 檔,大小與修改時間以 FTP 上的實際值為準;不在 FTP 上或不是 log 的檔案算在 skipped。',
         tags: ['FTP Log 檔案'],
         'x-permission': 'netops.ftp.write',
         'x-gherkin': [
@@ -130,21 +130,32 @@ const ftpRoutes: FastifyPluginAsync<{ ftp: Ftp; traffic: TrafficImporter; events
                 type: 'object',
                 required: ['path'],
                 additionalProperties: false,
-                properties: { path: { type: 'string', minLength: 1, maxLength: 1024 }, size: { type: 'number', minimum: 0 }, modified: { type: ['string', 'null'], maxLength: 40 } },
+                // size / modified 為舊版欄位,接受但不使用(以 FTP 上的實際值為準)
+                properties: { path: { type: 'string', minLength: 1, maxLength: 1024 }, size: { type: 'number' }, modified: { type: ['string', 'null'], maxLength: 40 } },
               },
             },
           },
         },
-        response: { 200: { type: 'object', properties: { added: { type: 'integer' } } } },
+        response: { 200: { type: 'object', properties: { added: { type: 'integer' }, skipped: { type: 'integer' } } } },
       },
     },
     async (req) => {
-      const list = req.body.items.map((it) => {
-        const p = ftp.safePath(it.path);
-        return { path: p, name: path.posix.basename(p), size: Number(it.size) || 0, modified: it.modified || null };
-      });
-      const ev = list.filter((f) => events.isEventPath(f.path)).map((f) => ({ ...f, type: events.eventTypeOfPath(f.path) }));
-      return { added: traffic.enqueue(list.filter((f) => !events.isEventPath(f.path))) + events.enqueue(ev) };
+      const paths = [...new Set(req.body.items.map((it) => ftp.safePath(it.path)))];
+      // 大小與修改時間取 FTP 上的實際值(傳輸不完整的檢查靠 size,不信任呼叫端)
+      const onFtp = new Map<string, FtpEntry>();
+      for (const dir of new Set(paths.map((p) => path.posix.dirname(p)))) for (const f of await ftp.listDir(dir)) if (!f.dir) onFtp.set(f.path, f);
+      const trafficItems = [];
+      const eventItems = [];
+      for (const p of paths) {
+        const f = onFtp.get(p);
+        if (!f) continue;
+        const item = { path: p, name: f.name, size: f.size, modified: f.modified };
+        const type = events.eventLogType(p);
+        if (type) eventItems.push({ ...item, type });
+        else if (traffic.isTrafficLog(p)) trafficItems.push(item);
+      }
+      const added = traffic.enqueue(trafficItems) + events.enqueue(eventItems);
+      return { added, skipped: paths.length - trafficItems.length - eventItems.length };
     },
   );
 

@@ -116,8 +116,7 @@ export async function buildApp(config: Config, deps: { ftp?: Ftp } = {}): Promis
     events.start();
   });
   app.addHook('onClose', async () => {
-    traffic.stop();
-    events.stop();
+    await Promise.all([traffic.stop(), events.stop()]);
   });
   await app.register(paRoutes, { traffic });
   await app.register(ftpRoutes, {

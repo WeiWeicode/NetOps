@@ -6,10 +6,10 @@
  */
 import path from 'node:path';
 import type { EventType, FtpConfig } from '../../config.js';
-import type { Ftp } from '../../infra/ftp/index.js';
+import { cancelledError, type Ftp, type FtpStream } from '../../infra/ftp/index.js';
 import type { PaStore } from '../../infra/store/index.js';
 import { readLog } from '../pa/core/palog.js';
-import { modKey, sumName, type FileListState, type FileState, type Log, type QueueItem, type RemoteFile } from '../pa/importer.js';
+import { errorText, MAX_QUEUE, modKey, queueFull, sumName, type FileListState, type FileState, type Log, type QueueItem, type RemoteFile } from '../pa/importer.js';
 import { createEventSummary, EVENT_TYPES, EVENT_VERSION, mergeEventSummaries } from './core/paevents.js';
 
 interface EventFileState extends FileState {
@@ -24,8 +24,7 @@ interface Running extends EventItem {
   read: number;
   rows: number;
   startedAt: number;
-  cancelled?: boolean;
-  abort: (() => void) | null;
+  controller: AbortController;
 }
 
 const LOG_RE = /\.(csv|gz)$/i;
@@ -51,6 +50,7 @@ export function createEventImporter({ ftp, store, ftpConfig, log }: { ftp: Ftp; 
 
   const job = {
     queue: [] as EventItem[],
+    queued: new Set<string>(),
     running: null as Running | null,
     total: 0,
     done: 0,
@@ -83,15 +83,13 @@ export function createEventImporter({ ftp, store, ftpConfig, log }: { ftp: Ftp; 
 
   async function analyze(item: EventItem) {
     const def = TYPE_DEFS[item.type]!;
-    const run: Running = { ...item, read: 0, rows: 0, startedAt: Date.now(), abort: null };
+    const controller = new AbortController();
+    const run: Running = { ...item, read: 0, rows: 0, startedAt: Date.now(), controller };
     job.running = run;
+    let opened: FtpStream | null = null;
     try {
-      const { stream, done, abort } = await ftp.openStream(item.path);
-      run.abort = () => {
-        run.cancelled = true;
-        abort();
-      };
-      if (run.cancelled) abort();
+      opened = await ftp.openStream(item.path, { signal: controller.signal });
+      const { stream, done } = opened;
       stream.on('data', (chunk: Buffer) => (run.read += chunk.length));
       const sum = createEventSummary(item.type);
       const { bad } = await readLog(
@@ -104,7 +102,7 @@ export function createEventImporter({ ftp, store, ftpConfig, log }: { ftp: Ftp; 
         { columns: def.columns as null, numeric: def.numeric as Set<string> | undefined },
       );
       await done;
-      if (run.cancelled) throw Object.assign(new Error('已取消'), { cancelled: true });
+      if (controller.signal.aborted) throw cancelledError();
       if (item.size && run.read < item.size) throw new Error(`FTP 傳輸不完整(${run.read} / ${item.size} bytes)`);
       const r = sum.result() as { rows: number; lines: number; day: string; timeMin: string; timeMax: string; aggOverflow: boolean };
       const result = { file: item.path, name: item.name, size: item.size, modified: item.modified, analyzedAt: new Date().toISOString(), bad, ...r };
@@ -131,10 +129,11 @@ export function createEventImporter({ ftp, store, ftpConfig, log }: { ftp: Ftp; 
       };
       job.done++;
     } catch (err) {
-      if ((err as { cancelled?: boolean }).cancelled || run.cancelled) return;
-      const message = (err as Error).message;
-      log.error({ type: item.type, file: item.path, err: message }, `[PA ${def.label}] 分析失敗`);
-      index.files[item.path] = { ...(index.files[item.path] ?? {}), type: item.type, name: item.name, size: item.size, modified: modKey(item.modified), status: 'error', error: message, analyzedAt: new Date().toISOString() };
+      // 讀取失敗時中斷傳輸,釋放 FTP 連線
+      opened?.abort();
+      if (controller.signal.aborted) return;
+      log.error({ type: item.type, file: item.path, err }, `[PA ${def.label}] 分析失敗`);
+      index.files[item.path] = { ...(index.files[item.path] ?? {}), type: item.type, name: item.name, size: item.size, modified: modKey(item.modified), status: 'error', error: errorText(err), analyzedAt: new Date().toISOString() };
       job.failed++;
     } finally {
       job.running = null;
@@ -142,39 +141,43 @@ export function createEventImporter({ ftp, store, ftpConfig, log }: { ftp: Ftp; 
     }
   }
 
-  let pumping = false;
-  async function pump() {
+  let pumping: Promise<void> | null = null;
+  function pump() {
     if (pumping) return;
-    pumping = true;
-    try {
-      while (job.queue.length) await analyze(job.queue.shift()!);
-    } finally {
-      pumping = false;
-    }
-    if (job.startedAt && !job.finishedAt) job.finishedAt = new Date().toISOString();
+    pumping = (async () => {
+      while (job.queue.length) {
+        const item = job.queue.shift()!;
+        job.queued.delete(item.path);
+        await analyze(item).catch((err) => log.error({ file: item.path, err }, '[PA 其他 log] 非預期錯誤'));
+      }
+      if (job.startedAt && !job.finishedAt) job.finishedAt = new Date().toISOString();
+    })().finally(() => {
+      pumping = null;
+    });
   }
 
   /** 加入佇列 */
   function enqueue(items: EventItem[]) {
+    const fresh = items.filter((it) => job.running?.path !== it.path && !job.queued.has(it.path));
+    if (job.queue.length + fresh.length > MAX_QUEUE) throw queueFull();
     if (!job.running && !job.queue.length) Object.assign(job, { total: 0, done: 0, failed: 0, startedAt: new Date().toISOString(), finishedAt: null });
     let added = 0;
-    for (const it of items) {
-      if (job.running?.path === it.path || job.queue.some((q) => q.path === it.path)) continue;
+    for (const it of fresh) {
+      if (job.queued.has(it.path)) continue;
       job.queue.push(it);
+      job.queued.add(it.path);
       added++;
     }
     job.total += added;
-    void pump();
+    pump();
     return added;
   }
 
   function cancel() {
     const n = job.queue.length + (job.running ? 1 : 0);
     job.queue = [];
-    if (job.running) {
-      if (job.running.abort) job.running.abort();
-      else job.running.cancelled = true;
-    }
+    job.queued.clear();
+    job.running?.controller.abort();
     return n;
   }
 
@@ -189,7 +192,7 @@ export function createEventImporter({ ftp, store, ftpConfig, log }: { ftp: Ftp; 
       const st = index.files[f.path];
       let state: FileListState = 'new';
       if (job.running?.path === f.path) state = 'running';
-      else if (job.queue.some((q) => q.path === f.path)) state = 'queued';
+      else if (job.queued.has(f.path)) state = 'queued';
       else if (st) state = st.status === 'error' ? 'error' : st.size === f.size && st.modified === modKey(f.modified) && st.v === EVENT_VERSION ? 'done' : 'changed';
       return {
         ...f,
@@ -229,7 +232,7 @@ export function createEventImporter({ ftp, store, ftpConfig, log }: { ftp: Ftp; 
         found += logs.length;
         items.push(...logs.filter((f) => ['new', 'changed', 'error'].includes(f.state)).map((f) => ({ path: f.path, name: f.name, size: f.size, modified: f.modified, type: t.type })));
       } catch (err) {
-        errors.push(`${t.label}:${(err as Error).message}`);
+        errors.push(`${t.label}:${errorText(err)}`);
       }
     }
     job.lastSyncAt = new Date().toISOString();
@@ -248,10 +251,14 @@ export function createEventImporter({ ftp, store, ftpConfig, log }: { ftp: Ftp; 
     // 比 TRAFFIC 晚一點開始,避免同時開很多條 FTP 連線
     timers.push(setTimeout(tick, 60000).unref(), setInterval(tick, ftpConfig.syncMinutes * 60000).unref());
   }
-  function stop() {
+  async function stop() {
     for (const t of timers.splice(0)) clearTimeout(t);
     cancel();
+    await pumping;
   }
+
+  /** 檔案是不是某類型的 log(在該類型目錄下、副檔名 csv / gz);是的話回傳類型 */
+  const eventLogType = (p: string) => (LOG_RE.test(path.posix.basename(p)) ? typeOfDir(path.posix.dirname(p)) : '');
 
   /** 刪除摘要(之後同步會重新分析) */
   function forget(paths: string[]) {
@@ -307,5 +314,5 @@ export function createEventImporter({ ftp, store, ftpConfig, log }: { ftp: Ftp; 
     return { ...mergeEventSummaries(type, list, topN), missing: files.length - list.length };
   }
 
-  return { eventTypes, typeOfDir, status, enqueue, cancel, listRemote, sync, start, stop, forget, isEventPath, eventTypeOfPath, overview, summary };
+  return { eventTypes, typeOfDir, eventLogType, status, enqueue, cancel, listRemote, sync, start, stop, forget, isEventPath, eventTypeOfPath, overview, summary };
 }

@@ -4,7 +4,7 @@
  *   - 非 GET 自動帶 X-CSRF-Token(gn_csrf);401 先 Refresh 一次,失敗才導向入口網 /login?redirect=...
  *   - 錯誤統一為 ApiError { status, code, message, requestId, details }
  */
-import { ApiError, http as kit, useAuth, type Me, type RequestOptions } from '@giganexus/web-kit';
+import { ApiError, http as kit, readCookie, redirectToLogin, refreshSession, useAuth, type Me, type RequestOptions } from '@giganexus/web-kit';
 import { hasIcon } from '@/ui/icons';
 
 export { ApiError, loadMe, logout, useAuth } from '@giganexus/web-kit';
@@ -53,6 +53,56 @@ export const http = {
   patch: <T = unknown>(path: ApiPath, body?: unknown, opts: Opts = {}) => kit.patch<T>(withQuery(path, opts.query), body, opts),
   delete: <T = unknown>(path: ApiPath, opts: Opts = {}) => kit.delete<T>(withQuery(path, opts.query), opts),
 };
+
+/** Content-Disposition 的檔名(filename*=UTF-8''… 優先) */
+export function filenameOf(header: string | null, fallback: string): string {
+  if (!header) return fallback;
+  const star = header.match(/filename\*\s*=\s*UTF-8''([^;]+)/i);
+  if (star) {
+    try {
+      return decodeURIComponent(star[1]!.trim());
+    } catch {
+      // 編碼錯誤時改用一般檔名
+    }
+  }
+  const plain = header.match(/filename\s*=\s*"?([^";]+)"?/i);
+  return plain?.[1]?.trim() || fallback;
+}
+
+/**
+ * 下載檔案(docs/API.md §1 下載):fetch 取得 Blob 後存檔,帶 Cookie 與 CSRF、不帶 Bearer;
+ * 401 先 Refresh 一次;失敗時丟 ApiError(與 http 相同,頁面用 toast.fromError 顯示)。
+ */
+export async function download(path: ApiPath, query: Query | undefined, fallbackName: string, retried = false): Promise<void> {
+  const url = withQuery(path, query);
+  const token = readCookie('gn_csrf');
+  const res = await fetch(url, { credentials: 'same-origin', headers: { Accept: '*/*', ...(token ? { 'X-CSRF-Token': token } : {}) } });
+  if (res.status === 401 && !retried) {
+    if (await refreshSession()) return download(path, query, fallbackName, true);
+    redirectToLogin();
+    return;
+  }
+  if (!res.ok) {
+    const requestId = res.headers.get('X-Request-Id');
+    let e: { code?: string; message?: string; requestId?: string; details?: unknown } = {};
+    try {
+      e = await res.json();
+    } catch {
+      // 非 JSON 錯誤
+    }
+    throw new ApiError(res.status, e.code ?? `HTTP_${res.status}`, e.message ?? res.statusText, e.requestId ?? requestId, e.details);
+  }
+  const blob = await res.blob();
+  const href = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = href;
+  a.download = filenameOf(res.headers.get('Content-Disposition'), fallbackName);
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // 太早撤銷時部分瀏覽器(Firefox、Safari)下載會失敗
+  setTimeout(() => URL.revokeObjectURL(href), 30_000);
+}
 
 /** 錯誤訊息附 requestId 前 12 碼,方便回報時查日誌(AGENT.md §5);欄位錯誤(details)一併列出 */
 export function describeError(e: unknown): string {

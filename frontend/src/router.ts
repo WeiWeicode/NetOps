@@ -90,8 +90,16 @@ const PAGES: PageDef[] = [
   },
   {
     path: 'firewall/search',
-    meta: { permission: NETOPS.paSearch, requires: [API.paLogRead], title: 'Log 明細查詢', subtitle: 'PA-560 Log Search', icon: 'search', group: 'firewall' },
-    view: wip('依條件查詢 PA log 明細並匯出;改成「送出工作 → 查詢結果」(ARCHITECTURE D6)。'),
+    meta: {
+      permission: NETOPS.paSearch,
+      requires: [API.paLogRead],
+      title: 'Log 明細查詢',
+      subtitle: 'PA-560 Log Search',
+      icon: 'search',
+      group: 'firewall',
+      description: '從 FTP 即時讀取 TRAFFIC log 明細並匯出;送出後在背景查詢(ARCHITECTURE D6)',
+    },
+    view: page(() => import('./pages/firewall/Search.vue')),
   },
   {
     path: 'firewall/files',
@@ -121,8 +129,16 @@ const PAGES: PageDef[] = [
   },
   {
     path: 'ad/search',
-    meta: { permission: NETOPS.adSearch, requires: [API.adLogRead], title: 'Log 明細查詢', subtitle: 'AD Log Search', icon: 'search', group: 'ad' },
-    view: wip('依條件查詢 AD 事件明細。'),
+    meta: {
+      permission: NETOPS.adSearch,
+      requires: [API.adLogRead],
+      title: 'Log 明細查詢',
+      subtitle: 'AD Log Search',
+      icon: 'search',
+      group: 'ad',
+      description: '已匯入的 AD 事件(Security / System / 目錄服務 / DNS)依時間與條件查詢並匯出',
+    },
+    view: page(() => import('./pages/ad/Search.vue')),
   },
   {
     path: 'ad/files',

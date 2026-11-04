@@ -56,7 +56,14 @@ export const http = {
 
 /** Content-Disposition 的檔名(filename*=UTF-8''… 優先) */
 export function filenameOf(header: string | null, fallback: string): string {
-  if (!header) return fallback;
+  const name = rawFilename(header);
+  // 去掉路徑與 Windows 不允許的字元、控制字元
+  const safe = name?.replace(/[\\/:*?"<>|\u0000-\u001f\u007f]+/g, '_').trim();
+  return safe || fallback;
+}
+
+function rawFilename(header: string | null): string | undefined {
+  if (!header) return undefined;
   const star = header.match(/filename\*\s*=\s*UTF-8''([^;]+)/i);
   if (star) {
     try {
@@ -66,7 +73,7 @@ export function filenameOf(header: string | null, fallback: string): string {
     }
   }
   const plain = header.match(/filename\s*=\s*"?([^";]+)"?/i);
-  return plain?.[1]?.trim() || fallback;
+  return plain?.[1]?.trim();
 }
 
 /**

@@ -2,6 +2,12 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。
 
+## 2026-11-03 F1 第 2 批:知識庫
+- 工作項目:F1
+- 內容:知識庫改用新版畫面並串接後端;AI 相關功能連到舊版(D17);細節見 `FrontendCorrection.md`。
+- 檔案:`frontend/`、`docs/`
+- 驗證:見 `FrontendCorrection.md` 同日紀錄
+
 ## 2026-11-03 F1 第 2 批:Log 明細查詢
 - 工作項目:F1
 - 內容:防火牆與 AD 的 Log 明細查詢改用新版畫面;PA、AD 都串接後端;細節見 `FrontendCorrection.md`。

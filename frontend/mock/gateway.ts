@@ -10,6 +10,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Plugin } from 'vite';
 import { handleAd } from './ad.ts';
 import { handleFtp } from './ftp.ts';
+import { handleKb } from './kb.ts';
 import { handlePaLog } from './paLog.ts';
 import { handlePa } from './pa.ts';
 import { handlePaEvents } from './paEvents.ts';
@@ -80,7 +81,7 @@ async function readBody(req: IncomingMessage): Promise<unknown> {
 }
 
 /** 各模組的假 API(依序嘗試,處理了就回 true) */
-const HANDLERS: ((ctx: MockCtx) => boolean)[] = [handleFtp, handleAd, handlePaEvents, handlePa, handlePaLog];
+const HANDLERS: ((ctx: MockCtx) => boolean)[] = [handleFtp, handleAd, handlePaEvents, handlePa, handlePaLog, handleKb];
 const fail = (res: ServerResponse, status: number, code: string, message: string) => send(res, status, { code, message, requestId: rid() });
 
 export function mockGateway(role: string | undefined): Plugin | null {
@@ -118,6 +119,7 @@ export function mockGateway(role: string | undefined): Plugin | null {
           need,
           send: (status, body) => send(res, status, body),
           fail: (status, code, message) => fail(res, status, code, message),
+          user: `${m.user.employeeNo} ${m.user.name}`,
           sendFile: (contentType, filename, text) => {
             res.statusCode = 200;
             res.setHeader('X-Request-Id', rid());

@@ -3,7 +3,7 @@
 #   在主機 2 的 WSL:sudo sh host2-set-secrets.sh
 # 產生(已存在的不覆寫;要重建先刪除該檔):
 #   /srv/giganexus/netops-secrets/   gw_api_key(Gateway CLI client:create --code netops-api;自動註冊 OpenAPI 草稿用)、
-#                                    monitor_api_key(B0 為空檔:giga-observe 拓樸尚未登記 netops-api,監控停用;D1 刪除後改寫為 ingest Key)、
+#                                    monitor_api_key(giga-observe ingest Key,服務 netops-api;B0 留下的空檔會改寫為 Key;D1)、
 #                                    ftp_password(FTP 唯讀帳號密碼,執行時隱藏輸入;B1)
 #   /srv/giga-netops/test            資料目錄(uid 1000 可寫;B1)
 #   /srv/giganexus/deploy/netops.env Compose 變數(範本 test.env.example;FTP_USER 執行時輸入)
@@ -34,8 +34,23 @@ if [ ! -f "$D/gw_api_key" ]; then
   [ -s "$D/gw_api_key" ] || { echo "取不到 API Key,請檢查上方輸出" >&2; rm -f "$D/gw_api_key"; exit 1; }
 fi
 
-# ---------- giga-observe 監控 Key(B0 留空檔,監控停用;D1 登記拓樸後刪除此檔,改用 createApiKey.js 建立) ----------
-[ -f "$D/monitor_api_key" ] || : > "$D/monitor_api_key"
+# ---------- giga-observe 監控 Key(ingest,服務 netops-api;D1。比照 giga-Portal host2-set-api-secrets.sh) ----------
+# 檔案不存在或為空(B0 留下的空檔)才建立;Key 明文只寫進機密檔,不顯示。每執行一次 createApiKey 就多一把 Key,已有 Key 時不重建
+if [ ! -s "$D/monitor_api_key" ]; then
+  (cd /srv/giganexus/giga-observe && docker compose --env-file deploy/test.env exec -T gno-backend \
+    node src/scripts/createApiKey.js --service netops-api --scope ingest --label "資訊網通管理系統 netops-api") > "$TMP/obs.txt" \
+    || { echo "建立監控 Key 失敗(giga-observe gno-backend 是否運作中?);監控會停用,服務仍可啟動,稍後可重跑本腳本" >&2; : > "$TMP/obs.txt"; }
+  sed -n 's/^  key *: *//p' "$TMP/obs.txt" | tr -d '\r\n' > "$TMP/monitor_api_key"
+  if [ -s "$TMP/monitor_api_key" ]; then
+    rm -f "$D/monitor_api_key"; mv "$TMP/monitor_api_key" "$D/monitor_api_key"
+    # 立即限縮(腳本之後中斷時,容器仍讀得到)
+    chown 1000:1000 "$D/monitor_api_key"; chmod 400 "$D/monitor_api_key"; echo "已建立監控 Key(netops-api)"
+  else
+    # 不印 createApiKey 的輸出(格式改變時可能含 Key 明文),只提示去 giga-observe 查看
+    echo "取不到監控 Key:監控維持停用,服務仍可啟動;排除後重跑本腳本。若上方顯示已建立,請在 giga-observe 撤銷 netops-api 多出的 Key" >&2
+    [ -f "$D/monitor_api_key" ] || : > "$D/monitor_api_key"
+  fi
+fi
 
 # ---------- FTP 密碼(B1;舊版 IIS server/.env 的 FTP_PWD 同一個帳號,隱藏輸入,不顯示、不寫進歷史) ----------
 if [ ! -s "$D/ftp_password" ]; then

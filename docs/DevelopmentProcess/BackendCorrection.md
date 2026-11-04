@@ -2,6 +2,14 @@
 
 > `backend/`、`deploy/` 的修改;新紀錄加在最上方,格式見 `AGENT.md` §11。
 
+## 2026-11-04 D1:測試區部署前端、畫面權限、監控 Key、知識庫 NAS 備份
+- 工作項目:D1
+- 內容:① `.gitlab-ci.yml` 新增 `deploy-web-test`(建置 `spa-netops` 並發佈到 Gateway 的 `gw_www/netops`,冒煙測試確認 `/netops/` 與深層路由回本系統的 index.html)與 `rbac-test`(以測試區 Gateway 映像套用 `deploy/gateway-rbac.yaml`),做法同 GigaItApp、giga-Portal。② `deploy/gateway-rbac.yaml`:ARCHITECTURE §5 的應用、3 個選單目錄、8 個選單、3 個按鈕(`includes` 綁 API 權限,與前端 `requires` 一致)與角色 `netops-admin`、`netops-viewer`(不指派成員,D15);路由由服務自動註冊,不另寫 `gateway-routes.yaml`(B0 決定;`apply` 會把已發佈的路由打回草稿)。③ `deploy/host2-set-secrets.sh`:`monitor_api_key` 是空檔時改以 giga-observe `createApiKey.js` 建立 ingest Key(服務 `netops-api`)。④ 知識庫 NAS 備份(Q3):compose 新增 `netops-kb-backup`(`deploy/kb-backup/`,alpine,唯讀掛資料目錄、不連網路),每天 2 點把 `knowledge/` 打包到 NAS `docker-folder/giga-netops/<區>`,核對檔數、寫 `.sha256`、保留 30 份;沒有標記檔 `.giga-netops-backup` 時不寫入;目錄與標記檔由新的 `deploy/host2-setup-kb-backup.sh` 建立(沿用附件服務的 NAS 掛載,不經手 NAS 帳密)。
+- 檔案:`.gitlab-ci.yml`、`deploy/docker-compose.yml`、`deploy/gateway-rbac.yaml`、`deploy/apply-gateway-rbac.sh`、`deploy/host2-set-secrets.sh`、`deploy/host2-setup-kb-backup.sh`、`deploy/kb-backup/{Dockerfile,backup.sh}`、`deploy/test.env.example`
+- 配合:Gateway `feature/netops-spa`(Nginx `/netops/`、`gw.app`)、giga-observe `feature/topology-netops`(拓樸)
+- 審查後:`apply-gateway-rbac.sh` 套用前檢查範圍(頂層只能有 permissions / roles,代碼、includes、角色權限都要是 `netops.*` / `netops-*`,不得有 adGroups / companies;CLI apply 本身不限系統);監控 Key 寫入後立即 chown / chmod,取不到 Key 時不印 createApiKey 的輸出;`publish.sh` 驗證版本名稱、回滾排除 `.tmp`;`netops-kb-backup` 加 `init`、`read_only`、`cap_drop: [ALL]`、`no-new-privileges`,啟動時清掉中止留下的 `.part`,整點比較改數值(`KB_BACKUP_HOUR=0` 原本永不觸發);CI 冒煙測試不再用 `A | B && echo`(左側失敗不會讓 job 失敗,含既有的 `/v1/ping`);`deploy-web-test` 加 `needs: [deploy-api-test]`(同一個 compose project 不同時執行);`netops-kb-backup` 以 `--wait` 啟動
+- 驗證:見 MR 描述
+
 ## 2026-11-03 FTP 錯誤訊息不外露主機與原始錯誤
 - 工作項目:B2(F1 的 security-auditor 指出;!11 已記錄同類問題)
 - 內容:`infra/ftp` 的 502 `NETOPS_FTP_UNAVAILABLE` 原本把 basic-ftp 的原始錯誤(可能含 FTP 主機 IP 與 port,例如 `connect ECONNREFUSED 10.10.130.66:21`)接在訊息後面,經 API 回應、匯入狀態 `lastSyncError`、FTP 檔案清單的 `error` 與工作的 `error.message` 傳給有 `netops.ftp.read`、`netops.pa-log.read` 的人。改成只回分類過的原因(`ftpReason`:逾時、拒絕連線、找不到主機、連線中斷、TLS、FTP 回應碼),原始錯誤放在 `cause`,由錯誤處理、匯入與工作的日誌寫出。FTP 路徑照舊(畫面上本來就看得到)。

@@ -2,6 +2,12 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。範圍:`frontend/`。
 
+## 2026-11-04 D1:前端 SPA 映像與發佈腳本
+- 工作項目:D1
+- 內容:新增 `frontend/Dockerfile`、`frontend/publish.sh`、`.dockerignore`(同 GigaItApp、giga-Portal):建置 `dist` 後以一次性容器發佈到 Gateway 的 `gw_www`,`/srv/www/netops/current` symlink 原子切換、保留 5 版、可回滾;`publish.sh` 只接受 `netops`,不會動到其他系統的目錄。版本名稱(commit SHA)同時作為 web-kit 監控回報的 `VITE_RELEASE`。畫面程式沒有修改。
+- 檔案:`frontend/Dockerfile`、`frontend/publish.sh`、`frontend/.dockerignore`
+- 驗證:見 MR 描述
+
 ## 2026-11-03 F1 第 3 批:收尾
 - 工作項目:F1
 - 內容:所有頁面改寫完成,移除 `frontend/` 內的過渡程式:佔位頁 `pages/WipPage.vue`、`components/PingCard.vue`、`api/netops.ts`(`/api/netops/ping` 只在佔位頁用)、路由的 `wip()` 與假 Gateway 的 ping。舊版 `src/`、`server/`、根目錄的 Element Plus / Tailwind 依 D12、D18 暫不刪(見 UI-GUIDE §4)。

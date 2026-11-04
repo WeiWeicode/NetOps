@@ -1,0 +1,6 @@
+# mock/ 不可排除:vite.config.ts 會載入(未設定 MOCK 時不啟用)
+node_modules
+dist
+test
+*.local
+.env*

@@ -12,7 +12,7 @@ import { describeError } from '@/api/gateway';
 import { fmtNum, fmtShort, fmtTime } from '@/api/format';
 import { paEvents, type PaEventOverview, type PaEventType } from '@/api/paEvents';
 import TopList from '@/components/TopList.vue';
-import { daysBetween } from '@/composables/dates';
+import { checkDayRange } from '@/composables/dates';
 import { legacyAskUrl } from '@/config/links';
 
 const MAX_DAYS = 92;
@@ -51,12 +51,8 @@ function resetRange(force = true) {
   Object.assign(range, { from: d, to: d });
   if (!d) data.value = null;
 }
-const rangeError = computed(() => {
-  if (!range.from || !range.to) return current.value?.days.length ? '請選擇開始與結束日期' : '';
-  if (range.from > range.to) return '開始日期不可晚於結束日期';
-  if (daysBetween(range.from, range.to) > MAX_DAYS) return `期間最長 ${MAX_DAYS} 天`;
-  return '';
-});
+const rangeCheck = computed(() => checkDayRange(range.from, range.to, !!current.value?.days.length, MAX_DAYS));
+const rangeError = computed(() => rangeCheck.value.error);
 watch(type, (t) => {
   if (route.query.type !== t) void router.replace({ query: { ...route.query, type: t } });
   // 換類型:丟掉舊類型的資料與進行中的請求,避免標題已換、內容還是舊類型
@@ -75,8 +71,8 @@ let seq = 0;
 
 async function load() {
   if (!type.value) return;
-  // 期間無效時不顯示舊期間的結果
-  if (rangeError.value) {
+  // 期間無效或沒有已分析資料(期間空白)時不送出,也不顯示舊期間的結果
+  if (!rangeCheck.value.ok) {
     seq++;
     data.value = null;
     loading.value = false;

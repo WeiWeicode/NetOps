@@ -50,6 +50,9 @@ function wip(summary: string, plan?: string[]): RouteRecordRaw {
   return { path: '', component: () => import('./pages/WipPage.vue'), props: { summary, plan, docs: ['NetOps docs/IMPL-PLAN.md F1', 'NetOps docs/UI-GUIDE.md §3'] } };
 }
 
+/** 已改寫的頁面(單一內容) */
+const page = (component: NonNullable<RouteRecordRaw['component']>): RouteRecordRaw => ({ path: '', component });
+
 interface PageDef {
   path: string;
   meta: Required<Pick<RouteMeta, 'permission' | 'title' | 'subtitle' | 'icon' | 'group'>> & Pick<RouteMeta, 'requires' | 'description'>;
@@ -76,8 +79,16 @@ const PAGES: PageDef[] = [
   },
   {
     path: 'firewall/files',
-    meta: { permission: NETOPS.paFiles, requires: [API.ftpRead], title: 'FTP Log 檔案', subtitle: 'PA-560 FTP Files', icon: 'folder', group: 'firewall' },
-    view: wip('FTP 上的 PA log 檔案與分析狀態;有管理權限可同步、重新分析與刪除分析結果(FTP 唯讀)。'),
+    meta: {
+      permission: NETOPS.paFiles,
+      requires: [API.ftpRead],
+      title: 'FTP Log 檔案',
+      subtitle: 'PA-560 FTP Files',
+      icon: 'folder',
+      group: 'firewall',
+      description: 'FTP 上的 PA log 與分析狀態;FTP 唯讀,刪除只刪本系統的分析結果',
+    },
+    view: page(() => import('./pages/firewall/Files.vue')),
   },
   {
     path: 'ad/events',
@@ -91,8 +102,16 @@ const PAGES: PageDef[] = [
   },
   {
     path: 'ad/files',
-    meta: { permission: NETOPS.adFiles, requires: [API.ftpRead], title: 'FTP Log 檔案', subtitle: 'AD FTP Files', icon: 'folder', group: 'ad' },
-    view: wip('FTP 上的 AD 事件檔案與分析狀態。'),
+    meta: {
+      permission: NETOPS.adFiles,
+      requires: [API.ftpRead],
+      title: 'FTP Log 檔案',
+      subtitle: 'AD FTP Files',
+      icon: 'folder',
+      group: 'ad',
+      description: 'DC 每天匯出到 FTP 的 AD 事件檔與匯入狀態;FTP 唯讀',
+    },
+    view: page(() => import('./pages/ad/Files.vue')),
   },
   {
     path: 'knowledge',
@@ -127,7 +146,10 @@ const shell: RouteRecordRaw = {
   ],
 };
 
-const routes: RouteRecordRaw[] = [{ path: '/unavailable', component: () => import('./pages/Unavailable.vue'), meta: { public: true, title: '暫時無法連線' } }, shell];
+const routes: RouteRecordRaw[] = [
+  { path: '/unavailable', component: () => import('./pages/Unavailable.vue'), meta: { public: true, title: '暫時無法連線' } },
+  shell,
+];
 
 export const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -150,7 +172,14 @@ function firstTab(page: RouteRecordRaw): string | null {
 }
 
 const MENU_PAGES: MenuPage[] = [
-  ...PAGES.map((p) => ({ path: `/${p.path}`, group: p.meta.group, title: p.meta.title, icon: p.meta.icon, permission: p.meta.permission, requires: p.meta.requires })),
+  ...PAGES.map((p) => ({
+    path: `/${p.path}`,
+    group: p.meta.group,
+    title: p.meta.title,
+    icon: p.meta.icon,
+    permission: p.meta.permission,
+    requires: p.meta.requires,
+  })),
   ...LINK_PAGES,
 ];
 /** 側欄選單(AppLayout 使用) */

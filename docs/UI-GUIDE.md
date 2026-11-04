@@ -39,7 +39,15 @@
 | 流量總覽自刻 SVG 圖表 | 改用 `ui/charts`;不足時先擴充元件 |
 | `lucide-vue-next` 直接 import | `GIcon`,在 `icons.ts` 登記 |
 
-沒有對應元件的(可展開表格列、`el-input-number`、`el-tooltip`、`el-dropdown`)F1 逐項處理:優先改用既有元件,必要時擴充 `src/ui/`,不在頁面內刻樣式。
+沒有對應元件的(可展開表格列、`el-input-number`、`el-tooltip`、`el-dropdown`)F1 逐項處理:優先改用既有元件,必要時擴充 `src/ui/`,不在頁面內刻樣式。已處理:
+
+| 舊版 | 新版 |
+| --- | --- |
+| `el-table` 勾選欄(`type="selection"`) | `GTable` 的 `#cell-sel` 放 `GCheckbox`,表格上方「全選目前清單」(`GTable` 不擴充,與入口網同步) |
+| `el-table` 可展開列 | 列尾按鈕開 `GModal` 顯示明細(AD 每日檔案) |
+| `text-danger`、`text-run` 等狀態文字色 | `base.css` 新增 `.c-success`、`.c-warning`、`.c-danger`(語意色混入本文色,四種組合對比 ≥ 5:1;`.tone-*` 只設定 `--tone`) |
+
+`GTable` 的儲存格插槽內容全是 `v-if` 落空(只剩註解)時會顯示預設值,要留 `<span v-else />`。
 
 **只換畫面,不改功能**:篩選條件、排行點擊帶到明細、知識庫操作都要保留。AI 畫面不改寫,選單放連結到舊版(ARCHITECTURE D17、D18)。
 

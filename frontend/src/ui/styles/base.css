@@ -161,6 +161,17 @@ code,
 .tone-neutral {
   --tone: var(--text-2);
 }
+/* 文字語意色(NetOps 新增:狀態數字、錯誤說明;.tone-* 只設定 --tone 不改文字色)。
+   語意色直接當小字對比不足 4.5:1,混入本文色(亮色變深、暗色變淺) */
+.c-success {
+  color: color-mix(in srgb, var(--c-success) 55%, var(--text));
+}
+.c-warning {
+  color: color-mix(in srgb, var(--c-warning) 45%, var(--text));
+}
+.c-danger {
+  color: color-mix(in srgb, var(--c-danger) 65%, var(--text));
+}
 
 /* ---------------- 版面工具 ---------------- */
 .stack {

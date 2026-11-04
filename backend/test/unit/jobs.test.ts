@@ -86,6 +86,18 @@ describe('JobRunner', () => {
     assert.equal(seen.length, 1);
   });
 
+  it('帶 cause 的已知錯誤:回應照實但不含原文,原文交給 onError 寫日誌', async () => {
+    const seen: unknown[] = [];
+    const jobs = new JobRunner({}, (_k, err) => seen.push(err));
+    const e = Object.assign(new AppError(502, 'NETOPS_FTP_UNAVAILABLE', 'FTP 連線失敗:拒絕連線'), { cause: new Error('connect ECONNREFUSED 10.10.130.66:21') });
+    const j = jobs.submit('t', 'S1', async () => {
+      throw e;
+    }, { timeoutMs: 1000 });
+    await tick();
+    assert.deepEqual(jobs.get(j.id, 'S1').error, { code: 'NETOPS_FTP_UNAVAILABLE', message: 'FTP 連線失敗:拒絕連線' });
+    assert.equal(seen[0], e);
+  });
+
   it('完成後超過保留時間就查不到(程序重啟同樣回 NETOPS_JOB_NOT_FOUND)', async () => {
     let now = 1_000_000;
     const jobs = new JobRunner({ retainMs: 1000, now: () => now });

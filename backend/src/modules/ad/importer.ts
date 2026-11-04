@@ -114,6 +114,7 @@ export function createAdImporter({ ftp, store, ftpConfig, log }: { ftp: Ftp; sto
         info.push({ name: f.name, channel: evs[0]?.channel ?? f.name.replace(/\.csv$/i, ''), size: f.size, modified: f.modified, rows: evs.length });
       } catch (err) {
         info.push({ name: f.name, size: f.size, modified: f.modified, rows: 0, error: errorText(err) });
+        log.error({ file: f.name, err, cause: (err as { cause?: unknown }).cause }, '[AD 匯入] 檔案匯入失敗');
       }
     }
     // 同一天可能同時有舊檔名(Security.csv)和新檔名(Security_GSMC-DC1.csv,v3 匯出程式):依主機 + 記錄 + 記錄編號去除重複

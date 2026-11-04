@@ -5,7 +5,8 @@
  *   - 畫面上的瀏覽(listDir)優先拿到連線,最多等 FTP_WAIT_MS,等不到回 503 NETOPS_FTP_BUSY(不讓請求超過路由逾時);
  *     背景工作(匯入、明細查詢、AD)排隊等候,可用 AbortSignal 取消
  *   - 下載以串流讀取,不存到本機(原始 log 不落地,§7.2);withSession.download 只給 AD 小檔,有大小上限
- *   - 錯誤回 502 NETOPS_FTP_UNAVAILABLE,訊息含 FTP 回應,不含帳密
+ *   - 錯誤回 502 NETOPS_FTP_UNAVAILABLE,訊息只寫分類過的原因(逾時、拒絕連線、帳密錯誤、FTP 回應碼…),
+ *     不含 FTP 主機、port 與原始錯誤;原始錯誤放在 cause,只寫進服務日誌(AGENT.md §7.5、§8)
  * 與舊版不同:連線逾時 30 秒改 20 秒;FTPS 預設驗證憑證;列目錄失敗由 404 改 502(docs/API.md §8)。
  */
 import path from 'node:path';
@@ -108,8 +109,34 @@ export class Semaphore {
 }
 
 const sortEntries = (a: FtpEntry, b: FtpEntry) => (a.dir === b.dir ? a.name.localeCompare(b.name, 'zh-Hant', { numeric: true }) : a.dir ? -1 : 1);
-const unavailable = (msg: string) => new AppError(502, 'NETOPS_FTP_UNAVAILABLE', msg);
-const errText = (err: unknown) => (err instanceof Error ? err.message : String(err));
+/**
+ * FTP 原始錯誤 → 給使用者看的分類(不含主機、port 與錯誤原文)
+ * basic-ftp 的 FTPError 帶 FTP 回應碼(code 為數字);連線錯誤帶 Node 的 errno 代碼(code 為字串)
+ */
+export function ftpReason(err: unknown): string {
+  const e = err as { code?: unknown; message?: unknown };
+  const msg = String(e?.message ?? '');
+  if (typeof e?.code === 'number') {
+    const known: Record<number, string> = { 421: '伺服器忙碌或已關閉連線', 425: '無法建立資料連線', 426: '資料連線中斷', 450: '檔案暫時無法使用', 451: '伺服器處理錯誤', 530: '帳號或密碼錯誤', 550: '檔案或目錄不存在,或沒有權限' };
+    return `${known[e.code] ?? 'FTP 伺服器回應錯誤'}(FTP ${e.code})`;
+  }
+  const code = typeof e?.code === 'string' ? e.code : '';
+  if (code === 'ECONNREFUSED') return '拒絕連線';
+  if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') return '找不到主機';
+  if (code === 'ECONNRESET' || code === 'EPIPE') return '連線中斷';
+  if (code === 'ETIMEDOUT' || /timeout/i.test(msg)) return '連線逾時';
+  // Node TLS 的錯誤碼(CERT_*、DEPTH_ZERO_SELF_SIGNED_CERT、SELF_SIGNED_CERT_IN_CHAIN、UNABLE_TO_*、ERR_TLS_*、ERR_SSL_*)
+  if (/^(CERT_|DEPTH_ZERO_|SELF_SIGNED_|UNABLE_TO_|ERR_TLS_|ERR_SSL_|HOSTNAME_MISMATCH|ERR_TLS)/.test(code)) return 'TLS 憑證驗證失敗';
+  if ((err as { tooLarge?: boolean })?.tooLarge) return `檔案超過 ${DOWNLOAD_MAX_BYTES / 1024 / 1024} MB 上限`;
+  return '連線或傳輸失敗';
+}
+
+/** 502:訊息只含分類過的原因,原始錯誤放在 cause(寫日誌用) */
+export function unavailable(what: string, cause: unknown): AppError {
+  const e = new AppError(502, 'NETOPS_FTP_UNAVAILABLE', `${what}:${ftpReason(cause)}`);
+  (e as { cause?: unknown }).cause = cause;
+  return e;
+}
 
 export function createFtp(config: FtpConfig | null): Ftp {
   if (!config) {
@@ -143,7 +170,7 @@ export function createFtp(config: FtpConfig | null): Ftp {
       });
     } catch (err) {
       c.close();
-      throw unavailable(`FTP 連線失敗:${errText(err)}`);
+      throw unavailable('FTP 連線失敗', err);
     }
     return c;
   }
@@ -157,7 +184,7 @@ export function createFtp(config: FtpConfig | null): Ftp {
         .map((f) => ({ name: f.name, path: path.posix.join(abs, f.name), dir: f.isDirectory, size: f.size, modified: f.modifiedAt ?? null, rawModified: f.rawModifiedAt }))
         .sort(sortEntries);
     } catch (err) {
-      throw unavailable(`無法讀取 FTP 目錄 ${abs}:${errText(err)}`);
+      throw unavailable(`無法讀取 FTP 目錄 ${abs}`, err);
     }
   }
 
@@ -178,7 +205,7 @@ export function createFtp(config: FtpConfig | null): Ftp {
               new Writable({
                 write(chunk: Buffer, _e, cb) {
                   size += chunk.length;
-                  if (size > DOWNLOAD_MAX_BYTES) return cb(new Error(`檔案超過 ${DOWNLOAD_MAX_BYTES / 1024 / 1024} MB 上限`));
+                  if (size > DOWNLOAD_MAX_BYTES) return cb(Object.assign(new Error('檔案超過大小上限'), { tooLarge: true }));
                   chunks.push(chunk);
                   cb();
                 },
@@ -186,7 +213,7 @@ export function createFtp(config: FtpConfig | null): Ftp {
               abs,
             );
           } catch (err) {
-            throw unavailable(`讀取 FTP 檔案失敗 ${abs}:${errText(err)}`);
+            throw unavailable(`讀取 FTP 檔案失敗 ${abs}`, err);
           }
           return Buffer.concat(chunks);
         },
@@ -223,7 +250,7 @@ export function createFtp(config: FtpConfig | null): Ftp {
       .downloadTo(stream, abs)
       .then(() => undefined)
       .catch((err) => {
-        if (!aborted) stream.destroy(unavailable(`讀取 FTP 檔案失敗 ${abs}:${errText(err)}`));
+        if (!aborted) stream.destroy(unavailable(`讀取 FTP 檔案失敗 ${abs}`, err));
       })
       .finally(() => {
         signal?.removeEventListener('abort', abort);

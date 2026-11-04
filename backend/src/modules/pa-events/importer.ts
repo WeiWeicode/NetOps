@@ -132,7 +132,7 @@ export function createEventImporter({ ftp, store, ftpConfig, log }: { ftp: Ftp; 
       // 讀取失敗時中斷傳輸,釋放 FTP 連線
       opened?.abort();
       if (controller.signal.aborted) return;
-      log.error({ type: item.type, file: item.path, err }, `[PA ${def.label}] 分析失敗`);
+      log.error({ type: item.type, file: item.path, err, cause: (err as { cause?: unknown }).cause }, `[PA ${def.label}] 分析失敗`);
       index.files[item.path] = { ...(index.files[item.path] ?? {}), type: item.type, name: item.name, size: item.size, modified: modKey(item.modified), status: 'error', error: errorText(err), analyzedAt: new Date().toISOString() };
       job.failed++;
     } finally {
@@ -233,6 +233,7 @@ export function createEventImporter({ ftp, store, ftpConfig, log }: { ftp: Ftp; 
         items.push(...logs.filter((f) => ['new', 'changed', 'error'].includes(f.state)).map((f) => ({ path: f.path, name: f.name, size: f.size, modified: f.modified, type: t.type })));
       } catch (err) {
         errors.push(`${t.label}:${errorText(err)}`);
+        log.error({ type: t.type, err, cause: (err as { cause?: unknown }).cause }, '[PA 其他 log] 同步失敗');
       }
     }
     job.lastSyncAt = new Date().toISOString();

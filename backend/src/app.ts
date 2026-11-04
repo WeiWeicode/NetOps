@@ -81,7 +81,12 @@ export async function buildApp(config: Config, deps: { ftp?: Ftp } = {}): Promis
   });
 
   app.setErrorHandler((err, req, reply) => {
-    if (err instanceof AppError) return reply.status(err.status).send(errorBody(err.code, err.message, req.id, err.details));
+    if (err instanceof AppError) {
+      // 外部系統錯誤(FTP 等,帶 cause)的原文只寫日誌,回應只有分類過的訊息;預期內的 503(忙碌、未就緒)不記 error
+      const cause = (err as { cause?: unknown }).cause;
+      if (cause) req.log.error({ err, cause }, err.code);
+      return reply.status(err.status).send(errorBody(err.code, err.message, req.id, err.details));
+    }
     const e = err as { validation?: { instancePath: string; message?: string }[]; statusCode?: number };
     if (e.validation)
       return reply.status(400).send(

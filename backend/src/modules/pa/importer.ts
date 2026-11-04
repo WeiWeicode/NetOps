@@ -77,9 +77,17 @@ export const modKey = (d: string | Date | null | undefined) => {
   return Number.isNaN(t) ? '' : new Date(t).toISOString();
 };
 
-/** 存進分析狀態、回給畫面的錯誤訊息:本機檔案錯誤(帶路徑)不外露,細節只寫日誌(ARCHITECTURE §4.2) */
-export const errorText = (err: unknown) =>
-  err instanceof AppError || !(err as NodeJS.ErrnoException).path ? (err as Error).message : '寫入分析結果失敗(詳見服務日誌)';
+/**
+ * 存進分析狀態、回給畫面的錯誤訊息(白名單):
+ *   AppError(已分類,例如 FTP 錯誤)、核心 readLog 的格式錯誤(status 400,固定文字)、本程式的「FTP 傳輸不完整」照實回報;
+ *   其他錯誤(本機檔案、第三方套件原文)一律回固定訊息,細節只寫日誌(ARCHITECTURE §4.2、AGENT.md §8)
+ */
+export const errorText = (err: unknown) => {
+  const e = err as { status?: unknown; message?: unknown };
+  const msg = String(e?.message ?? '');
+  if (err instanceof AppError || e?.status === 400 || /^FTP 傳輸不完整\(\d+ \/ \d+ bytes\)$/.test(msg)) return msg;
+  return '分析失敗(詳見服務日誌)';
+};
 
 /** 佇列已滿 */
 export const queueFull = () => new AppError(409, 'NETOPS_IMPORT_QUEUE_FULL', `分析佇列已滿(上限 ${MAX_QUEUE} 個檔案),請等候目前的分析完成`);
@@ -189,7 +197,7 @@ export function createTrafficImporter({ ftp, store, ftpConfig, log }: { ftp: Ftp
       opened?.abort();
       // 取消的檔案維持原本狀態(下次同步再分析)
       if (controller.signal.aborted) return;
-      log.error({ file: item.path, err }, '[匯入] 分析失敗');
+      log.error({ file: item.path, err, cause: (err as { cause?: unknown }).cause }, '[匯入] 分析失敗');
       index.files[item.path] = { ...(index.files[item.path] ?? {}), name: item.name, size: item.size, modified: modKey(item.modified), status: 'error', error: errorText(err), analyzedAt: new Date().toISOString() };
       job.failed++;
     } finally {
@@ -309,6 +317,7 @@ export function createTrafficImporter({ ftp, store, ftpConfig, log }: { ftp: Ftp
     } catch (err) {
       job.lastSyncAt = new Date().toISOString();
       job.lastSyncError = errorText(err);
+      log.error({ err, cause: (err as { cause?: unknown }).cause }, '[匯入] 同步失敗');
       throw err;
     } finally {
       job.syncing = false;
@@ -324,8 +333,9 @@ export function createTrafficImporter({ ftp, store, ftpConfig, log }: { ftp: Ftp
     const tick = (retry = true) =>
       sync().then(
         (r) => r.added && log.info({ added: r.added }, '[自動同步] 新增檔案待分析'),
-        (err) => {
-          log.error({ err: (err as Error).message, retry }, '[自動同步] 失敗');
+        () => {
+          // 失敗原因(含原始錯誤)已由 sync() 寫日誌
+          log.info({ retry }, '[自動同步] 失敗,稍後重試');
           if (retry) timers.push(setTimeout(() => tick(false), 120000).unref());
         },
       );

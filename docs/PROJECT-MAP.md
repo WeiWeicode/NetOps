@@ -1,6 +1,6 @@
 # 專案地圖 — NetOps
 
-> **最後更新:2026-11-03**(F1 完成:`frontend/` 框架、全部頁面改寫並串接後端、收尾;B2 完成並部署測試區;Gherkin 規格見 !18;舊版程式未改動)。
+> **最後更新:2026-11-04**(D1:CI 發佈前端 SPA 與套用畫面權限、`deploy/gateway-rbac.yaml`、知識庫 NAS 備份 `deploy/kb-backup/`、監控 Key;!24 審查中。2026-11-03:F1、B2 完成;舊版程式未改動)。
 > 開發新功能後,在同一個變更內更新本文件(`AGENT.md` §9)。只寫結構與職責,細節連到 `docs/`。
 
 資訊網通管理系統:PA-560 防火牆 log、AD 事件與網通知識庫;AI 問答只留在舊版(ARCHITECTURE D17)。目標是接入 GigaNexus Gateway(`/netops/`、`netops-api` :51292),目前部署於 IIS `/NetOps`。
@@ -29,7 +29,8 @@ NetOps/
 
 ```
 NetOps/
-├─ .gitlab-ci.yml           check:backend、check:frontend(所有分支)、deploy-api-test(develop → 主機 2)
+├─ .gitlab-ci.yml           check:backend、check:frontend(所有分支);develop → 主機 2:deploy-api-test(netops-api、netops-kb-backup)、
+│                           deploy-web-test(SPA 發佈到 Gateway gw_www/netops)、rbac-test(套用 deploy/gateway-rbac.yaml)
 ├─ backend/                 netops-api :51292(Fastify 5 + TypeScript,由 Gateway samples/node-backend 複製)
 │  ├─ src/
 │  │  ├─ server.ts、app.ts  啟動;內部 Token 驗證、錯誤格式、/healthz、/readyz、/openapi.json、setupGateway
@@ -60,10 +61,14 @@ NetOps/
 │  │  ├─ config/links.ts    舊版 NetOps(AI 問答、AI 分析、知識庫 AI 功能)與 Veeam 連結(D11、D17、D18)
 │  │  └─ pages/             firewall/(流量總覽、安全事件、明細查詢、FTP Log 檔案)、ad/(事件總覽、明細查詢、FTP Log 檔案)、knowledge/;Forbidden、NotFound、Unavailable
 │  ├─ mock/                 本機假 Gateway(gateway.ts;MOCK=admin|viewer|noapp|anon,只在 dev,不進建置)與各模組假 API(ftp、pa、paEvents、paLog、ad、kb)
-│  └─ test/                 vitest:選單、守衛、應用層守衛、風格、工作輪詢、狀態輪詢、各頁純函式、網址條件、連結
+│  ├─ test/                 vitest:選單、守衛、應用層守衛、風格、工作輪詢、狀態輪詢、各頁純函式、網址條件、連結
+│  └─ Dockerfile、publish.sh SPA 映像:一次性容器發佈到 gw_www/netops(symlink 原子切換、保留 5 版、可回滾;D1)
 └─ deploy/
-   ├─ docker-compose.yml    netops-api 加入 Gateway 網路,不對主機發佈 port
-   ├─ host2-set-secrets.sh  主機 2 機密與 netops.env(使用者執行)
+   ├─ docker-compose.yml    netops-api 加入 Gateway 網路,不對主機發佈 port;netops-kb-backup(知識庫 NAS 備份);spa-netops(profile publish)
+   ├─ gateway-rbac.yaml     netops.* 應用 / 選單 / 按鈕、netops-admin、netops-viewer(不指派成員,D15);apply-gateway-rbac.sh 套用(檢查只動 netops 範圍)
+   ├─ kb-backup/            每天把 knowledge/ 打包到 NAS docker-folder/giga-netops/<區>,保留 30 份(ARCHITECTURE Q3)
+   ├─ host2-set-secrets.sh  主機 2 機密(含 giga-observe ingest Key)與 netops.env(使用者執行)
+   ├─ host2-setup-kb-backup.sh  NAS 備份目錄與標記檔(使用者執行;沿用附件服務的 NAS 掛載)
    └─ test.env.example
 ```
 
@@ -78,7 +83,7 @@ NetOps/
 │  │  └─ infra/{ftp,store,jobs}/             外部系統、資料存取、長時間工作
 │  └─ test/{unit,integration}/
 ├─ frontend/                Vue 3 SPA(base /netops/)
-├─ deploy/                  compose、gateway-routes.yaml、gateway-rbac.yaml、env 範本
+├─ deploy/                  compose、gateway-rbac.yaml、env 範本(路由由服務自動註冊,不另寫 gateway-routes.yaml)
 └─ docs/
 ```
 

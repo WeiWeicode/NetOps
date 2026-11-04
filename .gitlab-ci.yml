@@ -1,16 +1,19 @@
 # NetOps Pipeline(Runner:主機 2 WSL shell executor,tag windows-runner;與 Gateway 同一台主機;IMPL-PLAN B0)
 #   check            所有分支:netops-api、netops-web(frontend/)型別檢查、單元測試、建置
-#   deploy-api-test  develop:在主機 2 建置並更新 netops-api(加入 Gateway 網路);啟動後自動註冊路由草稿
-# 只部署 netops-api;SPA 只做檢查不部署(F1),SPA 部署、gateway-rbac.yaml、Nginx /netops/ location 於 D1 加入。
-# 舊版 IIS 程式(根目錄 server/、src/)不在 Pipeline 內,切換前 main 維持舊版(ARCHITECTURE D12),本檔沒有 main 的工作。
-# 主機需有:${NETOPS_SECRETS_DIR} 機密與 ${NETOPS_ENV_FILE}(deploy/host2-set-secrets.sh 產生);Gateway 已部署(giganexus-gw_default 網路);
-#           npm Registry Token 同其他專案(${NPM_TOKEN_FILE})
-stages: [check, deploy-test]
+#   deploy-api-test  develop:在主機 2 建置並更新 netops-api(加入 Gateway 網路;啟動後自動註冊路由草稿)與知識庫 NAS 備份 netops-kb-backup
+#   deploy-web-test  develop:建置 SPA 並發佈到 Gateway 的 gw_www(Nginx /netops/;IMPL-PLAN D1,同 GigaItApp、giga-Portal)
+#   rbac-test        develop:以已部署的 Gateway 映像套用 deploy/gateway-rbac.yaml(netops.* 畫面權限、netops-admin / netops-viewer 角色;不指派成員)
+# 舊版 IIS 程式(根目錄 server/、src/)不在 Pipeline 內,切換前 main 維持舊版(ARCHITECTURE D12),本檔沒有 main 的工作(正式區屬 D2)。
+# 主機需有:${NETOPS_SECRETS_DIR} 機密與 ${NETOPS_ENV_FILE}(deploy/host2-set-secrets.sh 產生);Gateway 已部署(giganexus-gw_default 網路、
+#           giganexus-gw_gw_www volume、Nginx /netops/ location);npm Registry Token 同其他專案(${NPM_TOKEN_FILE})
+stages: [check, deploy-test, rbac-test]
 
 variables:
   NETOPS_ENV_FILE: /srv/giganexus/deploy/netops.env
   NETOPS_SECRETS_DIR: /srv/giganexus/netops-secrets
   NPM_TOKEN_FILE: /srv/giganexus/deploy/secrets/gitlab_npm_token
+  GATEWAY_DIR: /srv/giganexus/shared/giga-api-gateway-bff
+  GW_TEST_ENV_FILE: /srv/giganexus/deploy/test.env
 
 .runner: &runner
   tags: [windows-runner]
@@ -50,13 +53,16 @@ deploy-api-test:
     - export GITLAB_NPM_TOKEN="$(cat "$NPM_TOKEN_FILE")"
     - C="docker compose -f deploy/docker-compose.yml"
     # --pull:主機上的 node:22-alpine 可能被其他專案覆寫(同 Gateway 2026-10-02)
-    - $C build --pull netops-api
+    - $C build --pull netops-api netops-kb-backup
     # 記下啟動時間:之後只看這次的日誌(同一 SHA 重跑、容器未重建時,不被舊的註冊結果誤判)
     - S="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     - $C up -d --wait --force-recreate netops-api
+    # 知識庫 NAS 備份:重建才看得到晚於容器掛上的 NAS;啟動時今天還沒備份就先備份一次(結果看容器日誌)
+    - $C up -d --wait --force-recreate netops-kb-backup
     # 冒煙測試:健康檢查;無內部 Token → 401
     - $C exec -T netops-api wget -qO- http://127.0.0.1:51292/readyz
-    - '$C exec -T netops-api node -e "fetch(\"http://127.0.0.1:51292/v1/ping\").then((r) => process.exit(r.status === 401 ? 0 : 1))" && echo "OK   /v1/ping 無內部 Token → 401"'
+    - '$C exec -T netops-api node -e "fetch(\"http://127.0.0.1:51292/v1/ping\").then((r) => process.exit(r.status === 401 ? 0 : 1))" || { echo "FAIL /v1/ping 無內部 Token 不是 401" >&2; exit 1; }'
+    - echo "OK   /v1/ping 無內部 Token → 401"
     # 自動註冊在背景執行(SDK 失敗時重試 1、2、4、8、16 秒,另加連線逾時);最多等 90 秒看最終結果,重試用完仍失敗時 job 失敗
     # 訊息取自 @giganexus/backend-sdk 0.3:成功「API 已註冊…」,最終失敗「…Gateway 路由未更新」
     - |
@@ -67,3 +73,43 @@ deploy-api-test:
         sleep 2
       done
       echo "90 秒內沒有看到自動註冊結果" >&2; $C logs --since "$S" netops-api 2>&1 | tail -20; exit 1
+
+deploy-web-test:
+  <<: *runner
+  stage: deploy-test
+  rules:
+    - if: $CI_COMMIT_BRANCH == "develop"
+  # 同一個 compose project:等後端部署完才發佈,不與 deploy-api-test 同時執行;後端失敗時不發佈前端
+  needs: [deploy-api-test]
+  environment: { name: test, url: https://giganexus-test.gigasolar.com.tw/netops/ }
+  script:
+    - test -f "$NETOPS_ENV_FILE" || { echo "缺少 $NETOPS_ENV_FILE(先在主機 2 執行 deploy/host2-set-secrets.sh)" >&2; exit 1; }
+    - export IMAGE_TAG=$CI_COMMIT_SHORT_SHA RELEASE_SHA=$CI_COMMIT_SHORT_SHA COMPOSE_ENV_FILES="$NETOPS_ENV_FILE"
+    - export GITLAB_NPM_TOKEN="$(cat "$NPM_TOKEN_FILE")"
+    - P="docker compose -f deploy/docker-compose.yml --profile publish"
+    # --pull:同 deploy-api-test
+    - $P build --pull spa-netops
+    # 發佈到 gw_www 的 netops(保留上一版供回滾:$P run --rm spa-netops rollback netops)
+    - $P run --rm spa-netops
+    # 冒煙測試(經 Gateway Nginx):/netops/ 與深層路由都回本系統的 index.html(引用 /netops/assets/);
+    # Gateway 尚未加 /netops/ location 時會落到入口網的 index.html,這裡就會失敗
+    - |
+      for u in /netops/ /netops/firewall/dashboard; do
+        curl -skf "https://127.0.0.1$u" | grep -q '/netops/assets/' || { echo "FAIL $u 不是 NetOps 的 index.html(Gateway /netops/ location?)" >&2; exit 1; }
+        echo "OK   $u"
+      done
+    # 失敗要讓 job 失敗:不用「A | B && echo」(&& 左側失敗不會中止 job)
+    - curl -sk -o /dev/null -w '%{http_code}\n' https://127.0.0.1/api/auth/me | grep -q 401 || { echo "FAIL /api/auth/me 不是 401" >&2; exit 1; }
+    - echo "OK   /api/auth/me → 401(單一入口)"
+
+rbac-test:
+  <<: *runner
+  stage: rbac-test
+  rules:
+    - if: $CI_COMMIT_BRANCH == "develop"
+  script:
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+    # 與測試區 Gateway 相同的映像(Gateway deploy-test 記錄);GATEWAY_DIR 為 Gateway 共用目錄(含 deploy/)
+    # 在 deploy-api-test 之後:includes 綁的 netops.* API 權限由 netops-api 啟動時自動註冊建立
+    - export IMAGE_TAG="$(cat "$(dirname "$GATEWAY_DIR")/gateway-image-tag")" REGISTRY=10.10.130.123:5050/giganexus/giga-api-gateway-bff
+    - sh deploy/apply-gateway-rbac.sh test "$GW_TEST_ENV_FILE"

@@ -7,11 +7,17 @@
 # 上游與路由:服務啟動後由 setupGateway 自動註冊為 Gateway 草稿(上游 netops-api、位址 SERVICE_ADVERTISE_URL、路由、權限代碼),
 #   在 GigaItApp「服務與路由」審查發佈後才生效
 # 機密(NETOPS_SECRETS_DIR,uid 1000 可讀;deploy/host2-set-secrets.sh 產生):
-#   gw_api_key(Gateway CLI client:create --code netops-api)、monitor_api_key(giga-observe 服務 netops-api;B0 為空檔,監控停用,D1 補上)、
+#   gw_api_key(Gateway CLI client:create --code netops-api)、monitor_api_key(giga-observe ingest Key,服務 netops-api;D1)、
 #   ftp_password(FTP 10.10.130.66 唯讀帳號;B1)
 # 資料目錄(B1):主機 NETOPS_DATA_HOST_DIR(/srv/giga-netops/test,WSL 檔案系統、uid 1000 可寫)掛到容器 /data;只經 infra/store 存取
 # FTP 目錄與同步:FTP_ROOT、FTP_LOG_DIR、FTP_AD_DIR、FTP_*_DIR 未設定時用程式預設值(backend/src/config.ts,與舊版相同)
 # 單一容器(ARCHITECTURE D9):背景工作在程序內執行,不要加 replicas
+#
+# 前端 SPA(IMPL-PLAN D1;同 GigaItApp、giga-Portal):spa-netops 只在 profile publish,一次性容器發佈到 Gateway 的 gw_www volume(Nginx /netops/)
+#   docker compose --env-file <netops.env> -f deploy/docker-compose.yml --profile publish build --pull spa-netops
+#   docker compose --env-file <netops.env> -f deploy/docker-compose.yml --profile publish run --rm spa-netops                    # 發佈
+#   docker compose --env-file <netops.env> -f deploy/docker-compose.yml --profile publish run --rm spa-netops rollback netops    # 回滾到上一版
+# 知識庫 NAS 備份(ARCHITECTURE Q3):netops-kb-backup 每天打包資料目錄的 knowledge/ 到 NAS(deploy/kb-backup/backup.sh;目錄與標記檔由 deploy/host2-setup-kb-backup.sh 建立)
 name: giganexus-netops-${GW_ENV:?GW_ENV 必須設定(test / prod)}
 
 services:
@@ -58,6 +64,43 @@ services:
       gateway:
         aliases: [netops-api]
 
+  # 知識庫每日備份到 NAS(唯讀掛載資料目錄;不連網路)。NAS 晚於容器掛載時需重建容器(--force-recreate,CI 部署每次都會)
+  netops-kb-backup:
+    image: ${NETOPS_IMAGE_PREFIX:-giganexus}/netops-kb-backup:${IMAGE_TAG:-dev}
+    build:
+      context: ./kb-backup
+    restart: unless-stopped
+    network_mode: none
+    # PID 1 不是 sh:docker stop / 重建時立即結束,不等 10 秒被強制終止
+    init: true
+    # 只寫 /backup;不需要任何 capability
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      GW_ENV: ${GW_ENV}
+      KB_BACKUP_HOUR: ${KB_BACKUP_HOUR:-2}
+      KB_BACKUP_KEEP: ${KB_BACKUP_KEEP:-30}
+    volumes:
+      - ${NETOPS_DATA_HOST_DIR}:/data:ro
+      # 主機 cifs 掛載點下的區域目錄(附件服務同一個 NAS 分享 docker-folder);沒有標記檔 .giga-netops-backup 時不寫入
+      - ${NETOPS_KB_BACKUP_HOST_DIR:-/mnt/nas-docker/giga-netops/${GW_ENV}}:/backup
+
+  # 前端 SPA:發佈到 Gateway 的 gw_www(/srv/www/netops/current,Nginx /netops/);不長駐
+  spa-netops:
+    image: ${NETOPS_IMAGE_PREFIX:-giganexus}/spa-netops:${IMAGE_TAG:-dev}
+    build:
+      context: ../frontend
+      # @giganexus/web-kit 取自公司 GitLab npm Registry(建置 secret npm_token)
+      secrets: [npm_token]
+      args:
+        RELEASE_SHA: ${RELEASE_SHA:-}
+    profiles: ["publish"]
+    restart: "no"
+    volumes:
+      - gw_www:/srv/www
+    command: ["publish", "netops"]
+
 secrets:
   gw_api_key:
     file: ${NETOPS_SECRETS_DIR:?NETOPS_SECRETS_DIR 必須設定}/gw_api_key
@@ -68,6 +111,12 @@ secrets:
   # 建置用:GitLab npm Registry 讀取 Token(環境變數 GITLAB_NPM_TOKEN;CI 由主機機密檔讀入)
   npm_token:
     environment: GITLAB_NPM_TOKEN
+
+volumes:
+  # Gateway Nginx 唯讀掛載的 SPA volume(Gateway DEPLOYMENT.md §3.4)
+  gw_www:
+    external: true
+    name: ${GW_WWW_VOLUME:-giganexus-gw_gw_www}
 
 networks:
   gateway:

@@ -1,0 +1,72 @@
+# 資訊網通管理系統(NetOps)的畫面權限與角色(Gateway CLI `apply` 格式;同 GigaItApp、giga-Portal 的 deploy/gateway-rbac.yaml;IMPL-PLAN D1)
+#
+#   sh deploy/apply-gateway-rbac.sh test <Gateway 區域 env 檔>      # CI rbac-test 於 develop 自動執行
+#
+# 內容(ARCHITECTURE §5 權限草案):
+#   ① 應用、選單目錄、選單與按鈕(系統代碼 netops;kind / parent / sort 供 GigaItApp「權限設定 › 應用權限」樹狀設定)
+#      只負責首次登記:已存在的權限不覆寫名稱、上層與排序,之後在 GigaItApp「系統管理 › 選單管理」調整
+#      includes = 此頁 / 按鈕需要的 API 權限(隨附:擁有選單即一併擁有),與 frontend/src/router.ts 的 requires、frontend/src/api/perms.ts 一致
+#      API 權限(netops.pa.read 等)由 netops-api 啟動時自動註冊 OpenAPI 建立(x-permissions),本檔不重複登記;
+#      尚未註冊時 includes 會略過,下次套用補上
+#   ② 角色 netops-admin、netops-viewer:只定義角色內容,**不指派成員**。成員由系統負責人在 GigaItApp「人員」或「角色與指派規則」設定(D15)
+#      (此處不寫 adGroups / companies,套用時不會覆蓋畫面上的設定;permissions 會整組取代,新增選單請改此檔)
+#   netops.ping.read(B0 連線驗證 API)不綁畫面節點,也不放進角色;需要時個別指派
+#   「其他系統」目錄(Veeam 等一般連結,D11、D18)只在前端,不登記
+#   上游 netops-api 與 /api/netops/* 路由由服務啟動時自動註冊為草稿(BACKEND-GUIDE §7.5),不另寫 gateway-routes.yaml
+# 測試區與正式區設定不互通(Gateway PRD Q3),兩區各自套用。應用登記(gw.app,應用切換)由 Gateway 負責人維護(Gateway deploy/gateway-apps.yaml)。
+
+permissions:
+  - { code: netops.app.access, name: 資訊網通管理系統使用權限, kind: app, sort: 30 }
+  # 選單目錄(kind group:側欄大項,只分組命名、不可授予;名稱 / 排序 / 圖示可在「選單管理」修改;圖示須是 frontend/src/ui/icons.ts 登記的名稱)
+  - { code: netops.group.firewall, name: 防火牆 PA-560, kind: group, parent: netops.app.access, sort: 10, icon: shield }
+  - { code: netops.group.ad, name: AD 網域, kind: group, parent: netops.app.access, sort: 20, icon: gateway }
+  - { code: netops.group.knowledge, name: 網通知識, kind: group, parent: netops.app.access, sort: 30, icon: book-open }
+
+  # 防火牆 PA-560
+  - { code: netops.pa-dashboard.read, name: 流量總覽, kind: menu, parent: netops.group.firewall, sort: 10, includes: [netops.pa.read] }
+  - { code: netops.pa-events.read, name: 安全事件, kind: menu, parent: netops.group.firewall, sort: 20, includes: [netops.pa.read] }
+  - { code: netops.pa-search.read, name: Log 明細查詢, kind: menu, parent: netops.group.firewall, sort: 30, includes: [netops.pa-log.read] }
+  - { code: netops.pa-files.read, name: FTP Log 檔案, kind: menu, parent: netops.group.firewall, sort: 40, includes: [netops.ftp.read] }
+  # 同步 / 分析 / 刪除分析結果(FTP 唯讀,只刪本系統資料;AGENT.md §7.4)
+  - { code: netops.pa-files.manage, name: 同步 / 分析 / 刪除分析結果, kind: button, parent: netops.pa-files.read, sort: 10, includes: [netops.ftp.write] }
+
+  # AD 網域
+  - { code: netops.ad-events.read, name: AD 事件總覽, kind: menu, parent: netops.group.ad, sort: 10, includes: [netops.ad.read] }
+  - { code: netops.ad-search.read, name: Log 明細查詢, kind: menu, parent: netops.group.ad, sort: 20, includes: [netops.ad-log.read] }
+  - { code: netops.ad-files.read, name: FTP Log 檔案, kind: menu, parent: netops.group.ad, sort: 30, includes: [netops.ftp.read] }
+  - { code: netops.ad-files.manage, name: 同步 / 匯入 / 刪除匯入結果, kind: button, parent: netops.ad-files.read, sort: 10, includes: [netops.ftp.write] }
+
+  # 網通知識
+  - { code: netops.kb-page.read, name: 知識庫, kind: menu, parent: netops.group.knowledge, sort: 10, includes: [netops.kb.read] }
+  - { code: netops.kb-page.write, name: 新增 / 修改 / 刪除筆記, kind: button, parent: netops.kb-page.read, sort: 10, includes: [netops.kb.write] }
+
+roles:
+  - code: netops-admin
+    name: 資訊網通管理系統管理員
+    description: 資訊網通管理系統全部畫面與操作(FTP 同步 / 分析、知識庫編輯;按鈕綁定的寫入 API 一併取得)
+    permissions:
+      - netops.app.access
+      - netops.pa-dashboard.read
+      - netops.pa-events.read
+      - netops.pa-search.read
+      - netops.pa-files.read
+      - netops.pa-files.manage
+      - netops.ad-events.read
+      - netops.ad-search.read
+      - netops.ad-files.read
+      - netops.ad-files.manage
+      - netops.kb-page.read
+      - netops.kb-page.write
+  - code: netops-viewer
+    name: 資訊網通管理系統檢視者
+    description: 資訊網通管理系統全部畫面唯讀(不含 FTP 同步 / 分析與知識庫編輯)
+    permissions:
+      - netops.app.access
+      - netops.pa-dashboard.read
+      - netops.pa-events.read
+      - netops.pa-search.read
+      - netops.pa-files.read
+      - netops.ad-events.read
+      - netops.ad-search.read
+      - netops.ad-files.read
+      - netops.kb-page.read

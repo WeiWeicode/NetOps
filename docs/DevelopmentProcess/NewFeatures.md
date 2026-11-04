@@ -2,6 +2,12 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。
 
+## 2026-11-03 F1 完成:文件整理
+- 工作項目:F1
+- 內容:依主串規則,功能 MR(!16 起)不改 PROJECT-MAP、HANDOFF、IMPL-PLAN,F1 完成後在本 MR 一次整理:專案地圖的 `frontend/` 目錄與「要改 X」、測試地圖、已知差異;IMPL-PLAN 與 HANDOFF 的 F1 狀態與 MR 合併順序。只改 F1 段落。
+- 檔案:`docs/PROJECT-MAP.md`、`docs/HANDOFF.md`、`docs/IMPL-PLAN.md`
+- 驗證:對照 `frontend/` 實際目錄;code-reviewer 審查
+
 ## 2026-11-03 F1 第 3 批:收尾
 - 工作項目:F1
 - 內容:移除 `frontend/` 的佔位頁與連線驗證卡片;舊版程式依 D12、D18 保留到舊版停用;細節見 `FrontendCorrection.md`。

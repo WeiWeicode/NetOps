@@ -1,6 +1,6 @@
 # 專案地圖 — NetOps
 
-> **最後更新:2026-11-03**(F1 第 2 批:FTP Log 檔案(PA、AD)、AD 事件總覽、安全事件、流量總覽改寫;F1 第 1 批:新增 `frontend/` 框架;B2-logs:PA Log 明細查詢與匯出,B2 後端模組搬移完成;舊版程式未改動)。
+> **最後更新:2026-11-03**(F1 完成:`frontend/` 框架、全部頁面改寫並串接後端、收尾;B2-logs:PA Log 明細查詢與匯出,B2 後端模組搬移完成;舊版程式未改動)。
 > 開發新功能後,在同一個變更內更新本文件(`AGENT.md` §9)。只寫結構與職責,細節連到 `docs/`。
 
 資訊網通管理系統:PA-560 防火牆 log、AD 事件與網通知識庫;AI 問答只留在舊版(ARCHITECTURE D17)。目標是接入 GigaNexus Gateway(`/netops/`、`netops-api` :51292),目前部署於 IIS `/NetOps`。
@@ -49,18 +49,18 @@ NetOps/
 │  │     └─ ftp/            routes.ts(PA)、ad-routes.ts(AD;清單為工作模式)
 │  ├─ test/unit/            app、config、jobs、store、ftp、pa / ad(與舊版結果比對);test/fixtures 假 log、假 AD 匯出檔、假 FTP
 │  └─ Dockerfile、.npmrc(@giganexus/* 取自 GitLab npm Registry)
-├─ frontend/                netops-web(Vue 3 + TypeScript,base /netops/;F1,框架由入口網複製,docs/UI-GUIDE.md)
+├─ frontend/                netops-web(Vue 3 + TypeScript,base /netops/;F1 完成,框架由入口網複製,docs/UI-GUIDE.md)
 │  ├─ src/
 │  │  ├─ ui/                全域元件與設計 token(入口網 src/ui/,只換 tokens.css 顏色;NetOps 新增 charts/GStackedBars、base.css 的 .c-* 文字色)
 │  │  ├─ layouts/           AppLayout(兩層側欄、頂列)、TabbedPage
 │  │  ├─ router.ts          選單群組、功能頁、一般連結、路由守衛(應用 / 頁面權限)
-│  │  ├─ api/               gateway.ts(web-kit 包裝)、perms.ts(權限代碼)、netops.ts、ftp.ts、ad.ts、paEvents.ts、pa.ts(/api/netops/*,docs/API.md)、jobs.ts(工作狀態)、format.ts(顯示格式)
-│  │  ├─ composables/       apps、guard(守衛判斷)、menu、session、theme、useJob(工作模式輪詢)、usePolling(背景工作狀態輪詢)、ftpFiles(FTP 清單的純函式)、adEvents、paDashboard(排行 → 明細查詢條件)、dates
-│  │  ├─ components/        PingCard、TopList(排行清單,安全事件與流量總覽共用)
-│  │  ├─ config/links.ts    舊版 AI 問答(含帶入問題的 legacyAskUrl)、Veeam 連結(D11、D18)
-│  │  └─ pages/             firewall/、ad/(已改寫的頁面)、WipPage(改寫中)、Forbidden、NotFound、Unavailable
-│  ├─ mock/                 本機假 Gateway(gateway.ts;MOCK=admin|viewer|noapp|anon,只在 dev)與各模組假 API(ftp.ts、ad.ts、paEvents.ts、pa.ts)
-│  └─ test/                 vitest:選單、路由守衛、應用層守衛、風格、工作輪詢、FTP 清單
+│  │  ├─ api/               gateway.ts(web-kit 包裝、download())、perms.ts(權限代碼)、ftp / pa / paEvents / ad / kb.ts(/api/netops/*,docs/API.md)、jobs.ts(工作狀態)、format.ts(顯示格式)
+│  │  ├─ composables/       apps、guard(守衛判斷)、menu、session、theme;useJob(工作模式)、usePolling(背景狀態輪詢)、searchQuery(明細查詢網址條件)、markdown(marked + DOMPurify)、ftpFiles、adEvents、paDashboard、dates
+│  │  ├─ components/        TopList(排行清單,安全事件與流量總覽共用)
+│  │  ├─ config/links.ts    舊版 NetOps(AI 問答、AI 分析、知識庫 AI 功能)與 Veeam 連結(D11、D17、D18)
+│  │  └─ pages/             firewall/(流量總覽、安全事件、明細查詢、FTP Log 檔案)、ad/(事件總覽、明細查詢、FTP Log 檔案)、knowledge/;Forbidden、NotFound、Unavailable
+│  ├─ mock/                 本機假 Gateway(gateway.ts;MOCK=admin|viewer|noapp|anon,只在 dev,不進建置)與各模組假 API(ftp、pa、paEvents、paLog、ad、kb)
+│  └─ test/                 vitest:選單、守衛、應用層守衛、風格、工作輪詢、狀態輪詢、各頁純函式、網址條件、連結
 └─ deploy/
    ├─ docker-compose.yml    netops-api 加入 Gateway 網路,不對主機發佈 port
    ├─ host2-set-secrets.sh  主機 2 機密與 netops.env(使用者執行)
@@ -107,6 +107,8 @@ NetOps/
 | AI 提示與流程 | `server/routes/ai.js`、`server/lib/evidence.js`、`server/lib/llm.js` |
 | 知識庫 | 新版 `backend/src/modules/kb/`;向量與自動學習只在舊版 `server/lib/vector.js`、`iplearn.js`(D17) |
 | 選單與頁面 | 舊版 `src/router/menu.js`、`src/views/`;新版 `frontend/src/router.ts`、`frontend/src/pages/` |
+| 新版畫面呼叫的 API | `frontend/src/api/*.ts`(頁面不直接 fetch;下載用 `api/gateway.ts` 的 `download()`) |
+| 舊版連結(AI、Veeam) | `frontend/src/config/links.ts`(舊版網址待使用者確認) |
 | 新版權限代碼(前端) | `frontend/src/api/perms.ts`(ARCHITECTURE §5) |
 | 新版 API、權限代碼 | `docs/API.md`(介面定稿)、`backend/src/modules/*/routes.ts`、`backend/src/openapi.ts` |
 | 新版部署 | `.gitlab-ci.yml`、`deploy/` |
@@ -116,14 +118,14 @@ NetOps/
 
 ## 6. 測試地圖
 
-`backend/test/unit/`:OpenAPI 必填欄位、內部 Token 驗證與錯誤格式、部署區與服務設定、`/readyz`、長時間工作(`cd backend && npm test`)。`frontend/test/`:選單、路由守衛、應用層守衛、風格、工作輪詢、FTP 清單(`cd frontend && npm test`);畫面以 `MOCK=admin|viewer|noapp npm run dev` 在瀏覽器檢查。舊版沒有自動化測試,只有 `scripts/` 的手動探測;B2 搬移時補上模組測試。
+`backend/test/unit/`:OpenAPI 必填欄位、內部 Token 驗證與錯誤格式、部署區與服務設定、`/readyz`、長時間工作(`cd backend && npm test`)。`frontend/test/`:選單、路由守衛、應用層守衛、風格、工作 / 狀態輪詢、各頁純函式、網址條件、連結(`cd frontend && npm test`);畫面以 `MOCK=admin|viewer|noapp npm run dev` 在瀏覽器檢查。舊版沒有自動化測試,只有 `scripts/` 的手動探測;B2 搬移時補上模組測試。
 
 ## 7. 已知差異(與 Gateway §10.7.2)
 
 | 差異 | 狀態 |
 | --- | --- |
 | 整個後端使用 Express 與 JavaScript、沒有 OpenAPI | B1、B2 處理 |
-| 前端 JavaScript、Element Plus,與 GigaItApp、入口網元件不同 | F1 改用 `src/ui/` 與 TypeScript(ARCHITECTURE D5、`docs/UI-GUIDE.md`) |
+| 前端 JavaScript、Element Plus,與 GigaItApp、入口網元件不同 | 新版 `frontend/` 已改用 `src/ui/` 與 TypeScript(F1);舊版 `src/` 與根目錄 Element Plus / Tailwind 依 D12、D18 保留到舊版停用(`docs/UI-GUIDE.md` §4) |
 | 自建登入、Bearer Token 存 localStorage | B2、F1 移除 |
 | 回應格式與時間不符 BACKEND-GUIDE §5 | B2 處理 |
 | 資料寫在 `uploads/`、各模組自行讀寫 | B2 集中到 `infra/store`;資料庫為後續階段(D8) |

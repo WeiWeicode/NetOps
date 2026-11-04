@@ -1,6 +1,6 @@
 # 專案地圖 — NetOps
 
-> **最後更新:2026-11-04**(D1:CI 發佈前端 SPA 與套用畫面權限、`deploy/gateway-rbac.yaml`、知識庫 NAS 備份 `deploy/kb-backup/`、監控 Key;!24 審查中。2026-11-03:F1、B2 完成;舊版程式未改動)。
+> **最後更新:2026-11-04**(D1 完成並上測試區,有未驗項目:CI 發佈前端 SPA 與套用畫面權限、`deploy/gateway-rbac.yaml`、知識庫 NAS 備份 `deploy/kb-backup/`、監控 Key;驗收報告 `docs/test-reports/2026-11-04-d1-uat.md`。2026-11-03:F1、B2 完成;舊版程式未改動)。
 > 開發新功能後,在同一個變更內更新本文件(`AGENT.md` §9)。只寫結構與職責,細節連到 `docs/`。
 
 資訊網通管理系統:PA-560 防火牆 log、AD 事件與網通知識庫;AI 問答只留在舊版(ARCHITECTURE D17)。目標是接入 GigaNexus Gateway(`/netops/`、`netops-api` :51292),目前部署於 IIS `/NetOps`。
@@ -12,7 +12,7 @@
 ```
 NetOps/
 ├─ AGENT.md / CLAUDE.md / GEMINI.md / README.md
-├─ docs/               ARCHITECTURE、IMPL-PLAN、HANDOFF、本文件、DevelopmentProcess/
+├─ docs/               ARCHITECTURE、IMPL-PLAN、HANDOFF、本文件、DevelopmentProcess/、Gherkin/(行為規格)、test-reports/(測試與驗收報告)
 ├─ server/             Express API
 │  ├─ index.js         進入點、路由掛載、靜態檔
 │  ├─ config.js、db.js 設定;SQL Server(只供登入與跳轉)

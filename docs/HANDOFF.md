@@ -2,7 +2,51 @@
 
 > 接手時先讀 `AGENT.md`,再讀 `docs/ARCHITECTURE.md`、`docs/IMPL-PLAN.md`。
 
-## 2026-11-04 D1 測試區部署(MR 審查中)
+## 2026-11-04 收工
+
+**已完成**
+- **D1 測試區部署**:Gateway !20(Nginx `/netops/`、`gw.app`)、!21(`gw-super-admin` 只新增權限的套用流程,已在主機 2 補上 `netops.*`)、giga-observe !3(拓樸)、NetOps !24(CI 發佈 SPA、`gateway-rbac.yaml`、監控 Key、知識庫 NAS 備份)、!25(D1 文件)、!26(安全事件頁無資料時不送出查詢)全部合併並部署。
+- **驗收**(報告見 !27 `docs/test-reports/2026-11-04-d1-uat.md`):`netops-admin`、`netops-viewer`、無權限三種帳號的畫面與導回、應用切換、1440px / 375px、架構觀測(`netops-api` 心跳與請求、`netops-web` 事件)、NAS 備份產生都通過。指派角色曾被防提權擋下(403),以 Gateway !21 替 `gw-super-admin` 補 `netops.*` 後指派成功。
+
+**D1 未驗項目(下一階段先做)**
+1. **Log 明細查詢**的送出、結果表、取消、匯出(admin 與 viewer 各一次):測試區還沒有已分析的 TRAFFIC log,送出時回 404「沒有已分析的 log 檔」。要先在「FTP Log 檔案」分析至少一個 TRAFFIC 檔,這是寫入操作,**先取得使用者同意**。
+2. **安全事件頁無資料時**不再呼叫 API(!26):驗收時測試區已有資料,要找沒有資料的類型再看一次,並確認架構觀測不再新增 `pa-events/overview` 的 400。
+3. **知識庫備份可還原**:目前測試區 0 則筆記,備份是空的(`files=0`)。有筆記後解開一份備份核對內容與檔數。
+
+**驗收發現的待改項目**
+
+| 項目 | 說明 |
+| --- | --- |
+| FTP 根目錄列出系統資料夾 | FTP Log 檔案清單出現 `$RECYCLE.BIN`、`System Volume Information`;前端或後端過濾 |
+| viewer 開 AD FTP 頁就觸發 FTP 掃描 | 頁面載入自動送 `POST /api/netops/ftp/ad/listings`(最長 3 分鐘),唯讀角色也會觸發,多人同時開會疊加(FTP 同時連線 1);改為手動或加快取 |
+| 備份容器沒有 healthcheck | `netops-kb-backup` 只能看 `LAST_RESULT` 與日誌判斷 |
+| `/netops/` 一度被導回入口網 | 指派後可進,之後又被導回,補權限並重新登入後沒再發生;推測與權限版本時差或指派被收回有關,原因未明,指派後再觀察 |
+
+**下一步:D2 驗收與切換**(IMPL-PLAN D2)。切換前要先確認:
+- 舊版關閉知識庫寫入與外部 IP 自動學習的做法(D14、D18)。
+- 舊版知識庫 `uploads/knowledge` 不可重建,複製前**先備份**;新版 NAS 備份確認可還原(上面未驗項目 3)。
+- 正式區的 Gateway 步驟同測試區:`gateway-rbac.yaml`(`rbac-prod`)、`gateway-apps.yaml`、`apply-super-admin-grants.sh prod`(正式區要明確指定 `IMAGE_TAG`,Gateway DEPLOYMENT §3.5.1)。
+
+**待使用者決定**
+
+| # | 事項 | 說明 |
+| --- | --- | --- |
+| a | CI Runner 只跑受保護分支 | `check:*` 在所有分支用主機 2 的 shell executor 執行,讀得到主機上的 npm Token;D1 後 develop 的 job 還會寫 `gw_www` 與 Gateway RBAC,影響變大。要不要設為 Protected runner 或改 docker executor |
+| b | FTPS | FTP 帳密與 log 目前明文傳輸(沿用舊版)。確認 FTP 伺服器支援 FTPS 後才能設 `FTP_SECURE=1` |
+| c | `.gz` 提早結束 | 舊版 `readLog` 讀 `.gz` 時,來源比解壓先關閉會提早結束(測試可重現;FTP 分段串流正常)。依 D4 沒改核心;FTP 上是否有 `.gz` 未確認 |
+| d | 舊版 NetOps 正式網址 | **仍未確認**。F1 先用 `https://gsmc-web.gigasolar.com.tw/NetOps`(`frontend/src/config/links.ts`),AI 問答連結依賴它 |
+| e | F1 新增的 UI 元件 | `GStackedBars` 等要不要回饋到入口網與 GigaItApp(跨 repo) |
+| f | 知識庫匯整檔可被偽造成另一則筆記(Low) | 修了會改匯整檔格式(與舊版不同) |
+| g | `spa-netops` 以 root 掛整個 `gw_www` | 同 GigaItApp、giga-Portal;只掛子目錄要 Compose `volume.subpath`(Docker 26+) |
+| h | 知識庫備份是明文 | 放在附件服務共用的 NAS 分享;要不要獨立帳號 / ACL 或加密 |
+| i | PA、AD 的 FTP 管理按鈕共用 `netops.ftp.write` | 預設兩個角色不受影響,單獨指派按鈕時權限比預期大 |
+| j | viewer 可以查詢並匯出 Log 明細 | 依 ARCHITECTURE §5「全部 .read」;匯出行為待未驗項目 1 一起確認 |
+| k | **Gateway 防提權缺口(High,兩個)** | `bff/src/modules/admin/rbac.ts`:① `PUT /api/admin/roles/:id/permissions` 不檢查操作人是否擁有要加入的權限,持有 `gw.admin.rbac.write` 者可把任意權限加進自己所屬的角色(例如 `employee`);② `POST` / `PATCH /api/admin/roles/:id/rules` 沒有保護 `gw-super-admin` 也沒有權限檢查,可建「自己的部門 → gw-super-admin」規則升為超級管理員。修法見 Gateway !21 描述;屬 Gateway repo |
+| l | 超級管理員可以寫入 NetOps | `gw-super-admin` 補了 `netops.*`(!21),所有超級管理員都能 FTP 同步 / 分析 / 刪除分析結果、編輯知識庫;成員有 AD 群組對應時群組內每個人都有 |
+
+**之後**:工作區 `GigaNexusAIPlan/architecture/` 的 NetOps 狀態(`deployment.json` 的 CI、`workspace.json` 4 條 `planned` 關係)要更新為已上測試區,屬於工作區 repo。
+
+## 2026-11-04 D1 測試區部署(紀錄:MR 審查與合併順序)
 
 **已完成**
 - F1 與 Gherkin(!12–!23)已合併進 `develop`。
@@ -29,7 +73,7 @@
 
 **之後**:工作區 `GigaNexusAIPlan/architecture/` 的 NetOps 狀態(`deployment.json` 的 CI、`workspace.json` 4 條 `planned` 關係)要在 D1 驗證後更新,屬於工作區 repo。
 
-## 2026-11-03 收工
+## 2026-11-03 收工(紀錄)
 
 **已完成**
 - B0、B1、B2 全部合併(!4、!7–!11)並部署測試區:`netops-api` 經 Gateway 可用,新版機密腳本已執行、路由已發佈、權限已指派;容器內 FTP 可用;!11 的測試區驗證(明細筆數、匯出、取消後匯入繼續)通過。
@@ -61,7 +105,9 @@
 
 **B0 最小骨架部署完成**(2026-11-03,NetOps !4 合併,`develop` e53f8da;測試區四項完成條件驗證通過)。`backend/` 有內部 Token 驗證、統一錯誤格式、`/healthz`、`/readyz`、`/openapi.json`、`setupGateway` 與驗證路由 `GET /api/netops/ping`(`netops.ping.read`);CI 只部署 `netops-api` 到主機 2。舊版繼續在 IIS 運作。**這次不改寫 AI 功能**,未來由 AI 中控台提供,切換後舊版留著給 AI 用(D17、D18)。負責人:佳緯。
 
-**F1 前端完成(MR 審查中)**:`frontend/` 由入口網複製 `src/ui/`、外框與守衛,換工程藍;全部頁面改寫並串接後端:FTP Log 檔案(PA、AD,!12)、AD 事件總覽(!13)、安全事件(!14)、流量總覽(!15)、Log 明細查詢(!16,PA 工作模式)、知識庫(!17,Markdown 經 DOMPurify)、收尾(!19)。MR 堆疊,依 !12 → !13 → !14 → !15 → !16 → !17 → !19 → 本文件 MR 的順序合併。AI 功能(問答、分析、知識庫語意搜尋與自動學習)改連結到舊版(D17、D18),舊版網址在 `frontend/src/config/links.ts` 待確認。舊版 `src/`、`server/` 依 D12、D18 保留。`netops.*` 畫面代碼要到 D1 才登記,測試區看畫面用 `DEV_EXTRA_PERMS` 或本機假 Gateway(`MOCK`);前端 SPA 部署屬 D1。
+**D1 測試區部署完成(有未驗項目)**(2026-11-04):前端 `/netops/` 經 Gateway 可用,畫面權限、應用切換、監控、知識庫 NAS 備份上線;見最前面「2026-11-04 收工」。
+
+**F1 前端完成**(2026-11-04 全部合併):`frontend/` 由入口網複製 `src/ui/`、外框與守衛,換工程藍;全部頁面改寫並串接後端:FTP Log 檔案(PA、AD,!12)、AD 事件總覽(!13)、安全事件(!14)、流量總覽(!15)、Log 明細查詢(!16,PA 工作模式)、知識庫(!17,Markdown 經 DOMPurify)、收尾(!19)。MR 堆疊,依 !12 → !13 → !14 → !15 → !16 → !17 → !19 → 本文件 MR 的順序合併。AI 功能(問答、分析、知識庫語意搜尋與自動學習)改連結到舊版(D17、D18),舊版網址在 `frontend/src/config/links.ts` 待確認。舊版 `src/`、`server/` 依 D12、D18 保留。`netops.*` 畫面代碼要到 D1 才登記,測試區看畫面用 `DEV_EXTRA_PERMS` 或本機假 Gateway(`MOCK`);前端 SPA 部署屬 D1。
 
 ## 下一步
 

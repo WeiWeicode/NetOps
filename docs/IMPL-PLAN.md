@@ -9,7 +9,7 @@
 | B1 | 後端骨架 | 完成 |
 | B2 | 模組搬移 | 完成 |
 | F1 | 前端框架與畫面改寫 | 完成 |
-| D1 | 測試區部署 | MR 審查中(NetOps !24、Gateway !20、giga-observe !3) |
+| D1 | 測試區部署 | 完成(有未驗項目) |
 | D2 | 驗收與切換 | 未開始 |
 | 後續 | 服務寫入資料庫 | 未排程(ARCHITECTURE §4.2) |
 | 後續 | 接入 AI 中控台、停用舊版 IIS | 未排程;目前只有 PRD(ARCHITECTURE D17、D18) |
@@ -104,7 +104,7 @@ D13:骨架直接留用;AI 不在這次範圍,不做串流驗證(D7、D17)。
 - NetOps:CI 加上 SPA、`gateway-rbac.yaml`、其餘機密腳本(使用者執行)。路由由服務啟動時自動註冊為草稿(B0),不另寫 `gateway-routes.yaml`(`apply` 會把已發佈路由打回草稿)。
 - 容器內驗證 FTP;知識庫 NAS 備份(Q3)。
 
-**狀態:MR 審查中(2026-11-04)**。合併順序:Gateway !20(Nginx `/netops/`、`deploy/gateway-apps.yaml`)→ giga-observe !3(拓樸 `netops-web`、`netops-api`、FTP、資料目錄)→ NetOps !24(合併前在主機 2 執行 `host2-set-secrets.sh` 建 ingest Key、`host2-setup-kb-backup.sh` 建 NAS 目錄)→ 套用 `gateway-apps.yaml` → GigaItApp 指派測試帳號。各 MR 的前後步驟與驗證寫在 MR 描述。
+**狀態:完成(有未驗項目)(2026-11-04)**。Gateway !20、!21,giga-observe !3,NetOps !24–!26 合併並部署測試區;驗收報告見 `docs/test-reports/2026-11-04-d1-uat.md`(!27)。未驗:Log 明細查詢的送出 / 結果 / 取消 / 匯出(測試區要先分析一個 TRAFFIC 檔,寫入操作需使用者同意)、安全事件頁無資料時的重驗(!26)、知識庫備份還原;移到 D2 開頭(HANDOFF「2026-11-04 收工」)。指派 `netops-*` 角色前,`gw-super-admin` 要先補 `netops.*`(Gateway !21,DEPLOYMENT §3.5.1)。原合併順序:Gateway !20(Nginx `/netops/`、`deploy/gateway-apps.yaml`)→ giga-observe !3(拓樸 `netops-web`、`netops-api`、FTP、資料目錄)→ NetOps !24(合併前在主機 2 執行 `host2-set-secrets.sh` 建 ingest Key、`host2-setup-kb-backup.sh` 建 NAS 目錄)→ 套用 `gateway-apps.yaml` → GigaItApp 指派測試帳號。各 MR 的前後步驟與驗證寫在 MR 描述。
 
 | 項目 | 做法 |
 | --- | --- |

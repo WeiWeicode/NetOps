@@ -11,8 +11,13 @@
 | F1 | 前端框架與畫面改寫 | 完成 |
 | D1 | 測試區部署 | 完成(有未驗項目) |
 | D2 | 驗收與切換 | 未開始 |
-| 後續 | 服務寫入資料庫 | 未排程(ARCHITECTURE §4.2) |
-| 後續 | 接入 AI 中控台、停用舊版 IIS | 未排程;目前只有 PRD(ARCHITECTURE D17、D18) |
+| S0 | 串流驗證(SSE 經 Nginx / BFF) | 未開始(ARCHITECTURE D7) |
+| A1 | AI 搬進 `netops-api`、停用舊版 IIS | 未開始(D23、D18) |
+| R0 | PA 即時監控前置:設備帳號、Log Forwarding、網路、容量量測 | 未開始(PA-LIVE-PLAN §5、§11) |
+| R1 | PA 即時監控(唯讀):`netops-pa`、`netops-redis`、即時監控頁 | 未開始(D19、D21、D24) |
+| R2 | 封鎖 IP(DAG 動態標籤) | 未排程(D22) |
+| ~~後續~~ | ~~服務寫入資料庫~~ | 取消(D20) |
+| ~~後續~~ | ~~接入 AI 中控台~~ | 取消(D17 → D23) |
 
 ---
 
@@ -122,6 +127,48 @@ D13:骨架直接留用;AI 不在這次範圍,不做串流驗證(D7、D17)。
 2. 正式區部署,發佈路由;負責人在 GigaItApp 指派 `netops-admin`、`netops-viewer`(D15)。
 3. 關閉舊版知識庫寫入與外部 IP 自動學習,全部複製資料(D14),核對檔數;舊版繼續同步 FTP(D18)。關閉寫入的做法在這步之前確認。
 4. 新舊期間總覽數字核對後,通知使用者改用新網址;AI 問答與分析繼續用舊版(D18)。
-5. 在 `main` 打標籤保留舊版程式。舊版 IIS 運作到 AI 中控台接入才停用,也作為回滾。
+5. 在 `main` 打標籤保留舊版程式。舊版 IIS 運作到 A1 完成才停用,也作為回滾。
 
 **完成條件**:正式區可用;舊版知識庫停止寫入、AI 功能仍可用;文件、架構資料與甘特圖更新。
+
+---
+
+> 以下 S0、A1、R0–R2 為 2026-11-04 新增,架構與細節見 [PA-LIVE-PLAN.md](PA-LIVE-PLAN.md)。順序以甘特圖為準;S0 是 A1 與 R1 的共同前提。
+
+## S0 串流驗證
+
+1. `netops-api` 加一支 SSE 驗證路由(heartbeat 每 15 秒),經 Nginx 與 BFF 在測試區連線超過 5 分鐘。
+2. 確認不被緩衝、不因 60 秒閒置逾時中斷、斷線可重連、不累積斷路器失敗。
+3. 需要改 Gateway 設定時,先說明並取得同意(Gateway repo)。
+
+**完成條件**:測試區 SSE 連線 5 分鐘以上穩定;或確認不可行、改用輪詢並記錄原因。
+
+## A1 AI 搬移
+
+1. 替舊版 AI 核心(`evidence.js`、`llm.js`、`vector.js`、`iplearn.js`)補測試基準,再搬進 `backend/`(D4,`refactor-assistant`)。
+2. 設定改連 `10.10.130.46`(`LLM_URL`、`LLM_MODEL`、`EMBED_URL`);Qdrant 與翻譯依 PA-LIVE-PLAN P6 定案。
+3. API 補 `x-permission`、`x-gherkin`;`gateway-rbac.yaml` 加 AI 權限;前端加回 AI 分析、問答、翻譯、整理筆記、語意搜尋。
+4. 確認主機 2、3 容器可連 AI 主機與 RDAP;測試區驗收。
+5. 正式區上線後停用舊版 IIS(`main` 已打標籤)。
+
+**完成條件**:新版 AI 功能與舊版一致並通過驗收;舊版 IIS 停用;文件、架構資料與甘特圖更新。
+
+## R0 即時監控前置
+
+1. 網通提供 PA-560 管理 IP、PAN-OS 版本,建立唯讀管理角色與 API Key、HTTP 與 Syslog Server Profile(P1、P2)。
+2. ~~量 log 量與主機記憶體(P3)~~:2026-11-04 完成,見 PA-LIVE-PLAN §5。
+3. ~~接收 port 與 Python 在 Gateway 文件登記(P4)~~:Gateway MR 已開;網通放行 `netops-pa` → PA-560 `:443` 與 PA-560 → 51293 / 51294。
+4. 機密(API Key、HTTP 接收 Token)寫成腳本交給使用者在主機執行。
+5. 轉送設好後核對實際每秒筆數與管理平面 CPU,必要時調整 PA-LIVE-PLAN §5 的保留時間。
+
+**完成條件**:P1–P7 定案(P3–P7 已於 2026-11-04 定案);網路放行;轉送量核對寫回 PA-LIVE-PLAN §5。
+
+## R1 即時監控(唯讀)
+
+1. `pa-collector/`:SDK 輪詢寫快照與心跳;HTTP(其他類型)與 Syslog(TRAFFIC)接收,寫 Stream 與每分鐘統計;依 D21 修剪(TRAFFIC 明細 1 小時、統計 1 天;其他 2 天)。
+2. `netops-redis` 加入 Compose 與 CI(測試區先;`maxmemory` 2 GB、RDB)。
+3. `netops-api`:`infra/redis`、`modules/pa-live`(快照、排行、log、SSE),補 API.md、OpenAPI、Gherkin。
+4. 前端「即時監控」頁;`gateway-rbac.yaml` 登記節點與權限。
+5. 測試區驗收後上正式區;上線一週觀察 Redis 用量並檢討保留時間。
+
+**完成條件**:即時監控頁在兩區可用;收集器停止時畫面明確顯示;Redis 用量在上限內;文件、架構資料與甘特圖更新。

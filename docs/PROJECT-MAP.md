@@ -117,7 +117,7 @@ NetOps/
 | 新版權限代碼(前端) | `frontend/src/api/perms.ts`(ARCHITECTURE §5) |
 | 新版 API、權限代碼 | `docs/API.md`(介面定稿)、`backend/src/modules/*/routes.ts`、`backend/src/openapi.ts` |
 | 新版部署 | `.gitlab-ci.yml`、`deploy/` |
-| 接入規劃與決策 | `docs/ARCHITECTURE.md`、`docs/IMPL-PLAN.md` |
+| 接入規劃與決策 | `docs/ARCHITECTURE.md`、`docs/IMPL-PLAN.md`、`docs/PA-LIVE-PLAN.md`(PA 即時監控與 AI 搬移) |
 | 資料與 AI 流程(現況、過渡期、未來目標) | `docs/FLOW-ARCHITECTURE.md` |
 | 新版畫面與主題色 | `docs/UI-GUIDE.md` |
 
@@ -133,4 +133,4 @@ NetOps/
 | 前端 JavaScript、Element Plus,與 GigaItApp、入口網元件不同 | 新版 `frontend/` 已改用 `src/ui/` 與 TypeScript(F1);舊版 `src/` 與根目錄 Element Plus / Tailwind 依 D12、D18 保留到舊版停用(`docs/UI-GUIDE.md` §4) |
 | 自建登入、Bearer Token 存 localStorage | B2、F1 移除 |
 | 回應格式與時間不符 BACKEND-GUIDE §5 | 新版已處理(B2) |
-| 資料寫在 `uploads/`、各模組自行讀寫 | 新版已集中到 `infra/store`(B2);資料庫為後續階段(D8) |
+| 資料寫在 `uploads/`、各模組自行讀寫 | 新版已集中到 `infra/store`(B2);不寫入資料庫(D20);即時資料規劃放 Redis(D19) |

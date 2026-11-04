@@ -2,6 +2,33 @@
 
 > 接手時先讀 `AGENT.md`,再讀 `docs/ARCHITECTURE.md`、`docs/IMPL-PLAN.md`。
 
+## 2026-11-04 D1 測試區部署(MR 審查中)
+
+**已完成**
+- F1 與 Gherkin(!12–!23)已合併進 `develop`。
+- D1 三個 MR 已開,待合併:NetOps !24(CI 發佈 SPA、`gateway-rbac.yaml`、監控 Key、知識庫 NAS 備份)、Gateway !20(Nginx `/netops/`、`deploy/gateway-apps.yaml`)、giga-observe !3(拓樸)。都經 `code-reviewer`、`security-auditor` 審查並修正。
+
+**合併順序**(各 MR 描述有合併前後要做的事與預期輸出)
+1. Gateway !20 → develop。
+2. giga-observe !3 → main,在主機 2 `git pull` 並重啟 `gno-backend`。
+3. 在主機 2 以 root 執行本分支的 `deploy/host2-set-secrets.sh`(建 ingest Key)與 `deploy/host2-setup-kb-backup.sh`(NAS 目錄與標記檔),再合併 NetOps !24 → develop。
+4. `rbac-test` 成功後,套用 Gateway 的 `deploy/gateway-apps.yaml`;到 GigaItApp 把 `netops-admin`、`netops-viewer` 指派給測試帳號。
+5. 驗證:三種帳號看 `/netops/`(無權限導回 `/?denied=netops`);走登入 → 總覽 → 明細 → 知識庫;架構觀測看得到 `netops-api` 心跳與紀錄;NAS 上有當天的知識庫備份。
+6. 本文件 MR 在 !24 之後合併。
+
+**新的待決定事項**(審查提出,這次沒有處理)
+
+| # | 事項 | 說明 |
+| --- | --- | --- |
+| g | `spa-netops` 以 root 掛整個 `gw_www` | 同 GigaItApp、giga-Portal。只掛 `netops` 子目錄要用 Compose `volume.subpath`(Docker 26+),要先確認主機版本 |
+| h | 知識庫備份是明文 | 放在附件服務共用的 NAS 分享 `docker-folder`;要不要獨立帳號 / ACL 或加密 |
+| i | PA、AD 的 FTP 管理按鈕共用 `netops.ftp.write` | B1 的 API 設計;預設兩個角色不受影響,單獨指派按鈕時權限比預期大 |
+| j | viewer 可以查詢並匯出 Log 明細 | 依 ARCHITECTURE §5「全部 .read」;要不要收緊 |
+
+待決定 a(CI Runner 只跑受保護分支)的影響變大:D1 後 develop 的 job 會寫 `gw_www` 與 Gateway RBAC。
+
+**之後**:工作區 `GigaNexusAIPlan/architecture/` 的 NetOps 狀態(`deployment.json` 的 CI、`workspace.json` 4 條 `planned` 關係)要在 D1 驗證後更新,屬於工作區 repo。
+
 ## 2026-11-03 收工
 
 **已完成**

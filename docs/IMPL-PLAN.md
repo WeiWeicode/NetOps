@@ -8,8 +8,8 @@
 | B0 | 最小骨架部署 | 完成 |
 | B1 | 後端骨架 | 完成 |
 | B2 | 模組搬移 | 完成 |
-| F1 | 前端框架與畫面改寫 | 完成(MR 審查) |
-| D1 | 測試區部署 | 未開始 |
+| F1 | 前端框架與畫面改寫 | 完成 |
+| D1 | 測試區部署 | MR 審查中(NetOps !24、Gateway !20、giga-observe !3) |
 | D2 | 驗收與切換 | 未開始 |
 | 後續 | 服務寫入資料庫 | 未排程(ARCHITECTURE §4.2) |
 | 後續 | 接入 AI 中控台、停用舊版 IIS | 未排程;目前只有 PRD(ARCHITECTURE D17、D18) |
@@ -93,16 +93,26 @@ D13:骨架直接留用;AI 不在這次範圍,不做串流驗證(D7、D17)。
 - 無權限導回 `/?denied=netops`。
 - Veeam、舊版 AI 問答改一般連結(D11、D18)。
 
-**狀態:完成,MR 審查中**(2026-11-03)。① 框架 `feature/netops-f1-frame`(!6,已合併);② 畫面逐頁,每頁一個堆疊 MR:FTP Log 檔案 !12 → AD 事件總覽 !13 → 安全事件 !14 → 流量總覽 !15 → Log 明細查詢 !16(PA 工作模式、AD)→ 知識庫 !17;③ 收尾 !19:只清 `frontend/` 的佔位頁;舊版 `src/`、`server/`、Element Plus / Tailwind 依 D12、D18 保留到舊版停用(UI-GUIDE §4)。全部頁面串接後端(B2 各批已合併),AI 功能改連結到舊版(D17)。
+**狀態:完成**(2026-11-03 開 MR,2026-11-04 全部合併進 `develop`)。① 框架 `feature/netops-f1-frame`(!6,已合併);② 畫面逐頁,每頁一個堆疊 MR:FTP Log 檔案 !12 → AD 事件總覽 !13 → 安全事件 !14 → 流量總覽 !15 → Log 明細查詢 !16(PA 工作模式、AD)→ 知識庫 !17;③ 收尾 !19:只清 `frontend/` 的佔位頁;舊版 `src/`、`server/`、Element Plus / Tailwind 依 D12、D18 保留到舊版停用(UI-GUIDE §4)。全部頁面串接後端(B2 各批已合併),AI 功能改連結到舊版(D17)。
 
-**完成條件**(以本機假 Gateway 驗證;測試區要等 D1 登記 `netops.*` 畫面代碼後再看一次):`netops-admin`、`netops-viewer` 與無權限帳號各自看到正確畫面;舊版功能逐頁對照無遺漏;四種風格組合 × 1440px / 375px 都用瀏覽器看過;`vue-tsc` 通過;`frontend/` 不相依 `element-plus`、`tailwindcss`;無寫死 `/` 開頭的資源路徑。
+**完成條件**(以本機假 Gateway 驗證;測試區於 D1 驗證時用真實帳號再看一次):`netops-admin`、`netops-viewer` 與無權限帳號各自看到正確畫面;舊版功能逐頁對照無遺漏;四種風格組合 × 1440px / 375px 都用瀏覽器看過;`vue-tsc` 通過;`frontend/` 不相依 `element-plus`、`tailwindcss`;無寫死 `/` 開頭的資源路徑。
 
 ## D1 測試區部署
 
 - Gateway:`/netops/` Nginx location、`gw.app` 登記(跨 repo)。
 - giga-observe:拓樸與 ingest Key。
-- NetOps:CI 加上 SPA、`gateway-routes.yaml`、`gateway-rbac.yaml`、其餘機密腳本(使用者執行)。
+- NetOps:CI 加上 SPA、`gateway-rbac.yaml`、其餘機密腳本(使用者執行)。路由由服務啟動時自動註冊為草稿(B0),不另寫 `gateway-routes.yaml`(`apply` 會把已發佈路由打回草稿)。
 - 容器內驗證 FTP;知識庫 NAS 備份(Q3)。
+
+**狀態:MR 審查中(2026-11-04)**。合併順序:Gateway !20(Nginx `/netops/`、`deploy/gateway-apps.yaml`)→ giga-observe !3(拓樸 `netops-web`、`netops-api`、FTP、資料目錄)→ NetOps !24(合併前在主機 2 執行 `host2-set-secrets.sh` 建 ingest Key、`host2-setup-kb-backup.sh` 建 NAS 目錄)→ 套用 `gateway-apps.yaml` → GigaItApp 指派測試帳號。各 MR 的前後步驟與驗證寫在 MR 描述。
+
+| 項目 | 做法 |
+| --- | --- |
+| SPA | `deploy-web-test`:`spa-netops` 映像以一次性容器發佈到 `gw_www/netops`(同 GigaItApp、giga-Portal),冒煙測試確認 `/netops/` 回本系統 index.html |
+| 畫面權限 | `deploy/gateway-rbac.yaml`(ARCHITECTURE §5),`rbac-test` 每次 develop 套用;套用前檢查只動 `netops.*` / `netops-*`;角色不指派成員(D15) |
+| 應用切換 | `gw.app` 由 Gateway `deploy/gateway-apps.yaml` 登記,Gateway 負責人手動套用 |
+| 監控 | giga-observe ingest Key(服務 `netops-api`),由 `host2-set-secrets.sh` 建立;前端 `installMonitor({ app: 'netops-web' })` |
+| 知識庫備份(Q3) | `netops-kb-backup` 每天 2 點打包 `knowledge/` 到 NAS `docker-folder/giga-netops/<區>`,核對檔數、`.sha256`、保留 30 份;沒有標記檔不寫入 |
 
 **完成條件**:`develop` 合併後 CI 部署成功;瀏覽器走完登入、總覽、明細、知識庫;架構觀測看得到心跳與紀錄。
 

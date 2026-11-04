@@ -192,7 +192,7 @@ function tick() {
 
 // ---------- AD ----------
 const AD_DIR = '/AD_Log_Backup';
-const adDays = Array.from({ length: 14 }, (_, i) => {
+export const adDays = Array.from({ length: 14 }, (_, i) => {
   const d = new Date();
   d.setDate(d.getDate() - i - 1);
   const day = ymd(d);
@@ -215,7 +215,7 @@ const adDays = Array.from({ length: 14 }, (_, i) => {
     files: state === 'orphan' ? [] : files,
   };
 });
-const adStatus = {
+export const adStatus = {
   running: false,
   dir: AD_DIR,
   autoSyncMinutes: 0,

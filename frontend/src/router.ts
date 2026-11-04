@@ -92,8 +92,16 @@ const PAGES: PageDef[] = [
   },
   {
     path: 'ad/events',
-    meta: { permission: NETOPS.adEvents, requires: [API.adRead], title: 'AD 事件總覽', subtitle: 'AD Events', icon: 'activity', group: 'ad' },
-    view: wip('網域控制站匯出的 AD 事件統計與排行。'),
+    meta: {
+      permission: NETOPS.adEvents,
+      requires: [API.adRead],
+      title: 'AD 事件總覽',
+      subtitle: 'AD Events',
+      icon: 'activity',
+      group: 'ad',
+      description: '網域控制站每天匯出的事件統計、帳號與特權異動;點選帶條件到明細查詢',
+    },
+    view: page(() => import('./pages/ad/Events.vue')),
   },
   {
     path: 'ad/search',

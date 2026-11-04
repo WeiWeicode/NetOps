@@ -2,6 +2,12 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。範圍:`frontend/`。
 
+## 2026-11-03 F1 第 2 批:AD 事件總覽
+- 工作項目:F1
+- 內容:改寫 AD 事件總覽,串接 docs/API.md §6.1。期間改兩個日期欄位(預設最新一天、最長 92 天);KPI 改 `GStatCard`(點選帶條件到明細查詢,需 `netops.ad-search.read`);帳號與特權異動(新帳號隨即加入特權群組的提醒)、特權登入、需要注意的事件、事件排行、登入失敗的帳號 / IP / 原因。新增資料不完整提示:期間天數多於已匯入天數、上次同步失敗。「從 FTP 同步」依 `netops.ad-files.manage` 顯示,完成後自動更新。假 API `mock/ad.ts`。
+- 檔案:`frontend/src/pages/ad/Events.vue`、`frontend/src/api/ad.ts`、`frontend/src/composables/{dates,adEvents}.ts`、`frontend/mock/ad.ts`、`frontend/src/router.ts`
+- 驗證:見 MR 描述
+
 ## 2026-11-03 F1 第 2 批:FTP Log 檔案(PA、AD)
 - 工作項目:F1
 - 內容:改寫防火牆與 AD 的「FTP Log 檔案」頁,串接 docs/API.md §5.1、§5.2(後端 B2-pa、B2-ad 已上線)。PA:log 類型目錄切換、FTP 路徑、日期分組(前一天 / 後一天)、檔名與狀態篩選、分析進度(TRAFFIC 與其他類型)、同步、分析 / 重新分析選取、取消、刪除分析結果;同步失敗時顯示 `lastSyncError`。AD:清單改工作模式(`composables/useJob.ts`,離開頁面取消工作)、同步、重新匯入選取(一次最多 60 天)、刪除匯入結果、Security 空檔提醒、每日檔案明細改對話框。寫入按鈕依 `netops.pa-files.manage` / `netops.ad-files.manage` 顯示。假 API 在 `mock/ftp.ts`。`base.css` 新增 `.c-success`、`.c-warning`、`.c-danger` 文字色。

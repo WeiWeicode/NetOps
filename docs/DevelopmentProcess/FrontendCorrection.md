@@ -2,6 +2,12 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。範圍:`frontend/`。
 
+## 2026-11-03 F1 第 2 批:安全事件
+- 工作項目:F1
+- 內容:改寫防火牆安全事件,串接 docs/API.md §4.2。log 類型改 `GSegmented`(`?type=` 記住目前類型)、期間兩個日期欄位(預設該類型最新一天、最長 92 天)、KPI(壞值標紅)、每小時事件數改 `GAreaChart`、排行改共用元件 `components/TopList.vue`。點含 IP 的排行另開舊版 AI 問答並帶入問題(`config/links.ts` 的 `legacyAskUrl`;D17、D18)。新增結果不完整提示(分析中、摘要讀不到、分析失敗)。假 API `mock/paEvents.ts`。
+- 檔案:`frontend/src/pages/firewall/Events.vue`、`frontend/src/api/paEvents.ts`、`frontend/src/components/TopList.vue`、`frontend/src/config/links.ts`、`frontend/mock/paEvents.ts`、`frontend/src/router.ts`
+- 驗證:見 MR 描述
+
 ## 2026-11-03 F1 第 2 批:AD 事件總覽
 - 工作項目:F1
 - 內容:改寫 AD 事件總覽,串接 docs/API.md §6.1。期間改兩個日期欄位(預設最新一天、最長 92 天);KPI 改 `GStatCard`(點選帶條件到明細查詢,需 `netops.ad-search.read`);帳號與特權異動(新帳號隨即加入特權群組的提醒)、特權登入、需要注意的事件、事件排行、登入失敗的帳號 / IP / 原因。新增資料不完整提示:期間天數多於已匯入天數、上次同步失敗。「從 FTP 同步」依 `netops.ad-files.manage` 顯示,完成後自動更新。假 API `mock/ad.ts`。

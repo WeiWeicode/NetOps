@@ -10,6 +10,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Plugin } from 'vite';
 import { handleAd } from './ad.ts';
 import { handleFtp } from './ftp.ts';
+import { handlePaEvents } from './paEvents.ts';
 import type { MockCtx } from './types.ts';
 
 type Role = 'admin' | 'viewer' | 'noapp' | 'anon';
@@ -77,7 +78,7 @@ async function readBody(req: IncomingMessage): Promise<unknown> {
 }
 
 /** 各模組的假 API(依序嘗試,處理了就回 true) */
-const HANDLERS: ((ctx: MockCtx) => boolean)[] = [handleFtp, handleAd];
+const HANDLERS: ((ctx: MockCtx) => boolean)[] = [handleFtp, handleAd, handlePaEvents];
 const fail = (res: ServerResponse, status: number, code: string, message: string) => send(res, status, { code, message, requestId: rid() });
 
 export function mockGateway(role: string | undefined): Plugin | null {

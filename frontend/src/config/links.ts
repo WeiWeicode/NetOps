@@ -10,3 +10,13 @@ export const LINKS = {
   adAsk: `${LEGACY_NETOPS_URL}/Main/AdAsk`,
   veeam: 'https://gsmc-web.gigasolar.com.tw/Veeam',
 } as const;
+
+/**
+ * 舊版 AI 問答並帶入問題(舊版 PaAsk 讀 ?q=問題&from=yyyy/MM/dd&to=yyyy/MM/dd,填入輸入框由使用者送出)。
+ * from / to 為 YYYY-MM-DD。
+ */
+export function legacyAskUrl(q: string, from: string, to: string, source: 'pa' | 'ad' = 'pa'): string {
+  const slash = (d: string) => d.replace(/-/g, '/');
+  const qs = new URLSearchParams({ q, ...(from ? { from: slash(from), to: slash(to || from) } : {}) });
+  return `${source === 'ad' ? LINKS.adAsk : LINKS.paAsk}?${qs}`;
+}

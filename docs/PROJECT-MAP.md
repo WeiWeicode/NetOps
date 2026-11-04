@@ -1,6 +1,6 @@
 # 專案地圖 — NetOps
 
-> **最後更新:2026-11-03**(F1 完成:`frontend/` 框架、全部頁面改寫並串接後端、收尾;B2-logs:PA Log 明細查詢與匯出,B2 後端模組搬移完成;舊版程式未改動)。
+> **最後更新:2026-11-03**(F1 完成:`frontend/` 框架、全部頁面改寫並串接後端、收尾;B2 完成並部署測試區;Gherkin 規格見 !18;舊版程式未改動)。
 > 開發新功能後,在同一個變更內更新本文件(`AGENT.md` §9)。只寫結構與職責,細節連到 `docs/`。
 
 資訊網通管理系統:PA-560 防火牆 log、AD 事件與網通知識庫;AI 問答只留在舊版(ARCHITECTURE D17)。目標是接入 GigaNexus Gateway(`/netops/`、`netops-api` :51292),目前部署於 IIS `/NetOps`。
@@ -118,14 +118,14 @@ NetOps/
 
 ## 6. 測試地圖
 
-`backend/test/unit/`:OpenAPI 必填欄位、內部 Token 驗證與錯誤格式、部署區與服務設定、`/readyz`、長時間工作(`cd backend && npm test`)。`frontend/test/`:選單、路由守衛、應用層守衛、風格、工作 / 狀態輪詢、各頁純函式、網址條件、連結(`cd frontend && npm test`);畫面以 `MOCK=admin|viewer|noapp npm run dev` 在瀏覽器檢查。舊版沒有自動化測試,只有 `scripts/` 的手動探測;B2 搬移時補上模組測試。
+`backend/test/unit/`:OpenAPI 必填欄位、內部 Token 驗證與錯誤格式、部署區與服務設定、`/readyz`、長時間工作(`cd backend && npm test`)。`frontend/test/`:選單、路由守衛、應用層守衛、風格、工作 / 狀態輪詢、各頁純函式、網址條件、連結(`cd frontend && npm test`);畫面以 `MOCK=admin|viewer|noapp npm run dev` 在瀏覽器檢查。舊版沒有自動化測試,只有 `scripts/` 的手動探測;B2 已補上模組測試(`pa`、`ad`、`kb`、`logs` 以同一批假 log 與舊版 `server/lib` 比對)。
 
 ## 7. 已知差異(與 Gateway §10.7.2)
 
 | 差異 | 狀態 |
 | --- | --- |
-| 整個後端使用 Express 與 JavaScript、沒有 OpenAPI | B1、B2 處理 |
+| 整個後端使用 Express 與 JavaScript、沒有 OpenAPI | 新版已處理(B1、B2:Fastify + TypeScript、OpenAPI);舊版切換前保留(D12) |
 | 前端 JavaScript、Element Plus,與 GigaItApp、入口網元件不同 | 新版 `frontend/` 已改用 `src/ui/` 與 TypeScript(F1);舊版 `src/` 與根目錄 Element Plus / Tailwind 依 D12、D18 保留到舊版停用(`docs/UI-GUIDE.md` §4) |
 | 自建登入、Bearer Token 存 localStorage | B2、F1 移除 |
-| 回應格式與時間不符 BACKEND-GUIDE §5 | B2 處理 |
-| 資料寫在 `uploads/`、各模組自行讀寫 | B2 集中到 `infra/store`;資料庫為後續階段(D8) |
+| 回應格式與時間不符 BACKEND-GUIDE §5 | 新版已處理(B2) |
+| 資料寫在 `uploads/`、各模組自行讀寫 | 新版已集中到 `infra/store`(B2);資料庫為後續階段(D8) |

@@ -2,6 +2,12 @@
 
 > `backend/`、`deploy/` 的修改;新紀錄加在最上方,格式見 `AGENT.md` §11。
 
+## 2026-11-03 冪等 DELETE 在 OpenAPI 宣告 204
+- 工作項目:B2(Gherkin 規格比對時發現,docs/Gherkin/README.md §7 #6)
+- 內容:`DELETE /v1/pa/log-searches/:id`、`/v1/ftp/ad/listings/:id`、`/v1/kb/notes/:id` 實際回 204,但路由沒有宣告,OpenAPI 只有預設的 200;補上 `response: { 204 }`(`shared/schemas.ts` 的 `NO_CONTENT`)。行為不變。
+- 檔案:`backend/src/shared/schemas.ts`、`backend/src/modules/{pa/log-routes.ts,ftp/ad-routes.ts,kb/routes.ts}`、`backend/test/unit/app.test.ts`
+- 驗證:`npm run typecheck`、`npm test`、`npm run build`
+
 ## 2026-11-03 B2-logs:PA Log 明細查詢與匯出(工作模式)
 - 工作項目:B2
 - 內容:`scan.js` 搬到 `pa/core/scan.js`,只把 `openStream` 改成由呼叫端注入(其餘逐字相同);篩選沿用 `palog.js` 的 `buildFilter`、`buildPrefilter`。舊版 `POST /palog/search` 同步等待最長 180 秒,改成工作模式(D6):`POST /v1/pa/log-searches`(202)、`GET /v1/pa/log-searches/:id`(狀態只回摘要)、`/rows`(分頁)、`/export`(伺服器端 CSV,舊版在前端產生)、`DELETE`(取消並中斷 FTP 掃描,冪等 204)。工作只有本人可查;期間最長 31 天;與匯入共用 FTP 連線上限。審查後:IP 條件只允許 IP 字元、`*` 最多 4 個且連續合併(舊版大量 `*` 會讓正規表示式比對卡死整個服務,核心不改、在路由擋);明細查詢同時只執行 1 個、每人保留 5 筆結果,已完成的工作取消即丟棄結果;掃描結束一律中止還在排隊或佔 FTP 連線的 worker,等不到連線超過掃描秒數時回部分結果(`timeout`),匯出檔名標「_不完整」。

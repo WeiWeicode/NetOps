@@ -80,4 +80,5 @@ export { default as GBarList } from './charts/GBarList.vue';
 export { default as GDonut } from './charts/GDonut.vue';
 export { default as GRing } from './charts/GRing.vue';
 export { default as GSparkline } from './charts/GSparkline.vue';
+export { default as GStackedBars } from './charts/GStackedBars.vue';
 

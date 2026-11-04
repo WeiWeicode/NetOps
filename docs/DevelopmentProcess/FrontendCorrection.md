@@ -2,6 +2,12 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。範圍:`frontend/`。
 
+## 2026-11-03 F1 第 2 批:流量總覽
+- 工作項目:F1
+- 內容:改寫防火牆流量總覽,串接 docs/API.md §4.1。KPI(允許 / 阻擋可點)、每小時連線數 / 流量改新元件 `ui/charts/GStackedBars.vue`(允許 / 阻擋堆疊、點長條帶該小時到明細查詢、鍵盤可操作)、流量排行(次數 / 流量切換)、資料外流與 AI 應用、阻擋與風險、動作分布、連線結束原因、疑似掃描。排行點選條件抽成 `composables/paDashboard.ts`(同舊版)。明細查詢的時間條件改為 `YYYY-MM-DDTHH:mm`。AI 分析不改寫(D17),按鈕另開舊版流量總覽。新增沒有資料 / 結果不完整提示。假 API `mock/pa.ts`。
+- 檔案:`frontend/src/pages/firewall/Dashboard.vue`、`frontend/src/api/pa.ts`、`frontend/src/composables/paDashboard.ts`、`frontend/src/ui/charts/GStackedBars.vue`、`frontend/src/config/links.ts`、`frontend/mock/pa.ts`、`frontend/src/router.ts`
+- 驗證:見 MR 描述
+
 ## 2026-11-03 F1 第 2 批:安全事件
 - 工作項目:F1
 - 內容:改寫防火牆安全事件,串接 docs/API.md §4.2。log 類型改 `GSegmented`(`?type=` 記住目前類型)、期間兩個日期欄位(預設該類型最新一天、最長 92 天)、KPI(壞值標紅)、每小時事件數改 `GAreaChart`、排行改共用元件 `components/TopList.vue`。點含 IP 的排行另開舊版 AI 問答並帶入問題(`config/links.ts` 的 `legacyAskUrl`;D17、D18)。新增結果不完整提示(分析中、摘要讀不到、分析失敗)。假 API `mock/paEvents.ts`。

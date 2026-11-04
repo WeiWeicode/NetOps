@@ -2,6 +2,18 @@
 
 > 接手時先讀 `AGENT.md`,再讀 `docs/ARCHITECTURE.md`、`docs/IMPL-PLAN.md`。
 
+## 2026-11-04 重新規劃(會議後)
+
+- **取消 AI 中控台**:AI 搬進新版(A1,D23),連 `10.10.130.46`(`:8080` `Qwen3.6-35B-A3B-FP8`、`:8081` embedding;`.45` 相同作備用)。舊版 IIS 留到 A1 完成(D18)。
+- **PA 即時監控**(R0–R2):`netops-pa`(Python,pan-os-python)+ `netops-redis`(log 保留 2 天);第一版只讀;**不寫入資料庫**(D20)。
+- 規劃全文:[PA-LIVE-PLAN.md](PA-LIVE-PLAN.md)。開工前事項(§11)已定案 P3–P7:
+  - 實測 TRAFFIC 每天約 1,000 萬筆(FTP `/my-data`,4.6–6.8 GB),主機 2 WSL 5.8 GiB、主機 3 7.8 GiB。定案 TRAFFIC 統計 1 天、明細 1 小時,其他類型 2 天;`maxmemory` 2 GB;開 RDB 不開 AOF。
+  - TRAFFIC 用 Syslog(:51294),其他類型 HTTP(:51293);Python 與兩個 port 登記在 Gateway(Gateway MR)。
+  - AI:沿用 Qdrant(A1 先比對 `.46:8081` embedding 維度)、翻譯沿用 LLM。
+  - **待網通**:P1 PA-560 管理 IP 與 PAN-OS 版本、P2 唯讀 API Key 與轉送設定。
+- 量測時發現:測試區 `FTP_LOG_DIR` 是空的,TRAFFIC 實際在 `/my-data`。D1 未驗項目 1 要先切到該目錄分析,或把 `FTP_LOG_DIR` 設為 `/my-data`。
+- 下面「待使用者決定」的 d(舊版正式網址)在 A1 完成後就不再需要。
+
 ## 2026-11-04 收工
 
 **已完成**

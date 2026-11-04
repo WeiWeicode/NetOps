@@ -5,13 +5,13 @@
 
 | 項目 | 現況 | 過渡期 | 未來目標 |
 | --- | --- | --- | --- |
-| 期間 | 目前到正式切換前 | 正式切換後到 AI 中控台接入前 | AI 中控台接入後 |
-| 使用者入口 | IIS `/NetOps` | 新版 `/netops/`;AI 連到舊版 | `/netops/` |
+| 期間 | 目前到正式切換前 | 正式切換後到 A1(AI 搬移)完成前 | A1、R1 完成後 |
+| 使用者入口 | IIS `/NetOps` | 新版 `/netops/`;AI 連到舊版 | `/netops/`,舊版 IIS 停用 |
 | 登入與權限 | 自簽 JWT、`.env` 名單 | 新版經 BFF;舊版維持自簽 JWT | 經 BFF |
-| 資料取得 | 舊版同步 FTP | 新舊各自同步 FTP | 新版同步 FTP |
-| 資料存放 | IIS `uploads/` | 新版 `/srv/giga-netops/{env}`;舊版 `uploads/` | 第一版仍存檔案;資料庫未排程(D8) |
-| 知識庫 | 舊版可寫 | 以新版為準,舊版關閉寫入 | 新版管理內容;向量歸屬待定(PRD Q6) |
-| AI | 舊版直連 vLLM、Qdrant | 同現況,知識庫內容會落後 | 經 AI 中控台與 SDK |
+| 資料取得 | 舊版同步 FTP | 新舊各自同步 FTP | FTP(歷史)+ SDK 輪詢與 HTTP Log Forwarding(即時,D19) |
+| 資料存放 | IIS `uploads/` | 新版 `/srv/giga-netops/{env}`;舊版 `uploads/` | 檔案(歷史)+ Redis 2 天(即時,D21);不寫資料庫(D20) |
+| 知識庫 | 舊版可寫 | 以新版為準,舊版關閉寫入 | 新版管理內容與向量同步 |
+| AI | 舊版直連 vLLM、Qdrant | 同現況,知識庫內容會落後 | 新版 `netops-api` 直連 AI 主機 .46(D23) |
 
 ---
 
@@ -125,50 +125,36 @@ flowchart TD
 
 ---
 
-## 3. 未來目標(AI 中控台接入)
+## 3. 未來目標(A1 AI 搬移、R1 即時監控完成後)
 
-AI 中控台與 SDK 另開 repo,目前只有 PRD 草案(工作區 `GigaNexusAIPlan/docs/AI-CONSOLE-PRD.md`)。接入後停用舊版 IIS。虛線是尚未定案的部分。
+2026-11-04 取消 AI 中控台(原規劃見工作區 `GigaNexusAIPlan/docs/AI-CONSOLE-PRD.md`,已標示取消)。AI 搬進 `netops-api`(D23),PA 即時資料走 Redis(D19),不寫資料庫(D20);A1 完成後停用舊版 IIS。細節見 [PA-LIVE-PLAN.md](PA-LIVE-PLAN.md),虛線是之後才做的部分。
 
 ```mermaid
 flowchart TD
-    PA["PA-560 防火牆"] --> FTP["FTP 10.10.130.66"]
+    PA["PA-560 防火牆"] -->|"每天匯出 log"| FTP["FTP 10.10.130.66<br/>歷史(事後查詢)"]
     DC["GSMC-DC1"] --> FTP
     U["使用者瀏覽器"] --> N["Gateway:Nginx / BFF"]
 
     subgraph NET["NetOps"]
         S["SPA /netops/"]
-        A["netops-api<br/>業務查證:統計、FTP、AD、知識庫"]
+        A["netops-api :51292<br/>總覽、明細、知識庫、AI、即時監控"]
         D[("資料檔<br/>摘要、統計、AD、知識庫")]
-        SDK["AI SDK"]
+        R[("netops-redis<br/>快照 + 2 天 log")]
+        P["netops-pa(Python)<br/>SDK 輪詢 + Log 接收"]
         A --> D
-        A --> SDK
+        A --> R
+        P --> R
     end
 
     N --> S
-    N -->|"X-Internal-Token"| A
+    N -->|"X-Internal-Token<br/>REST + SSE"| A
     FTP --> A
+    P -->|"10–15 秒輪詢(唯讀)"| PA
+    PA -->|"HTTP Log Forwarding"| P
     A --> O["giga-observe"]
-    A -.->|"未排程(D8)"| DB[("資料庫")]
-
-    subgraph AI["AI 中控台(規劃)"]
-        C["應用與服務<br/>模型、知識庫、用量、呼叫紀錄"]
-    end
-
-    N --> C
-    SDK -.->|"路徑待定(PRD Q4)"| C
-    C --> LLM["vLLM 10.10.130.45"]
-    C --> Q["Qdrant 10.10.130.46"]
+    A --> LLM["AI 主機 10.10.130.46<br/>:8080 模型 / :8081 embedding"]
+    A --> Q["Qdrant<br/>知識庫向量"]
+    A -.->|"R2 封鎖 IP(DAG)"| PA
 ```
 
-| 分工 | 內容 |
-| --- | --- |
-| NetOps | 查證資料:解析問題條件、查統計、掃 FTP、提供知識庫內容;只送統計與彙整結果 |
-| AI SDK | 問答與串流、embedding、翻譯、失敗回報 |
-| AI 中控台 | 模型服務、知識庫向量、用量與呼叫紀錄 |
-
-**開工前要確認**:
-
-- SDK 直接連模型,或一律經 AI 中控台服務(PRD Q4);圖上的呼叫路徑依此調整。
-- 知識庫歸屬(PRD Q6)。
-- 串流實測:Nginx 與 BFF 都有最長 60 秒閒置逾時,失敗就改工作加輪詢(D7)。
-- 外部 IP 自動學習的對外連線(D10)。
+**開工前要確認**:PA-LIVE-PLAN §11(P1–P6);串流實測(S0,D7);外部 IP 自動學習的對外連線(D10)。

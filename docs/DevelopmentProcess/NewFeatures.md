@@ -2,6 +2,12 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。
 
+## 2026-11-04 重新規劃:取消 AI 中控台、PA 即時監控、不寫資料庫
+- 工作項目:S0、A1、R0–R2(新增)
+- 內容:使用者與系統、網通開會後決定:取消 AI 中控台,舊版 AI 功能搬進 `netops-api`,直接呼叫 AI 主機 `10.10.130.46`(`.45` 配置相同);防火牆群組新增「即時監控」選單,用官方 pan-os-python SDK 輪詢設備狀態並接收 HTTP Log Forwarding,資料放 NetOps 自己的 Redis(log 保留 2 天);不寫入資料庫,歷史用 FTP 事後查詢;第一版只讀,封鎖 IP 排 R2。ARCHITECTURE 新增 D19–D24,改寫 D7、D8、D10、D16、D17、D18;AGENT §7.2 原始 log 規則加 Redis 例外。程式尚未改動。
+- 檔案:`docs/PA-LIVE-PLAN.md`(新)、`docs/ARCHITECTURE.md`、`docs/IMPL-PLAN.md`、`docs/FLOW-ARCHITECTURE.md`、`AGENT.md`、`docs/PROJECT-MAP.md`、`docs/UI-GUIDE.md`、`docs/HANDOFF.md`
+- 驗證:文件交叉引用核對;未實作。同日定案 P3–P7:主機 2 測試區容器內唯讀量測 FTP(TRAFFIC 每天約 1,000 萬筆、4.6–6.8 GB),TRAFFIC 改 Syslog、統計 1 天 / 明細 1 小時,其他類型 2 天;Redis 2 GB + RDB;沿用 Qdrant、翻譯沿用 LLM;Gateway 登記 51293 / 51294 與 Python
+
 ## 2026-11-03 收工:B2 完成、交接與待決定事項
 - 工作項目:B2、D1
 - 內容:B2 四批(!8–!11)合併並部署測試區,IMPL-PLAN、PROJECT-MAP、ARCHITECTURE 狀態更新為完成。HANDOFF 新增「2026-11-03 收工」:明天的合併順序、D1 下一步(跨 repo,要使用者同意)、待使用者決定的 6 件事、舊版知識庫複製前先備份。依 Gherkin 規格(!18)發現的不一致修正文件:工作上限依類型分開計算、AD 檔案清單每人保留 10 筆(API.md §1.1、§5.2);下載為 GET 不需 CSRF(IMPL-PLAN F1)。

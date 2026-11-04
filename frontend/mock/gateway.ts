@@ -106,10 +106,6 @@ export function mockGateway(role: string | undefined): Plugin | null {
         if (r === 'anon' || path === '/api/auth/refresh') return fail(res, 401, 'UNAUTHORIZED', '尚未登入');
         const m = me(r);
         const need = (perm: string) => m.permissions.includes(perm) || (fail(res, 403, 'PERMISSION_DENIED', `沒有權限 ${perm}`), false);
-        if (req.method === 'GET' && path === '/api/netops/ping') {
-          if (!need('netops.ping.read')) return;
-          return send(res, 200, { service: 'netops-api', emp: m.user.employeeNo, name: m.user.name, dept: m.user.department, roles: m.roles, requestId: rid(), time: new Date().toISOString() });
-        }
         const method = req.method ?? 'GET';
         const ctx: MockCtx = {
           method,

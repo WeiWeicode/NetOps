@@ -56,6 +56,8 @@
 
 ## 4. 移除
 
+> **F1 收尾(2026-11-03)只清 `frontend/` 內的過渡程式**(佔位頁 `WipPage`、`PingCard`、`api/netops.ts`)。下列舊版項目在根目錄 `src/`、`server/` 與根 `package.json`,依 ARCHITECTURE D12(切換前 `main` 維持舊 IIS 版本,緊急修正要能合回 `develop`)與 D18(切換後舊版 IIS 仍提供 AI,在 `main` 打標籤保留)**暫不刪除**,等舊版停用(AI 中控台接入)時再一併移除。新版 `frontend/` 已不相依 Element Plus、Tailwind。
+
 - Element Plus、Tailwind、`unplugin-auto-import`、`unplugin-vue-components`。
 - 舊配色系統:`themes/`、`src/themes/`、`scripts/make-themes.mjs`、`/theme.css`、`/__themes`。
 - 字體大小控制 `FontSizeControl`、`useFontScale`:GigaItApp 與入口網都沒有。

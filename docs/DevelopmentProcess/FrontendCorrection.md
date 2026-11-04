@@ -2,6 +2,12 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。範圍:`frontend/`。
 
+## 2026-11-03 F1 第 3 批:收尾
+- 工作項目:F1
+- 內容:所有頁面改寫完成,移除 `frontend/` 內的過渡程式:佔位頁 `pages/WipPage.vue`、`components/PingCard.vue`、`api/netops.ts`(`/api/netops/ping` 只在佔位頁用)、路由的 `wip()` 與假 Gateway 的 ping。舊版 `src/`、`server/`、根目錄的 Element Plus / Tailwind 依 D12、D18 暫不刪(見 UI-GUIDE §4)。
+- 檔案:`frontend/src/router.ts`、`frontend/mock/gateway.ts`、`docs/UI-GUIDE.md`
+- 驗證:見 MR 描述
+
 ## 2026-11-03 F1 第 2 批:知識庫
 - 工作項目:F1
 - 內容:改寫知識庫,串接 docs/API.md §7(後端 B2-kb !10)。筆記查詢(後端分頁)、閱讀、下載 .md、匯整檔預覽與下載;有 `netops.kb-page.write` 可新增、修改、刪除(對話框,標題 300 字、內容 20,000 字、IP 30 個、標籤 10 個)。Markdown 以 `marked` 轉換後一律經 `DOMPurify`(`composables/markdown.ts`;連結另開分頁並加 rel,禁 style / form / iframe;AGENT.md §7.4)。新增相依 `marked`、`dompurify`(版本同舊版,AGENT.md §7.4 要求 DOMPurify)。不改寫(D17):語意搜尋、向量同步、外部 IP 自動學習、在 AI 問答請 AI 記錄 → 連到舊版。假 API `mock/kb.ts`(含惡意 HTML 範例)。

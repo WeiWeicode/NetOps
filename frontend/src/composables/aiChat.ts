@@ -43,6 +43,9 @@ export interface ChatMessage {
   vectorError?: boolean;
   truncated?: boolean;
   note?: KbNote;
+  /** 送出時的期間(datetime-local);看原始紀錄用 */
+  from?: string;
+  to?: string;
 }
 
 const store = reactive<Record<Source, ChatMessage[]>>({ pa: [], ad: [] });

@@ -36,7 +36,8 @@ export class AiStreamError extends Error {
 }
 
 /**
- * SSE 解析:依空行切事件,支援 \r\n、一個資料塊切在事件中間;data 是 JSON(netops-api 每個事件一行 data)
+ * SSE 解析:依空行切事件,支援 \r\n、一個資料塊切在事件中間;data 是 JSON
+ * 限制:只取第一行 data(netops-api 每個事件只有一行 data,JSON.stringify 不含換行)
  * 回傳 push(文字) → 這次完整的事件
  */
 export function createSseParser() {
@@ -95,18 +96,32 @@ export async function streamPost(path: ApiPath, body: unknown, onEvent: (e: SseE
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   const parse = createSseParser();
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    for (const e of parse(decoder.decode(value, { stream: true }))) {
+  let finished = false;
+  const handle = (events: SseEvent[]) => {
+    for (const e of events) {
       if (e.event === 'heartbeat' || e.event === 'open') continue;
       if (e.event === 'error') {
         const d = e.data as { code?: string; message?: string };
         throw new AiStreamError(d.code ?? 'NETOPS_AI_FAILED', d.message ?? 'AI 回答失敗');
       }
+      if (e.event === 'done') finished = true;
       onEvent(e);
     }
+  };
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      handle(parse(decoder.decode(value, { stream: true })));
+    }
+    // 最後一段沒有結尾空行時也要處理
+    handle(parse(`${decoder.decode()}\n\n`));
+  } finally {
+    // 丟錯或中斷時關閉連線,後端停止產生內容
+    void reader.cancel().catch(() => {});
   }
+  // 沒收到 done 就結束:連線中途斷掉(代理逾時、服務重啟),已收到的內容不完整(AGENT.md §5)
+  if (!finished) throw new AiStreamError('NETOPS_STREAM_INCOMPLETE', '連線中斷,回答可能不完整,請再試一次');
 }
 
 /** 一次性的 SSE(翻譯、整理筆記):回傳 done 事件的資料 */

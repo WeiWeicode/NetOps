@@ -13,7 +13,7 @@ import { fmtNum, fmtShort, fmtTime } from '@/api/format';
 import { paEvents, type PaEventOverview, type PaEventType } from '@/api/paEvents';
 import TopList from '@/components/TopList.vue';
 import { checkDayRange } from '@/composables/dates';
-import { NETOPS } from '@/api/perms';
+import { UI } from '@/api/perms';
 import { askLink } from '@/composables/aiChat';
 
 const MAX_DAYS = 92;
@@ -134,7 +134,8 @@ const tops = computed(() => (data.value?.tops ?? []).filter((t) => t.items.lengt
 
 /** IPv4(每段 0–255,前後不接數字或點) */
 const IP = /(?<![\d.])(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)(?![\d.])/;
-const canAsk = computed(() => can(NETOPS.paAsk));
+// 要能使用 AI 問答(按鈕 netops.pa-ask.use)才可點;只看得到問答頁的人點了也不能問
+const canAsk = computed(() => can(UI.paAskUse));
 const hasIp = (key: string) => canAsk.value && IP.test(key);
 /** 排行點選:內容含 IP 就到 AI 問答並帶入問題(由使用者送出) */
 function pick(key: string) {

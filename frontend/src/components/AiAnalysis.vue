@@ -89,8 +89,12 @@ async function start() {
     phase.value = text.value ? 'done' : 'error';
     if (!text.value) error.value = 'AI 沒有產生內容,請再試一次';
   } catch (e) {
-    if ((e as Error).name === 'AbortError') phase.value = text.value ? 'done' : 'idle';
-    else {
+    if ((e as Error).name === 'AbortError') {
+      phase.value = text.value ? 'done' : 'idle';
+      if (text.value) error.value = '已停止,分析不完整';
+    } else {
+      // 連線中斷(沒有收到 done)時保留已收到的內容,並標示不完整
+      if (text.value) truncated.value = true;
       phase.value = 'error';
       error.value = e instanceof AiStreamError ? e.message : describeError(e);
     }

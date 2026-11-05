@@ -67,3 +67,29 @@
       當 在「外部 IP 自動學習」按「立即學習」
       那麼 每 2 秒更新進度與紀錄,完成後重新整理知識庫清單
       但是 沒有編輯權限的人只看得到狀態
+
+  Rule: 審查修正(與舊版不同)
+
+    # 來源: frontend/src/composables/markdown.ts:51(feature/a1-ai-frontend)
+    @manual @security @changed
+    場景: AI 回答的外部連結不能點、不顯示圖片
+      # 模型的輸入含外部可控的文字(log 的 URL、RDAP、PTR),回答可能被誘導出釣魚連結;顯示圖片會自動帶 Cookie 發 GET
+      當 AI 回答含 [請重新登入確認](https://evil.example/login) 與圖片
+      那麼 外部連結顯示成「請重新登入確認(https://evil.example/login)」純文字
+      而且 同網域的連結照常可點,圖片不顯示
+
+    # 來源: frontend/src/pages/ai/Ask.vue:59(feature/a1-ai-frontend)
+    @manual @security @changed
+    場景: 連結帶入的「請記錄」不會直接寫入知識庫
+      假如 使用者有 "netops.kb-page.write"
+      當 開啟 /netops/firewall/ask?q=請記錄:10.10.1.5 是備份主機 並按送出
+      那麼 顯示「問題由連結帶入,請確認內容後再送出」
+      而且 第一次送出當成問題,不呼叫 /api/netops/ai/notes
+
+    # 來源: frontend/src/api/ai.ts:124(feature/a1-ai-frontend)
+    @auto @changed
+    場景: 串流中途斷線時標示回答不完整
+      # 舊版沒收到 done 也當成完成
+      假如 AI 回答串流沒有收到 done 事件就結束
+      那麼 保留已收到的內容,並顯示「連線中斷,回答可能不完整」
+      而且 這則回答不放進之後的對話紀錄

@@ -1,10 +1,13 @@
 <script setup lang="ts">
-/** AI 回答(Markdown)→ HTML:一律經 DOMPurify(composables/markdown.ts;AGENT.md §7.4) */
+/**
+ * AI 回答(Markdown)→ HTML:一律經 DOMPurify(composables/markdown.ts;AGENT.md §7.4);
+ * AI 模式:不顯示圖片、外部網址不能點(模型可能被 log / RDAP 內容誘導出釣魚連結)
+ */
 import { computed } from 'vue';
 import { renderMarkdown } from '@/composables/markdown';
 
 const props = defineProps<{ text: string }>();
-const html = computed(() => renderMarkdown(props.text));
+const html = computed(() => renderMarkdown(props.text, { ai: true }));
 </script>
 
 <template>
@@ -48,6 +51,10 @@ const html = computed(() => renderMarkdown(props.text));
   padding: 0.1em 0.35em;
   border-radius: 4px;
   background: var(--glass-soft);
+}
+.ai-md :deep(.ext-link) {
+  text-decoration: underline dotted;
+  overflow-wrap: anywhere;
 }
 .ai-md :deep(table) {
   border-collapse: collapse;

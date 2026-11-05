@@ -39,7 +39,8 @@ const ANSWER = `## 結論
 
 ## 建議處理
 1. 確認 10.10.1.5 的 DNS 設定是否應改為內部 DNS。<img src=x onerror=alert(1)>
-2. 若是合法需求,新增 LAN → WAN 的 dns 規則,只開必要的範圍。`;
+2. 若是合法需求,新增 LAN → WAN 的 dns 規則,只開必要的範圍。
+3. 參考:[請重新登入確認](https://evil.example/login)、[流量總覽](/netops/firewall/dashboard)`;
 
 const contentEvents = (text: string): [string, unknown][] => text.match(/[\s\S]{1,24}/g)!.map((t) => ['content', { text: t }]);
 

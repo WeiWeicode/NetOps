@@ -59,6 +59,22 @@ describe('streamPost', () => {
     expect(e.code).toBe('NETOPS_AI_UNAVAILABLE');
   });
 
+  it('沒收到 done 就結束(連線中途斷掉)→ AiStreamError NETOPS_STREAM_INCOMPLETE,已收到的事件照常交出', async () => {
+    vi.stubGlobal('fetch', async () => sse(['event: meta\ndata: {}\n\nevent: content\ndata: {"text":"半"}\n\n']));
+    const got: string[] = [];
+    const e = await streamPost('/api/netops/ai/analyses', {}, (x) => got.push(x.event)).catch((x) => x);
+    expect(got).toEqual(['meta', 'content']);
+    expect(e).toBeInstanceOf(AiStreamError);
+    expect(e.code).toBe('NETOPS_STREAM_INCOMPLETE');
+  });
+
+  it('最後一個事件沒有結尾空行也會處理', async () => {
+    vi.stubGlobal('fetch', async () => sse(['event: content\ndata: {"text":"A"}\n\nevent: done\ndata: {"finish":"stop"}']));
+    const got: string[] = [];
+    await streamPost('/api/netops/ai/analyses', {}, (x) => got.push(x.event));
+    expect(got).toEqual(['content', 'done']);
+  });
+
   it('串流開始前的錯誤(429 等)→ ApiError', async () => {
     vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ code: 'NETOPS_STREAM_BUSY', message: '已達上限', requestId: 'r1' }), { status: 429, headers: { 'content-type': 'application/json' } }));
     const e = await streamPost('/api/netops/ai/questions', {}, () => {}).catch((x) => x);

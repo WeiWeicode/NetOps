@@ -13,7 +13,7 @@ import { ad } from '@/api/ad';
 import { ai, AiStreamError, type AiStatus } from '@/api/ai';
 import { can, describeError } from '@/api/gateway';
 import { pa } from '@/api/pa';
-import { API, UI } from '@/api/perms';
+import { UI } from '@/api/perms';
 import AiMarkdown from '@/components/AiMarkdown.vue';
 import TranslateBox from '@/components/TranslateBox.vue';
 import { applyEvent, clearMessages, historyOf, messagesOf, NOTE_RE, searchLink, type ChatMessage, type Source } from '@/composables/aiChat';
@@ -25,7 +25,8 @@ const isAd = props.source === 'ad';
 const route = useRoute();
 const router = useRouter();
 const canUse = computed(() => can(isAd ? UI.adAskUse : UI.paAskUse));
-const canRecord = computed(() => can(API.kbWrite));
+// 按鈕代碼(同知識庫頁);BFF 以 netops.kb.write 檢查
+const canRecord = computed(() => can(UI.kbWrite));
 
 const TEXT = isAd
   ? {
@@ -51,6 +52,11 @@ const running = ref(false);
 const service = shallowRef<AiStatus | null>(null);
 const listEl = ref<HTMLElement | null>(null);
 let controller: AbortController | null = null;
+/**
+ * 輸入框的內容是由連結(?q=)帶入:第一次送出一律當成問題,不因「請記錄」字樣改成寫入知識庫
+ * (避免外部連結誘導有編輯權限的人寫入筆記;審查修正)
+ */
+const fromLink = ref(false);
 
 const rangeError = computed(() => {
   if (!range.from || !range.to) return '請選擇時間範圍';
@@ -98,11 +104,14 @@ async function record(text = input.value) {
 async function send(text = input.value) {
   const question = text.trim();
   if (!question || running.value || unavailable.value) return;
-  if (canRecord.value && NOTE_RE.test(question)) return record(question);
+  const linked = fromLink.value;
+  fromLink.value = false;
+  if (canRecord.value && !linked && NOTE_RE.test(question)) return record(question);
   if (rangeError.value) return toast.warning(rangeError.value);
   const history = historyOf(messages);
   push({ role: 'user', content: question });
-  const r = push({ role: 'assistant', content: '', evidence: null, status: '準備中...', error: '' });
+  // 記住送出時的期間:之後改了時間,「看原始紀錄」仍用這一題的期間
+  const r = push({ role: 'assistant', content: '', evidence: null, status: '準備中...', error: '', from: range.from, to: range.to });
   input.value = '';
   running.value = true;
   controller = new AbortController();
@@ -118,9 +127,9 @@ async function send(text = input.value) {
     );
     if (!r.content) r.error = 'AI 沒有產生內容,請再試一次';
   } catch (e) {
-    if ((e as Error).name === 'AbortError') {
-      if (!r.content) r.error = '已停止';
-    } else r.error = e instanceof AiStreamError ? e.message : describeError(e);
+    // 停止或中斷時保留已收到的內容並標示不完整(有 error 的訊息不會進入之後的對話紀錄)
+    if ((e as Error).name === 'AbortError') r.error = r.content ? '已停止,回答不完整' : '已停止';
+    else r.error = e instanceof AiStreamError ? e.message : describeError(e);
   } finally {
     r.status = '';
     running.value = false;
@@ -144,7 +153,7 @@ async function copy(text: string) {
   }
 }
 
-const openSearch = (m: ChatMessage) => void router.push(searchLink(m, range.from, range.to, isAd));
+const openSearch = (m: ChatMessage) => void router.push(searchLink(m, m.from ?? range.from, m.to ?? range.to, isAd));
 const fmt = (n: number | undefined) => (Number(n) || 0).toLocaleString('en-US');
 
 onMounted(async () => {
@@ -159,6 +168,7 @@ onMounted(async () => {
   if (typeof q.from === 'string' && toLocalInput(q.from)) Object.assign(range, { from: toLocalInput(q.from), to: toLocalInput(typeof q.to === 'string' ? q.to : q.from, true) });
   if (typeof q.q === 'string' && q.q.trim()) {
     input.value = q.q.slice(0, 2000);
+    fromLink.value = true;
     void router.replace({ query: {} });
   }
 });
@@ -191,7 +201,7 @@ const onKey = (e: KeyboardEvent) => {
     </GCard>
 
     <GCard class="chat" padding="none">
-      <div ref="listEl" class="list">
+      <div ref="listEl" class="list" aria-live="polite">
         <div v-if="!messages.length" class="intro">
           <GIcon name="sparkles" :size="36" class="tone-primary ic-lg" />
           <p class="strong">{{ TEXT.empty }}</p>
@@ -251,7 +261,7 @@ const onKey = (e: KeyboardEvent) => {
               <span>標籤:{{ m.note.tags.join('、') || '(無)' }}</span>
               <RouterLink :to="{ path: '/knowledge', query: { id: m.note.id } }">到知識庫查看 / 修改</RouterLink>
             </div>
-            <p v-if="m.status" class="small muted status"><span class="spin" />{{ m.status }}</p>
+            <p v-if="m.status" class="small muted status" role="status"><span class="spin" aria-hidden="true" />{{ m.status }}</p>
             <p v-if="m.error" class="small c-danger">{{ m.error }}</p>
             <div v-if="m.content && !m.status" class="tools">
               <GButton size="sm" variant="ghost" icon="file-text" @click="copy(m.content)">複製</GButton>
@@ -262,7 +272,8 @@ const onKey = (e: KeyboardEvent) => {
       </div>
 
       <div class="composer">
-        <GTextarea v-model="input" :rows="3" :placeholder="TEXT.placeholder" :disabled="running || unavailable" maxlength="2000" @keydown="onKey" />
+        <p v-if="fromLink" class="xs c-warning">問題由連結帶入,請確認內容後再送出</p>
+        <GTextarea v-model="input" label="問題" :rows="3" :placeholder="TEXT.placeholder" :disabled="running || unavailable" maxlength="2000" @keydown="onKey" />
         <div class="actions">
           <GCheckbox v-model="think" :disabled="running || unavailable" label="深入思考(較慢,先推理再回答)" />
           <span class="spacer" />

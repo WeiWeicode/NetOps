@@ -2,6 +2,13 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。範圍:`frontend/`。
 
+## 2026-11-05 A1-frontend 審查修正
+- 工作項目:A1(第 3 批;`code-reviewer`、`security-auditor` 審查後)
+- 內容:① AI 回答(`AiMarkdown` → `renderMarkdown(text, { ai: true })`):不同網域的連結改成「文字(網址)」純文字、不顯示圖片(模型可能被 log / RDAP 內容誘導出釣魚連結;圖片會自動帶 Cookie 發 GET);知識庫筆記不變。② 由連結(`?q=`)帶入的問題,第一次送出一律當成問題,不因「請記錄」字樣改寫入知識庫,並提示「問題由連結帶入」。③ 串流沒收到 `done` 就結束時丟 `NETOPS_STREAM_INCOMPLETE`(保留已收到的內容並標示不完整;舊版當成完成);結束或丟錯時 `reader.cancel()`;最後一段沒有結尾空行也處理。④ 停止時標示「已停止,回答不完整」,不放進之後的對話紀錄;「看原始紀錄」用送出那一題的期間。⑤ `IpLearning` 輪詢:卸載後不再排程,只有最新一次查詢可以排下一輪(不會重複輪詢);天數與筆數送出前限制範圍。⑥ 知識庫:語意搜尋等全部回應取回後才更新畫面(連續查詢不互相覆蓋),新增 / 修改 / 刪除後也更新匯整檔資訊;勾選語意搜尋改用 `watch`;向量庫同步中每 3 秒查狀態直到結束,離開頁面時清除。⑦ 權限:記錄到知識庫用按鈕代碼 `UI.kbWrite`(同知識庫頁);安全事件頁點 IP 改檢查 `UI.paAskUse`。⑧ 無障礙:對話列表 `aria-live`、狀態 `role="status"`、輸入框加標籤。
+- 檔案:`frontend/src/{api/ai.ts,composables/{markdown,aiChat}.ts,components/{AiMarkdown,AiAnalysis,IpLearning}.vue,pages/ai/Ask.vue,pages/knowledge/Knowledge.vue,pages/firewall/Events.vue}`、`frontend/mock/ai.ts`、`frontend/test/ai.test.ts`、`docs/Gherkin/ui/ai.feature`
+- 驗證:`npm run typecheck`、`npm test`(79 項通過,新增 2 項)、`npm run build`;`MOCK=admin` 瀏覽器確認:連結帶入「請記錄:…」送出後走問答、沒有寫入;外部連結變純文字、同網域連結可點、圖片拿掉
+- 未改:SPA 內登出再換人登入時,模組層級的對話會保留(web-kit 登出是整頁導向入口網,目前不會發生;之後若改成不重新載入要清掉)
+
 ## 2026-11-05 A1-frontend:AI 問答、AI 分析、翻譯、知識庫 AI 功能
 - 工作項目:A1(第 3 批 `feature/a1-ai-frontend`,從第 2 批開出)
 - 內容:舊版 AI 畫面搬進新版(ARCHITECTURE D23):① `pages/ai/Ask.vue`(PA `/firewall/ask`、AD `/ad/ask` 共用;由舊版 `src/views/PaAsk.vue` 搬移):SSE 串流顯示查詢進度、查到的資料、PA 其他 log、AD 事件、參考的知識庫筆記與回答;追問、停止、清除、複製、翻譯、看原始紀錄(帶條件到明細查詢)、範例問題;有 `netops.kb.write` 可「記錄到知識庫」(或輸入「請記錄:…」);對話放在模組層級的 reactive(`composables/aiChat.ts`,切頁回來還在,重新整理清空,不存 localStorage)。② `components/AiAnalysis.vue`:流量總覽的「AI 分析」對話框(按鈕權限 `netops.pa-dashboard.ai`)。③ `components/TranslateBox.vue`、`AiMarkdown.vue`(一律經 DOMPurify)。④ 知識庫頁:語意搜尋(勾選後依相近度排序、顯示相近度)、向量庫狀態(只搜尋不同步時註明;開啟同步時有「立即同步」)、外部 IP 自動學習對話框(`components/IpLearning.vue`,執行中每 2 秒查狀態,完成後重新整理清單)。⑤ `api/ai.ts`:POST SSE 以 `fetch` 讀串流,帶 Cookie 與 CSRF、不帶 Bearer,401 先 Refresh;串流開始前的錯誤是 `ApiError`,`error` 事件是 `AiStreamError`。⑥ 移除連到舊版 NetOps 的連結(`config/links.ts` 只剩 Veeam):選單的「AI 問答(舊版)」改成新版頁面;安全事件頁點 IP 改到新版 AI 問答(沒有 AI 問答權限時不可點)。⑦ `api/perms.ts`:`NETOPS.paAsk` / `adAsk`、`UI.paAskUse` / `adAskUse` / `paDashboardAi`、`API.aiUse`。⑧ 假 Gateway `mock/ai.ts`(`MOCK=admin`):固定的 SSE 事件、翻譯、整理筆記、向量庫狀態、外部 IP 學習。

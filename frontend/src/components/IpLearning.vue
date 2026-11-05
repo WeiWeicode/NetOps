@@ -20,28 +20,40 @@ const form = reactive({ days: 7, max: 150, rewrite: false });
 const starting = ref(false);
 let timer: ReturnType<typeof setTimeout> | undefined;
 let wasBusy = false;
+/** 卸載後不再排輪詢;seq:只有最新一次查詢可以排下一輪(快速關閉再開啟時不會重複輪詢) */
+let disposed = false;
+let seq = 0;
 
 async function refresh() {
   clearTimeout(timer);
+  const my = ++seq;
   try {
-    status.value = await ai.ipLearning();
+    const s = await ai.ipLearning();
+    if (my !== seq || disposed) return;
+    status.value = s;
     error.value = null;
     // 執行完成:通知知識庫頁重新整理
-    if (wasBusy && !status.value.busy) emit('learned');
-    wasBusy = status.value.busy;
+    if (wasBusy && !s.busy) emit('learned');
+    wasBusy = s.busy;
   } catch (e) {
+    if (my !== seq || disposed) return;
     error.value = e;
   }
+  clearTimeout(timer);
   if (open.value && status.value?.busy) timer = setTimeout(() => void refresh(), 2000);
 }
 
 async function run() {
   starting.value = true;
   try {
-    status.value = await ai.learnIps({ days: form.days, max: form.max, rewrite: form.rewrite });
+    const days = Math.min(Math.max(Math.round(Number(form.days)) || 7, 1), 60);
+    const max = Math.min(Math.max(Math.round(Number(form.max)) || 150, 1), 500);
+    Object.assign(form, { days, max });
+    status.value = await ai.learnIps({ days, max, rewrite: form.rewrite });
     wasBusy = true;
     toast.success('已開始學習外部 IP');
-    timer = setTimeout(() => void refresh(), 2000);
+    clearTimeout(timer);
+    if (!disposed) timer = setTimeout(() => void refresh(), 2000);
   } catch (e) {
     toast.fromError(e, '無法開始學習');
   } finally {
@@ -51,9 +63,15 @@ async function run() {
 
 watch(open, (v) => {
   if (v) void refresh();
-  else clearTimeout(timer);
+  else {
+    seq++;
+    clearTimeout(timer);
+  }
 });
-onBeforeUnmount(() => clearTimeout(timer));
+onBeforeUnmount(() => {
+  disposed = true;
+  clearTimeout(timer);
+});
 </script>
 
 <template>

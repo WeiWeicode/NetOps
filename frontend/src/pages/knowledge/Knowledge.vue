@@ -6,7 +6,7 @@
  *   AI 功能(IMPL-PLAN A1;docs/API.md §10.2):語意搜尋(向量庫)、向量庫狀態與立即同步(VECTOR_SYNC 開啟時)、外部 IP 自動學習(components/IpLearning.vue);
  *   請 AI 記錄筆記在 AI 問答頁。
  */
-import { computed, onMounted, reactive, ref, shallowRef, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { can, describeError, download } from '@/api/gateway';
 import { fmtTime } from '@/api/format';
@@ -45,25 +45,26 @@ async function load(p = 1, reloadAll = false) {
   loading.value = true;
   error.value = null;
   try {
+    let r: { items: KbNote[]; compilation: KbCompilation };
     if (semantic.value && q.value.trim()) {
-      const s = await ai.semanticSearch(q.value.trim());
+      // 語意搜尋的回應沒有匯整檔資訊:同時取(新增、修改、刪除後也要更新);全部取回後才更新畫面
+      const [s, list] = await Promise.all([ai.semanticSearch(q.value.trim()), !compilation.value || reloadAll ? kb.list('', 1, 1) : null]);
       if (my !== seq) return;
-      notes.value = s.items;
+      r = { items: s.items, compilation: list?.compilation ?? compilation.value! };
       scores.value = new Map(s.items.map((n) => [n.id, n.score]));
       total.value = s.items.length;
       page.value = 1;
       vector.value = s.vector;
-      if (!compilation.value) compilation.value = (await kb.list('', 1, 1)).compilation;
     } else {
-      const r = await kb.list(q.value, p, PAGE_SIZE);
+      const res = await kb.list(q.value, p, PAGE_SIZE);
       if (my !== seq) return;
-      notes.value = r.items;
+      r = res;
       scores.value = new Map();
-      total.value = r.total;
-      page.value = r.page;
-      compilation.value = r.compilation;
+      total.value = res.total;
+      page.value = res.page;
     }
-    const r = { compilation: compilation.value!, items: notes.value };
+    notes.value = r.items;
+    compilation.value = r.compilation;
     if (currentId.value === ALL) {
       // 沒有任何筆記時匯整檔入口會消失,改回未選取
       if (!r.compilation.count) select(r.items[0]?.id ?? '');
@@ -207,13 +208,17 @@ async function remove(n: KbNote) {
   }
 }
 
-/** 向量庫狀態(沒有權限或 AI 未設定時不顯示語意搜尋) */
+/** 向量庫狀態(沒有權限或 AI 未設定時不顯示語意搜尋);同步中每 3 秒查一次直到結束 */
+let vectorTimer: ReturnType<typeof setTimeout> | undefined;
+let unmounted = false;
 async function loadVector() {
+  clearTimeout(vectorTimer);
   try {
     vector.value = await ai.vectorStatus();
   } catch {
     vector.value = null;
   }
+  if (vector.value?.syncing && !unmounted) vectorTimer = setTimeout(() => void loadVector(), 3000);
 }
 const syncing = ref(false);
 async function syncVector() {
@@ -221,7 +226,8 @@ async function syncVector() {
   try {
     vector.value = await ai.vectorSync();
     toast.success('已開始同步向量庫');
-    setTimeout(() => void loadVector(), 3000);
+    clearTimeout(vectorTimer);
+    if (!unmounted) vectorTimer = setTimeout(() => void loadVector(), 3000);
   } catch (e) {
     toast.fromError(e, '無法同步向量庫');
   } finally {
@@ -229,9 +235,19 @@ async function syncVector() {
   }
 }
 
+// 切換語意搜尋:有關鍵字就重查;取消時清掉相近度
+watch(semantic, (on) => {
+  if (q.value.trim()) void load(1);
+  else if (!on) scores.value = new Map();
+});
+
 onMounted(() => {
   void load();
   void loadVector();
+});
+onBeforeUnmount(() => {
+  unmounted = true;
+  clearTimeout(vectorTimer);
 });
 </script>
 
@@ -249,7 +265,7 @@ onMounted(() => {
           <GInput v-model="q" icon="search" placeholder="IP、標題、內容、標籤(空白分隔多個關鍵字)" clearable class="grow" />
           <GButton type="submit" icon="search" :loading="loading" square aria-label="查詢" />
         </form>
-        <GCheckbox v-if="vector?.enabled" v-model="semantic" class="sem" label="語意搜尋(找意思相近的筆記)" @update:model-value="q.trim() && load(1)" />
+        <GCheckbox v-if="vector?.enabled" v-model="semantic" class="sem" label="語意搜尋(找意思相近的筆記)" />
         <p class="xs faint meta">
           共 {{ total.toLocaleString() }} 則<template v-if="pages > 1"> · 第 {{ page }} / {{ pages }} 頁</template>
           <template v-if="semantic && q.trim()"> · 依相近度排序</template>

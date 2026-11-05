@@ -33,11 +33,38 @@ function getPurifier(): DOMPurify {
   return p;
 }
 
-export function renderMarkdown(text: string | null | undefined): string {
+/**
+ * opts.ai:AI 回答(IMPL-PLAN A1)。模型輸入含外部可控的文字(log 的 URL、RDAP、PTR),回答可能被誘導出釣魚連結或圖片:
+ *   不顯示圖片(顯示時會自動帶 Cookie 發 GET);不同網域的連結只留文字與網址(不能點),同網域照常另開分頁
+ */
+export function renderMarkdown(text: string | null | undefined, opts: { ai?: boolean } = {}): string {
   const html = marked.parse((text ?? '').replace(/~/g, '～'), { gfm: true, async: false });
-  return getPurifier().sanitize(html, {
+  const out = getPurifier().sanitize(html, {
     USE_PROFILES: { html: true },
-    FORBID_TAGS: ['style', 'form', 'input', 'button', 'iframe'],
+    FORBID_TAGS: ['style', 'form', 'input', 'button', 'iframe', ...(opts.ai ? ['img'] : [])],
     FORBID_ATTR: ['style', 'download', 'srcset'],
   });
+  return opts.ai ? unlinkExternal(out) : out;
+}
+
+/** 不同網域的 <a> 換成「文字(網址)」純文字 */
+function unlinkExternal(html: string): string {
+  const doc = new DOMParser().parseFromString(`<body>${html}</body>`, 'text/html');
+  for (const a of [...doc.body.querySelectorAll('a')]) {
+    let same = false;
+    try {
+      same = new URL(a.getAttribute('href') ?? '', location.href).origin === location.origin;
+    } catch {
+      same = false;
+    }
+    if (same) continue;
+    const href = a.getAttribute('href') ?? '';
+    const label = a.textContent ?? '';
+    const span = doc.createElement('span');
+    span.className = 'ext-link';
+    span.title = 'AI 回答中的外部網址(不能直接點選;請勿在不明網站輸入帳密)';
+    span.textContent = href && href !== label ? `${label}(${href})` : label;
+    a.replaceWith(span);
+  }
+  return doc.body.innerHTML;
 }

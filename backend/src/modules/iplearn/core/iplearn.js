@@ -15,6 +15,8 @@ import { ipMatcher, isPrivateIp, mergeSummaries } from '../../pa/core/palog.js'
  */
 export const AUTHOR = 'AI 自動學習'
 export const TAG = '自動學習'
+/** 自動學習筆記的上限（與管理者共用知識庫 5,000 則的上限，預留給管理者） */
+export const MAX_AUTO_NOTES = 1000
 
 /* ───────── IP 工具 ───────── */
 
@@ -56,7 +58,17 @@ export function isLearnable(ip) {
 
 /* ───────── RDAP 回應 ───────── */
 
-const vcardFn = (e) => e?.vcardArray?.[1]?.find((x) => x[0] === 'fn')?.[3] ?? ''
+/**
+ * 與舊版不同（審查修正）：RDAP 的名稱與說明由網段登記人填寫，可能夾帶要模型照做的文字（之後會寫進知識庫）；
+ * 每個欄位壓成一行、去掉控制字元並限制長度
+ */
+const clean = (v, n = 120) =>
+  String(v ?? '')
+    .replace(/[\u0000-\u001f\u007f\u2028\u2029]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, n)
+const vcardFn = (e) => clean(e?.vcardArray?.[1]?.find((x) => x[0] === 'fn')?.[3] ?? '')
 
 /** RDAP 回應 JSON → { name, handle, org, country, start, end, cidrs, desc }；沒有網段資料丟出錯誤（舊版 rdap() 的解析部分） */
 export function parseRdap(j) {
@@ -64,13 +76,13 @@ export function parseRdap(j) {
   // 擁有者：registrant 優先，其次第一個有名稱的聯絡人
   const ents = [...(j.entities ?? []), ...(j.entities ?? []).flatMap((e) => e.entities ?? [])]
   const owner = ents.find((e) => e.roles?.includes('registrant') && vcardFn(e)) ?? ents.find((e) => vcardFn(e) && !e.roles?.includes('abuse'))
-  const desc = (j.remarks ?? []).flatMap((r) => r.description ?? []).filter((x) => x && x.length < 120).slice(0, 3)
+  const desc = (j.remarks ?? []).flatMap((r) => r.description ?? []).filter((x) => typeof x === 'string' && x && x.length < 120).map((x) => clean(x)).slice(0, 3)
   const cidrs = (j.cidr0_cidrs ?? []).filter((c) => c.v4prefix).map((c) => `${c.v4prefix}/${c.length}`)
   return {
-    name: j.name ?? '',
-    handle: j.handle ?? '',
-    org: vcardFn(owner) || desc[0] || j.name || '',
-    country: j.country ?? '',
+    name: clean(j.name),
+    handle: clean(j.handle, 60),
+    org: vcardFn(owner) || desc[0] || clean(j.name) || '',
+    country: clean(j.country, 10),
     start: j.startAddress,
     end: j.endAddress,
     cidrs: (cidrs.length ? cidrs : rangeToCidrs(j.startAddress, j.endAddress)).slice(0, 16),
@@ -165,13 +177,18 @@ export function parseJson(text) {
  *   loadState() / saveState(state)：palogs/iplearn.json（store.pa）
  *   recentSummaries(days) → { summaries, from, to, files }：最近 days 天的 TRAFFIC 摘要（from / to 為 'yyyy/MM/dd'）
  *   listNotes()、saveNote(data, author, id?)：知識庫（id 不存在時丟出錯誤）
+ *   noteState(id) → 'auto' | 'manual' | null：筆記仍是自動學習的、管理者改過（拿掉標籤或修改人不是 AI 自動學習）、已刪除
  *   chatOnce({ messages, maxTokens })：模型（不串流、不思考）
  *   rdap(ip) → RDAP 回應 JSON（infra/rdap，依序查各區登記處）；reverseDns(ip) → '名稱, …'（失敗回 ''）
  *   nowText()：'yyyy/MM/dd HH:mm:ss'；log：{ error }
- *   options：{ days, max, ttlDays }（設定的預設值）
+ *   options：{ days, max, ttlDays, maxAutoNotes? }（設定的預設值）
  */
 export function createIpLearner(deps) {
   const { loadState, saveState, recentSummaries, listNotes, saveNote, chatOnce, rdap, reverseDns, nowText, options } = deps
+  const noteState = deps.noteState ?? (() => 'auto')
+  const maxAutoNotes = options.maxAutoNotes ?? MAX_AUTO_NOTES
+  /** 目前的自動學習筆記數 */
+  const autoCount = () => listNotes().filter((n) => n.tags.includes(TAG)).length
   let state = (() => {
     try {
       return loadState() ?? {}
@@ -220,20 +237,34 @@ export function createIpLearner(deps) {
         log(`AI 整理失敗：${err.message}`)
         continue
       }
+      // 與舊版不同（審查修正）：模型回的 key 只接受這一批的分組（不可改寫別組的筆記）
+      const allowed = new Set(batch)
       for (const n of notes) {
+        if (typeof n?.key !== 'string' || !allowed.has(n.key)) continue
         const g = state.groups[n.key]
-        if (!g || !n.content) continue
+        if (!g || typeof n.content !== 'string' || !n.content) continue
         const ips = g.cidrs.length ? g.cidrs : Object.keys(g.ips)
         const tags = [TAG, '外部 IP', ...(Array.isArray(n.tags) ? n.tags : [])].map(String).filter((x, j, a) => x && a.indexOf(x) === j)
-        // AI 有時自己寫了註記：去掉再統一加
-        const content = `${String(n.content).replace(/\n*（AI[^）]*自動整理[^）]*）\s*$/, '').trim()}\n\n${FOOTER}`
-        const data = { title: n.title, ips: ips.slice(0, 30), tags, content, source: `外部 IP 自動學習（RDAP / DNS 反查）${g.handle ? ` ${g.handle}` : ''}` }
+        // AI 有時自己寫了註記：去掉再統一加（內容先限制長度，模型輸出很長時正規表示式比對會很慢）
+        const content = `${n.content.slice(0, 8000).replace(/\n*（AI[^）]*自動整理[^）]*）\s*$/, '').trim()}\n\n${FOOTER}`
+        const data = { title: typeof n.title === 'string' ? n.title : '', ips: ips.slice(0, 30), tags, content, source: `外部 IP 自動學習（RDAP / DNS 反查）${g.handle ? ` ${g.handle}` : ''}` }
+        // 與舊版不同（審查修正）：管理者改過的筆記不覆寫（AGENT.md §7.4）；已刪除的重新建立；
+        // 寫入失敗明確記錄並略過（舊版任何錯誤都改成新建，可能產生重複筆記）
+        const st = g.noteId ? noteState(g.noteId) : null
+        if (st === 'manual') {
+          log(`「${g.org || n.key}」的筆記已由管理者修改，不覆寫`)
+          continue
+        }
+        if (!st && autoCount() >= maxAutoNotes) {
+          log(`自動學習筆記已達上限 ${maxAutoNotes} 則，不再新增`)
+          continue
+        }
         let note
         try {
-          note = saveNote(data, AUTHOR, g.noteId)
-        } catch {
-          // 管理者刪掉了原本的筆記 → 重新建立
-          note = saveNote(data, AUTHOR, undefined)
+          note = saveNote(data, AUTHOR, st ? g.noteId : undefined)
+        } catch (err) {
+          log(`「${g.org || n.key}」寫入知識庫失敗：${err.message}`)
+          continue
         }
         g.noteId = note.id
         g.noted = nowText().slice(0, 16)

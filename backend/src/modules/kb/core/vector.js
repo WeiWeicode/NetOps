@@ -31,21 +31,36 @@ export const hashOf = (text) => crypto.createHash('md5').update(text).digest('he
  * listNotes()：全部筆記；nowText()：本地時間字串；log：{ info, error }
  * allowWrite：false 時不寫入、不刪除 Qdrant（只做語意搜尋；VECTOR_SYNC，見 config.ts）
  */
+/** scroll 最多讀幾頁（每頁 256 筆） */
+const MAX_SCROLL_PAGES = 200
+/** 一次同步最多刪除：現有筆數的 20%，至少可刪 5 筆 */
+const MAX_DELETE_RATIO = 0.2
+const MAX_DELETE_MIN = 5
+
 export function createVectorIndex({ qdrant, embed, listNotes, nowText, log, allowWrite }) {
   const state = { ok: null, points: 0, lastSync: null, error: '', syncing: false, upserted: 0, deleted: 0 }
   const vectorEnabled = () => qdrant.enabled
   const vectorStatus = () => ({ enabled: vectorEnabled(), sync: Boolean(allowWrite), collection: qdrant.collection, ...state })
   const embedQuery = (text) => embed(queryText(text))
 
-  /** Qdrant 裡現有的 point：Map(noteId → hash) */
+  /**
+   * Qdrant 裡現有的 point：Map(noteId → hash)
+   * 與舊版不同（審查修正）：payload 沒有 noteId 的 point（不是筆記同步寫的）不列入，之後也不會被刪除；
+   * 最多讀 MAX_SCROLL_PAGES 頁，next_page_offset 重複時停止（避免無窮迴圈）
+   */
   async function existing() {
     const out = new Map()
+    const seen = new Set()
     let offset = null
+    let pages = 0
     do {
       const r = await qdrant.request('POST', '/points/scroll', { limit: 256, offset, with_payload: ['noteId', 'hash'], with_vector: false })
-      for (const p of r.points ?? []) out.set(p.payload?.noteId, { id: p.id, hash: p.payload?.hash })
+      for (const p of r.points ?? []) if (typeof p.payload?.noteId === 'string' && p.payload.noteId) out.set(p.payload.noteId, { id: p.id, hash: p.payload?.hash })
       offset = r.next_page_offset ?? null
-    } while (offset)
+      if (offset !== null && seen.has(JSON.stringify(offset))) throw new Error('向量庫分頁異常（重複的 offset）')
+      if (offset !== null) seen.add(JSON.stringify(offset))
+      if (++pages >= MAX_SCROLL_PAGES && offset !== null) throw new Error(`向量庫筆數超過 ${MAX_SCROLL_PAGES * 256}，停止同步`)
+    } while (offset !== null)
     return out
   }
 
@@ -57,6 +72,11 @@ export function createVectorIndex({ qdrant, embed, listNotes, nowText, log, allo
     try {
       const notes = listNotes()
       const have = await existing()
+      const ids = new Set(notes.map((n) => n.id))
+      const gone = [...have.entries()].filter(([id]) => !ids.has(id)).map(([, v]) => v.id)
+      // 安全閥（與舊版不同，審查修正）：collection 是共用的，知識庫讀不到（空的）或一次要刪太多時整次不同步（寫入前就檢查），請人確認
+      if (gone.length && (!notes.length || gone.length > Math.max(MAX_DELETE_MIN, have.size * MAX_DELETE_RATIO)))
+        throw new Error(`要從向量庫刪除 ${gone.length} / ${have.size} 筆，超過安全上限，已停止；請確認知識庫資料目錄後再同步`)
       let upserted = 0
       const batch = []
       const flush = async () => {
@@ -75,8 +95,6 @@ export function createVectorIndex({ qdrant, embed, listNotes, nowText, log, allo
         if (batch.length >= 16) await flush()
       }
       await flush()
-      const ids = new Set(notes.map((n) => n.id))
-      const gone = [...have.entries()].filter(([id]) => !ids.has(id)).map(([, v]) => v.id)
       if (gone.length) await qdrant.request('POST', '/points/delete?wait=true', { points: gone })
       const info = await qdrant.request('GET', '')
       Object.assign(state, { ok: true, error: '', points: info.points_count ?? 0, lastSync: nowText(), upserted, deleted: gone.length })

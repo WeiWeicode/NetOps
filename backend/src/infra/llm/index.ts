@@ -36,16 +36,22 @@ export class LlmError extends Error {
 
 export type Llm = ReturnType<typeof createLlm>;
 
+/** 串流中一行的長度上限(vLLM 每個 data: 是一小段回答) */
+const MAX_LINE = 1024 * 1024;
+
 export function createLlm(cfg: LlmConfig, fetchImpl: typeof fetch = fetch) {
   let modelCache = { at: 0, id: '' };
   const authHeader = (): Record<string, string> => (cfg.apiKey ? { Authorization: `Bearer ${cfg.apiKey}` } : {});
 
-  async function post(path: string, body: unknown, signal: AbortSignal) {
+  /** timeout:逾時用的 signal(與呼叫端中斷分開判斷);user:使用者關閉連線 */
+  async function post(path: string, body: unknown, timeout: AbortSignal, user?: AbortSignal) {
+    const signal = user ? AbortSignal.any([user, timeout]) : timeout;
     let res: Response;
     try {
       res = await fetchImpl(`${cfg.url}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeader() }, signal, body: JSON.stringify(body) });
     } catch (err) {
-      if (signal.aborted) throw new LlmError('AI 服務回應逾時', 'timeout', { cause: err });
+      if (user?.aborted) throw err;
+      if (timeout.aborted) throw new LlmError('AI 服務回應逾時', 'timeout', { cause: err });
       throw new LlmError('無法連線 AI 服務', 'unavailable', { cause: err });
     }
     if (!res.ok) {
@@ -88,7 +94,8 @@ export function createLlm(cfg: LlmConfig, fetchImpl: typeof fetch = fetch) {
     const res = await post(
       '/chat/completions',
       { model: m, temperature, max_tokens: maxTokens, chat_template_kwargs: { enable_thinking: false }, messages },
-      signal ? AbortSignal.any([signal, timeout]) : timeout,
+      timeout,
+      signal,
     );
     const body = (await res.json()) as { choices?: { message?: { content?: string } }[] };
     return body.choices?.[0]?.message?.content ?? '';
@@ -101,11 +108,11 @@ export function createLlm(cfg: LlmConfig, fetchImpl: typeof fetch = fetch) {
   async function* stream({ messages, think = false, signal }: { messages: ChatMessage[]; think?: boolean; signal?: AbortSignal }): AsyncGenerator<StreamEvent> {
     const m = await model();
     const timeout = AbortSignal.timeout(cfg.timeoutMs);
-    const all = signal ? AbortSignal.any([signal, timeout]) : timeout;
     const upstream = await post(
       '/chat/completions',
       { model: m, stream: true, temperature: 0.3, max_tokens: think ? 12000 : 4000, chat_template_kwargs: { enable_thinking: think }, messages },
-      all,
+      timeout,
+      signal,
     );
     if (!upstream.body) throw new LlmError('AI 服務沒有回應內容', 'bad-response');
 
@@ -118,6 +125,8 @@ export function createLlm(cfg: LlmConfig, fetchImpl: typeof fetch = fetch) {
     try {
       for await (const chunk of upstream.body as unknown as AsyncIterable<Uint8Array>) {
         buffer += decoder.decode(chunk, { stream: true });
+        // 上游一直不送換行時不無限累積(審查修正)
+        if (buffer.length > MAX_LINE) throw new LlmError('AI 服務回應格式錯誤', 'bad-response');
         let idx;
         while ((idx = buffer.indexOf('\n')) >= 0) {
           const line = buffer.slice(0, idx).trim();
@@ -147,6 +156,7 @@ export function createLlm(cfg: LlmConfig, fetchImpl: typeof fetch = fetch) {
         }
       }
     } catch (err) {
+      if (err instanceof LlmError) throw err;
       if (timeout.aborted) throw new LlmError(`AI 分析逾時(超過 ${Math.round(cfg.timeoutMs / 1000)} 秒)`, 'timeout', { cause: err });
       if (signal?.aborted) throw err;
       throw new LlmError('AI 服務連線中斷', 'unavailable', { cause: err });

@@ -47,6 +47,9 @@ export function createFlowStats() {
 
 export const flowFileName = (summaryName) => summaryName.replace(/\.json$/, '.tsv.gz')
 
+/** 一次查詢最多回傳幾個組合（collector 只保留 5000 種，但要累計次數；20 萬列約 100 MB 以內） */
+const QUERY_LIMIT = 200000
+
 /* ───────── 查詢(AI 問答用,由舊版 queryFlows 搬移,IMPL-PLAN A1;讀檔改由呼叫端注入 readFlows) ───────── */
 
 /** 一列 → 組合物件（欄位名稱與 log 紀錄相同，方便沿用 buildCondition 的 IP 判斷） */
@@ -74,8 +77,9 @@ function parseLine(line) {
  * 時間以組合的最早 / 最晚時間判斷是否與 [from, to] 重疊（同一小時內的組合可能稍微超出範圍）
  * 回傳 { flows: [...], files }
  */
-export async function queryFlows(names, { from, to, prefilter, test, parallel = 4, readFlows }) {
+export async function queryFlows(names, { from, to, prefilter, test, parallel = 4, readFlows, limit = QUERY_LIMIT }) {
   const out = []
+  let truncated = false
   const failed = [] // 讀不到的統計檔（呼叫端改掃 FTP）
   const queue = [...names]
   const end = `${to}:59`
@@ -88,18 +92,26 @@ export async function queryFlows(names, { from, to, prefilter, test, parallel = 
         // readFlows(name)：store.pa.readFlows（解壓後的文字；檔案不存在回 null，視同讀不到）
         const text = await readFlows(name)
         if (text === null) throw new Error('missing')
+        if (truncated) continue
         for (const line of text.split('\n')) {
           if (!line || (prefilter && !prefilter(line))) continue
           const f = parseLine(line)
           if (f.last < from || f.first > end) continue
-          if (test(f)) found.push(f)
+          if (!test(f)) continue
+          // 與舊版不同（審查修正）：符合的組合超過 limit 就停止累積並標 truncated（寬網段一次可能數百萬列，避免記憶體耗盡）
+          if (out.length + found.length >= limit) {
+            truncated = true
+            break
+          }
+          found.push(f)
         }
-        out.push(...found)
+        // 逐一加入（舊版 out.push(...found) 在組合很多時會超過函式參數上限）
+        for (const f of found) out.push(f)
       } catch {
         failed.push(name)
       }
     }
   }
   await Promise.all(Array.from({ length: Math.min(parallel, names.length) }, worker))
-  return { flows: out, files: names.length, failed }
+  return { flows: out, files: names.length, failed, truncated }
 }

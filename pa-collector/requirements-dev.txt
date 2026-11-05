@@ -1,0 +1,5 @@
+# 測試與 lint(只在 Dockerfile 的 test 階段與本機安裝,不進執行映像)
+-r requirements.txt
+pytest==9.2.0
+fakeredis==2.40.0
+ruff==0.17.3

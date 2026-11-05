@@ -11,7 +11,7 @@
  */
 import path from 'node:path';
 import { PassThrough, Writable, type Readable } from 'node:stream';
-import { Client } from 'basic-ftp';
+import { Client, type FileInfo } from 'basic-ftp';
 import type { FtpConfig } from '../../config.js';
 import { AppError } from '../../errors.js';
 
@@ -108,7 +108,22 @@ export class Semaphore {
   }
 }
 
+/**
+ * Windows 系統資料夾(FTP 主機的磁碟根目錄會列出):不是 log,清單一律不顯示(PA、AD 共用;D1 驗收 2026-11-05 §4.1)
+ * 只過濾清單,不擋路徑;比對不分大小寫
+ */
+const SYSTEM_DIRS = new Set(['$recycle.bin', 'system volume information']);
+export const isSystemEntry = (name: string) => SYSTEM_DIRS.has(name.toLowerCase());
+
 const sortEntries = (a: FtpEntry, b: FtpEntry) => (a.dir === b.dir ? a.name.localeCompare(b.name, 'zh-Hant', { numeric: true }) : a.dir ? -1 : 1);
+
+/** basic-ftp 的列表 → FtpEntry(去掉 . / .. 與系統資料夾,資料夾在前) */
+export function toEntries(abs: string, raw: readonly Pick<FileInfo, 'name' | 'isDirectory' | 'size' | 'modifiedAt' | 'rawModifiedAt'>[]): FtpEntry[] {
+  return raw
+    .filter((f) => f.name !== '.' && f.name !== '..' && !isSystemEntry(f.name))
+    .map((f) => ({ name: f.name, path: path.posix.join(abs, f.name), dir: f.isDirectory, size: f.size, modified: f.modifiedAt ?? null, rawModified: f.rawModifiedAt }))
+    .sort(sortEntries);
+}
 /**
  * FTP 原始錯誤 → 給使用者看的分類(不含主機、port 與錯誤原文)
  * basic-ftp 的 FTPError 帶 FTP 回應碼(code 為數字);連線錯誤帶 Node 的 errno 代碼(code 為字串)
@@ -178,11 +193,7 @@ export function createFtp(config: FtpConfig | null): Ftp {
   async function list(c: Client, dir: string): Promise<FtpEntry[]> {
     const abs = safePath(dir);
     try {
-      const entries = await c.list(abs);
-      return entries
-        .filter((f) => f.name !== '.' && f.name !== '..')
-        .map((f) => ({ name: f.name, path: path.posix.join(abs, f.name), dir: f.isDirectory, size: f.size, modified: f.modifiedAt ?? null, rawModified: f.rawModifiedAt }))
-        .sort(sortEntries);
+      return toEntries(abs, await c.list(abs));
     } catch (err) {
       throw unavailable(`無法讀取 FTP 目錄 ${abs}`, err);
     }

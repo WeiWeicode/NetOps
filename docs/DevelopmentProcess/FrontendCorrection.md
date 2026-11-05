@@ -2,6 +2,12 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。範圍:`frontend/`。
 
+## 2026-11-05 D1 驗收修正:FTP 勾選、AD 清單改手動、導回時不回報錯誤
+- 工作項目:D1(驗收報告 `docs/test-reports/2026-11-05-d1-uat-pending.md` §3.1、§4.2、§4.4)
+- 內容:① PA「FTP Log 檔案」:後端只分析 TRAFFIC 目錄直屬(`path === logDir`)與各類型目錄的檔案,其他目錄(例如 `FTP_LOG_DIR` 之外的 `/my-data`)勾了一定被略過。選改動最小的做法:**這些目錄不顯示勾選框與全選 / 分析 / 刪除列**,改顯示「這個目錄的檔案只能瀏覽,不能分析」與 TRAFFIC 目錄(`ftpFiles.ts` `analyzableDir`;API 不變)。略過時的 toast 也寫明 TRAFFIC 目錄。② AD「FTP Log 檔案」:依需求方決定,載入時只查 `GET /ftp/ad/status`,不送 `POST /ftp/ad/listings`;有 `netops.ad-files.manage` 的人按「列出 FTP 資料夾」才送出,沒有的人看不到按鈕(改顯示「重新整理」只更新同步狀態);同步 / 匯入結束時只在已列過清單時才重新列出。③ 未登入或沒有應用權限時,守衛 `return false` 中止第一次導覽,`router.isReady()` 以不帶訊息的 NavigationFailure 拒絕,`App.vue` 的 `.finally()` 讓它變成未處理的 Promise 拒絕,被 web-kit 監控回報成 `netops-web` 錯誤(正式建置堆疊對到 vue-router 的 `createRouterError`)。改成導覽中止時吞掉並維持載入畫面(`guard.ts` `isLeavingNavigation`),其他錯誤照常回報。
+- 檔案:`frontend/src/pages/firewall/Files.vue`、`frontend/src/pages/ad/Files.vue`、`frontend/src/composables/{ftpFiles,guard}.ts`、`frontend/src/App.vue`、`frontend/test/{ftpFiles,guard}.test.ts`、`docs/Gherkin/{ftp/*,ui/navigation}.feature`
+- 驗證:`npm run typecheck`、`npm test`(12 檔 67 項通過,新增 4 項)、`npm run build`;畫面未在瀏覽器實測(合併後於測試區重驗,見 HANDOFF「2026-11-05」)
+
 ## 2026-11-04 D1:前端 SPA 映像與發佈腳本
 - 工作項目:D1
 - 內容:新增 `frontend/Dockerfile`、`frontend/publish.sh`、`.dockerignore`(同 GigaItApp、giga-Portal):建置 `dist` 後以一次性容器發佈到 Gateway 的 `gw_www`,`/srv/www/netops/current` symlink 原子切換、保留 5 版、可回滾;`publish.sh` 只接受 `netops`,不會動到其他系統的目錄。版本名稱(commit SHA)同時作為 web-kit 監控回報的 `VITE_RELEASE`。畫面程式沒有修改。

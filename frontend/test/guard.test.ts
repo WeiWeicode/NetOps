@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { decideGuard, type GuardInput } from '../src/composables/guard';
+import { createMemoryHistory, createRouter } from 'vue-router';
+import { decideGuard, isLeavingNavigation, type GuardInput } from '../src/composables/guard';
 
 const APP = 'netops.app.access';
 const DASH = { permission: 'netops.pa-dashboard.read', requires: ['netops.pa.read'] };
@@ -49,5 +50,44 @@ describe('路由守衛', () => {
     const tab = { permission: 'netops.x.tab-b' };
     const r = decideGuard(input([APP, DASH.permission, ...DASH.requires], { matched: [shell, DASH, tab], path: '/firewall/dashboard/b' }));
     expect(r).toEqual({ kind: 'redirect', to: '/firewall/dashboard' });
+  });
+});
+
+// D1 驗收 2026-11-05 §4.4:未登入開 /netops/ 時,守衛 return false 讓 isReady() 以 NavigationFailure 拒絕(正式建置沒有訊息),被監控回報
+describe('isLeavingNavigation', () => {
+  const router = (guard: () => boolean | void) => {
+    const r = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', component: { render: () => null } }] });
+    r.beforeEach(guard);
+    return r;
+  };
+
+  it('第一次導覽被守衛中止(導向登入 / 入口網)時是「離開中」,不是錯誤', async () => {
+    const r = router(() => false);
+    // 同 App.vue:isReady 在第一次導覽完成前就等候
+    const ready = r.isReady().then(
+      () => null,
+      (e: unknown) => e,
+    );
+    await r.push('/');
+    const err = await ready;
+    expect(err).toBeInstanceOf(Error);
+    expect(isLeavingNavigation(err)).toBe(true);
+  });
+
+  it('守衛丟出例外與一般錯誤照常回報', async () => {
+    const r = router(() => {
+      throw new Error('boom');
+    });
+    r.onError(() => undefined);
+    const ready = r.isReady().then(
+      () => null,
+      (e: unknown) => e,
+    );
+    await r.push('/').catch(() => undefined);
+    const err = await ready;
+    expect((err as Error).message).toBe('boom');
+    expect(isLeavingNavigation(err)).toBe(false);
+    expect(isLeavingNavigation(new Error(''))).toBe(false);
+    expect(isLeavingNavigation(undefined)).toBe(false);
   });
 });

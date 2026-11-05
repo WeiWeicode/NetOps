@@ -77,6 +77,15 @@ services:
     read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
+    # 健康檢查:/backup/LAST_RESULT 26 小時內更新過(每天備份一次 + 緩衝)且結果是 OK。
+    #   備份 FAIL、NAS 未掛載(沒有標記檔就不寫結果)、超過一天沒備份都會 unhealthy
+    #   CI 的 up --wait 會等到 healthy:正常部署第一次檢查(約 30 秒)就通過;啟動時的備份最多等 5 分鐘;備份失敗時 deploy-api-test 失敗
+    healthcheck:
+      test: ["CMD-SHELL", "find /backup/LAST_RESULT -mmin -1560 | grep -q . && grep -q '^[^ ]* OK ' /backup/LAST_RESULT"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5m
     environment:
       GW_ENV: ${GW_ENV}
       KB_BACKUP_HOUR: ${KB_BACKUP_HOUR:-2}

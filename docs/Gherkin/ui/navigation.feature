@@ -26,6 +26,16 @@
       那麼 整頁導回入口網 /?denied=netops
       而且 不停在本系統(避免導向迴圈)
 
+    # 來源: frontend/src/composables/guard.ts:48(fix/d1-uat-findings)
+    @auto @changed
+    場景: 導向登入頁或入口網時不回報錯誤
+      # D1 測試區每次未登入開頁,giga-observe 都多一筆 netops-web 空白訊息的錯誤(D1 驗收 2026-11-05 §4.4)
+      假如 使用者尚未登入,或沒有 "netops.app.access"
+      當 開啟 /netops/
+      那麼 導向入口網,離開前維持「正在確認登入狀態」畫面
+      而且 守衛中止第一次導覽不算錯誤,不回報 giga-observe
+      但是 守衛丟出的其他例外照常回報
+
     # 來源: frontend/src/router.ts:236(origin/feature/netops-f1-pa-dashboard)
     @untested
     場景: BFF 無法連線時顯示維護頁

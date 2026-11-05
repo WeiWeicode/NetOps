@@ -1,6 +1,6 @@
 # 專案地圖 — NetOps
 
-> **最後更新:2026-11-04**(D1 完成並上測試區,有未驗項目:CI 發佈前端 SPA 與套用畫面權限、`deploy/gateway-rbac.yaml`、知識庫 NAS 備份 `deploy/kb-backup/`、監控 Key;驗收報告 `docs/test-reports/2026-11-04-d1-uat.md`。2026-11-03:F1、B2 完成;舊版程式未改動)。
+> **最後更新:2026-11-05**(D1 驗收修正:測試區 `FTP_LOG_DIR=/my-data` 寫進 CI、`netops-kb-backup` healthcheck、FTP 清單不列系統資料夾、AD FTP 清單改手動;2026-11-04:D1 完成並上測試區,有未驗項目:CI 發佈前端 SPA 與套用畫面權限、`deploy/gateway-rbac.yaml`、知識庫 NAS 備份 `deploy/kb-backup/`、監控 Key;驗收報告 `docs/test-reports/2026-11-04-d1-uat.md`。2026-11-03:F1、B2 完成;舊版程式未改動)。
 > 開發新功能後,在同一個變更內更新本文件(`AGENT.md` §9)。只寫結構與職責,細節連到 `docs/`。
 
 資訊網通管理系統:PA-560 防火牆 log、AD 事件與網通知識庫;AI 問答只留在舊版(ARCHITECTURE D17)。目標是接入 GigaNexus Gateway(`/netops/`、`netops-api` :51292),目前部署於 IIS `/NetOps`。
@@ -64,7 +64,7 @@ NetOps/
 │  ├─ test/                 vitest:選單、守衛、應用層守衛、風格、工作輪詢、狀態輪詢、各頁純函式、網址條件、連結
 │  └─ Dockerfile、publish.sh SPA 映像:一次性容器發佈到 gw_www/netops(symlink 原子切換、保留 5 版、可回滾;D1)
 └─ deploy/
-   ├─ docker-compose.yml    netops-api 加入 Gateway 網路,不對主機發佈 port;netops-kb-backup(知識庫 NAS 備份);spa-netops(profile publish)
+   ├─ docker-compose.yml    netops-api 加入 Gateway 網路,不對主機發佈 port;netops-kb-backup(知識庫 NAS 備份,healthcheck 看 LAST_RESULT);spa-netops(profile publish)
    ├─ gateway-rbac.yaml     netops.* 應用 / 選單 / 按鈕、netops-admin、netops-viewer(不指派成員,D15);apply-gateway-rbac.sh 套用(檢查只動 netops 範圍)
    ├─ kb-backup/            每天把 knowledge/ 打包到 NAS docker-folder/giga-netops/<區>,保留 30 份(ARCHITECTURE Q3)
    ├─ host2-set-secrets.sh  主機 2 機密(含 giga-observe ingest Key)與 netops.env(使用者執行)

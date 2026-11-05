@@ -6,7 +6,7 @@ import net from 'node:net';
 import { describe, it } from 'node:test';
 import { loadConfig } from '../../src/config.js';
 import { AppError } from '../../src/errors.js';
-import { createFtp, ftpReason, Semaphore, unavailable } from '../../src/infra/ftp/index.js';
+import { createFtp, ftpReason, isSystemEntry, Semaphore, toEntries, unavailable } from '../../src/infra/ftp/index.js';
 import { errorText } from '../../src/modules/pa/importer.js';
 import { createTestApp, waitFor } from '../helpers.js';
 
@@ -24,6 +24,28 @@ describe('safePath', () => {
   });
   it('沒有設定 FTP 時回 503', () => {
     assert.throws(() => createFtp(null).safePath('/'), code('NETOPS_FTP_NOT_CONFIGURED'));
+  });
+});
+
+describe('isSystemEntry', () => {
+  it('FTP 清單不列 Windows 系統資料夾(不分大小寫)', () => {
+    for (const n of ['$RECYCLE.BIN', 'System Volume Information', 'system volume information', '$Recycle.Bin']) assert.equal(isSystemEntry(n), true, n);
+    for (const n of ['my-data', 'AD_Log_Backup', 'RECYCLE.BIN', 'System Volume Information.csv']) assert.equal(isSystemEntry(n), false, n);
+  });
+  it('列目錄的結果不含系統資料夾與 . / ..,資料夾在前', () => {
+    const raw = ['.', '..', '$RECYCLE.BIN', 'System Volume Information', 'b.csv', 'my-data', 'AD_Log_Backup'].map((name) => ({
+      name,
+      isDirectory: !name.endsWith('.csv'),
+      size: 1,
+      modifiedAt: undefined,
+      rawModifiedAt: '',
+    }));
+    const out = toEntries('/', raw);
+    assert.deepEqual(
+      out.map((f) => f.name),
+      ['AD_Log_Backup', 'my-data', 'b.csv'],
+    );
+    assert.equal(out[2]!.path, '/b.csv');
   });
 });
 

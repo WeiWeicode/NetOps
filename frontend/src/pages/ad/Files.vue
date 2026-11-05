@@ -4,6 +4,8 @@
  *   FTP /AD_Log_Backup/yyyyMMdd/*.csv(DC 每天匯出)與匯入狀態。清單改工作模式(舊版逐一列出日期資料夾最長 120 秒)。
  *   有管理權限(UI.adFilesManage)可:同步 = 新的 / 有變動的日期才匯入;重新匯入選取 = 一律重新讀取(一次最多 60 天);
  *   刪除匯入結果 = 只刪本系統的資料,FTP 檔案不動。同步與匯入在背景執行,完成後重新列出清單。
+ *   列出清單要連 FTP 逐一列日期資料夾(最長 3 分鐘,佔用 FTP 連線):頁面載入時不送出,有管理權限的人按「列出 FTP 資料夾」才送出
+ *   (需求方 2026-11-05 決定;D1 驗收 §4.2)。沒有管理權限的人只看得到同步狀態。
  */
 import { computed, onMounted, ref, shallowRef, watch } from 'vue';
 import { can, describeError } from '@/api/gateway';
@@ -72,8 +74,8 @@ const poller = usePolling(
       statusError.value = null;
     }
     const running = !!status.value?.running;
-    // 同步 / 匯入剛結束:重新列出清單
-    if (!running && polledRunning) void reload();
+    // 同步 / 匯入剛結束:已經列過清單才重新列出(不替沒按「列出」的人連 FTP)
+    if (!running && polledRunning && manage.value && last.value) void reload();
     polledRunning = running;
     return running;
   },
@@ -144,12 +146,15 @@ async function forget() {
 const detail = ref<AdDay | null>(null);
 const detailOpen = computed({ get: () => !!detail.value, set: (v) => !v && (detail.value = null) });
 
-function refresh() {
+/** 「列出 FTP 資料夾」(管理權限):送出清單工作並更新同步狀態 */
+function listFtp() {
+  if (!manage.value || listing.running.value) return;
   void reload();
   poll();
 }
 
-onMounted(refresh);
+// 載入時只查同步狀態(GET,不連 FTP)
+onMounted(poll);
 
 const asDay = (r: unknown) => r as AdDay;
 const columns = computed(() => [
@@ -176,7 +181,8 @@ const channelsText = (d: AdDay) => d.files.map((f) => `${AD_CHANNEL[f.channel] ?
 <template>
   <div class="stack" style="--gap: 16px">
     <Teleport to="#page-actions" defer>
-      <GButton icon="refresh" :loading="listing.running.value" @click="refresh">重新整理</GButton>
+      <GButton v-if="manage" icon="list" :loading="listing.running.value" @click="listFtp">列出 FTP 資料夾</GButton>
+      <GButton v-else icon="refresh" @click="poll">重新整理</GButton>
       <GButton v-if="manage" variant="primary" icon="download" :loading="busy === 'sync'" :disabled="!!status?.running" @click="sync">同步新檔案</GButton>
     </Teleport>
 
@@ -193,9 +199,12 @@ const channelsText = (d: AdDay) => d.files.map((f) => `${AD_CHANNEL[f.channel] ?
         <GButton icon="refresh" @click="reload">重試</GButton>
       </GEmpty>
     </GCard>
-    <GCard v-else padding="none" :title="last ? `FTP ${last.dir}` : 'FTP 資料夾'" icon="folder">
+    <GCard v-else padding="none" :title="last ? `FTP ${last.dir}` : status?.dir ? `FTP ${status.dir}` : 'FTP 資料夾'" icon="folder">
       <div class="toolbar stack" style="--gap: 10px">
-        <span class="small muted num">
+        <span v-if="!last" class="small muted num">
+          尚未列出 FTP 資料夾<template v-if="status?.lastSyncAt"> · 上次同步 {{ fmtTime(status.lastSyncAt) }}</template>
+        </span>
+        <span v-else class="small muted num">
           {{ counts.days }} 天、{{ counts.files }} 個檔({{ fmtSize(counts.size) }})· <span class="c-success">已匯入 {{ counts.done }}</span> · 未匯入 / 已變更
           {{ counts.pending }}
           <template v-if="status?.lastSyncAt"> · 上次同步 {{ fmtTime(status.lastSyncAt) }}</template>
@@ -227,7 +236,14 @@ const channelsText = (d: AdDay) => d.files.map((f) => `${AD_CHANNEL[f.channel] ?
         :page-size="31"
         dense
         :columns="columns"
-        empty-title="FTP 上沒有 AD log 資料夾"
+        :empty-title="last ? 'FTP 上沒有 AD log 資料夾' : '尚未列出 FTP 資料夾'"
+        :empty-description="
+          last
+            ? undefined
+            : manage
+              ? '按右上「列出 FTP 資料夾」列出日期資料夾與匯入狀態(最長 3 分鐘,會佔用 FTP 連線)'
+              : '列出 FTP 資料夾需要 AD FTP 管理權限;已匯入的事件請到「AD 事件總覽」查看'
+        "
       >
         <template #cell-sel="{ row }">
           <GCheckbox

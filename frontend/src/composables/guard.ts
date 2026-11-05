@@ -3,6 +3,7 @@
  *   未登入 → 登入頁;沒有本系統應用權限 → 整頁導回入口網 /?denied=netops;
  *   任一層缺少選單 / Tab 權限或 API 讀取權限 → 同頁第一個可看的 Tab;從 / 進來的預設首頁 → 第一個可見功能;其餘 → /403。
  */
+import { isNavigationFailure, NavigationFailureType } from 'vue-router';
 import type { AppEntry } from '@/api/gateway';
 import { DENIED_URL, hasCurrentApp, resolveApps } from './apps';
 
@@ -38,3 +39,11 @@ export function decideGuard(i: GuardInput): GuardDecision {
   }
   return { kind: 'redirect', to: '/403' };
 }
+
+/**
+ * 第一次導覽被守衛中止(導向登入頁、整頁導回入口網時 return false):router.isReady() 會以不帶訊息的 NavigationFailure 拒絕。
+ * 這不是錯誤,呼叫端吞掉、維持載入畫面等頁面離開,不要讓它變成未處理的 Promise 拒絕被監控回報(D1 驗收 2026-11-05 §4.4)。
+ * 其他錯誤(守衛丟出例外等)照常往外丟。
+ * 注意:router.ts 的守衛只有在離開頁面(redirectToLogin、location.replace)時才可以 return false;不跳頁的中止會讓畫面停在載入中。
+ */
+export const isLeavingNavigation = (err: unknown): boolean => isNavigationFailure(err, NavigationFailureType.aborted);

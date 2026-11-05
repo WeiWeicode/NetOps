@@ -1,7 +1,7 @@
 /**
  * FTP Log 檔案頁的純函式(畫面與測試共用;規則同舊版 src/views/FtpFiles.vue、AdFiles.vue)
  */
-import type { AdDay, PaFile, PaFileState } from '@/api/ftp';
+import type { AdDay, PaFile, PaFileState, PaListing } from '@/api/ftp';
 
 export const NO_DAY = '(無日期)';
 
@@ -79,6 +79,12 @@ export function filterFiles(items: PaFile[], f: { day: string; keyword: string; 
     (x) => (x.dir || !f.day || dayOf(x) === f.day) && (!k || x.name.toLowerCase().includes(k)) && (!f.state || (!x.dir && x.state === f.state)),
   );
 }
+
+/**
+ * 目前目錄的檔案能不能分析:後端只分析 TRAFFIC 目錄(FTP_LOG_DIR)直屬與各類型 log 目錄的檔案(isTrafficLog / eventLogType),
+ * 其他目錄(例如 FTP_LOG_DIR 之外的 /my-data)只能瀏覽,不顯示勾選框(D1 驗收 2026-11-05 §3.1)
+ */
+export const analyzableDir = (l: Pick<PaListing, 'path' | 'type' | 'logDir'> | null | undefined): boolean => !!l && (!!l.type || l.path === l.logDir);
 
 /** FTP 路徑麵包屑:[{ name: '/', path: '/' }, { name: 'threat', path: '/threat' }, …] */
 export function crumbsOf(dir: string): { name: string; path: string }[] {

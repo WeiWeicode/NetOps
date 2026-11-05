@@ -3,7 +3,7 @@
 > 以 Gherkin(繁體中文關鍵字,`# language: zh-TW`)描述 NetOps 新版(接入 Gateway 後)的**目標行為**。寫法沿用員工入口網 `giga-Portal/docs/Gherkin/`。
 > 依據:`backend/src` 各路由的 `x-gherkin`、[API.md](../API.md)、[ARCHITECTURE.md](../ARCHITECTURE.md)(D6、D8、D14–D18、§5)、[UI-GUIDE.md](../UI-GUIDE.md)。舊版 `server/`、`src/` 只作比對,行為不同處標 `@changed`。
 > AI 功能(問答、分析、翻譯、整理筆記、語意搜尋、向量同步、外部 IP 自動學習)不搬移(D17),不寫。
-> **最後更新:2026-11-03**(依 `develop` e3475f8:B0–B2 全部合併;前端依 `origin/feature/netops-f1-*`)。
+> **最後更新:2026-11-05**(`fix/d1-uat-findings`:D1 驗收修正的場景;2026-11-03 依 `develop` e3475f8:B0–B2 全部合併;前端依 `origin/feature/netops-f1-*`)。
 
 ## 1. 檔案一覽
 
@@ -46,7 +46,7 @@
 
 ## 4. 進度
 
-`@auto` 對應的測試:`backend/test/unit/{app,config,jobs,store,ftp,pa,ad,kb,logs}.test.ts`、F1 的 `frontend/test/{guard,menu,links,useJob,usePolling}.test.ts`。
+`@auto` 對應的測試:`backend/test/unit/{app,config,jobs,store,ftp,pa,ad,kb,logs}.test.ts`、F1 的 `frontend/test/{guard,menu,links,useJob,usePolling,ftpFiles}.test.ts`。
 
 | 檔案 | 場景 | `@auto` | `@manual` / `@e2e` | `@untested` | `@pending-ui` | `@changed` |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -55,13 +55,13 @@
 | `pa/overview.feature` | 9 | 7 | 0 | 2 | 0 | 2 |
 | `pa-events/overview.feature` | 4 | 4 | 0 | 0 | 0 | 1 |
 | `pa-log-searches/search.feature` | 21 | 18 | 0 | 3 | 0 | 整個功能 + 6 |
-| `ftp/pa-files.feature` | 16 | 14 | 0 | 2 | 0 | 5 |
-| `ftp/ad-files.feature` | 14 | 13 | 0 | 1 | 0 | 4 |
+| `ftp/pa-files.feature` | 18 | 16 | 0 | 2 | 0 | 7 |
+| `ftp/ad-files.feature` | 15 | 13 | 1 | 1 | 0 | 5 |
 | `ad/events.feature` | 11 | 10 | 0 | 1 | 0 | 4 |
 | `kb/notes.feature` | 18 | 16 | 0 | 2 | 0 | 7 |
-| `ui/navigation.feature` | 10 | 8 | 0 | 1 | 2 | 1 |
+| `ui/navigation.feature` | 11 | 9 | 0 | 1 | 2 | 2 |
 | `ui/requests.feature` | 9 | 2 | 1 | 2 | 4 | 2 |
-| **合計** | **140** | **117** | **5** | **14** | **6** | **35 + 2 個功能** |
+| **合計** | **144** | **120** | **6** | **14** | **6** | **39 + 2 個功能** |
 
 (場景數含 `場景大綱`;數字以 §5 的腳本輸出為準。)
 
@@ -118,6 +118,7 @@ cd backend && npm run -s openapi > ../openapi.tmp.json && node ../docs/Gherkin/c
 | `GET /api/netops/kb/notes/{id}/markdown` | 下載筆記 | `kb/notes.feature` |
 | `GET /api/netops/kb/compilation` | 下載匯整檔 | `kb/notes.feature` |
 | `GET /api/netops/ftp/pa/files` | 瀏覽 TRAFFIC 目錄 | `ftp/pa-files.feature` |
+| `GET /api/netops/ftp/pa/files` | 不列出系統資料夾 | `ftp/pa-files.feature` |
 | `GET /api/netops/ftp/pa/files` | 超出根目錄 | `ftp/pa-files.feature` |
 | `GET /api/netops/ftp/pa/status` | 查詢匯入進度 | `ftp/pa-files.feature` |
 | `POST /api/netops/ftp/pa/syncs` | 送出同步 | `ftp/pa-files.feature` |
@@ -143,6 +144,8 @@ cd backend && npm run -s openapi > ../openapi.tmp.json && node ../docs/Gherkin/c
 | 匯出 | 前端產生 CSV | 後端產生(UTF-8 BOM、公式字元加 `'`) | 一致的欄位與稽核 |
 | 刪除筆記 | 不存在回 404 | 冪等 204 | BACKEND-GUIDE §5.1 |
 | AI 問答、Veeam | 系統內功能、同步登入 | 一般連結到舊版 / Veeam,另行登入 | D11、D17、D18 |
+| FTP 清單 | 列出 `$RECYCLE.BIN`、`System Volume Information`;任何目錄的 log 檔都能勾選 | 不列系統資料夾;只有 TRAFFIC 與各類型目錄可勾選 | D1 驗收 2026-11-05 |
+| AD FTP 清單 | 開頁就列出 | 有管理權限的人按「列出 FTP 資料夾」才列出 | 需求方 2026-11-05 決定 |
 
 ## 7. 發現的不一致
 

@@ -5,7 +5,7 @@
 ## 2026-11-05 D1 驗收修正(`fix/d1-uat-findings`)
 
 依驗收報告 `docs/test-reports/2026-11-05-d1-uat-pending.md` 與需求方 2026-11-05 的決定修正(MR 描述有細節):
-- **測試區 `FTP_LOG_DIR=/my-data`**:寫在 `.gitlab-ci.yml` 的 `deploy-api-test`(蓋過主機 `netops.env`),合併後 CI 重新部署即生效。**正式區的值未定**,D2 部署前由負責人確認(IMPL-PLAN D2 第 2 步),不要沿用預設 `/`。
+- **測試區 `FTP_LOG_DIR=/my-data`**:寫在 `.gitlab-ci.yml` 的 `deploy-api-test`(蓋過主機 `netops.env`),合併後 CI 重新部署即生效。只有 CI 部署會帶這個值:在主機手動 `docker compose up` 時要另外 `export FTP_LOG_DIR=/my-data`(或寫進 `netops.env`),否則會回到預設 `/`。**正式區的值未定**,D2 部署前由負責人確認(IMPL-PLAN D2 第 2 步),不要沿用預設 `/`。
 - FTP 清單(PA、AD)不列 `$RECYCLE.BIN`、`System Volume Information`。
 - PA「FTP Log 檔案」:不能分析的目錄(TRAFFIC 目錄直屬與各類型目錄以外)不顯示勾選框,改顯示說明。
 - AD「FTP Log 檔案」:載入時不再送 `POST /ftp/ad/listings`;有 `netops.ad-files.manage` 的人按「列出 FTP 資料夾」才列出,其他人只看得到同步狀態。

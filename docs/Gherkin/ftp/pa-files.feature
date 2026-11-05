@@ -46,7 +46,7 @@
       那麼 回應 403,code 為 "NETOPS_FTP_PATH_FORBIDDEN"
       而且 "/my-data/../etc" 這類路徑也一樣被拒絕
 
-    # 來源: backend/src/infra/ftp/index.ts:160
+    # 來源: backend/src/infra/ftp/index.ts:168
     @auto @security
     場景: 路徑含控制字元
       當 呼叫 GET /api/netops/ftp/pa/files?path=/a%0D%0ADELE%20x
@@ -60,14 +60,14 @@
       當 呼叫 GET /api/netops/ftp/pa/files
       那麼 回應 503,code 為 "NETOPS_FTP_BUSY"
 
-    # 來源: backend/src/infra/ftp/index.ts:180
+    # 來源: backend/src/infra/ftp/index.ts:188
     @untested
     場景: FTP 連不上
       假如 FTP 主機無法連線或帳密錯誤
       當 呼叫 GET /api/netops/ftp/pa/files
       那麼 回應 502,code 為 "NETOPS_FTP_UNAVAILABLE",訊息含 FTP 回應、不含帳密
 
-    # 來源: backend/src/infra/ftp/index.ts:151
+    # 來源: backend/src/infra/ftp/index.ts:159
     @auto
     場景: 開發環境沒有設定 FTP
       假如 GW_ENV 為 "dev" 且沒有設定 FTP_HOST

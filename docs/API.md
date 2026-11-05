@@ -282,7 +282,7 @@ FTP 唯讀(AGENT.md §7.4):「刪除分析結果」只刪本系統的摘要,不�
 | POST | `/api/netops/ftp/ad/imports` | `netops.ftp.write` | `POST /ad/import` |
 | POST | `/api/netops/ftp/ad/result-deletions` | `netops.ftp.write` | `POST /ad/forget` |
 
-**`POST /ftp/ad/listings`**:舊版要逐一列出每個日期資料夾(最長 120 秒),改成工作模式;回 202 + 工作狀態(§1.1)。畫面載入時**不送出**,有管理權限(`netops.ad-files.manage`)的人按「列出 FTP 資料夾」才送出;沒有管理權限的人看不到按鈕,只看得到 `GET /ftp/ad/status`(需求方 2026-11-05 決定)。API 權限仍是 `netops.ftp.read`。完成時 `result`:
+**`POST /ftp/ad/listings`**:舊版要逐一列出每個日期資料夾(最長 120 秒),改成工作模式;回 202 + 工作狀態(§1.1)。畫面載入時**不送出**,有管理權限(`netops.ad-files.manage`)的人按「列出 FTP 資料夾」才送出;沒有管理權限的人看不到按鈕,只看得到 `GET /ftp/ad/status`(需求方 2026-11-05 決定)。API 權限仍是 `netops.ftp.read`:按鈕隱藏只是體驗,有 read 權限的人仍可直接呼叫(要在後端限制需另行決定)。完成時 `result`:
 
 ```jsonc
 {

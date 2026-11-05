@@ -4,9 +4,9 @@
 
 ## 2026-11-05 D1 驗收修正:測試區 FTP_LOG_DIR、FTP 清單不列系統資料夾、知識庫備份 healthcheck
 - 工作項目:D1(驗收報告 `docs/test-reports/2026-11-05-d1-uat-pending.md` §3.1、§4.1、§5.4)
-- 內容:① 測試區 TRAFFIC 在 FTP `/my-data`,`FTP_LOG_DIR` 沒設定(預設 `/`)時永遠無法分析;依需求方決定寫進部署設定:`.gitlab-ci.yml` `deploy-api-test` 加 `FTP_LOG_DIR: /my-data`(Compose 以 shell 環境變數優先,蓋過主機 `netops.env`)。compose 本身不寫值(正式區共用);正式區的值寫進 IMPL-PLAN D2 待確認。② `infra/ftp` 的列目錄不回 `$RECYCLE.BIN`、`System Volume Information`(不分大小寫;`isSystemEntry`),PA 瀏覽、同步與 AD 清單共用。只過濾清單,不擋路徑。③ `netops-kb-backup` 加 healthcheck:`/backup/LAST_RESULT` 26 小時內更新過且為 OK(FAIL、NAS 未掛載不寫結果、超過一天沒備份都會 unhealthy);interval 30 秒、start_period 2 分。CI 的 `up -d --wait` 會等 healthy,備份失敗時 `deploy-api-test` 失敗。
-- 檔案:`.gitlab-ci.yml`、`deploy/docker-compose.yml`、`deploy/test.env.example`、`backend/src/infra/ftp/index.ts`、`backend/src/modules/ftp/routes.ts`(x-gherkin)、`backend/test/unit/ftp.test.ts`、`docs/API.md` §5、`docs/Gherkin/ftp/*.feature`
-- 驗證:`npm run typecheck`、`npm test`(117 項通過,新增 1 項)、`npm run build`;`check-scenarios.mjs` 無問題(順帶修正既有的來源行號);healthcheck 指令以本機 shell 驗證 6 種情況(alpine busybox 的 `find -mmin` 未在容器內實測,合併後看 CI)
+- 內容:① 測試區 TRAFFIC 在 FTP `/my-data`,`FTP_LOG_DIR` 沒設定(預設 `/`)時永遠無法分析;依需求方決定寫進部署設定:`.gitlab-ci.yml` `deploy-api-test` 加 `FTP_LOG_DIR: /my-data`(Compose 以 shell 環境變數優先,蓋過主機 `netops.env`)。compose 本身不寫值(正式區共用);正式區的值寫進 IMPL-PLAN D2 待確認。② `infra/ftp` 的列目錄不回 `$RECYCLE.BIN`、`System Volume Information`(不分大小寫;`isSystemEntry`),PA 瀏覽、同步與 AD 清單共用。只過濾清單,不擋路徑。③ `netops-kb-backup` 加 healthcheck:`/backup/LAST_RESULT` 26 小時內更新過且為 OK(FAIL、NAS 未掛載不寫結果、超過一天沒備份都會 unhealthy);interval 30 秒、start_period 5 分。CI 的 `up -d --wait` 會等 healthy,備份失敗時 `deploy-api-test` 失敗。
+- 檔案:`.gitlab-ci.yml`、`deploy/docker-compose.yml`、`deploy/test.env.example`、`backend/src/infra/ftp/index.ts`(`toEntries`)、`backend/src/modules/ftp/routes.ts`(x-gherkin)、`backend/test/unit/ftp.test.ts`、`docs/API.md` §5、`docs/Gherkin/ftp/*.feature`
+- 驗證:`npm run typecheck`、`npm test`(118 項通過,新增 2 項)、`npm run build`;`check-scenarios.mjs` 無問題(順帶修正既有的來源行號);healthcheck 指令以本機 shell 驗證 6 種情況(alpine busybox 的 `find -mmin` 未在容器內實測,合併後看 CI)
 
 ## 2026-11-04 D1:測試區部署前端、畫面權限、監控 Key、知識庫 NAS 備份
 - 工作項目:D1

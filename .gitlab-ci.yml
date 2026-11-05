@@ -1,6 +1,7 @@
 # NetOps Pipeline(Runner:主機 2 WSL shell executor,tag windows-runner;與 Gateway 同一台主機;IMPL-PLAN B0)
 #   check            所有分支:netops-api、netops-web(frontend/)型別檢查、單元測試、建置;netops-pa(pa-collector/)ruff 與 pytest
-#   deploy-api-test  develop:在主機 2 建置並更新 netops-api(加入 Gateway 網路;啟動後自動註冊路由草稿)與知識庫 NAS 備份 netops-kb-backup
+#   deploy-api-test  develop:在主機 2 建置並更新 netops-api(加入 Gateway 網路;啟動後自動註冊路由草稿)與知識庫 NAS 備份 netops-kb-backup;
+#                    PA 即時監控 netops-redis、netops-pa(R1)
 #   deploy-web-test  develop:建置 SPA 並發佈到 Gateway 的 gw_www(Nginx /netops/;IMPL-PLAN D1,同 GigaItApp、giga-Portal)
 #   rbac-test        develop:以已部署的 Gateway 映像套用 deploy/gateway-rbac.yaml(netops.* 畫面權限、netops-admin / netops-viewer 角色;不指派成員)
 # 舊版 IIS 程式(根目錄 server/、src/)不在 Pipeline 內,切換前 main 維持舊版(ARCHITECTURE D12),本檔沒有 main 的工作(正式區屬 D2)。
@@ -72,6 +73,14 @@ deploy-api-test:
     - $C up -d --wait --force-recreate netops-api
     # 知識庫 NAS 備份:重建才看得到晚於容器掛上的 NAS;啟動時今天還沒備份就先備份一次(結果看容器日誌)
     - $C up -d --wait --force-recreate netops-kb-backup
+    # PA 即時監控(R1):netops-redis(資料保留在 volume,不強制重建)與收集器 netops-pa。
+    #   輪詢與接收預設關閉(netops.env 的 PA_POLL_ENABLED / PA_RECEIVE_ENABLED,測試時才開);關閉時仍會執行並寫心跳
+    - for f in pa_api_key pa_http_token; do test -f "$NETOPS_SECRETS_DIR/$f" || { echo "缺少 netops-pa 機密 $f(先在主機 2 執行 deploy/host2-set-pa-secrets.sh)" >&2; exit 1; }; done
+    - $C build --pull netops-pa
+    - $C up -d --wait netops-redis
+    - $C up -d --wait --force-recreate netops-pa
+    - $C exec -T netops-redis redis-cli config get maxmemory-policy | grep -q noeviction || { echo "FAIL netops-redis 不是 noeviction" >&2; exit 1; }
+    - echo "OK   netops-redis / netops-pa"
     # 冒煙測試:健康檢查;無內部 Token → 401
     - $C exec -T netops-api wget -qO- http://127.0.0.1:51292/readyz
     - '$C exec -T netops-api node -e "fetch(\"http://127.0.0.1:51292/v1/ping\").then((r) => process.exit(r.status === 401 ? 0 : 1))" || { echo "FAIL /v1/ping 無內部 Token 不是 401" >&2; exit 1; }'

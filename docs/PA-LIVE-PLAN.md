@@ -200,6 +200,7 @@ netops.group.firewall
 | PA API Key | 唯讀角色、只放 Docker secret,不進版控與日誌;日誌遮罩 `key=` 參數 |
 | 網路 | `netops-pa` → PA-560 管理介面 `:443`;PA-560 → 主機 2 / 主機 3 的接收 port(51293、51294)。兩個方向都要網通放行 |
 | 接收 port | **51293** HTTP Log Forwarding(使用者 2026-11-04 同意)、**51294** Syslog(TRAFFIC 改 Syslog 後新增);登記在 Gateway BACKEND-GUIDE §3.3。不是 Gateway 上游(D24),只供 PA-560 連入 |
+| PA-560 端設定 | 給網通的設定規格(唯讀 API 帳號、HTTP / Syslog Server Profile、payload 欄位對應)與主機端轉送、防火牆:[PA-FORWARDING-SPEC.md](PA-FORWARDING-SPEC.md)(R1,2026-11-05) |
 | 兩個部署區 | 測試區與正式區都會輪詢同一台 PA-560;HTTP Server Profile 可列兩台伺服器。測試區輪詢間隔設長一點,或只在測試期間開 |
 
 ---

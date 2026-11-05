@@ -2,6 +2,12 @@
 
 > `backend/`、`deploy/` 的修改;新紀錄加在最上方,格式見 `AGENT.md` §11。
 
+## 2026-11-05 R1 部署:netops-redis、netops-pa 加入 Compose 與 CI(測試區)
+- 工作項目:R1、R0
+- 內容:`deploy/docker-compose.yml` 新增 `netops-redis`(redis:7.4-alpine,`maxmemory` 2 GB、`noeviction`、RDB 開 / AOF 關、named volume,只在 `internal: true` 的 `netops-internal` 網路,不對主機開 port)與 `netops-pa`(唯讀根目錄、tmpfs /tmp、cap_drop ALL、日誌輪替;port 51293 / 51294 只綁 WSL `127.0.0.1`;`PA_POLL_ENABLED` / `PA_RECEIVE_ENABLED` 預設 0);`netops-api` 加 `REDIS_URL` 與 `netops-internal` 網路。CI `deploy-api-test` 檢查機密、建置(`--pull`)並啟動兩個容器、確認 `noeviction`。新增 `deploy/host2-set-pa-secrets.sh`(Token 自動產生、API Key 隱藏輸入,可先留空)。新增 `docs/PA-FORWARDING-SPEC.md`(給網通:唯讀角色與 API Key、HTTP / Syslog Server Profile、各類型 payload 欄位對應、Log Forwarding Profile;附錄 F 主機端 portproxy、防火牆、開啟步驟)。
+- 檔案:`deploy/docker-compose.yml`、`.gitlab-ci.yml`、`deploy/host2-set-pa-secrets.sh`、`deploy/test.env.example`、`docs/PA-FORWARDING-SPEC.md`、`docs/PA-LIVE-PLAN.md` §9
+- 驗證:`docker compose -f deploy/docker-compose.yml config` 通過(本機無 Docker daemon,未實際啟動;CI 部署時驗證)
+
 ## 2026-11-05 R1 收集器 `pa-collector/`(netops-pa)
 - 工作項目:R1
 - 內容:新增 Python 3.12 服務 `netops-pa`(PA-LIVE-PLAN §3.1):① SDK 輪詢(`PA_POLL_ENABLED`):pan-os-python 只執行白名單內 4 個 `show` op 指令(D22),寫快照 `netops:pa:snap:*`(60 秒 TTL)與趨勢 `series`(2 天);pan-os-python 預設不驗證 HTTPS 憑證,改為自帶 `ssl_context` 預設驗證(`PA_CA_FILE`;`PA_TLS_INSECURE` 只限 dev / test)。② HTTP 接收 :51293(`POST /v1/logs/{type}`,TRAFFIC 以外,`X-NetOps-Token` 固定時間比對)與 Syslog 接收 :51294(TCP / 選用 TLS 與用戶端憑證,只收 TRAFFIC,換行與長度分框),由 `PA_RECEIVE_ENABLED` 控制;只接受 `PA_ALLOWED_SOURCES`;單則與本文長度、同時連線數、閒置逾時、HTTP 與 Syslog 各自的速率上限、Syslog 最多用佇列 80%;畸形輸入只計數。③ 批次寫 Redis:Stream(MINID 精確修剪 + MAXLEN 上限 + EXPIRE)、每分鐘 Hash 與排行(TTL;排行每分鐘留前 200)、心跳 `netops:pa:heartbeat`(輪詢、接收、Redis 的最後成功時間與錯誤、計數)。保留時間依 D21。欄位 key 沿用舊版 `palog.js` / `paevents.js`。錯誤訊息遮罩 API Key / Token。CI 新增 `check:pa-collector`(Docker test 階段跑 ruff + pytest)。依 `code-reviewer`、`security-auditor` 審查修正(JSON 深層巢狀與超長整數、Redis 錯誤清除、Stream 過期、Hash 計數值上限、日誌限頻、工作執行緒結束時程序結束重啟、正式區接收端點預設要求 TLS)。

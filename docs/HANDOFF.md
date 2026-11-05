@@ -2,6 +2,13 @@
 
 > 接手時先讀 `AGENT.md`,再讀 `docs/ARCHITECTURE.md`、`docs/IMPL-PLAN.md`。
 
+## 2026-11-05 S0 完成(測試區驗證通過)
+
+- NetOps !32 合併(`develop` cce67e0,pipeline #702),路由已發佈。測試區驗證全部通過(報告 `docs/test-reports/2026-11-05-s0-sse.md` §3):SSE 經 Nginx 與 BFF 穩定長連線,**不改 Gateway、不改輪詢**。
+- 需求方決定(2026-11-05):① 驗證完成後在 GigaItApp **停用**驗證路由 `netops.pa-live.stream-test`(需求方操作;程式留在 repo 當範本);② R1 單一連線最長 **5 分鐘**(PA-LIVE-PLAN §8);③ Gateway `docs/MONITORING-PLAN.md` 中「SSE 經 BFF 會被切斷」的說法另開 Gateway 文件 MR 更正。
+- `netops.ping.read` 已由需求方指派給 S112009(驗證用)。
+- **下一步**:A1、R1 依報告 §3.6 的規則實作串流。
+
 ## 2026-11-05 S0 串流驗證(`feature/s0-sse`)
 
 - **狀態:程式與文件完成,待合併部署後在測試區驗證**。結論先寫在這:**不需改 Gateway**,只靠 NetOps 回應標頭與路由逾時(理由見 `docs/test-reports/2026-11-05-s0-sse.md` §4)。

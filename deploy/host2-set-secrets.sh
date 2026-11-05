@@ -67,7 +67,8 @@ fi
 if [ ! -s "$D/qdrant_api_key" ]; then
   [ -t 0 ] || { echo "請在終端機執行(要隱藏輸入 Qdrant API Key)" >&2; exit 1; }
   printf 'Qdrant API Key(10.10.130.46:6333,與舊版 QDRANT_API_KEY 相同;輸入時不顯示):'
-  stty -echo; trap 'stty echo; rm -rf "$TMP"' EXIT; IFS= read -r QDRANT_KEY; stty echo; echo
+  # trap 先設再關回顯(中斷時一定恢復)
+  trap 'stty echo; rm -rf "$TMP"' EXIT; stty -echo; IFS= read -r QDRANT_KEY; stty echo; echo
   [ -n "$QDRANT_KEY" ] || { echo "未輸入 Qdrant API Key" >&2; exit 1; }
   printf '%s' "$QDRANT_KEY" > "$D/qdrant_api_key"; unset QDRANT_KEY
 fi

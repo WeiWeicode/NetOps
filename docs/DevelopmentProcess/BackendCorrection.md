@@ -2,6 +2,14 @@
 
 > `backend/`、`deploy/` 的修改;新紀錄加在最上方,格式見 `AGENT.md` §11。
 
+## 2026-11-05 A1-api 審查修正
+- 工作項目:A1(第 2 批;`code-reviewer`、`security-auditor` 審查後)
+- 內容:① SSE:用戶端在處理請求前就斷線時不開始(否則掃描與模型照跑、名額佔到最長時間);串流結束時一併中斷還在進行的工作(翻譯其中一段失敗,其餘段落不再等);用戶端讀不動被中斷時寫 warn 日誌。② 翻譯最多 12 段、同時 3 段(舊版全部同時送,AI 主機與其他系統共用),空白內容與分段超過上限在串流開始前回 400。③ 問答的 FTP 掃描全系統同時只跑 1 個(排隊時送 `scan` `{ waiting: true }`;唯讀使用者不能藉 AI 問答佔滿 FTP 連線);掃描逾時或連線組合超過 20 萬列(`queryFlows` 的 `truncated`)時標資料不完整且不快取。④ `gateway-rbac.yaml`:三個 AI 按鈕一併綁定 `netops.pa.read`、`netops.ad.read`、`netops.kb.read`(`netops.ai.use` 實際可取得 PA、AD 與知識庫的彙整,授權畫面要看得到)。⑤ 稽核:整理筆記、翻譯、立即同步、外部 IP 學習加 `x-audit-level: meta`。⑥ `/ai/status` 與外部 IP 學習紀錄不帶上游原文(模型回應不是 JSON 時改分類錯誤;寫入知識庫與 RDAP 連線錯誤只留固定文字,原文寫日誌)。⑦ 排程:筆記異動的同步計時器在關閉時清除,`setInterval` 用 `clearInterval`。⑧ `history` 上限放寬到 100 則(只送最近 6 則)。⑨ `host2-set-secrets.sh` 的 Qdrant Key 輸入先設 trap 再關回顯。
+- 另記與舊版不同(審查指出原本漏記):`analyze` 的 `question`、`ask` 與 `note` 的文字超過上限回 400(舊版截斷);模型連不到時舊版在串流前回 5xx,新版以 `error` 事件回傳;掃描並行數改為 `FTP_MAX_CONNECTIONS`(舊版 `parallel + 1`,另開連線);整理筆記的 `source` 截 1,000 字;`ask` 的 `meta` 時間改 ISO 8601。
+- 未改(交需求方決定):`netops.ai.use` 是否拆成 PA / AD 各自的權限;整理筆記是否改成「先回草稿、管理者確認後才存」(AI 回答可能夾帶外部可控的文字,例如 URL、RDAP、PTR,記錄後會影響之後所有人的分析);AI 主機以 http 傳 API Key(內網,同舊版)。
+- 檔案:`backend/src/modules/ai/{sse,service,routes,index}.ts`、`backend/src/modules/kb/ai-routes.ts`、`backend/src/infra/llm/index.ts`、`backend/test/unit/ai.test.ts`、`deploy/{gateway-rbac.yaml,host2-set-secrets.sh}`、`docs/API.md` §8、§10
+- 驗證:`npm run typecheck`、`npm test`(165 項通過,新增 4 項:名額共用與歸還、全系統上限、用戶端中途斷線中斷模型並歸還名額、翻譯驗證)、`npm run build`、`check-scenarios.mjs`
+
 ## 2026-11-05 A1-api:AI API(SSE)、知識庫 AI 功能、權限與部署設定
 - 工作項目:A1(第 2 批 `feature/a1-ai-api`,從第 1 批開出)
 - 內容:`modules/ai/service.ts` 搬舊版 `routes/ai.js` 的分析、問答、整理筆記、翻譯流程(送給模型的內容不變);`modules/ai/sse.ts` 是 AI 共用的 SSE(依 S0 §3.6:`x-timeout-ms: 60000`、立即送 `open`、心跳 15 秒、`X-Accel-Buffering: no`、名額滿 429、`preClose` 結束;每人 2 個、全系統 6 個,單一回答最長 15 分鐘,使用者關頁時中斷掃描與模型);`modules/ai/routes.ts`:`GET /v1/ai/status`、`POST /v1/ai/{analyses,questions,translations,notes}`;`modules/kb/ai-routes.ts`:`GET /v1/kb/{semantic-search,vector-status,ip-learning}`、`POST /v1/kb/{vector-syncs,ip-learnings}`;`modules/ai/index.ts` 組裝(模型、向量庫、RDAP 用戶端,向量同步與外部 IP 學習的排程);知識庫服務新增 `onChange`(向量同步用)。權限 `netops.ai.use`(OpenAPI `x-permissions`;不是 `.read`,`gateway-rbac.yaml` 以按鈕 `netops.pa-ask.use`、`netops.ad-ask.use`、`netops.pa-dashboard.ai` 綁定,另加選單 `netops.pa-ask.read`、`netops.ad-ask.read`;admin 與 viewer 都有);整理筆記用 `netops.kb.write`。部署:compose 加 AI 設定(預設 `.46`、`VECTOR_SYNC=0`、`IPLEARN_HOUR=-1`)與機密 `qdrant_api_key`(`host2-set-secrets.sh` 隱藏輸入;CI 檢查)。

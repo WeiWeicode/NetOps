@@ -7,7 +7,7 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { AppError } from '../../errors.js';
 import { looseObject } from '../../shared/schemas.js';
-import { dayRange, timeIn, validation } from '../../shared/time.js';
+import { dayRange, logTimeOut, timeIn, validation } from '../../shared/time.js';
 import type { AiService, HistoryItem } from './service.js';
 import { SSE_TIMEOUT_MS, type SseHub } from './sse.js';
 
@@ -19,9 +19,9 @@ const SSE_RESPONSE = (events: string) => ({
 });
 const HISTORY = {
   type: 'array',
-  maxItems: 20,
+  maxItems: 100,
   items: { type: 'object', required: ['role', 'content'], properties: { role: { type: 'string', enum: ['user', 'assistant'] }, content: { type: 'string', maxLength: 20000 } } },
-  description: '前面的對話(只取最近 6 則、每則前 4000 字)',
+  description: '前面的對話(最多 100 則;只送最近 6 則、每則前 4000 字給模型)',
 } as const;
 const sse = { 'x-timeout-ms': SSE_TIMEOUT_MS } as const;
 
@@ -176,6 +176,7 @@ const aiRoutes: FastifyPluginAsync<{ ai: AiService; hub: SseHub }> = async (app,
           '模型回答可能超過路由逾時,以 SSE 回傳:open、heartbeat、done({ note })、error。',
         tags: ['AI'],
         'x-permission': 'netops.kb.write',
+        'x-audit-level': 'meta',
         ...sse,
         'x-gherkin': [
           '場景: 整理成筆記',
@@ -202,7 +203,7 @@ const aiRoutes: FastifyPluginAsync<{ ai: AiService; hub: SseHub }> = async (app,
       return hub.open(req, reply, owner, async (s) => {
         const note = await ai.note({ text, history: req.body.history }, who, s.signal);
         req.log.info({ noteId: note.id, emp: req.identity?.emp }, 'AI 整理知識庫筆記');
-        s.send('done', { note: { ...note, created: logTime(note.created), updated: logTime(note.updated) } });
+        s.send('done', { note: { ...note, created: logTimeOut(note.created), updated: logTimeOut(note.updated) } });
       });
     },
   );
@@ -216,6 +217,7 @@ const aiRoutes: FastifyPluginAsync<{ ai: AiService; hub: SseHub }> = async (app,
         description: '把 AI 回答(Markdown)翻成 en / zh / ja / th:依段落分段平行翻譯,保留格式、IP、Port 與規則名稱;沿用 LLM_URL / LLM_MODEL 並關閉思考模式。以 SSE 回傳:open、heartbeat、done({ target, text, seconds })、error。',
         tags: ['AI'],
         'x-permission': 'netops.ai.use',
+        'x-audit-level': 'meta',
         ...sse,
         'x-gherkin': [
           '場景: 翻譯成英文',
@@ -232,14 +234,11 @@ const aiRoutes: FastifyPluginAsync<{ ai: AiService; hub: SseHub }> = async (app,
       },
     },
     async (req, reply) => {
-      ai.requireEnabled();
+      ai.checkTranslate(req.body.text, req.body.target);
       const owner = hub.reserve(req);
       return hub.open(req, reply, owner, async (s) => s.send('done', await ai.translate(req.body.text, req.body.target, s.signal)));
     },
   );
 };
-
-/** 筆記時間 'yyyy/MM/dd HH:mm:ss' → ISO +08:00(同 kb/routes.ts noteOut) */
-const logTime = (t: string) => (t ? `${t.replace(/\//g, '-').replace(' ', 'T')}+08:00` : t);
 
 export default aiRoutes;

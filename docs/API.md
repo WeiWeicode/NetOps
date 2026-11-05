@@ -454,11 +454,11 @@ AI 相關(語意搜尋、向量同步、外部 IP 自動學習)見 §10.2(A1)。
 | 409 | `NETOPS_AD_SYNC_BUSY` | AD 正在同步 |
 | 409 | `NETOPS_IMPORT_QUEUE_FULL` | 分析佇列已滿 |
 | 409 | `NETOPS_KB_LIMIT` | 知識庫筆記已達上限 |
-| 429 | `NETOPS_STREAM_BUSY` | 串流連線數已達上限:串流驗證(§3.1,每人 2 條、全系統 20 條)、AI 回答(§10.1,每人 2 個、全系統 6 個);不用 5xx,避免累積 BFF 斷路器失敗 |
 | 409 | `NETOPS_AI_DISABLED` | 沒有設定 AI 服務(`LLM_URL`);設定狀態不是故障,不用 5xx(§10) |
 | 409 | `NETOPS_VECTOR_SYNC_DISABLED` | 沒有啟用向量庫同步(`VECTOR_SYNC=0`,只做語意搜尋;§10.2) |
 | 409 | `NETOPS_VECTOR_SYNC_BUSY` | 向量庫正在同步 |
 | 409 | `NETOPS_IPLEARN_BUSY` | 外部 IP 自動學習正在執行 |
+| 429 | `NETOPS_STREAM_BUSY` | 串流連線數已達上限:串流驗證(§3.1,每人 2 條、全系統 20 條)、AI 回答(§10.1,每人 2 個、全系統 6 個);不用 5xx,避免累積 BFF 斷路器失敗 |
 | 422 | `NETOPS_EXPORT_TOO_LARGE` | 匯出筆數超過上限 |
 | 502 | `NETOPS_FTP_UNAVAILABLE` | FTP 連線或讀取失敗。訊息為「動作 + FTP 路徑:原因」,原因只有分類(連線逾時、拒絕連線、找不到主機、連線中斷、TLS 憑證驗證失敗、帳號或密碼錯誤(FTP 530)、檔案或目錄不存在,或沒有權限(FTP 550)…),不含 FTP 主機、port 與原始錯誤;原始錯誤只寫服務日誌。匯入狀態的 `lastSyncError`、檔案的 `error`、工作的 `error.message` 同樣規則 |
 | 503 | `NETOPS_FTP_NOT_CONFIGURED` | 未設定 FTP(只會在 dev) |
@@ -540,13 +540,15 @@ AI 串流(§10.1)開始後的錯誤以 `error` 事件回傳 `{ code, message }`:
 | GET | `/api/netops/ai/status` | `netops.ai.use` | `{ enabled, ok, model, message }`;不回主機位址 |
 | POST | `/api/netops/ai/analyses` | `netops.ai.use` | 期間分析;`{ from, to?, think?, question? }`(`YYYY-MM-DD`,最長 92 天) |
 | POST | `/api/netops/ai/questions` | `netops.ai.use` | 問答;`{ from, to, question, history?, think?, source? }`(ISO 8601,最長 31 天;`source: 'ad'` 只看 AD) |
-| POST | `/api/netops/ai/translations` | `netops.ai.use` | `{ text, target }`(`en`、`zh`、`ja`、`th`;30,000 字內) |
+| POST | `/api/netops/ai/translations` | `netops.ai.use` | `{ text, target }`(`en`、`zh`、`ja`、`th`;30,000 字內、分段最多 12 段,同時翻 3 段;超過回 400) |
 | POST | `/api/netops/ai/notes` | `netops.kb.write` | 整理成知識庫筆記;`{ text, history? }`(4,000 字內) |
 
-- **全部回 SSE**(`text/event-stream`):掃描 FTP 與模型回答可能超過路由逾時(AGENT.md §7.3),寫法依 S0 §3.1:`x-timeout-ms: 60000`、立即送 `open`、每 15 秒 `heartbeat`、`X-Accel-Buffering: no`。POST,前端以 `fetch` 讀串流(`EventSource` 只能 GET);一次性回答,不重連。
+- **全部回 SSE**(`text/event-stream`):掃描 FTP 與模型回答可能超過路由逾時(AGENT.md §7.3),寫法依 S0(本文件 §3.1、`docs/test-reports/2026-11-05-s0-sse.md` §3.6):`x-timeout-ms: 60000`、立即送 `open`、每 15 秒 `heartbeat`、`X-Accel-Buffering: no`。POST,前端以 `fetch` 讀串流(`EventSource` 只能 GET);一次性回答,不重連。
 - 參數錯誤、沒有資料(404 `NETOPS_PA_NO_DATA`)、AI 未設定在串流開始前回 4xx;開始後的錯誤以 `error` 事件回傳(§8)。
-- 同時進行的 AI 回答(四支共用名額)每人 2 個、全系統 6 個(`AI_MAX_STREAMS*`),超過回 429 `NETOPS_STREAM_BUSY`;單一回答最長 15 分鐘;使用者關頁時中斷掃描與模型呼叫。
-- `history`:最多 20 則、每則 20,000 字;只送最近 6 則、每則前 4,000 字(同舊版)。問答的問題沒有 IP / Port 時沿用前面的條件(追問);同樣的條件 10 分鐘內不重複掃描(所有人共用,同舊版)。
+- 同時進行的 AI 回答(四支共用名額)每人 2 個、全系統 6 個(`AI_MAX_STREAMS`、`AI_MAX_STREAMS_PER_USER`,程式預設值,compose 未列出),超過回 429 `NETOPS_STREAM_BUSY`;單一回答最長 15 分鐘;使用者關頁時中斷掃描與模型呼叫。問答需要從 FTP 掃原始 log 時,全系統同時只掃 1 個(FTP 連線與匯入、明細查詢共用),其餘排隊並送 `scan` 事件 `{ waiting: true }`;掃描並行數為 `FTP_MAX_CONNECTIONS`(舊版另開一條)。
+- `history`:最多 100 則、每則 20,000 字;只送最近 6 則、每則前 4,000 字(同舊版)。問答的問題沒有 IP / Port 時沿用前面的條件(追問);同樣的條件 10 分鐘內不重複掃描(所有人共用,同舊版;資料不完整的結果不快取)。
+- **`netops.ai.use` 的資料範圍是 PA + AD + 知識庫**:問答依問題帶入 PA log 彙整、AD 事件與筆記標題,分析帶入 PA 摘要;所以 `gateway-rbac.yaml` 的三個 AI 按鈕都一併綁定 `netops.pa.read`、`netops.ad.read`、`netops.kb.read`。
+- 稽核:分析、問答、翻譯、整理筆記、立即同步、外部 IP 學習都設 `x-audit-level: meta`。
 
 | 事件 | 資料 | 出現在 |
 | --- | --- | --- |
@@ -565,7 +567,7 @@ AI 串流(§10.1)開始後的錯誤以 `error` 事件回傳 `{ code, message }`:
 
 **資料不完整要明確標示**(AGENT.md §5):`missing` 是摘要檔讀不到的檔案數;`evidence.partial` 為 true 表示 FTP 掃描逾時;`vectorError` 為 true 表示向量庫失敗、筆記改用關鍵字 / IP 比對。模型收到的資料也會註明(舊版既有的文字,例如「掃描逾時…資料不完整」)。
 
-與舊版不同:翻譯、整理筆記改 SSE(舊版同步回應,最長 180 秒);問答期間最長 31 天;`status` 不回主機位址;錯誤訊息不含上游原文;`meta` / `evidence` / `notes` 多 `missing`、`vectorError`;整理筆記的標題與標籤壓成一行(新版筆記規則)。
+與舊版不同:翻譯、整理筆記改 SSE(舊版同步回應,最長 180 秒);問答期間最長 31 天;參數超過長度上限回 400(舊版截斷);模型連不到時以 `error` 事件回傳(舊版串流前回 5xx);`meta` 的 `from` / `to` 改 ISO 8601;`status` 不回主機位址;錯誤訊息不含上游原文;`meta` / `evidence` / `notes` 多 `missing`、`vectorError`;整理筆記的標題與標籤壓成一行(新版筆記規則)。
 
 ### 10.2 知識庫的 AI 功能
 

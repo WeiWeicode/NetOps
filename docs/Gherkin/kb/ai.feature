@@ -38,14 +38,14 @@
 
   Rule: POST /api/netops/kb/vector-syncs
 
-    # 來源: backend/src/modules/kb/ai-routes.ts:107
+    # 來源: backend/src/modules/kb/ai-routes.ts:108
     @auto @changed
     場景: 沒有啟用同步
       假如 VECTOR_SYNC 為 0
       當 呼叫 POST /api/netops/kb/vector-syncs
       那麼 回應 409 NETOPS_VECTOR_SYNC_DISABLED
 
-    # 來源: backend/src/modules/kb/ai-routes.ts:112
+    # 來源: backend/src/modules/kb/ai-routes.ts:113
     @untested
     場景: 立即同步
       假如 VECTOR_SYNC 為 1
@@ -55,7 +55,7 @@
 
   Rule: GET /api/netops/kb/ip-learning
 
-    # 來源: backend/src/modules/kb/ai-routes.ts:146
+    # 來源: backend/src/modules/kb/ai-routes.ts:147
     @auto
     場景: 查詢外部 IP 自動學習狀態
       當 呼叫 GET /api/netops/kb/ip-learning
@@ -64,15 +64,16 @@
 
   Rule: POST /api/netops/kb/ip-learnings
 
-    # 來源: backend/src/modules/kb/ai-routes.ts:165
+    # 來源: backend/src/modules/kb/ai-routes.ts:167
     @auto
     場景: 開始學習
       假如 使用者擁有 netops.kb.write
       當 呼叫 POST /api/netops/kb/ip-learnings 帶 days 7
       那麼 回應 202 且 busy 為 true
 
-    # 來源: backend/src/modules/kb/ai-routes.ts:170
-    @auto
+    # 來源: backend/src/modules/kb/ai-routes.ts:172
+    # 單元測試的時序不固定(學習可能在第二次送出前就完成),只驗證 202 / 409 其一
+    @untested
     場景: 執行中再送出
       假如 外部 IP 自動學習正在執行
       當 呼叫 POST /api/netops/kb/ip-learnings

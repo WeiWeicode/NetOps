@@ -58,22 +58,32 @@ export function createSseHub(app: FastifyInstance, opts: SseHubOptions) {
    * run 丟出的錯誤送 error 事件({ code, message });非預期錯誤只回固定訊息,原文寫日誌。
    */
   function open(req: FastifyRequest, reply: FastifyReply, owner: string, run: (s: SseStream) => Promise<void>) {
+    // 解析請求或驗證 Token 期間用戶端已斷線:close 事件已經發過,不開始(否則掃描與模型照跑、名額佔到最長時間)
+    if (req.raw.destroyed || reply.raw.destroyed) {
+      reply.hijack();
+      return reply;
+    }
     const stream = new PassThrough();
     const abort = new AbortController();
     let ended = false;
     const send = (event: string, data: unknown) => {
       if (ended || stream.destroyed) return;
       stream.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-      if (stream.writableLength > MAX_PENDING_BYTES) stop('');
+      if (stream.writableLength > MAX_PENDING_BYTES) {
+        req.log.warn({ pending: stream.writableLength }, 'AI 串流用戶端讀不動,已中斷');
+        stop('');
+      }
     };
     const cleanup = () => {
       clearInterval(heartbeat);
       clearTimeout(limit);
       active.delete(stream);
     };
+    /** 結束串流;同時中斷還在進行的工作(例如翻譯其中一段失敗時,其餘段落不再等) */
     const end = () => {
       if (ended) return;
       ended = true;
+      abort.abort();
       cleanup();
       stream.end();
     };
@@ -98,7 +108,7 @@ export function createSseHub(app: FastifyInstance, opts: SseHubOptions) {
     const s: SseStream = { send, signal: abort.signal, end };
     void run(s)
       .catch((err: unknown) => {
-        if (abort.signal.aborted) return;
+        if (abort.signal.aborted || ended) return;
         if (err instanceof AppError) return send('error', { code: err.code, message: err.message });
         // 模型錯誤的訊息是分類過的(不含主機位址),原文在 cause,只寫日誌
         req.log.error({ err, cause: (err as { cause?: unknown }).cause }, 'AI 串流發生錯誤');

@@ -10,7 +10,7 @@
 import type { FtpConfig } from '../../config.js';
 import { AppError } from '../../errors.js';
 import type { Ftp, FtpStream } from '../../infra/ftp/index.js';
-import type { ChatMessage, Llm } from '../../infra/llm/index.js';
+import { LlmError, type ChatMessage, type Llm } from '../../infra/llm/index.js';
 import { accountsIn, eventIdsIn, isAdQuestion } from '../ad/core/ad-ai.js';
 import type { AdImporter } from '../ad/importer.js';
 import { notesForAi } from '../kb/core/ai-notes.js';
@@ -24,6 +24,7 @@ import { ASK_PROMPT, buildContext, EVENT_Q, kbSection, NOTE_PROMPT, parseJsonRep
 import { buildCondition, createCollector, parseQuestion } from './core/evidence.js';
 import { chunks, joinParts, LANGS, translateSystem } from './core/translate.js';
 import type { SseStream } from './sse.js';
+import { dayOut, logTimeOut } from '../../shared/time.js';
 
 /** 語意搜尋(kb/core/vector.js searchVectors) */
 export interface VectorSearch {
@@ -136,6 +137,24 @@ export function createAiService(deps: {
   /** 同樣的條件 10 分鐘內不重複掃描(追問時直接沿用;同舊版,所有人共用) */
   const evidenceCache = new Map<string, { at: number; info: Record<string, unknown>; text: string }>();
 
+  /** AI 掃描的排隊:一次一個;等候時送 scan 狀態,使用者中斷時離開隊伍 */
+  let scanning: Promise<void> = Promise.resolve();
+  async function scanSlot(s: SseStream, label: string): Promise<() => void> {
+    let release!: () => void;
+    const prev = scanning;
+    scanning = new Promise<void>((r) => (release = r));
+    // 200 毫秒內輪不到就告訴使用者在排隊
+    const timer = setTimeout(() => s.send('scan', { label, waiting: true, filesScanned: 0, files: 0, matched: 0 }), 200);
+    await Promise.race([prev, new Promise<void>((r) => s.signal.addEventListener('abort', () => r(), { once: true }))]);
+    clearTimeout(timer);
+    // 中斷時仍要等前一個結束才放行下一個,隊伍不會亂
+    if (s.signal.aborted) {
+      void prev.then(release);
+      return () => {};
+    }
+    return release;
+  }
+
   /** 對話紀錄:最近 6 則,每則最多 4000 字(同舊版) */
   const historyOf = (h: HistoryItem[] = []) => h.filter((m) => ['user', 'assistant'].includes(m?.role) && m.content).slice(-6).map((m) => ({ role: m.role, content: String(m.content).slice(0, 4000) }));
 
@@ -173,7 +192,7 @@ export function createAiService(deps: {
     const { history, cond, adOnly, lastUser, eventIds, adQ, files } = p;
     const closed = () => s.signal.aborted;
     const model = await llm.model();
-    s.send('meta', { model, from: timeOut(from), to: timeOut(to), files: files.length, ips: cond.ips, ports: cond.ports, source: adOnly ? 'ad' : 'pa' });
+    s.send('meta', { model, from: logTimeOut(from), to: logTimeOut(to), files: files.length, ips: cond.ips, ports: cond.ports, source: adOnly ? 'ad' : 'pa' });
 
     let evidence = '';
     if ((cond.ips.length || cond.ports.length) && files.length) {
@@ -185,7 +204,7 @@ export function createAiService(deps: {
         const t0 = Date.now();
         // 有連線組合統計的檔案直接查統計(快),沒有的(還沒重新分析 / 組合太多)才從 FTP 掃原始 log
         const withFlows = files.filter((f) => f.flows);
-        let fq: { flows: unknown[]; failed: string[] } = { flows: [], failed: [] };
+        let fq: { flows: unknown[]; failed: string[]; truncated?: boolean } = { flows: [], failed: [] };
         if (withFlows.length) {
           s.send('scan', { label, filesScanned: 0, files: files.length, matched: 0, mode: 'flows' });
           fq = await flowsQuery(withFlows.map((f) => f.flows!), { from, to, prefilter, test: flowTest, readFlows: deps.readFlows });
@@ -197,6 +216,9 @@ export function createAiService(deps: {
         if (closed()) return;
         s.send('scan', { label, filesScanned: flowFiles, files: files.length, matched: col.stats().n });
         let r = { filesScanned: 0, files: 0, rows: 0, seconds: 0 };
+        // 與舊版不同(審查修正):AI 問答的 FTP 掃描全系統同時只跑 1 個(FTP 連線與匯入、明細查詢共用,測試區只有 1 條),其餘排隊
+        const release = toScan.length ? await scanSlot(s, label) : () => {};
+        if (closed()) return release();
         try {
           if (toScan.length)
             r = await scan(toScan, {
@@ -214,10 +236,15 @@ export function createAiService(deps: {
           if (closed()) return;
           // FTP 錯誤訊息已分類(不含主機與原始錯誤,API.md §8)
           throw err instanceof AppError ? new AppError(err.status, err.code, `掃描 log 失敗:${err.message}`) : err;
+        } finally {
+          release();
         }
         if (closed()) return;
         const st = col.stats();
-        const partial = r.filesScanned < r.files ? `（掃描逾時，FTP 只掃了 ${r.filesScanned} / ${r.files} 個 log 檔，資料不完整）` : '';
+        const partial =
+          (r.filesScanned < r.files ? `（掃描逾時，FTP 只掃了 ${r.filesScanned} / ${r.files} 個 log 檔，資料不完整）` : '') +
+          // 與舊版不同(審查修正):符合的連線組合太多時只取前 20 萬列(pa/core/flows.js queryFlows)
+          (fq.truncated ? '（符合的連線組合太多，只取前 20 萬列，資料不完整）' : '');
         const seconds = Math.round((Date.now() - t0) / 100) / 10;
         const how = [
           flowFiles ? `${flowFiles} 個檔案查連線組合統計（同一小時、同一組合已累計，時間以小時為單位，沒有逐筆範例）` : '',
@@ -230,8 +257,11 @@ export function createAiService(deps: {
           info: { label, matched: st.n, allow: st.allow, block: st.block, flows: st.flows, filesScanned: flowFiles + r.filesScanned, files: files.length, flowFiles, rows: r.rows, seconds, partial: Boolean(partial) },
           text: `## 系統查詢條件：${label}\n時間 ${from} ~ ${to}；${how}${partial}\n\n${col.text()}`,
         };
-        if (evidenceCache.size > 20) evidenceCache.delete(evidenceCache.keys().next().value!);
-        evidenceCache.set(key, hit);
+        // 資料不完整的結果不快取(審查修正;舊版會快取),追問時重新查
+        if (!partial) {
+          if (evidenceCache.size > 20) evidenceCache.delete(evidenceCache.keys().next().value!);
+          evidenceCache.set(key, hit);
+        }
       }
       s.send('evidence', { ...hit.info, cached: hit.at < Date.now() - 1000 });
       evidence = hit.text;
@@ -324,11 +354,29 @@ export function createAiService(deps: {
 
   /* ───────── 翻譯:AI 回答 → en / zh / ja / th(同舊版:分段平行、關閉思考) ───────── */
 
+  /** 串流開始前驗證(錯誤回 400):語言、分段數(與舊版不同,審查修正:最多 TRANSLATE_MAX_PARTS 段、同時 TRANSLATE_PARALLEL 段;舊版全部同時送,AI 主機與其他系統共用) */
+  function checkTranslate(text: string, target: string) {
+    llmOf();
+    if (!(target in LANGS)) throw new AppError(400, 'VALIDATION_FAILED', '參數驗證失敗', [{ field: 'target', message: '不支援的語言' }]);
+    if (!text.trim()) throw new AppError(400, 'VALIDATION_FAILED', '參數驗證失敗', [{ field: 'text', message: '沒有要翻譯的內容' }]);
+    const list = chunks(text);
+    if (list.length > TRANSLATE_MAX_PARTS) throw new AppError(400, 'VALIDATION_FAILED', '參數驗證失敗', [{ field: 'text', message: `內容太長(分段超過 ${TRANSLATE_MAX_PARTS} 段),請分次翻譯` }]);
+    return list;
+  }
+
   async function translate(text: string, target: string, signal?: AbortSignal) {
     const llm = llmOf();
-    if (!(target in LANGS)) throw new AppError(400, 'VALIDATION_FAILED', '參數驗證失敗', [{ field: 'target', message: '不支援的語言' }]);
+    const list = checkTranslate(text, target);
     const t0 = Date.now();
-    const parts = await Promise.all(chunks(text).map((part) => llm.chatOnce({ signal, maxTokens: 6000, messages: [{ role: 'system', content: translateSystem(target) }, { role: 'user', content: part }] })));
+    const parts: string[] = new Array(list.length);
+    let next = 0;
+    const worker = async () => {
+      while (next < list.length) {
+        const i = next++;
+        parts[i] = await llm.chatOnce({ signal, maxTokens: 6000, messages: [{ role: 'system', content: translateSystem(target) }, { role: 'user', content: list[i]! }] });
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(TRANSLATE_PARALLEL, list.length) }, worker));
     return { target, text: joinParts(parts), seconds: Math.round((Date.now() - t0) / 100) / 10 };
   }
 
@@ -338,14 +386,15 @@ export function createAiService(deps: {
       return { enabled: true, ok: true, model: await deps.llm.model(), message: '' };
     } catch (err) {
       // 不回主機位址(舊版回 config.llm.url)
-      return { enabled: true, ok: false, model: '', message: `無法連線 AI 服務:${(err as Error).message}` };
+      // 不回主機位址與上游原文:LlmError 的訊息是分類過的,其他錯誤只回固定文字
+      return { enabled: true, ok: false, model: '', message: `無法連線 AI 服務:${err instanceof LlmError ? err.message : '回應格式錯誤'}` };
     }
   }
 
-  return { enabled: () => Boolean(deps.llm), requireEnabled: () => void llmOf(), prepareAnalysis, analyze, prepareQuestion, ask, note, translate, status, summarize };
+  return { enabled: () => Boolean(deps.llm), requireEnabled: () => void llmOf(), checkTranslate, prepareAnalysis, analyze, prepareQuestion, ask, note, translate, status, summarize };
 }
 
 const oneLine = (s: string) => s.replace(/[\r\n]+/g, ' ').trim();
-/** 'yyyy/MM/dd' → 'YYYY-MM-DD';'yyyy/MM/dd HH:mm' → ISO +08:00(回給前端的時間) */
-const dayOut = (d: string) => d.replace(/\//g, '-');
-const timeOut = (t: string) => `${t.replace(/\//g, '-').replace(' ', 'T')}:00+08:00`;
+/** 翻譯:最多幾段、同時幾段 */
+const TRANSLATE_MAX_PARTS = 12;
+const TRANSLATE_PARALLEL = 3;

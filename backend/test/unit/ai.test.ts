@@ -7,6 +7,8 @@
  */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { createFakeFtp, type FakeFtp } from '../fixtures/fake-ftp.js';
@@ -288,5 +290,101 @@ describe('外部 IP 自動學習 API', () => {
     assert.ok(done.result, JSON.stringify(done.log));
     assert.match(done.finishedAt, /\+08:00$/);
     assert.equal((await t.call({ method: 'POST', url: '/v1/kb/ip-learnings', payload: { days: 61 } })).statusCode, 400);
+  });
+});
+
+describe('AI 串流的名額與生命週期(S0 §3.6;審查補測)', () => {
+  const host = fakeAiHost({ streamDelayMs: 0 });
+  let base = '';
+  before(async () => (base = await host.start()));
+  after(() => host.close());
+  const TRANSLATE = { method: 'POST' as const, url: '/v1/ai/translations', payload: { text: '## 結論', target: 'en' } };
+
+  it('AI 串流共用每人名額(翻譯、整理筆記);結束後歸還', async () => {
+    // 假模型延遲 400 毫秒回應,讓前兩個請求佔住名額
+    const slow = (async (url: string | URL, init?: RequestInit) => {
+      if (String(url).endsWith('/chat/completions')) await new Promise((r) => setTimeout(r, 400));
+      return fetch(url, init);
+    }) as typeof fetch;
+    const t = await createTestApp({ env: { LLM_URL: `${base}/v1` }, ai: { fetch: slow } });
+    try {
+      const a = t.call(TRANSLATE);
+      const b = t.call({ ...TRANSLATE, payload: { text: '## 二', target: 'ja' } });
+      await new Promise((r) => setTimeout(r, 100));
+      const c = await t.call({ method: 'POST', url: '/v1/ai/notes', payload: { text: '10.10.1.5 是印表機' } });
+      assert.equal(c.statusCode, 429, '整理筆記與翻譯共用名額');
+      assert.equal(c.json().code, 'NETOPS_STREAM_BUSY');
+      for (const r of await Promise.all([a, b])) assert.equal(r.statusCode, 200);
+      const again = await t.call(TRANSLATE);
+      assert.equal(again.statusCode, 200, '結束後歸還名額');
+      assert.ok(events(again.body).some((e) => e.event === 'done'));
+    } finally {
+      await t.close();
+    }
+  });
+
+  it('全系統上限(AI_MAX_STREAMS):別人也被擋', async () => {
+    const slow = (async (url: string | URL, init?: RequestInit) => {
+      await new Promise((r) => setTimeout(r, 400));
+      return fetch(url, init);
+    }) as typeof fetch;
+    const t = await createTestApp({ env: { LLM_URL: `${base}/v1`, AI_MAX_STREAMS: '2' }, ai: { fetch: slow } });
+    try {
+      const a = t.call({ ...TRANSLATE, emp: 'S000001' });
+      const b = t.call({ ...TRANSLATE, emp: 'S000002' });
+      await new Promise((r) => setTimeout(r, 100));
+      const c = await t.call({ ...TRANSLATE, emp: 'S000003' });
+      assert.equal(c.statusCode, 429);
+      await Promise.all([a, b]);
+    } finally {
+      await t.close();
+    }
+  });
+
+  it('用戶端中途斷線:中斷模型呼叫並歸還名額', async () => {
+    let aborted = 0;
+    const hang = (async (url: string | URL, init?: RequestInit) => {
+      if (String(url).endsWith('/chat/completions'))
+        return new Promise<Response>((_, rej) => init?.signal?.addEventListener('abort', () => (aborted++, rej(new DOMException('aborted', 'AbortError')))));
+      return fetch(url, init);
+    }) as typeof fetch;
+    const t = await createTestApp({ env: { LLM_URL: `${base}/v1`, AI_MAX_STREAMS_PER_USER: '1' }, ai: { fetch: hang } });
+    try {
+      await t.app.listen({ port: 0, host: '127.0.0.1' });
+      const port = (t.app.server.address() as AddressInfo).port;
+      const token = await t.token();
+      await new Promise<void>((resolve, reject) => {
+        const req = http.request({ host: '127.0.0.1', port, method: 'POST', path: '/v1/ai/translations', headers: { 'content-type': 'application/json', 'x-internal-token': token } }, (res) => {
+          assert.equal(res.statusCode, 200);
+          res.once('data', () => {
+            req.destroy();
+            resolve();
+          });
+        });
+        req.on('error', () => {});
+        req.end(JSON.stringify(TRANSLATE.payload));
+        setTimeout(() => reject(new Error('沒有收到第一個事件')), 3000);
+      });
+      await waitFor(() => aborted === 1, 3000);
+      // 名額已歸還(每人 1 個):同一人可以再開一個
+      const ok = await t.call({ method: 'POST', url: '/v1/ai/translations', payload: { text: '   ', target: 'en' } });
+      assert.equal(ok.statusCode, 400, '空白內容在串流前回 400(不佔名額)');
+    } finally {
+      await t.close();
+    }
+  });
+
+  it('翻譯:空白內容、分段超過上限回 400(串流開始前)', async () => {
+    const t = await createTestApp({ env: { LLM_URL: `${base}/v1` } });
+    try {
+      const blank = await t.call({ method: 'POST', url: '/v1/ai/translations', payload: { text: '  \n ', target: 'en' } });
+      assert.equal(blank.statusCode, 400);
+      const long = Array.from({ length: 13 }, (_, i) => `## 第 ${i} 段\n${'x'.repeat(2000)}`).join('\n');
+      const r = await t.call({ method: 'POST', url: '/v1/ai/translations', payload: { text: long, target: 'en' } });
+      assert.equal(r.statusCode, 400);
+      assert.match(JSON.stringify(r.json().details), /分段超過 12 段/);
+    } finally {
+      await t.close();
+    }
   });
 });

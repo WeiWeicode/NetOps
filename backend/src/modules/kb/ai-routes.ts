@@ -103,6 +103,7 @@ const kbAiRoutes: FastifyPluginAsync<{ kb: KbService; vector: VectorIndex; learn
           '沒有啟用同步(VECTOR_SYNC=0,與舊版共用 collection 時)回 409 NETOPS_VECTOR_SYNC_DISABLED;同步中回 409 NETOPS_VECTOR_SYNC_BUSY。一次要刪除太多筆時停止(安全閥),原因寫在 error。',
         tags: ['知識庫'],
         'x-permission': 'netops.kb.write',
+        'x-audit-level': 'meta',
         'x-gherkin': [
           '場景: 沒有啟用同步',
           '  假如 VECTOR_SYNC 為 0',
@@ -161,6 +162,7 @@ const kbAiRoutes: FastifyPluginAsync<{ kb: KbService; vector: VectorIndex; learn
           'rewrite 為 true 時已學過的組織筆記全部重寫(管理者改過的筆記不覆寫)。執行中回 409 NETOPS_IPLEARN_BUSY;沒有設定 AI 回 409 NETOPS_AI_DISABLED。',
         tags: ['知識庫'],
         'x-permission': 'netops.kb.write',
+        'x-audit-level': 'meta',
         'x-gherkin': [
           '場景: 開始學習',
           '  假如 使用者擁有 netops.kb.write',

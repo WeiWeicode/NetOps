@@ -72,7 +72,7 @@
 
   Rule: POST /api/netops/ai/notes
 
-    # 來源: backend/src/modules/ai/routes.ts:181
+    # 來源: backend/src/modules/ai/routes.ts:182
     @auto
     場景: 整理成筆記
       假如 使用者擁有 netops.kb.write
@@ -80,7 +80,7 @@
       那麼 回應 200 且 Content-Type 為 text/event-stream
       而且 done 事件帶出新增的筆記,author 為登入者
 
-    # 來源: backend/src/modules/ai/routes.ts:187
+    # 來源: backend/src/modules/ai/routes.ts:188
     @e2e
     場景: 只有 AI 使用權限不能整理筆記
       假如 使用者只有 netops.ai.use
@@ -89,14 +89,14 @@
 
   Rule: POST /api/netops/ai/translations
 
-    # 來源: backend/src/modules/ai/routes.ts:221
+    # 來源: backend/src/modules/ai/routes.ts:223
     @auto
     場景: 翻譯成英文
       假如 使用者擁有 netops.ai.use
       當 呼叫 POST /api/netops/ai/translations 帶 text 與 target "en"
       那麼 done 事件的 target 為 "en"、text 為譯文
 
-    # 來源: backend/src/modules/ai/routes.ts:226
+    # 來源: backend/src/modules/ai/routes.ts:228
     @auto
     場景: 不支援的語言
       當 呼叫 POST /api/netops/ai/translations 帶 target "fr"

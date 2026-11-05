@@ -84,11 +84,27 @@ export async function registerAi(app: FastifyInstance, deps: AiDeps) {
         },
         listNotes: () => kb.listNotes(),
         // 新版筆記的標題與標籤不可含換行(B2-kb 資安修正):模型回的值壓成一行
-        saveNote: (data: { title: string; ips: string[]; tags: string[]; content: string; source: string }, author: string, id?: string) =>
-          kb.saveNote({ ...data, title: oneLine(data.title).slice(0, 300), tags: data.tags.map((t) => oneLine(t).slice(0, 100)).filter(Boolean).slice(0, 10), content: data.content.slice(0, 20000) }, author, id),
+        // 錯誤訊息會出現在學習紀錄(kb.read 看得到):非 AppError(可能含容器路徑)只留固定文字,原文寫日誌(審查修正)
+        saveNote: (data: { title: string; ips: string[]; tags: string[]; content: string; source: string }, author: string, id?: string) => {
+          try {
+            return kb.saveNote({ ...data, title: oneLine(data.title).slice(0, 300), tags: data.tags.map((t) => oneLine(t).slice(0, 100)).filter(Boolean).slice(0, 10), content: data.content.slice(0, 20000) }, author, id);
+          } catch (err) {
+            if (err instanceof AppError) throw err;
+            app.log.error({ err }, '[外部 IP 學習] 寫入知識庫失敗');
+            throw new Error('寫入知識庫失敗(細節見服務日誌)');
+          }
+        },
         noteState,
         chatOnce: (opts: { messages: { role: 'system' | 'user'; content: string }[]; maxTokens: number }) => llm.chatOnce(opts),
-        rdap: rdap.lookup,
+        rdap: async (ip: string) => {
+          try {
+            return await rdap.lookup(ip);
+          } catch (err) {
+            // 「RDAP 404」「RDAP 沒有網段資料」等是自己的分類訊息;連線錯誤只留固定文字
+            const msg = (err as Error).message;
+            throw new Error(/^(RDAP|不是 IPv4)/.test(msg) ? msg : 'RDAP 連線失敗');
+          }
+        },
         reverseDns: rdap.reverseDns,
         nowText,
         log,
@@ -98,31 +114,39 @@ export async function registerAi(app: FastifyInstance, deps: AiDeps) {
 
   /* ───────── 排程 ───────── */
   const timers: NodeJS.Timeout[] = [];
-  const syncQuietly = () => void vector.syncVectors().catch(() => {});
+  const intervals: NodeJS.Timeout[] = [];
+  let closing = false;
+  let debounce: NodeJS.Timeout | null = null;
+  const syncQuietly = () => void (closing ? null : vector.syncVectors().catch(() => {}));
   if (vector.vectorEnabled() && cfg.vectorSync) {
-    let debounce: NodeJS.Timeout | null = null;
     kb.onChange(() => {
+      if (closing) return;
       if (debounce) clearTimeout(debounce);
       debounce = setTimeout(syncQuietly, 3000);
       debounce.unref();
     });
     app.addHook('onReady', async () => {
-      timers.push(setTimeout(syncQuietly, 5000).unref(), setInterval(syncQuietly, 30 * 60000).unref());
+      timers.push(setTimeout(syncQuietly, 5000).unref());
+      intervals.push(setInterval(syncQuietly, 30 * 60000).unref());
     });
   }
   if (learner && cfg.ipLearn.hour >= 0) {
     app.addHook('onReady', async () => {
-      timers.push(
+      intervals.push(
         setInterval(() => {
           const now = new Date();
-          if (now.getHours() !== cfg.ipLearn.hour || !learner.shouldAutoRun(fmtDate(now))) return;
+          if (closing || now.getHours() !== cfg.ipLearn.hour || !learner.shouldAutoRun(fmtDate(now))) return;
           learner.learnIps({ by: '每日自動' }).catch((err: unknown) => app.log.error({ err }, '[外部 IP 學習] 每日自動執行失敗'));
         }, 10 * 60000).unref(),
       );
     });
   }
+  // 關閉時停掉排程;進行中的外部 IP 學習不中止(同舊版;狀態檔每查 10 個 IP 存一次,重啟後已查的 IP 不重查)
   app.addHook('onClose', async () => {
+    closing = true;
+    if (debounce) clearTimeout(debounce);
     for (const t of timers) clearTimeout(t);
+    for (const t of intervals) clearInterval(t);
   });
 
   const ftpConfig: FtpConfig | null = config.ftp;

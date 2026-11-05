@@ -36,6 +36,15 @@ export class LlmError extends Error {
 
 export type Llm = ReturnType<typeof createLlm>;
 
+/** 上游回應不是 JSON(例如代理錯誤頁)時丟分類過的錯誤,原文不外露 */
+async function jsonOf(res: Response): Promise<unknown> {
+  try {
+    return await res.json();
+  } catch (err) {
+    throw new LlmError('AI 服務回應格式錯誤', 'bad-response', { cause: err });
+  }
+}
+
 /** 串流中一行的長度上限(vLLM 每個 data: 是一小段回答) */
 const MAX_LINE = 1024 * 1024;
 
@@ -80,7 +89,7 @@ export function createLlm(cfg: LlmConfig, fetchImpl: typeof fetch = fetch) {
       throw new LlmError('無法連線 AI 服務', 'unavailable', { cause: err });
     }
     if (!res.ok) throw new LlmError(`AI 服務回應 ${res.status}`, 'bad-response');
-    const body = (await res.json()) as { data?: { id?: string }[] };
+    const body = (await jsonOf(res)) as { data?: { id?: string }[] };
     const id = body.data?.[0]?.id;
     if (!id) throw new LlmError('AI 服務沒有可用的模型', 'bad-response');
     modelCache = { at: Date.now(), id };
@@ -97,7 +106,7 @@ export function createLlm(cfg: LlmConfig, fetchImpl: typeof fetch = fetch) {
       timeout,
       signal,
     );
-    const body = (await res.json()) as { choices?: { message?: { content?: string } }[] };
+    const body = (await jsonOf(res)) as { choices?: { message?: { content?: string } }[] };
     return body.choices?.[0]?.message?.content ?? '';
   }
 

@@ -2,6 +2,12 @@
 
 > `backend/`、`deploy/` 的修改;新紀錄加在最上方,格式見 `AGENT.md` §11。
 
+## 2026-11-05 S0 串流驗證路由 `GET /v1/pa-live/stream-test`
+- 工作項目:S0
+- 內容:`modules/pa-live/routes.ts`:SSE(`PassThrough` 串流交給 Fastify,保留 hook 與監控);立即送 `retry` 與 `open`,每 15 秒 `heartbeat`(`id` 為序號,`data` 含 seq、伺服器時間、connectionId);`Last-Event-ID` 只接受正整數,接續序號;單一連線 10 分鐘;每人 2 條、全系統 20 條(超過 429 `NETOPS_STREAM_BUSY`;不用 5xx,因為 BFF 斷路器會把上游 5xx 計為失敗);用戶端在驗證 Token 期間已斷線時不建立串流;待送資料超過 64 KB 中斷;用戶端斷線、最長時間到與服務關閉(`preClose`,`onClose` 時 server 已在等候長連線)時清除計時器。OpenAPI 設 `x-timeout-ms: 60000`(BFF undici `bodyTimeout` 是閒置時間,大於心跳即可長連線)、`x-permission: netops.ping.read`(驗證用、不綁畫面,不新增權限、不改 `gateway-rbac.yaml`)。`buildApp` 的 `deps.streamTest` 只給測試縮短間隔。`scripts/sse-probe.mjs`:經 Gateway 連線,記錄事件到達時間、間隔、伺服器時間差、斷線與重連,結束時判定(不被緩衝、事件間隔含最後空窗、事件數、單一連線 65 秒、5 分鐘、重連序號接續);Cookie 由提示輸入(不回顯)或環境變數,不印出;只送到 https 的 GigaNexus 網域、不跟隨轉址;401 / 403 / 404 / 429 直接結束,連續 3 次錯誤停止重連。依 `code-reviewer`、`security-auditor` 審查修正。
+- 檔案:`backend/src/modules/pa-live/routes.ts`、`backend/src/app.ts`、`backend/test/helpers.ts`、`backend/test/unit/pa-live.test.ts`、`backend/scripts/sse-probe.mjs`
+- 驗證:`npm run typecheck`、`npm test`(125 項通過,新增 7 項)、`npm run build`;以本機假 Gateway 跑 `sse-probe.mjs`(心跳縮短)確認主動斷線後以 Last-Event-ID 重連;另以 BFF 使用的 undici 8.11.2 確認 `bodyTimeout` 是資料塊之間的閒置時間
+
 ## 2026-11-05 D1 驗收修正:測試區 FTP_LOG_DIR、FTP 清單不列系統資料夾、知識庫備份 healthcheck
 - 工作項目:D1(驗收報告 `docs/test-reports/2026-11-05-d1-uat-pending.md` §3.1、§4.1、§5.4)
 - 內容:① 測試區 TRAFFIC 在 FTP `/my-data`,`FTP_LOG_DIR` 沒設定(預設 `/`)時永遠無法分析;依需求方決定寫進部署設定:`.gitlab-ci.yml` `deploy-api-test` 加 `FTP_LOG_DIR: /my-data`(Compose 以 shell 環境變數優先,蓋過主機 `netops.env`)。compose 本身不寫值(正式區共用);正式區的值寫進 IMPL-PLAN D2 待確認。② `infra/ftp` 的列目錄不回 `$RECYCLE.BIN`、`System Volume Information`(不分大小寫;`isSystemEntry`),PA 瀏覽、同步與 AD 清單共用。只過濾清單,不擋路徑。③ `netops-kb-backup` 加 healthcheck:`/backup/LAST_RESULT` 26 小時內更新過且為 OK(FAIL、NAS 未掛載不寫結果、超過一天沒備份都會 unhealthy);interval 30 秒、start_period 5 分。CI 的 `up -d --wait` 會等 healthy,備份失敗時 `deploy-api-test` 失敗。

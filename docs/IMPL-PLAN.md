@@ -11,7 +11,7 @@
 | F1 | 前端框架與畫面改寫 | 完成 |
 | D1 | 測試區部署 | 完成(有未驗項目) |
 | D2 | 驗收與切換 | 未開始 |
-| S0 | 串流驗證(SSE 經 Nginx / BFF) | 進行中:驗證路由與腳本 MR 已開,不改 Gateway;待測試區驗證(ARCHITECTURE D7) |
+| S0 | 串流驗證(SSE 經 Nginx / BFF) | 完成(2026-11-05,不改 Gateway;ARCHITECTURE D7) |
 | A1 | AI 搬進 `netops-api`、停用舊版 IIS | 未開始(D23、D18) |
 | R0 | PA 即時監控前置:設備帳號、Log Forwarding、網路、容量量測 | 未開始(PA-LIVE-PLAN §5、§11) |
 | R1 | PA 即時監控(唯讀):`netops-pa`、`netops-redis`、即時監控頁 | 未開始(D19、D21、D24) |
@@ -143,7 +143,7 @@ D13:骨架直接留用;AI 不在這次範圍,不做串流驗證(D7、D17)。
 
 **完成條件**:測試區 SSE 連線 5 分鐘以上穩定;或確認不可行、改用輪詢並記錄原因。
 
-**狀態:進行中(2026-11-05)**。`GET /api/netops/pa-live/stream-test`(`netops.ping.read`,`x-timeout-ms: 60000`,心跳 15 秒,回 `X-Accel-Buffering: no`)與驗證腳本 `backend/scripts/sse-probe.mjs` 已完成(`feature/s0-sse`)。檢查 Gateway `develop` 後判定**不需改 Gateway**:Nginx 依回應標頭關閉緩衝、`proxy_read_timeout` 與 BFF undici `bodyTimeout` 都是閒置時間、BFF 串流轉送且斷路器只計標頭前的失敗(細節與測試區驗證步驟見 `docs/test-reports/2026-11-05-s0-sse.md`)。合併部署、發佈路由後依報告 §3 驗證。
+**狀態:完成(2026-11-05)**。測試區驗證全部通過:單一連線 375 秒不中斷、心跳間隔最大 15.0 秒、斷線後以 `Last-Event-ID` 重連序號接續、BFF 與 `netops-api` 沒有逾時或斷路器紀錄(報告 §3)。A1、R1 依報告 §3.6 實作,不需輪詢。原狀態說明:`GET /api/netops/pa-live/stream-test`(`netops.ping.read`,`x-timeout-ms: 60000`,心跳 15 秒,回 `X-Accel-Buffering: no`)與驗證腳本 `backend/scripts/sse-probe.mjs` 已完成(`feature/s0-sse`)。檢查 Gateway `develop` 後判定**不需改 Gateway**:Nginx 依回應標頭關閉緩衝、`proxy_read_timeout` 與 BFF undici `bodyTimeout` 都是閒置時間、BFF 串流轉送且斷路器只計標頭前的失敗(細節與測試區驗證步驟見 `docs/test-reports/2026-11-05-s0-sse.md`)。合併部署、發佈路由後依報告 §3 驗證。驗證完成後由需求方在 GigaItApp 停用驗證路由 `netops.pa-live.stream-test`(程式留在 repo 當 A1、R1 的範本)。
 
 ## A1 AI 搬移
 

@@ -166,6 +166,7 @@ flowchart TB
 - 要驗證的地方:Nginx 預設緩衝(回應帶 `X-Accel-Buffering: no` 或 location 關閉 `proxy_buffering`)、Nginx 與 BFF(undici)的 60 秒閒置逾時、斷線後瀏覽器重連、BFF 斷路器不把長連線算成逾時。
 - 驗證失敗就改成前端每 5 秒輪詢 REST(收集器本來就是 10–15 秒更新一次,體驗差異小)。
 - 若要改 Gateway(Nginx location 或 BFF 串流設定),屬於 Gateway repo,先說明再動。
+- S0 的寫法規則(2026-11-05,NetOps !32;細節見 `docs/API.md` §3.1、`docs/test-reports/2026-11-05-s0-sse.md`):OpenAPI 設 `x-timeout-ms: 60000`(BFF 的逾時是資料塊之間的閒置時間,預設 10 秒會在第一次心跳前切斷);立即送第一個事件,心跳 15 秒;回 `X-Accel-Buffering: no`、`Cache-Control: no-cache, no-transform`;名額滿回 429(不回 5xx,上游 5xx 會累積 BFF 斷路器失敗);每人上限;服務關閉在 `preClose` 結束串流。寫法照 `backend/src/modules/pa-live/routes.ts`。
 
 ---
 
@@ -187,6 +188,7 @@ netops.group.firewall
 
 - `netops-viewer` 也有(全部 `.read`,ARCHITECTURE §5)。
 - 即時 log 是原始明細,API 設 `x-audit-level: meta`,同 Log 明細查詢。
+- **單一連線最長 5 分鐘**(需求方 2026-11-05 決定):到時伺服器結束連線,瀏覽器自動重連時 BFF 重新檢查登入與權限,所以登出或撤權後最晚 5 分鐘停止收到即時 log(S0 驗證路由是 10 分鐘,只送心跳)。重連時以 `Last-Event-ID` 補送斷線期間的 log(Stream 的 ID)。
 
 ---
 

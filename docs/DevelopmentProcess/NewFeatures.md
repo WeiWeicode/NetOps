@@ -2,6 +2,12 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。
 
+## 2026-11-05 S0 完成:測試區驗證通過、R1 連線最長 5 分鐘
+- 工作項目:S0、R1
+- 內容:NetOps !32 合併部署後在測試區驗證 SSE,全部通過(不被緩衝、單一連線 375 秒不中斷、斷線重連序號接續、BFF 沒有斷路器紀錄),S0 改為完成,不改 Gateway、不改輪詢。依需求方決定:R1 單一連線最長 5 分鐘、SSE 寫法規則寫進 PA-LIVE-PLAN §7、§8;驗證路由由需求方在 GigaItApp 停用。
+- 檔案:`docs/test-reports/2026-11-05-s0-sse.md`、`docs/PA-LIVE-PLAN.md`、`docs/IMPL-PLAN.md`、`docs/HANDOFF.md`
+- 驗證:Claude 內建瀏覽器(需求方登入)同源 `EventSource` 與 `fetch` 串流各一條共 6 分鐘;主機 2 唯讀 `docker logs`(BFF、`netops-api`)
+
 ## 2026-11-05 S0 串流驗證:SSE 驗證路由與腳本
 - 工作項目:S0
 - 內容:新增 SSE 驗證路由 `GET /api/netops/pa-live/stream-test` 與驗證腳本,作為 A1(AI 問答串流)與 R1(即時監控)的共同前提。檢查 Gateway `develop` 的 Nginx 與 BFF 後判定不需改 Gateway:Nginx 依 `X-Accel-Buffering: no` 關閉緩衝、BFF 串流轉送且 undici `bodyTimeout` 是閒置時間、斷路器只計標頭前的失敗。AGENT §7.3 加 SSE 例外說明。測試區驗證待合併部署後進行。

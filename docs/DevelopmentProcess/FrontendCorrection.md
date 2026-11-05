@@ -2,6 +2,13 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。範圍:`frontend/`。
 
+## 2026-11-05 A1-frontend:AI 問答、AI 分析、翻譯、知識庫 AI 功能
+- 工作項目:A1(第 3 批 `feature/a1-ai-frontend`,從第 2 批開出)
+- 內容:舊版 AI 畫面搬進新版(ARCHITECTURE D23):① `pages/ai/Ask.vue`(PA `/firewall/ask`、AD `/ad/ask` 共用;由舊版 `src/views/PaAsk.vue` 搬移):SSE 串流顯示查詢進度、查到的資料、PA 其他 log、AD 事件、參考的知識庫筆記與回答;追問、停止、清除、複製、翻譯、看原始紀錄(帶條件到明細查詢)、範例問題;有 `netops.kb.write` 可「記錄到知識庫」(或輸入「請記錄:…」);對話放在模組層級的 reactive(`composables/aiChat.ts`,切頁回來還在,重新整理清空,不存 localStorage)。② `components/AiAnalysis.vue`:流量總覽的「AI 分析」對話框(按鈕權限 `netops.pa-dashboard.ai`)。③ `components/TranslateBox.vue`、`AiMarkdown.vue`(一律經 DOMPurify)。④ 知識庫頁:語意搜尋(勾選後依相近度排序、顯示相近度)、向量庫狀態(只搜尋不同步時註明;開啟同步時有「立即同步」)、外部 IP 自動學習對話框(`components/IpLearning.vue`,執行中每 2 秒查狀態,完成後重新整理清單)。⑤ `api/ai.ts`:POST SSE 以 `fetch` 讀串流,帶 Cookie 與 CSRF、不帶 Bearer,401 先 Refresh;串流開始前的錯誤是 `ApiError`,`error` 事件是 `AiStreamError`。⑥ 移除連到舊版 NetOps 的連結(`config/links.ts` 只剩 Veeam):選單的「AI 問答(舊版)」改成新版頁面;安全事件頁點 IP 改到新版 AI 問答(沒有 AI 問答權限時不可點)。⑦ `api/perms.ts`:`NETOPS.paAsk` / `adAsk`、`UI.paAskUse` / `adAskUse` / `paDashboardAi`、`API.aiUse`。⑧ 假 Gateway `mock/ai.ts`(`MOCK=admin`):固定的 SSE 事件、翻譯、整理筆記、向量庫狀態、外部 IP 學習。
+- 與舊版不同:對話紀錄只送最近 20 則(後端只用最近 6 則);AI 回答與知識庫一樣用 `composables/markdown.ts` 清理(連結另開分頁、外部圖片拿掉);深入思考改成 GCheckbox;日期改兩個 `datetime-local`;服務資訊不再寫死主機位址(舊版畫面寫 10.10.130.45)。
+- 檔案:`frontend/src/{api/ai.ts,api/perms.ts,composables/aiChat.ts,components/{AiMarkdown,AiAnalysis,TranslateBox,IpLearning}.vue,pages/ai/{Ask,PaAsk,AdAsk}.vue,pages/firewall/{Dashboard,Events}.vue,pages/knowledge/Knowledge.vue,router.ts,config/links.ts}`、`frontend/mock/{ai,gateway,types}.ts`、`frontend/test/{ai,links}.test.ts`、`docs/Gherkin/ui/{ai,navigation}.feature`、`docs/UI-GUIDE.md`
+- 驗證:`npm run typecheck`、`npm test`(13 檔 77 項通過,新增 10 項)、`npm run build`;以 `MOCK=admin` 本機假 Gateway 在瀏覽器確認:AI 問答串流顯示(查到的資料、掃描逾時資料不完整、其他 log、知識庫、Markdown 表格、惡意 `onerror` 已清掉)、翻譯、流量總覽 AI 分析(摘要讀不到的提示)、外部 IP 學習輪詢完成。經 Gateway 的實際串流待測試區驗收
+
 ## 2026-11-05 D1 驗收修正:FTP 勾選、AD 清單改手動、導回時不回報錯誤
 - 工作項目:D1(驗收報告 `docs/test-reports/2026-11-05-d1-uat-pending.md` §3.1、§4.2、§4.4)
 - 內容:① PA「FTP Log 檔案」:後端只分析 TRAFFIC 目錄直屬(`path === logDir`)與各類型目錄的檔案,其他目錄(例如 `FTP_LOG_DIR` 之外的 `/my-data`)勾了一定被略過。選改動最小的做法:**這些目錄不顯示勾選框與全選 / 分析 / 刪除列**,改顯示「這個目錄的檔案只能瀏覽,不能分析」與 TRAFFIC 目錄(`ftpFiles.ts` `analyzableDir`;API 不變)。略過時的 toast 也寫明 TRAFFIC 目錄。② AD「FTP Log 檔案」:依需求方決定,載入時只查 `GET /ftp/ad/status`,不送 `POST /ftp/ad/listings`;有 `netops.ad-files.manage` 的人按「列出 FTP 資料夾」才送出,沒有的人看不到按鈕(改顯示「重新整理」只更新同步狀態);同步 / 匯入結束時只在已列過清單時才重新列出。③ 未登入或沒有應用權限時,守衛 `return false` 中止第一次導覽,`router.isReady()` 以不帶訊息的 NavigationFailure 拒絕,`App.vue` 的 `.finally()` 讓它變成未處理的 Promise 拒絕,被 web-kit 監控回報成 `netops-web` 錯誤(正式建置堆疊對到 vue-router 的 `createRouterError`)。改成導覽中止時吞掉並維持載入畫面(`guard.ts` `isLeavingNavigation`),其他錯誤照常回報。

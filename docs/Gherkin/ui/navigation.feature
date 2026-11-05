@@ -70,13 +70,14 @@
       假如 使用者沒有「AD 網域」群組下任何功能頁的權限
       那麼 側欄不顯示「AD 網域」
 
-    # 來源: frontend/src/router.ts:183(origin/feature/netops-f1-pa-dashboard)
+    # 來源: frontend/src/router.ts:194(feature/a1-ai-frontend)
     @auto @changed
-    場景: 舊版 AI 問答與 Veeam 改為一般連結
-      # D11、D17、D18:AI 不搬移,切換後舊版 IIS 留著提供 AI;Veeam 不再同步登入
-      假如 使用者有 "netops.pa.read"
-      那麼 「防火牆 PA-560」群組顯示「AI 問答(舊版)」連結,另開分頁到舊版 NetOps
+    場景: Veeam 改為一般連結,AI 問答改為新版頁面
+      # D11:Veeam 不再同步登入。A1(D23,取代 D17):AI 問答搬進新版,不再連到舊版 NetOps
+      假如 使用者有 "netops.pa-ask.read" 與 "netops.pa.read"
+      那麼 「防火牆 PA-560」群組顯示「AI 問答」(/netops/firewall/ask),不另開分頁
       而且 「其他系統」群組顯示「Veeam 備份監控」連結,使用者在該系統另行登入
+      而且 選單沒有連到舊版 NetOps 的連結
 
   Rule: 頁面守衛
 

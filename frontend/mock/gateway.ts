@@ -9,6 +9,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Plugin } from 'vite';
 import { handleAd } from './ad.ts';
+import { handleAi } from './ai.ts';
 import { handleFtp } from './ftp.ts';
 import { handleKb } from './kb.ts';
 import { handlePaLog } from './paLog.ts';
@@ -35,14 +36,22 @@ const MENUS = [
   { code: 'netops.ad-files.manage', name: '管理', kind: 'button', parentCode: 'netops.ad-files.read', sort: 10, icon: null },
   { code: 'netops.kb-page.read', name: '知識庫', kind: 'menu', parentCode: 'netops.group.knowledge', sort: 10, icon: null },
   { code: 'netops.kb-page.write', name: '編輯', kind: 'button', parentCode: 'netops.kb-page.read', sort: 10, icon: null },
+  // A1:AI 問答與分析(netops.ai.use 由按鈕綁定;admin 與 viewer 都有)
+  { code: 'netops.pa-ask.read', name: 'AI 問答', kind: 'menu', parentCode: 'netops.group.firewall', sort: 50, icon: null },
+  { code: 'netops.pa-ask.use', name: '使用 AI 問答', kind: 'button', parentCode: 'netops.pa-ask.read', sort: 10, icon: null },
+  { code: 'netops.pa-dashboard.ai', name: 'AI 分析', kind: 'button', parentCode: 'netops.pa-dashboard.read', sort: 10, icon: null },
+  { code: 'netops.ad-ask.read', name: 'AI 問答', kind: 'menu', parentCode: 'netops.group.ad', sort: 40, icon: null },
+  { code: 'netops.ad-ask.use', name: '使用 AI 問答', kind: 'button', parentCode: 'netops.ad-ask.read', sort: 10, icon: null },
 ];
-const READ_API = ['netops.ping.read', 'netops.pa.read', 'netops.pa-log.read', 'netops.ftp.read', 'netops.ad.read', 'netops.ad-log.read', 'netops.kb.read'];
+const READ_API = ['netops.ping.read', 'netops.pa.read', 'netops.pa-log.read', 'netops.ftp.read', 'netops.ad.read', 'netops.ad-log.read', 'netops.kb.read', 'netops.ai.use'];
+/** viewer 也有的 AI 按鈕(netops.ai.use 給 admin 與 viewer,2026-11-05 決定) */
+const AI_BUTTONS = ['netops.pa-ask.use', 'netops.pa-dashboard.ai', 'netops.ad-ask.use'];
 const WRITE_API = ['netops.ftp.write', 'netops.kb.write'];
 const BUTTONS = MENUS.filter((m) => m.kind === 'button').map((m) => m.code);
 const PAGES = MENUS.filter((m) => m.kind === 'app' || m.kind === 'menu').map((m) => m.code);
 
 function me(role: LoggedIn) {
-  const perms = role === 'admin' ? [...PAGES, ...BUTTONS, ...READ_API, ...WRITE_API] : role === 'viewer' ? [...PAGES, ...READ_API] : ['portal.app.access'];
+  const perms = role === 'admin' ? [...PAGES, ...BUTTONS, ...READ_API, ...WRITE_API] : role === 'viewer' ? [...PAGES, ...AI_BUTTONS, ...READ_API] : ['portal.app.access'];
   const own = new Set(perms);
   return {
     user: { userId: 1, employeeNo: 'T000001', name: '測試人員', email: null, deptCode: 'IT', department: '資訊部', title: '工程師', authType: 'ad' },
@@ -81,7 +90,7 @@ async function readBody(req: IncomingMessage): Promise<unknown> {
 }
 
 /** 各模組的假 API(依序嘗試,處理了就回 true) */
-const HANDLERS: ((ctx: MockCtx) => boolean)[] = [handleFtp, handleAd, handlePaEvents, handlePa, handlePaLog, handleKb];
+const HANDLERS: ((ctx: MockCtx) => boolean)[] = [handleAi, handleFtp, handleAd, handlePaEvents, handlePa, handlePaLog, handleKb];
 const fail = (res: ServerResponse, status: number, code: string, message: string) => send(res, status, { code, message, requestId: rid() });
 
 export function mockGateway(role: string | undefined): Plugin | null {
@@ -116,6 +125,7 @@ export function mockGateway(role: string | undefined): Plugin | null {
           send: (status, body) => send(res, status, body),
           fail: (status, code, message) => fail(res, status, code, message),
           user: `${m.user.employeeNo} ${m.user.name}`,
+          raw: res,
           sendFile: (contentType, filename, text) => {
             res.statusCode = 200;
             res.setHeader('X-Request-Id', rid());

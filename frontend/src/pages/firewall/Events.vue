@@ -3,17 +3,18 @@
  * 防火牆 › 安全事件(docs/API.md §4.2;舊版 src/views/PaEvents.vue):
  *   PA-560 TRAFFIC 以外的 log(威脅、URL 過濾、資料過濾、WildFire、解密、GlobalProtect、User-ID),每種類型一個分段:
  *   KPI、每小時事件數、排行;資料來自 FTP 各類型目錄,「FTP Log 檔案」同步分析後才有。?type= 記住目前類型。
- *   點排行中含 IP 的項目 → 另開舊版 AI 問答並帶入問題(AI 不改寫,ARCHITECTURE D17、D18)。
+ *   點排行中含 IP 的項目 → 到 AI 問答並帶入問題(由使用者送出;IMPL-PLAN A1)。沒有 AI 問答權限時不可點。
  *   分析中、摘要讀不到的檔案(missing)都要提示結果不完整(AGENT.md §5)。
  */
 import { computed, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { describeError } from '@/api/gateway';
+import { can, describeError } from '@/api/gateway';
 import { fmtNum, fmtShort, fmtTime } from '@/api/format';
 import { paEvents, type PaEventOverview, type PaEventType } from '@/api/paEvents';
 import TopList from '@/components/TopList.vue';
 import { checkDayRange } from '@/composables/dates';
-import { legacyAskUrl } from '@/config/links';
+import { NETOPS } from '@/api/perms';
+import { askLink } from '@/composables/aiChat';
 
 const MAX_DAYS = 92;
 const route = useRoute();
@@ -133,12 +134,13 @@ const tops = computed(() => (data.value?.tops ?? []).filter((t) => t.items.lengt
 
 /** IPv4(每段 0–255,前後不接數字或點) */
 const IP = /(?<![\d.])(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)(?![\d.])/;
-const hasIp = (key: string) => IP.test(key);
-/** 排行點選:內容含 IP 就另開舊版 AI 問答並帶入問題(由使用者在舊版送出) */
+const canAsk = computed(() => can(NETOPS.paAsk));
+const hasIp = (key: string) => canAsk.value && IP.test(key);
+/** 排行點選:內容含 IP 就到 AI 問答並帶入問題(由使用者送出) */
 function pick(key: string) {
   const ip = key.match(IP)?.[0];
   if (!ip) return;
-  window.open(legacyAskUrl(`${ip} 在${current.value?.label ?? ''} log 的狀況,有沒有問題?`, range.from, range.to), '_blank', 'noopener,noreferrer');
+  void router.push(askLink(`${ip} 在${current.value?.label ?? ''} log 的狀況,有沒有問題?`, range.from, range.to));
 }
 
 async function refresh() {
@@ -230,11 +232,11 @@ onMounted(refresh);
           :items="t.items"
           :tone="toneOf(t.key)"
           :pickable="hasIp"
-          pick-hint="另開舊版 AI 問答查詢這個 IP"
+          pick-hint="到 AI 問答查詢這個 IP"
           @pick="pick"
         />
       </div>
-      <p class="xs faint"><GIcon name="sparkles" :size="12" /> 點排行中含 IP 的項目,會另開舊版 AI 問答並帶入問題(同時參考防火牆流量與這些 log)。</p>
+      <p v-if="canAsk" class="xs faint"><GIcon name="sparkles" :size="12" /> 點排行中含 IP 的項目,會到 AI 問答並帶入問題(同時參考防火牆流量與這些 log)。</p>
     </template>
   </div>
 </template>

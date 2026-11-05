@@ -1,3 +1,5 @@
+import type { ServerResponse } from 'node:http';
+
 /** 假 Gateway 各模組共用的請求內容(gateway.ts 組好後交給 handleXxx) */
 export interface MockCtx {
   method: string;
@@ -14,4 +16,6 @@ export interface MockCtx {
   sendFile: (contentType: string, filename: string, text: string) => void;
   /** 記錄人(「工號 姓名」) */
   user: string;
+  /** 原始回應(SSE 串流用,mock/ai.ts) */
+  raw: ServerResponse;
 }

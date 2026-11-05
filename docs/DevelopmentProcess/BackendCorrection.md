@@ -2,6 +2,12 @@
 
 > `backend/`、`deploy/` 的修改;新紀錄加在最上方,格式見 `AGENT.md` §11。
 
+## 2026-11-05 R1 API:`netops-api` 讀 netops-redis(`infra/redis`、`modules/pa-live`)
+- 工作項目:R1
+- 內容:`infra/redis/index.ts`(ioredis 5.11.1,Gateway TECH-STACK 已列;鍵格式同 `pa-collector/netops_pa/keys.py`,只在這裡組鍵;不排隊、3 秒逾時;連線錯誤限頻 warn)。`modules/pa-live/service.ts`:收集器狀態(心跳超過 30 秒 = stopped、兩個開關都關 = disabled、輪詢或 Redis 錯誤 = degraded、Redis 連不上 = unavailable;停止時不回舊快照)、快照、趨勢、排行合併、最新 log 掃描與篩選;心跳的錯誤原文只回分類。`live-routes.ts`:`GET /v1/pa-live/{snapshot,series,top,logs,stream}`,權限 `netops.pa-realtime.read`;`logs`、`stream` 設 `x-audit-level: meta`;SSE 照 S0 規則(`x-timeout-ms` 60000、立即送 open、心跳 15 秒、429、`preClose`),單一連線最長 5 分鐘,`Last-Event-ID` 游標接續(超過 5 分鐘不接續)。Redis 連不上時 `snapshot` 回 200 `unavailable`、其他回 **424**(不用 5xx:BFF 斷路器把上游 5xx 計為失敗)。`config.ts` 新增 `REDIS_URL`(test / prod 必填)。依 `code-reviewer`、`security-auditor` 審查修正(SSE 各類型分開處理失敗並送 `degraded`、ReplyError 與連線錯誤分開、`before` 拒絕 `0-0`、未知維度回 400、慢用戶端中斷底層連線、日誌)。
+- 檔案:`backend/src/infra/redis/index.ts`、`backend/src/modules/pa-live/{service,live-routes}.ts`、`backend/src/{app,config,openapi}.ts`、`backend/test/fixtures/fake-redis.ts`、`backend/test/unit/pa-live-r1.test.ts`、`docs/API.md` §3.2、`docs/Gherkin/pa-live/realtime.feature`
+- 驗證:`npm run typecheck`、`npm test`(148 passed)、`npm run build`;`check-scenarios.mjs` 69 / 69
+
 ## 2026-11-05 R1 部署:netops-redis、netops-pa 加入 Compose 與 CI(測試區)
 - 工作項目:R1、R0
 - 內容:`deploy/docker-compose.yml` 新增 `netops-redis`(redis:7.4-alpine,`maxmemory` 2 GB、`noeviction`、RDB 開 / AOF 關、named volume,只在 `internal: true` 的 `netops-internal` 網路,不對主機開 port)與 `netops-pa`(唯讀根目錄、tmpfs /tmp、cap_drop ALL、日誌輪替;port 51293 / 51294 只綁 WSL `127.0.0.1`;`PA_POLL_ENABLED` / `PA_RECEIVE_ENABLED` 預設 0);`netops-api` 加 `REDIS_URL` 與 `netops-internal` 網路。CI `deploy-api-test` 檢查機密、建置(`--pull`)並啟動兩個容器、確認 `noeviction`。新增 `deploy/host2-set-pa-secrets.sh`(Token 自動產生、API Key 隱藏輸入,可先留空)。新增 `docs/PA-FORWARDING-SPEC.md`(給網通:唯讀角色與 API Key、HTTP / Syslog Server Profile、各類型 payload 欄位對應、Log Forwarding Profile;附錄 F 主機端 portproxy、防火牆、開啟步驟)。

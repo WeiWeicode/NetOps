@@ -14,7 +14,7 @@ fs.writeFileSync(secret, 'from-file\n');
 after(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
 const base = { SERVICE_CODE: 'netops-api', GW_BASE_URL: 'https://gw.example' };
-const gwTest = { ...base, GW_ENV: 'test', GW_API_KEY: 'k', SERVICE_ADVERTISE_URL: 'http://netops-api:51292' };
+const gwTest = { ...base, GW_ENV: 'test', GW_API_KEY: 'k', SERVICE_ADVERTISE_URL: 'http://netops-api:51292', REDIS_URL: 'redis://netops-redis:6379/0' };
 const ftp = { FTP_HOST: '10.10.130.66', FTP_USER: 'netops', FTP_PASSWORD_FILE: secret };
 
 describe('資料目錄', () => {
@@ -57,7 +57,7 @@ describe('FTP', () => {
   });
 
   it('正式區不接受明文 FTP_PASSWORD(同時設定 _FILE 也拒絕)與 FTP_TLS_INSECURE', () => {
-    const prod = { ...base, GW_ENV: 'prod', GW_API_KEY_FILE: secret, SERVICE_ADVERTISE_URL: 'http://netops-api:51292', NETOPS_DATA_DIR: tmp };
+    const prod = { ...base, GW_ENV: 'prod', GW_API_KEY_FILE: secret, SERVICE_ADVERTISE_URL: 'http://netops-api:51292', NETOPS_DATA_DIR: tmp, REDIS_URL: 'redis://netops-redis:6379/0' };
     assert.throws(() => loadConfig({ ...prod, FTP_HOST: 'h', FTP_USER: 'u', FTP_PASSWORD: 'p' }), /正式區不可用 FTP_PASSWORD 明文設定/);
     assert.throws(() => loadConfig({ ...prod, ...ftp, FTP_PASSWORD: 'p' }), /正式區不可用 FTP_PASSWORD 明文設定/);
     assert.throws(() => loadConfig({ ...prod, ...ftp, FTP_TLS_INSECURE: '1' }), /正式區不可設定 FTP_TLS_INSECURE/);
@@ -102,5 +102,18 @@ describe('FTP', () => {
     assert.throws(() => loadConfig({ ...dev, FTP_SYNC_MINUTES: 'abc' }), /FTP_SYNC_MINUTES/);
     assert.throws(() => loadConfig({ ...dev, FTP_PATTERN: '(' }), /FTP_PATTERN 不是正確的正規表示式/);
     assert.throws(() => loadConfig({ ...base, GW_ENV: 'dev', PA_SEARCH_SECONDS: '9999' }), /PA_SEARCH_SECONDS 必須是 10–600/);
+  });
+});
+
+describe('netops-redis(R1)', () => {
+  it('test / prod 缺少 REDIS_URL 時啟動失敗;dev 為 null', () => {
+    const { REDIS_URL: _omit, ...noRedis } = gwTest;
+    assert.throws(() => loadConfig({ ...noRedis, NETOPS_DATA_DIR: tmp, ...ftp }), /test 缺少必要設定:REDIS_URL/);
+    assert.equal(loadConfig({ ...base, GW_ENV: 'dev' }).redisUrl, null);
+  });
+
+  it('只接受 redis:// 或 rediss://', () => {
+    assert.throws(() => loadConfig({ ...gwTest, NETOPS_DATA_DIR: tmp, ...ftp, REDIS_URL: 'http://x' }), /REDIS_URL 必須以/);
+    assert.equal(loadConfig({ ...gwTest, NETOPS_DATA_DIR: tmp, ...ftp }).redisUrl, 'redis://netops-redis:6379/0');
   });
 });

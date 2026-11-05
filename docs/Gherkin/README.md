@@ -19,6 +19,7 @@
 | `ad/events.feature` | AD 已匯入日期、總覽、明細查詢、匯出 | API.md §6 | B2 |
 | `kb/notes.feature` | 知識庫筆記查詢、下載、匯整檔、新增、修改、刪除 | API.md §7;D17 | B2 |
 | `pa-live/stream-test.feature` | S0 SSE 串流驗證:open / heartbeat、重連、連線上限、經 Gateway 長連線 | API.md §3.1;IMPL-PLAN S0 | S0 |
+| `pa-live/realtime.feature` | R1 PA 即時監控:收集器狀態(停止更新不顯示舊快照)、趨勢、排行、最新 log、SSE 串流;收集器開關、唯讀、接收驗證、保留時間 | API.md §3.2;PA-LIVE-PLAN;IMPL-PLAN R1 | R1 |
 | `ui/navigation.feature` | 應用層守衛(`/?denied=netops`)、選單依權限、403、一般連結 | UI-GUIDE §5;FRONTEND-GUIDE §7.4 | F1 |
 | `ui/requests.feature` | CSRF、不存 Token、下載、工作輪詢與取消、資料不完整提示、DOMPurify | FRONTEND-GUIDE §6;API.md §1 | F1 |
 | `check-scenarios.mjs` | 比對 `x-gherkin` 與本目錄場景的腳本(§5) | — | — |

@@ -28,6 +28,9 @@ import { createTrafficImporter } from './modules/pa/importer.js';
 import logRoutes from './modules/pa/log-routes.js';
 import paRoutes from './modules/pa/routes.js';
 import paLiveRoutes, { type StreamTestOptions } from './modules/pa-live/routes.js';
+import { connectPaLiveRedis, type PaLiveRedis } from './infra/redis/index.js';
+import paLiveLiveRoutes, { type LiveStreamOptions } from './modules/pa-live/live-routes.js';
+import { createPaLiveService } from './modules/pa-live/service.js';
 import pingRoutes from './modules/ping/routes.js';
 import { swaggerOptions } from './openapi.js';
 
@@ -47,7 +50,10 @@ declare module 'fastify' {
 }
 
 /** deps:測試時注入假 FTP(AGENT.md §9)與縮短的串流間隔;正式執行一律由設定建立 */
-export async function buildApp(config: Config, deps: { ftp?: Ftp; streamTest?: StreamTestOptions } = {}): Promise<FastifyInstance> {
+export async function buildApp(
+  config: Config,
+  deps: { ftp?: Ftp; streamTest?: StreamTestOptions; paLiveRedis?: PaLiveRedis; liveStream?: LiveStreamOptions } = {},
+): Promise<FastifyInstance> {
   const app = Fastify({
     logger: { level: config.logLevel, redact: ['req.headers["x-internal-token"]'] },
     // 沿用 Gateway 傳下來的 X-Request-Id,寫入每一筆日誌(§5.2)
@@ -120,6 +126,10 @@ export async function buildApp(config: Config, deps: { ftp?: Ftp; streamTest?: S
   await app.register(pingRoutes);
   // S0 串流驗證(SSE,PA-LIVE-PLAN §7)
   await app.register(paLiveRoutes, deps.streamTest ?? {});
+  // PA 即時監控(R1):只讀 netops-redis;Redis 停止時只有即時監控受影響(不影響 /readyz 與其他功能)
+  const paLiveRedis = deps.paLiveRedis ?? (config.redisUrl ? connectPaLiveRedis(config.redisUrl, app.log) : null);
+  if (paLiveRedis) app.addHook('onClose', async () => paLiveRedis.close());
+  await app.register(paLiveLiveRoutes, { live: createPaLiveService(paLiveRedis, { log: app.log }), stream: deps.liveStream });
 
   // PA 匯入(背景同步在程序內執行,單一容器,D9)
   const ftp = deps.ftp ?? createFtp(config.ftp);

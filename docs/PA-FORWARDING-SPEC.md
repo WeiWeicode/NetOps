@@ -30,10 +30,13 @@
    - **XML API**:只啟用 **Operational Requests**;Report、Log、Configuration、Commit、User-ID Agent、Import、Export、IoT Agent 全部停用。
    - **REST API**:全部停用。**Command Line**:None。
 2. **Device > Administrators > Add**:帳號 `netops-ro`(名稱可自訂)、Administrator Type 選 Role Based、Profile 選 `netops-readonly`;密碼依公司規則。
-3. 產生 API Key(在可連到管理介面的電腦執行;**密碼放在 POST 本文,不要放在網址**,避免留在 log):
+3. 產生 API Key(在可連到管理介面、受信任的管理網段電腦執行):
+   - **密碼放在 POST 本文、從標準輸入讀**,不要放在網址或命令列(會留在 log、shell history 與程序清單);
+   - **驗證管理介面憑證**(`--cacert`);管理介面是自簽憑證時,先從 Web UI 匯出該憑證。不要用 `-k`(帳號密碼可能被攔截)。
 
    ```bash
-   curl -k -X POST 'https://<PA-560 管理 IP>/api/?type=keygen' --data-urlencode 'user=netops-ro' --data-urlencode 'password=<密碼>'
+   # 執行後輸入密碼(不顯示),按 Enter
+   read -rs PW; printf 'password=%s' "$PW" | curl --cacert pa-mgmt.pem -X POST 'https://<PA-560 管理 IP>/api/?type=keygen' --data-urlencode 'user=netops-ro' --data-binary @- ; unset PW
    ```
 
    回應 `<key>…</key>` 的內容就是 API Key。**請用公司核可的方式直接交給需求方**,不要貼在聊天、Email 內文或工單;需求方會在主機上用隱藏輸入寫進 Docker secret(`deploy/host2-set-pa-secrets.sh`),程式不存帳號密碼。
@@ -209,6 +212,7 @@
 
 > 一則 log 長度約 0.8–1.5 KB;NetOps 單則上限 16 KB。
 > Syslog 沒有 Token,NetOps 靠**來源 IP**(主機 Windows 防火牆只放行 PA-560)與 SSL 辨識,所以請回覆 PA-560 送 log 的實際來源 IP。
+> 若 PA-560 的 Syslog SSL 可以設定**用戶端憑證**(Device > Certificate Management 指定給 Syslog 的憑證),請一併設定並提供簽發的 CA 憑證(公開資訊):NetOps 會要求並驗證這張憑證,這是 Syslog 唯一能確認來源是 PA-560 的方式。
 
 ---
 
@@ -304,7 +308,8 @@ netsh interface portproxy show v4tov4
 
    預期類似 `172.2x.0.1`。
 2. 編輯 `/srv/giganexus/deploy/netops.env`:`PA_ALLOWED_SOURCES=<上一步的閘道>`、`PA_RECEIVE_ENABLED=1`。
-3. 重建:`cd <NetOps repo> && sudo docker compose --env-file /srv/giganexus/deploy/netops.env -f deploy/docker-compose.yml up -d --force-recreate netops-pa`(或重跑 CI `deploy-api-test`)。
+3. 重建:**重跑 GitLab CI `develop` 最新 pipeline 的 `deploy-api-test`**(用 CI 建置的同一個映像)。手動時要指定目前部署的映像、不在主機上重新建置:
+   `cd /srv/giganexus/shared/NetOps 之類的 repo 目錄 && sudo IMAGE_TAG=<目前部署的 commit 短 SHA> GW_ENV=test docker compose --env-file /srv/giganexus/deploy/netops.env -f deploy/docker-compose.yml up -d --no-build --force-recreate netops-pa`(SHA 可由 `sudo docker ps --format '{{.Image}}' | grep netops-pa` 查到)。
 4. `sudo docker logs --tail 20 giganexus-netops-test-netops-pa-1`,預期:`接收端點已啟用:HTTP :51293、Syslog :51294;允許來源 172.2x.0.1/32`。
 5. 若日誌出現「拒絕不在允許清單的來源 X」,X 才是實際看到的來源,把 `PA_ALLOWED_SOURCES` 改成 X 再重建。
 6. 請網通把 `10.10.130.124` 加進 HTTP / Syslog Server Profile(B.1、C.1),測完移除,並把 `PA_RECEIVE_ENABLED` 改回 0。
@@ -316,6 +321,23 @@ netsh interface portproxy show v4tov4
 3. 重建 `netops-pa`(同 F.3 第 3 步),日誌預期:`SDK 輪詢已啟用:每 15 秒(PA <IP>:443)`;即時監控頁「設備狀態」有數字。
 4. 測完 `PA_POLL_ENABLED=0` 再重建。
 
+### F.4.1 安全限制(目前版本)
+
+- 經 portproxy 時容器看不到真實來源(F.2),**沒有設定用戶端憑證(F.6)前,Syslog 51294 只靠 Windows 防火牆**;主機 2 本機與 WSL 內的程序(包括 CI Runner 上的 job)可以直接連 WSL 的 `127.0.0.1:51294` 送假的 TRAFFIC log。所以在 F.6 完成前,**即時 TRAFFIC 資料只作為監控參考,不作為資安判斷依據**(資安判斷以 HTTP 轉送的威脅類 log 與 FTP 歷史為準)。
+- 主機 3(正式區)已有規則 `Docker-WSL2-AllServices-TCP`(來源不限):D2 上線前先確認它的 port 範圍不含 51293 / 51294,否則 F.2 限制來源的規則會被繞過。
+
 ### F.5 Redis 記憶體(建議)
 
 `netops-redis` 的 RDB 存檔會 fork;WSL 若 `vm.overcommit_memory` 為 0,Redis 日誌會出現警告,大量資料時存檔可能失敗。需要時由需求方在 WSL 設 `sysctl vm.overcommit_memory=1`(影響整個 WSL,先確認對 Gateway 等其他容器無影響)。上線後每天記錄 `docker exec giganexus-netops-test-netops-redis-1 redis-cli info memory`(PA-LIVE-PLAN §5)。
+
+### F.6 憑證(選用;建議至少正式區設定)
+
+主機目錄 `/srv/giganexus/netops-pa-tls`(`deploy/host2-set-pa-secrets.sh` 建立,唯讀掛到容器 `/run/pa-tls`)。放入檔案後在 `netops.env` 設對應變數,再依 F.3 第 3 步重建:
+
+| 檔案(建議檔名) | `netops.env` | 用途 | 權限 |
+| --- | --- | --- | --- |
+| `pa-mgmt-ca.pem` | `PA_CA_FILE=/run/pa-tls/pa-mgmt-ca.pem` | 驗證 PA-560 管理介面(SDK 輪詢);設了就不需要 `PA_TLS_INSECURE` | 644(公開資訊) |
+| `server.crt`、`server.key` | `PA_TLS_CERT_FILE=/run/pa-tls/server.crt`、`PA_TLS_KEY_FILE=/run/pa-tls/server.key` | 接收端點改 HTTPS(51293)與 Syslog SSL(51294);PA-560 要信任簽發的 CA | crt 644;key `chown 1000:1000`、400 |
+| `pa-client-ca.pem` | `PA_TLS_CLIENT_CA_FILE=/run/pa-tls/pa-client-ca.pem` | 要求並驗證 PA-560 的用戶端憑證(C 節) | 644 |
+
+正式區沒有 `server.crt` / `server.key` 時接收端點不會啟動;需求方決定接受明文時才設 `PA_RECEIVE_PLAINTEXT=1`。私鑰是機密:由需求方放入,不要貼到聊天或工單。

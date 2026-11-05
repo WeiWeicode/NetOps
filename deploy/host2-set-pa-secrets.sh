@@ -25,7 +25,9 @@ fi
 if [ ! -s "$D/pa_api_key" ]; then
   [ -t 0 ] || { echo "請在終端機執行(要隱藏輸入 API Key)" >&2; exit 1; }
   printf 'PA-560 API Key(輸入時不顯示;還沒有就直接按 Enter):'
-  stty -echo; trap 'stty echo' EXIT INT TERM; IFS= read -r PA_KEY; stty echo; trap - EXIT INT TERM; echo
+  # 先設 trap 再關回顯:中斷時恢復終端機並結束
+  trap 'stty echo' EXIT; trap 'stty echo; exit 130' INT TERM
+  stty -echo; IFS= read -r PA_KEY; stty echo; trap - EXIT INT TERM; echo
   if [ -n "$PA_KEY" ]; then
     printf '%s' "$PA_KEY" > "$D/pa_api_key"; echo "已寫入 pa_api_key"
   else
@@ -35,6 +37,11 @@ if [ ! -s "$D/pa_api_key" ]; then
 fi
 
 chown 1000:1000 "$D/pa_http_token" "$D/pa_api_key"; chmod 400 "$D/pa_http_token" "$D/pa_api_key"
+
+# ---------- 憑證目錄(選用;附錄 F.6。先建立空目錄,讓 Compose 掛載不會由 Docker 以 root 建立) ----------
+T=/srv/giganexus/netops-pa-tls
+[ -d "$T" ] || { mkdir -p "$T"; echo "已建立憑證目錄 $T(沒有憑證時保持空的)"; }
+chown 1000:1000 "$T"; chmod 750 "$T"
 
 # ---------- Compose 變數(只補缺少的) ----------
 touch "$ENV_FILE"

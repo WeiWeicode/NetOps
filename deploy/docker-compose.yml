@@ -90,7 +90,12 @@ services:
     volumes:
       - netops_redis_data:/data
     read_only: true
+    # 官方映像 entrypoint 以 su-exec 切到 redis 使用者,需要這三個 capability
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID]
     security_opt: ["no-new-privileges:true"]
+    # 關閉前存 RDB(資料接近 2 GB 時需要較長時間)
+    stop_grace_period: 60s
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -135,6 +140,17 @@ services:
       PA_RECEIVE_ENABLED: ${PA_RECEIVE_ENABLED:-0}
       PA_HTTP_TOKEN_FILE: /run/secrets/pa_http_token
       PA_ALLOWED_SOURCES: ${PA_ALLOWED_SOURCES:-}
+      # 憑證(選用;檔案放在主機 NETOPS_PA_TLS_HOST_DIR,唯讀掛到 /run/pa-tls,檔名固定見 docs/PA-FORWARDING-SPEC.md 附錄 F.6):
+      #   PA_CA_FILE            驗證 PA-560 管理介面憑證(公開資訊)
+      #   PA_TLS_CERT/KEY_FILE  接收端點改 HTTPS / Syslog SSL;PA_TLS_CLIENT_CA_FILE 要求 PA-560 用戶端憑證(Syslog 唯一的身分驗證)
+      #   PA_RECEIVE_PLAINTEXT  正式區沒有憑證時要明確設 1 才允許明文接收(需求方決定)
+      PA_CA_FILE: ${PA_CA_FILE:-}
+      PA_TLS_CERT_FILE: ${PA_TLS_CERT_FILE:-}
+      PA_TLS_KEY_FILE: ${PA_TLS_KEY_FILE:-}
+      PA_TLS_CLIENT_CA_FILE: ${PA_TLS_CLIENT_CA_FILE:-}
+      PA_RECEIVE_PLAINTEXT: ${PA_RECEIVE_PLAINTEXT:-}
+    volumes:
+      - ${NETOPS_PA_TLS_HOST_DIR:-/srv/giganexus/netops-pa-tls}:/run/pa-tls:ro
     secrets: [pa_api_key, pa_http_token]
     ports:
       - "127.0.0.1:51293:51293"

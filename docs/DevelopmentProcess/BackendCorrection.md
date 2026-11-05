@@ -6,7 +6,8 @@
 - 工作項目:R1、R0
 - 內容:`deploy/docker-compose.yml` 新增 `netops-redis`(redis:7.4-alpine,`maxmemory` 2 GB、`noeviction`、RDB 開 / AOF 關、named volume,只在 `internal: true` 的 `netops-internal` 網路,不對主機開 port)與 `netops-pa`(唯讀根目錄、tmpfs /tmp、cap_drop ALL、日誌輪替;port 51293 / 51294 只綁 WSL `127.0.0.1`;`PA_POLL_ENABLED` / `PA_RECEIVE_ENABLED` 預設 0);`netops-api` 加 `REDIS_URL` 與 `netops-internal` 網路。CI `deploy-api-test` 檢查機密、建置(`--pull`)並啟動兩個容器、確認 `noeviction`。新增 `deploy/host2-set-pa-secrets.sh`(Token 自動產生、API Key 隱藏輸入,可先留空)。新增 `docs/PA-FORWARDING-SPEC.md`(給網通:唯讀角色與 API Key、HTTP / Syslog Server Profile、各類型 payload 欄位對應、Log Forwarding Profile;附錄 F 主機端 portproxy、防火牆、開啟步驟)。
 - 檔案:`deploy/docker-compose.yml`、`.gitlab-ci.yml`、`deploy/host2-set-pa-secrets.sh`、`deploy/test.env.example`、`docs/PA-FORWARDING-SPEC.md`、`docs/PA-LIVE-PLAN.md` §9
-- 驗證:`docker compose -f deploy/docker-compose.yml config` 通過(本機無 Docker daemon,未實際啟動;CI 部署時驗證)
+- 依 `security-auditor` 審查修正:Compose 帶入憑證設定(`/srv/giganexus/netops-pa-tls` 唯讀掛載,`PA_CA_FILE`、`PA_TLS_*`、`PA_RECEIVE_PLAINTEXT`)、Redis `cap_drop` 與 `stop_grace_period`、CI 先建置 netops-pa 並檢查 AOF / RDB / maxmemory、腳本 trap 順序、規格的 API Key 產生指令(密碼從標準輸入、驗證憑證)、Syslog 安全限制與主機 3 防火牆注意事項(附錄 F.4.1)、手動重建改用 CI 映像。
+- 驗證:`docker compose -f deploy/docker-compose.yml config` 通過(本機無 Docker daemon,未實際啟動;CI 部署時驗證);`.gitlab-ci.yml` 以 YAML 解析器確認
 
 ## 2026-11-05 R1 收集器 `pa-collector/`(netops-pa)
 - 工作項目:R1

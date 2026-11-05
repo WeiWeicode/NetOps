@@ -67,6 +67,8 @@ deploy-api-test:
     - export GITLAB_NPM_TOKEN="$(cat "$NPM_TOKEN_FILE")"
     - C="docker compose -f deploy/docker-compose.yml"
     # --pull:主機上的 node:22-alpine 可能被其他專案覆寫(同 Gateway 2026-10-02)
+    # netops-pa(R1)先建置:建置失敗時不會只更新到一半
+    - $C build --pull netops-pa
     - $C build --pull netops-api netops-kb-backup
     # 記下啟動時間:之後只看這次的日誌(同一 SHA 重跑、容器未重建時,不被舊的註冊結果誤判)
     - S="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -76,10 +78,12 @@ deploy-api-test:
     # PA 即時監控(R1):netops-redis(資料保留在 volume,不強制重建)與收集器 netops-pa。
     #   輪詢與接收預設關閉(netops.env 的 PA_POLL_ENABLED / PA_RECEIVE_ENABLED,測試時才開);關閉時仍會執行並寫心跳
     - for f in pa_api_key pa_http_token; do test -f "$NETOPS_SECRETS_DIR/$f" || { echo "缺少 netops-pa 機密 $f(先在主機 2 執行 deploy/host2-set-pa-secrets.sh)" >&2; exit 1; }; done
-    - $C build --pull netops-pa
     - $C up -d --wait netops-redis
     - $C up -d --wait --force-recreate netops-pa
     - $C exec -T netops-redis redis-cli config get maxmemory-policy | grep -q noeviction || { echo "FAIL netops-redis 不是 noeviction" >&2; exit 1; }
+    - $C exec -T netops-redis redis-cli config get appendonly | grep -qx no || { echo "FAIL netops-redis AOF 應關閉" >&2; exit 1; }
+    - $C exec -T netops-redis redis-cli config get save | grep -q '3600 1' || { echo "FAIL netops-redis RDB save 設定不符" >&2; exit 1; }
+    - $C exec -T netops-redis redis-cli config get maxmemory | tail -n 1 | grep -q '^[1-9]' || { echo "FAIL netops-redis 沒有 maxmemory" >&2; exit 1; }
     - echo "OK   netops-redis / netops-pa"
     # 冒煙測試:健康檢查;無內部 Token → 401
     - $C exec -T netops-api wget -qO- http://127.0.0.1:51292/readyz

@@ -46,6 +46,10 @@ deploy-api-test:
   rules:
     - if: $CI_COMMIT_BRANCH == "develop"
   environment: { name: test-api }
+  variables:
+    # 測試區 FTP 的 TRAFFIC log 在 /my-data(根目錄沒有;D1 驗收 2026-11-05 §3.1,需求方決定寫進部署設定)。
+    # Compose 以 shell 環境變數優先於 --env-file,這裡的值會蓋過主機 netops.env 的 FTP_LOG_DIR。正式區另定(docs/HANDOFF.md D2 前確認)
+    FTP_LOG_DIR: /my-data
   script:
     - test -f "$NETOPS_ENV_FILE" || { echo "缺少 $NETOPS_ENV_FILE(先在主機 2 執行 deploy/host2-set-secrets.sh)" >&2; exit 1; }
     - for f in gw_api_key monitor_api_key ftp_password; do test -f "$NETOPS_SECRETS_DIR/$f" || { echo "缺少 netops-api 機密 $f(先在主機 2 執行 deploy/host2-set-secrets.sh)" >&2; exit 1; }; done

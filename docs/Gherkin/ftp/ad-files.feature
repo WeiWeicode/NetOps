@@ -23,6 +23,16 @@
       那麼 回應 202
       而且 status 為 "queued" 或 "running"
 
+    # 來源: frontend/src/pages/ad/Files.vue:157(fix/d1-uat-findings)
+    @manual @changed
+    場景: 頁面載入時不列出,按「列出 FTP 資料夾」才送出
+      # D1 測試區開頁就送出清單工作(最長 3 分鐘、佔 FTP 連線),唯讀角色也會觸發(D1 驗收 2026-11-05 §4.2;需求方 2026-11-05 決定改成手動)
+      當 開啟 AD「FTP Log 檔案」頁
+      那麼 只呼叫 GET /api/netops/ftp/ad/status,不呼叫 POST /api/netops/ftp/ad/listings
+      當 有 "netops.ad-files.manage" 的使用者按「列出 FTP 資料夾」
+      那麼 呼叫 POST /api/netops/ftp/ad/listings 並顯示清單
+      但是 沒有 "netops.ad-files.manage" 的使用者看不到這個按鈕,同步或匯入結束時也不自動列出
+
     # 來源: backend/src/modules/ftp/ad-routes.ts:66
     @auto
     場景: 查詢自己的工作
@@ -74,7 +84,7 @@
 
   Rule: 同步、重新匯入與刪除(netops.ftp.write)
 
-    # 來源: backend/src/modules/ftp/ad-routes.ts:110
+    # 來源: backend/src/modules/ftp/ad-routes.ts:111
     @auto
     場景: 查詢同步狀態
       當 呼叫 GET /api/netops/ftp/ad/status
@@ -82,7 +92,7 @@
       而且 回應含 running 與 lastSyncAt
       而且 lastResult.imported 的 day 為 "YYYY-MM-DD"
 
-    # 來源: backend/src/modules/ftp/ad-routes.ts:127
+    # 來源: backend/src/modules/ftp/ad-routes.ts:128
     @auto @changed
     場景: 送出同步
       # 舊版同步等待完成才回應;新版背景執行回 202
@@ -91,7 +101,7 @@
       而且 只有檔案有變更的日期重新匯入
       而且 匯入的事件與舊版 parseAdCsv + 去除重複 + 排序的結果相同(UTF-16 / UTF-8、跨行訊息、新舊檔名重複)
 
-    # 來源: backend/src/modules/ftp/ad-routes.ts:131
+    # 來源: backend/src/modules/ftp/ad-routes.ts:132
     @untested
     場景: 正在同步
       假如 AD 正在同步
@@ -105,14 +115,14 @@
       當 呼叫 POST /api/netops/ftp/ad/syncs
       那麼 回應 503,code 為 "NETOPS_FTP_NOT_CONFIGURED"
 
-    # 來源: backend/src/modules/ftp/ad-routes.ts:154
+    # 來源: backend/src/modules/ftp/ad-routes.ts:155
     @auto
     場景: 重新匯入一天
       當 呼叫 POST /api/netops/ftp/ad/imports 帶 days ["2026-11-02"]
       那麼 回應 202
       而且 不比對檔案,一律重新匯入這一天
 
-    # 來源: backend/src/modules/ftp/ad-routes.ts:174
+    # 來源: backend/src/modules/ftp/ad-routes.ts:175
     @auto
     場景: 刪除一天
       假如 2026-11-02 已匯入

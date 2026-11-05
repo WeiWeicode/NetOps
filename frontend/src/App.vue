@@ -2,11 +2,20 @@
 /** 第一次導覽完成前(路由守衛等待 Gateway /api/auth/me)顯示載入畫面,避免整頁空白 */
 import { ref } from 'vue';
 import { useRouter } from 'vue-router';
+import { isLeavingNavigation } from './composables/guard';
 
 const ready = ref(false);
 useRouter()
   .isReady()
-  .finally(() => (ready.value = true));
+  .then(
+    () => (ready.value = true),
+    (err: unknown) => {
+      // 導向登入頁 / 入口網中:維持載入畫面,不當成錯誤回報(composables/guard.ts)
+      if (isLeavingNavigation(err)) return;
+      ready.value = true;
+      throw err;
+    },
+  );
 </script>
 
 <template>

@@ -4,6 +4,7 @@
  *   瀏覽 FTP(TRAFFIC 與威脅、URL、資料過濾、WildFire、解密、GlobalProtect、User-ID 目錄)與每個檔案的分析狀態;
  *   檔案依資料日期分組,預設顯示最新一天;?path= 可直接開某個目錄。
  *   有管理權限(UI.paFilesManage)可同步新檔案、分析 / 重新分析選取、取消分析、刪除分析結果(只刪本系統摘要,FTP 唯讀)。
+ *   只有 TRAFFIC 目錄(FTP_LOG_DIR)與各類型 log 目錄的檔案可以勾選;其他目錄只能瀏覽(後端一定會略過,analyzableDir)。
  *   同步與分析在背景執行:分析中每 2 秒查詢進度,結束時重新載入清單。
  */
 import { computed, onMounted, ref, shallowRef, watch } from 'vue';
@@ -12,7 +13,7 @@ import { can, describeError } from '@/api/gateway';
 import { PA_BATCH_MAX, paFtp, type PaFile, type PaListing, type PaStatus } from '@/api/ftp';
 import { fmtClock, fmtNum, fmtSize, fmtTime } from '@/api/format';
 import { UI } from '@/api/perms';
-import { chunk, countFiles, crumbsOf, dayOf, filterFiles, groupDays, PA_STATE, progressPct } from '@/composables/ftpFiles';
+import { analyzableDir, chunk, countFiles, crumbsOf, dayOf, filterFiles, groupDays, PA_STATE, progressPct } from '@/composables/ftpFiles';
 import { usePolling } from '@/composables/usePolling';
 import { confirm, toast } from '@/ui';
 
@@ -37,7 +38,7 @@ async function load(path: string | undefined = dir.value || undefined) {
     const changedDir = r.path !== listing.value?.path;
     listing.value = r;
     if (changedDir) selected.value = new Set();
-    else selected.value = new Set([...selected.value].filter((p) => r.items.some((f) => f.path === p && f.isLog)));
+    else selected.value = new Set([...selected.value].filter((p) => analyzableDir(r) && r.items.some((f) => f.path === p && f.isLog)));
     // 第一次載入或換目錄:預設最新一天;原本選的日期不見了也改回最新一天
     if (changedDir || (day.value && !days.value.some((d) => d.day === day.value))) day.value = days.value[0]?.day ?? '';
   } catch (e) {
@@ -75,9 +76,10 @@ const rows = computed(() => filterFiles(items.value, { day: day.value, keyword: 
 const counts = computed(() => countFiles(items.value));
 const dayLogCount = computed(() => rows.value.filter((f) => f.isLog).length);
 
-// ---------- 選取(只有 log 檔可選) ----------
+// ---------- 選取(只有 TRAFFIC / 各類型 log 目錄的 log 檔可選) ----------
 const selected = ref(new Set<string>());
-const selectable = computed(() => rows.value.filter((f) => f.isLog));
+const analyzable = computed(() => analyzableDir(listing.value));
+const selectable = computed(() => (analyzable.value ? rows.value.filter((f) => f.isLog) : []));
 const allSelected = computed(() => selectable.value.length > 0 && selectable.value.every((f) => selected.value.has(f.path)));
 function toggle(f: PaFile, on: boolean) {
   const s = new Set(selected.value);
@@ -158,8 +160,9 @@ async function analyze() {
       added += r.added;
       skipped += r.skipped;
     }
-    if (added) toast.success(`已加入分析佇列 ${added} 個檔案`, skipped ? `略過 ${skipped} 個(不在 FTP 上、不是 log 或不在 log 目錄)` : undefined);
-    else toast.warning('沒有檔案加入佇列', `略過 ${skipped} 個(不在 FTP 上、不是 log 或不在 log 目錄)`);
+    const why = `略過 ${skipped} 個(不在 FTP 上、不是 log,或不在 TRAFFIC 目錄 ${listing.value?.logDir ?? ''} 與各類型 log 目錄)`;
+    if (added) toast.success(`已加入分析佇列 ${added} 個檔案`, skipped ? why : undefined);
+    else toast.warning('沒有檔案加入佇列', why);
     selected.value = new Set();
   } catch (e) {
     toast.fromError(e, '分析失敗');
@@ -233,7 +236,7 @@ onMounted(() => {
 
 const asFile = (r: unknown) => r as PaFile;
 const columns = computed(() => [
-  ...(manage.value ? [{ key: 'sel', label: '', width: '44px' }] : []),
+  ...(manage.value && analyzable.value ? [{ key: 'sel', label: '', width: '44px' }] : []),
   { key: 'name', label: '名稱' },
   { key: 'size', label: '大小', align: 'right' as const, width: '90px' },
   { key: 'modified', label: '修改時間', width: '170px', hideSm: true },
@@ -321,7 +324,10 @@ const columns = computed(() => [
           <GInput v-model="keyword" icon="search" placeholder="篩選檔名" clearable class="grow" />
           <GSelect v-model="stateFilter" :options="stateOptions" placeholder="全部狀態" class="state-select" />
         </div>
-        <div v-if="manage" class="filters">
+        <GAlert v-if="manage && listing && !analyzable && counts.files" tone="info" title="這個目錄的檔案只能瀏覽,不能分析">
+          只分析 TRAFFIC 目錄 <code>{{ listing.logDir }}</code>(FTP_LOG_DIR)與上方各類型 log 目錄裡的檔案;請切換到上方的目錄。
+        </GAlert>
+        <div v-if="manage && analyzable" class="filters">
           <GCheckbox :model-value="allSelected" :disabled="!selectable.length" label="全選目前清單" @update:model-value="toggleAll" />
           <span class="small muted num">已選 {{ selected.size }} 個</span>
           <div class="spacer" />
@@ -344,7 +350,7 @@ const columns = computed(() => [
       >
         <template #cell-sel="{ row }">
           <GCheckbox
-            v-if="asFile(row).isLog"
+            v-if="analyzable && asFile(row).isLog"
             :model-value="selected.has(asFile(row).path)"
             :aria-label="`選取 ${asFile(row).name}`"
             @update:model-value="(v: boolean) => toggle(asFile(row), v)"

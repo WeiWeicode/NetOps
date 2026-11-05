@@ -30,6 +30,15 @@
       那麼 回應 200,type 為 "threat"
 
     # 來源: backend/src/modules/ftp/routes.ts:41
+    @auto @changed
+    場景: 不列出系統資料夾
+      # 舊版與 D1 測試區都列出 FTP 主機磁碟根目錄的 Windows 系統資料夾(D1 驗收 2026-11-05 §4.1);AD 的清單同樣過濾
+      假如 FTP 根目錄有 $RECYCLE.BIN 與 System Volume Information
+      當 呼叫 GET /api/netops/ftp/pa/files?path=/
+      那麼 回應 200
+      而且 items 不含這兩個資料夾
+
+    # 來源: backend/src/modules/ftp/routes.ts:47
     @auto @security
     場景: 超出根目錄
       假如 FTP_ROOT 為 /my-data
@@ -37,13 +46,13 @@
       那麼 回應 403,code 為 "NETOPS_FTP_PATH_FORBIDDEN"
       而且 "/my-data/../etc" 這類路徑也一樣被拒絕
 
-    # 來源: backend/src/infra/ftp/index.ts:126
+    # 來源: backend/src/infra/ftp/index.ts:160
     @auto @security
     場景: 路徑含控制字元
       當 呼叫 GET /api/netops/ftp/pa/files?path=/a%0D%0ADELE%20x
       那麼 回應 400,code 為 "VALIDATION_FAILED"
 
-    # 來源: backend/src/infra/ftp/index.ts:94
+    # 來源: backend/src/infra/ftp/index.ts:95
     @auto @changed
     場景: FTP 連線都在使用中
       # 測試區只有 1 條 FTP 連線;畫面瀏覽優先拿連線,最多等 25 秒,不讓請求超過路由逾時
@@ -51,21 +60,21 @@
       當 呼叫 GET /api/netops/ftp/pa/files
       那麼 回應 503,code 為 "NETOPS_FTP_BUSY"
 
-    # 來源: backend/src/infra/ftp/index.ts:111
+    # 來源: backend/src/infra/ftp/index.ts:180
     @untested
     場景: FTP 連不上
       假如 FTP 主機無法連線或帳密錯誤
       當 呼叫 GET /api/netops/ftp/pa/files
       那麼 回應 502,code 為 "NETOPS_FTP_UNAVAILABLE",訊息含 FTP 回應、不含帳密
 
-    # 來源: backend/src/infra/ftp/index.ts:117
+    # 來源: backend/src/infra/ftp/index.ts:151
     @auto
     場景: 開發環境沒有設定 FTP
       假如 GW_ENV 為 "dev" 且沒有設定 FTP_HOST
       當 呼叫 GET /api/netops/ftp/pa/files
       那麼 回應 503,code 為 "NETOPS_FTP_NOT_CONFIGURED"
 
-    # 來源: backend/src/modules/ftp/routes.ts:67
+    # 來源: backend/src/modules/ftp/routes.ts:73
     @auto
     場景: 查詢匯入進度
       當 呼叫 GET /api/netops/ftp/pa/status
@@ -74,7 +83,7 @@
 
   Rule: 同步與分析(netops.ftp.write)
 
-    # 來源: backend/src/modules/ftp/routes.ts:84
+    # 來源: backend/src/modules/ftp/routes.ts:90
     @auto @changed
     場景: 送出同步
       # 舊版同步等列完目錄才回應;新版背景執行回 202
@@ -84,7 +93,7 @@
       而且 之後 GET /api/netops/ftp/pa/status 的 lastSyncAt 會更新
       而且 只有新的、已變更與上次失敗的檔案加入分析,已分析的不重複分析
 
-    # 來源: backend/src/modules/ftp/routes.ts:111
+    # 來源: backend/src/modules/ftp/routes.ts:117
     @auto
     場景: 分析選取的檔案
       當 呼叫 POST /api/netops/ftp/pa/analyses 帶 1 個檔案
@@ -92,7 +101,7 @@
       而且 added 為 1
       而且 分析完成後存下的摘要、連線組合統計與舊版 server/lib 對同一個檔案的結果完全一致
 
-    # 來源: backend/src/modules/ftp/routes.ts:116
+    # 來源: backend/src/modules/ftp/routes.ts:122
     @auto
     場景: 沒有選擇檔案
       當 呼叫 POST /api/netops/ftp/pa/analyses 帶空的 items
@@ -105,6 +114,16 @@
       當 呼叫 POST /api/netops/ftp/pa/analyses 帶 FTP 上不存在的檔案、非 log 檔、其他資料夾的檔案,以及 modified 為 "garbage" 的 log 檔
       那麼 回應 200,只有 log 檔加入分析,其餘算在 skipped
       而且 存下的大小與修改時間是 FTP 上的實際值
+
+    # 來源: frontend/src/composables/ftpFiles.ts:87(fix/d1-uat-findings)
+    @auto @changed
+    場景: 不能分析的目錄不顯示勾選框
+      # 後端只分析 TRAFFIC 目錄直屬與各類型目錄的檔案;D1 測試區 /my-data 可以勾選卻一定被略過(D1 驗收 2026-11-05 §3.1)
+      假如 使用者有 "netops.pa-files.manage",FTP_LOG_DIR 為 /my-data
+      當 在「FTP Log 檔案」瀏覽 /my-data 或 /threat
+      那麼 log 檔可以勾選、分析
+      當 瀏覽 FTP 根目錄或 /my-data/old 等其他目錄
+      那麼 不顯示勾選框與分析按鈕,改顯示「這個目錄的檔案只能瀏覽,不能分析」與 TRAFFIC 目錄
 
     # 來源: backend/src/modules/pa/importer.ts:56
     @untested @changed
@@ -122,7 +141,7 @@
       而且 FTP 傳輸被中斷、連線釋放,後面的檔案照常分析
       而且 寫檔失敗時 error 不含本機資料目錄路徑
 
-    # 來源: backend/src/modules/ftp/routes.ts:171
+    # 來源: backend/src/modules/ftp/routes.ts:177
     @auto
     場景: 取消分析
       假如 佇列中有 3 個檔案
@@ -131,7 +150,7 @@
       而且 cancelled 為 3
       而且 再呼叫一次 cancelled 為 0
 
-    # 來源: backend/src/modules/ftp/routes.ts:187
+    # 來源: backend/src/modules/ftp/routes.ts:193
     @auto
     場景: 刪除分析結果
       假如 檔案已分析

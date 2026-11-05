@@ -2,6 +2,26 @@
 
 > 接手時先讀 `AGENT.md`,再讀 `docs/ARCHITECTURE.md`、`docs/IMPL-PLAN.md`。
 
+## 2026-11-05 D1 驗收修正(`fix/d1-uat-findings`)
+
+依驗收報告 `docs/test-reports/2026-11-05-d1-uat-pending.md` 與需求方 2026-11-05 的決定修正(MR 描述有細節):
+- **測試區 `FTP_LOG_DIR=/my-data`**:寫在 `.gitlab-ci.yml` 的 `deploy-api-test`(蓋過主機 `netops.env`),合併後 CI 重新部署即生效。**正式區的值未定**,D2 部署前由負責人確認(IMPL-PLAN D2 第 2 步),不要沿用預設 `/`。
+- FTP 清單(PA、AD)不列 `$RECYCLE.BIN`、`System Volume Information`。
+- PA「FTP Log 檔案」:不能分析的目錄(TRAFFIC 目錄直屬與各類型目錄以外)不顯示勾選框,改顯示說明。
+- AD「FTP Log 檔案」:載入時不再送 `POST /ftp/ad/listings`;有 `netops.ad-files.manage` 的人按「列出 FTP 資料夾」才列出,其他人只看得到同步狀態。
+- 未登入 / 無權限導回時,前端不再回報空白訊息的錯誤(`router.isReady()` 的導覽中止)。
+- `netops-kb-backup` 加 healthcheck(`LAST_RESULT` 26 小時內且 OK);CI `up --wait` 會等它 healthy,備份失敗時 `deploy-api-test` 失敗。
+- `it-admin` 的 NetOps 權限:需求方已在 GigaItApp 移除,本次未處理。
+
+**合併後要重驗**:
+1. CI `deploy-api-test` 通過(`netops-kb-backup` healthy),`docker exec netops-api env` 的 `FTP_LOG_DIR` 為 `/my-data`。
+2. D1 未驗項目 1「Log 明細查詢」:先只分析 1 個 TRAFFIC 檔(約 38 MB;寫入,先取得同意),再做送出、結果表、取消、匯出(admin、viewer)。
+3. PA FTP 頁:根目錄不列系統資料夾;`/my-data` 可勾選,根目錄與其他目錄沒有勾選框。
+4. AD FTP 頁:開頁只送 `GET /ftp/ad/status`;admin 按「列出 FTP 資料夾」才送出清單工作;viewer 看不到按鈕。
+5. 未登入開 `/netops/` 後,giga-observe `netops-web` 不再新增 `VIEW /netops/` 空白錯誤。
+
+**仍待驗**(需求方決定等 A1、R1 完成後一起驗):純 `netops-viewer` 帳號的讀取與寫入被拒、知識庫筆記的備份還原(報告 §3.2、§4.3)。
+
 ## 2026-11-04 重新規劃(會議後)
 
 - **取消 AI 中控台**:AI 搬進新版(A1,D23),連 `10.10.130.46`(`:8080` `Qwen3.6-35B-A3B-FP8`、`:8081` embedding;`.45` 相同作備用)。舊版 IIS 留到 A1 完成(D18)。

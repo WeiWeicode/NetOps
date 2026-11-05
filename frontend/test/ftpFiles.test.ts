@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AdDay, PaFile } from '@/api/ftp';
-import { chunk, countFiles, crumbsOf, dayOf, filterFiles, groupDays, NO_DAY, progressPct, securityEmptyDays } from '@/composables/ftpFiles';
+import { analyzableDir, chunk, countFiles, crumbsOf, dayOf, filterFiles, groupDays, NO_DAY, progressPct, securityEmptyDays } from '@/composables/ftpFiles';
 
 const file = (name: string, o: Partial<PaFile> = {}): PaFile => ({
   name,
@@ -59,6 +59,19 @@ describe('groupDays / countFiles / filterFiles', () => {
     ]);
     expect(filterFiles(items, { day: '', keyword: '', state: 'error' }).map((f) => f.name)).toEqual(['a_2026_11_03_last_calendar_day_0.csv']);
     expect(filterFiles(items, { day: '', keyword: 'README', state: '' }).map((f) => f.name)).toEqual(['readme.txt']);
+  });
+});
+
+describe('analyzableDir', () => {
+  // D1 驗收 2026-11-05 §3.1:FTP_LOG_DIR 以外的目錄(例如 /my-data)分析時一定被略過,不給勾選
+  it('TRAFFIC 目錄與各類型 log 目錄可以分析', () => {
+    expect(analyzableDir({ path: '/my-data', type: '', logDir: '/my-data' })).toBe(true);
+    expect(analyzableDir({ path: '/threat', type: 'threat', logDir: '/my-data' })).toBe(true);
+  });
+  it('其他目錄、TRAFFIC 的子目錄與尚未載入時不能分析', () => {
+    expect(analyzableDir({ path: '/my-data', type: '', logDir: '/' })).toBe(false);
+    expect(analyzableDir({ path: '/my-data/old', type: '', logDir: '/my-data' })).toBe(false);
+    expect(analyzableDir(null)).toBe(false);
   });
 });
 

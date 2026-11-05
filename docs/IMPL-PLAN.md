@@ -124,7 +124,7 @@ D13:骨架直接留用;AI 不在這次範圍,不做串流驗證(D7、D17)。
 ## D2 驗收與切換
 
 1. 使用者在測試區驗收。
-2. 正式區部署,發佈路由;負責人在 GigaItApp 指派 `netops-admin`、`netops-viewer`(D15)。
+2. 正式區部署,發佈路由;負責人在 GigaItApp 指派 `netops-admin`、`netops-viewer`(D15)。部署前**確認正式區 FTP 目錄**:測試區 `FTP_LOG_DIR=/my-data` 寫在 CI `deploy-api-test`(TRAFFIC 不在 FTP 根目錄);正式區的 `FTP_LOG_DIR`(與 `FTP_ROOT`、`FTP_AD_DIR`、各類型目錄)要對照舊版 IIS 實際使用的值,由負責人確認後寫進正式區的 `netops.env` 或部署設定,不要沿用預設值 `/`。
 3. 關閉舊版知識庫寫入與外部 IP 自動學習,全部複製資料(D14),核對檔數;舊版繼續同步 FTP(D18)。關閉寫入的做法在這步之前確認。
 4. 新舊期間總覽數字核對後,通知使用者改用新網址;AI 問答與分析繼續用舊版(D18)。
 5. 在 `main` 打標籤保留舊版程式。舊版 IIS 運作到 A1 完成才停用,也作為回滾。

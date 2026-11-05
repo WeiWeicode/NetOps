@@ -232,7 +232,9 @@ FTP 唯讀(AGENT.md §7.4):「刪除分析結果」只刪本系統的摘要,不�
 | DELETE | `/api/netops/ftp/pa/analyses` | `netops.ftp.write` | `POST /ftp/cancel` |
 | POST | `/api/netops/ftp/pa/result-deletions` | `netops.ftp.write` | `POST /ftp/forget` |
 
-**`GET /ftp/pa/files?path=/threat`**:列出 FTP 目錄與每個檔案的分析狀態;`path` 省略時為 TRAFFIC 目錄,不可超出 FTP 根目錄(403 `NETOPS_FTP_PATH_FORBIDDEN`)。
+**`GET /ftp/pa/files?path=/threat`**:列出 FTP 目錄與每個檔案的分析狀態;`path` 省略時為 TRAFFIC 目錄,不可超出 FTP 根目錄(403 `NETOPS_FTP_PATH_FORBIDDEN`)。Windows 系統資料夾 `$RECYCLE.BIN`、`System Volume Information`(不分大小寫)不列出,AD 的清單同樣不列(2026-11-05)。
+
+`isLog` 只看檔名;**能不能分析看目錄**:只有 `path === logDir`(TRAFFIC 目錄直屬)或 `type` 不是空字串(各類型目錄)時,檔案送 `POST /ftp/pa/analyses` 才會加入佇列。畫面在其他目錄(例如 `FTP_LOG_DIR` 之外的 `/my-data`)不顯示勾選框,只能瀏覽(2026-11-05)。
 
 ```jsonc
 {
@@ -280,7 +282,7 @@ FTP 唯讀(AGENT.md §7.4):「刪除分析結果」只刪本系統的摘要,不�
 | POST | `/api/netops/ftp/ad/imports` | `netops.ftp.write` | `POST /ad/import` |
 | POST | `/api/netops/ftp/ad/result-deletions` | `netops.ftp.write` | `POST /ad/forget` |
 
-**`POST /ftp/ad/listings`**:舊版要逐一列出每個日期資料夾(最長 120 秒),改成工作模式;回 202 + 工作狀態(§1.1)。完成時 `result`:
+**`POST /ftp/ad/listings`**:舊版要逐一列出每個日期資料夾(最長 120 秒),改成工作模式;回 202 + 工作狀態(§1.1)。畫面載入時**不送出**,有管理權限(`netops.ad-files.manage`)的人按「列出 FTP 資料夾」才送出;沒有管理權限的人看不到按鈕,只看得到 `GET /ftp/ad/status`(需求方 2026-11-05 決定)。API 權限仍是 `netops.ftp.read`。完成時 `result`:
 
 ```jsonc
 {

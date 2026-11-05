@@ -104,3 +104,37 @@ describe('FTP', () => {
     assert.throws(() => loadConfig({ ...base, GW_ENV: 'dev', PA_SEARCH_SECONDS: '9999' }), /PA_SEARCH_SECONDS 必須是 10–600/);
   });
 });
+
+describe('AI(IMPL-PLAN A1)', () => {
+  const dev = { ...base, GW_ENV: 'dev' };
+  it('沒有設定時 AI 關閉;預設不同步向量庫、不自動學習外部 IP', () => {
+    const c = loadConfig(dev).ai;
+    assert.equal(c.llm.url, '');
+    assert.equal(c.vector.url, '');
+    assert.equal(c.vector.collection, 'NetOpsKb');
+    assert.equal(c.vectorSync, false);
+    assert.equal(c.ipLearn.hour, -1);
+    assert.equal(c.kbMaxChars, 20000);
+  });
+
+  it('主機位址只從設定讀,結尾的 / 拿掉;API Key 讀 *_FILE', () => {
+    const key = path.join(tmp, 'qdrant_api_key');
+    fs.writeFileSync(key, 'qk\n');
+    const c = loadConfig({ ...dev, LLM_URL: 'http://10.10.130.46:8080/v1/', LLM_MODEL: 'Qwen3.6-35B-A3B-FP8', EMBED_URL: 'http://10.10.130.46:8081/v1', QDRANT_URL: 'http://10.10.130.46:6333', QDRANT_API_KEY_FILE: key, VECTOR_SYNC: '1', IPLEARN_HOUR: '3' }).ai;
+    assert.deepEqual(c.llm, { url: 'http://10.10.130.46:8080/v1', model: 'Qwen3.6-35B-A3B-FP8', apiKey: '', timeoutMs: 300000 });
+    assert.deepEqual(c.vector, { url: 'http://10.10.130.46:6333', apiKey: 'qk', collection: 'NetOpsKb', embedUrl: 'http://10.10.130.46:8081/v1' });
+    assert.equal(c.vectorSync, true);
+    assert.equal(c.ipLearn.hour, 3);
+  });
+
+  it('設定錯誤時啟動失敗(網址、帳密寫在網址、缺 embedding、collection、正式區明文 Key)', () => {
+    assert.throws(() => loadConfig({ ...dev, LLM_URL: '10.10.130.46:8080' }), /LLM_URL/);
+    assert.throws(() => loadConfig({ ...dev, LLM_URL: 'ftp://10.10.130.46' }), /只接受 http/);
+    assert.throws(() => loadConfig({ ...dev, QDRANT_URL: 'http://u:p@10.10.130.46:6333', EMBED_URL: 'http://e' }), /不可帶帳密/);
+    assert.throws(() => loadConfig({ ...dev, QDRANT_URL: 'http://10.10.130.46:6333' }), /必須設定 EMBED_URL/);
+    assert.throws(() => loadConfig({ ...dev, QDRANT_COLLECTION: '../x' }), /QDRANT_COLLECTION/);
+    assert.throws(() => loadConfig({ ...dev, IPLEARN_HOUR: '24' }), /IPLEARN_HOUR/);
+    assert.throws(() => loadConfig({ ...dev, VECTOR_SYNC: 'yes' }), /VECTOR_SYNC/);
+    assert.throws(() => loadConfig({ ...base, GW_ENV: 'prod', GW_API_KEY_FILE: secret, SERVICE_ADVERTISE_URL: 'http://netops-api:51292', NETOPS_DATA_DIR: tmp, ...ftp, QDRANT_API_KEY: 'plain' }), /正式區不可用 QDRANT_API_KEY 明文/);
+  });
+});

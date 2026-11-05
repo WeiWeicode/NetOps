@@ -3,7 +3,7 @@
  *   分析每個 log 檔時,依「小時 × 來源 → 目的:協定/Port × 動作 × 規則 × App × 區域 × NAT × 目的國家」累計次數、流量、
  *   最早 / 最晚時間、結束原因次數(一列一個組合,沒有逐筆明細)。
  * 只搬匯入的部分(IMPL-PLAN B2):累計邏輯與輸出格式與舊版相同;寫檔改由 infra/store(saveFlows)負責,
- * 查詢(queryFlows)只給 AI 問答用,留在舊版(ARCHITECTURE D17)。
+ * 查詢(queryFlows)給 AI 問答用(IMPL-PLAN A1 搬移,讀檔由呼叫端注入)。
  */
 
 // 一個檔案最多記幾種組合;超過時不存(問答改掃 FTP),避免異常檔案(例如被掃描)產生超大統計
@@ -46,3 +46,60 @@ export function createFlowStats() {
 }
 
 export const flowFileName = (summaryName) => summaryName.replace(/\.json$/, '.tsv.gz')
+
+/* ───────── 查詢(AI 問答用,由舊版 queryFlows 搬移,IMPL-PLAN A1;讀檔改由呼叫端注入 readFlows) ───────── */
+
+/** 一列 → 組合物件（欄位名稱與 log 紀錄相同，方便沿用 buildCondition 的 IP 判斷） */
+function parseLine(line) {
+  const p = line.split('\t')
+  const r = { hour: p[0] }
+  KEY_FIELDS.forEach((k, i) => (r[k] = p[i + 1]))
+  const o = KEY_FIELDS.length + 1
+  r.dport = r.dport ? Number(r.dport) || r.dport : ''
+  r.n = Number(p[o]) || 0
+  r.bytes = Number(p[o + 1]) || 0
+  r.first = p[o + 2]
+  r.last = p[o + 3]
+  r.end = (p[o + 4] || '').split(';').filter(Boolean).map((x) => {
+    const i = x.lastIndexOf(':')
+    return [x.slice(0, i), Number(x.slice(i + 1)) || 0]
+  })
+  r.srcUser = p[o + 5] || ''
+  r.category = p[o + 6] || ''
+  return r
+}
+
+/**
+ * 查詢多個檔案的組合統計：prefilter(line) 先用文字排除，test(flow) 判斷；from / to 為 'yyyy/MM/dd HH:mm'
+ * 時間以組合的最早 / 最晚時間判斷是否與 [from, to] 重疊（同一小時內的組合可能稍微超出範圍）
+ * 回傳 { flows: [...], files }
+ */
+export async function queryFlows(names, { from, to, prefilter, test, parallel = 4, readFlows }) {
+  const out = []
+  const failed = [] // 讀不到的統計檔（呼叫端改掃 FTP）
+  const queue = [...names]
+  const end = `${to}:59`
+  async function worker() {
+    while (queue.length) {
+      const name = queue.shift()
+      const found = []
+      try {
+        // 每個統計檔壓縮後約 1MB，整檔讀進來比串流單純（讀檔 / 解壓失敗都會進 catch）
+        // readFlows(name)：store.pa.readFlows（解壓後的文字；檔案不存在回 null，視同讀不到）
+        const text = await readFlows(name)
+        if (text === null) throw new Error('missing')
+        for (const line of text.split('\n')) {
+          if (!line || (prefilter && !prefilter(line))) continue
+          const f = parseLine(line)
+          if (f.last < from || f.first > end) continue
+          if (test(f)) found.push(f)
+        }
+        out.push(...found)
+      } catch {
+        failed.push(name)
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(parallel, names.length) }, worker))
+  return { flows: out, files: names.length, failed }
+}

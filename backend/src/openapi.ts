@@ -38,6 +38,8 @@ export const PERMISSIONS = [
   { code: 'netops.ad-log.read', name: 'NetOps AD Log 明細:查詢' },
   { code: 'netops.kb.read', name: 'NetOps 知識庫:查詢' },
   { code: 'netops.kb.write', name: 'NetOps 知識庫:編輯' },
+  // A1:AI 分析、問答、翻譯(呼叫模型,不寫資料;2026-11-05 決定給 netops-admin、netops-viewer)。整理筆記會寫知識庫,沿用 netops.kb.write
+  { code: 'netops.ai.use', name: 'NetOps AI 分析與問答:使用' },
 ];
 
 /** project:開發專案(package.json gateway.project,由 SDK loadGatewayEnv 讀取) */

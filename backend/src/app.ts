@@ -29,6 +29,7 @@ import logRoutes from './modules/pa/log-routes.js';
 import paRoutes from './modules/pa/routes.js';
 import paLiveRoutes, { type StreamTestOptions } from './modules/pa-live/routes.js';
 import pingRoutes from './modules/ping/routes.js';
+import { registerAi } from './modules/ai/index.js';
 import { swaggerOptions } from './openapi.js';
 
 declare module 'fastify' {
@@ -47,7 +48,7 @@ declare module 'fastify' {
 }
 
 /** deps:測試時注入假 FTP(AGENT.md §9)與縮短的串流間隔;正式執行一律由設定建立 */
-export async function buildApp(config: Config, deps: { ftp?: Ftp; streamTest?: StreamTestOptions } = {}): Promise<FastifyInstance> {
+export async function buildApp(config: Config, deps: { ftp?: Ftp; streamTest?: StreamTestOptions; ai?: { fetch?: typeof fetch; heartbeatMs?: number } } = {}): Promise<FastifyInstance> {
   const app = Fastify({
     logger: { level: config.logLevel, redact: ['req.headers["x-internal-token"]'] },
     // 沿用 Gateway 傳下來的 X-Request-Id,寫入每一筆日誌(§5.2)
@@ -141,7 +142,10 @@ export async function buildApp(config: Config, deps: { ftp?: Ftp; streamTest?: S
   await app.register(paEventRoutes, { events });
   await app.register(adRoutes, { ad });
   await app.register(adFtpRoutes, { ad });
-  await app.register(kbRoutes, { kb: createKbService(app.store.kb, app.log) });
+  const kb = createKbService(app.store.kb, app.log);
+  await app.register(kbRoutes, { kb });
+  // AI 分析、問答、翻譯、整理筆記、語意搜尋、外部 IP 自動學習(IMPL-PLAN A1;deps.ai 只給測試注入假 AI 主機)
+  await registerAi(app, { config, traffic, events, ad, kb, ftp, paStore: app.store.pa, ...deps.ai });
   await app.register(ftpRoutes, {
     ftp,
     traffic,

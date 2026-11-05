@@ -127,13 +127,18 @@ netops.app.access                        應用
 ├─ netops.group.firewall                 防火牆 PA-560
 │  ├─ netops.pa-live.read                即時監控     → netops.pa-realtime.read(草案,D19,未實作)
 │  ├─ netops.pa-dashboard.read           流量總覽     → netops.pa.read
+│  │  └─ netops.pa-dashboard.ai (button)  AI 分析      → netops.ai.use(A1)
 │  ├─ netops.pa-events.read              安全事件     → netops.pa.read
 │  ├─ netops.pa-search.read              Log 明細查詢 → netops.pa-log.read
+│  ├─ netops.pa-ask.read                 AI 問答      → netops.pa.read(A1)
+│  │  └─ netops.pa-ask.use (button)                   → netops.ai.use
 │  └─ netops.pa-files.read               FTP Log 檔案 → netops.ftp.read
 │     └─ netops.pa-files.manage (button)              → netops.ftp.write
 ├─ netops.group.ad                       AD 網域
 │  ├─ netops.ad-events.read              AD 事件總覽  → netops.ad.read
 │  ├─ netops.ad-search.read              Log 明細查詢 → netops.ad-log.read
+│  ├─ netops.ad-ask.read                 AI 問答      → netops.ad.read(A1)
+│  │  └─ netops.ad-ask.use (button)                   → netops.ai.use
 │  └─ netops.ad-files.read               FTP Log 檔案 → netops.ftp.read
 │     └─ netops.ad-files.manage (button)              → netops.ftp.write
 └─ netops.group.knowledge                網通知識
@@ -144,7 +149,7 @@ netops.app.access                        應用
 | 角色 | 內容 |
 | --- | --- |
 | `netops-admin` | 全部 |
-| `netops-viewer` | 全部 `.read`;不含 `netops.ftp.write`、`netops.kb.write` |
+| `netops-viewer` | 全部 `.read` 與 `netops.ai.use`(A1,2026-11-05 決定);不含 `netops.ftp.write`、`netops.kb.write` |
 
 新權限預設沒有人擁有,成員由系統負責人上線時指派(D15);不比照舊版「清單空白就開放全部在職員工」。
 

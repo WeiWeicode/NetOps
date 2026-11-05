@@ -52,7 +52,7 @@ deploy-api-test:
     FTP_LOG_DIR: /my-data
   script:
     - test -f "$NETOPS_ENV_FILE" || { echo "缺少 $NETOPS_ENV_FILE(先在主機 2 執行 deploy/host2-set-secrets.sh)" >&2; exit 1; }
-    - for f in gw_api_key monitor_api_key ftp_password; do test -f "$NETOPS_SECRETS_DIR/$f" || { echo "缺少 netops-api 機密 $f(先在主機 2 執行 deploy/host2-set-secrets.sh)" >&2; exit 1; }; done
+    - for f in gw_api_key monitor_api_key ftp_password qdrant_api_key; do test -f "$NETOPS_SECRETS_DIR/$f" || { echo "缺少 netops-api 機密 $f(先在主機 2 執行 deploy/host2-set-secrets.sh)" >&2; exit 1; }; done
     - export IMAGE_TAG=$CI_COMMIT_SHORT_SHA RELEASE_SHA=$CI_COMMIT_SHORT_SHA COMPOSE_ENV_FILES="$NETOPS_ENV_FILE"
     - export GITLAB_NPM_TOKEN="$(cat "$NPM_TOKEN_FILE")"
     - C="docker compose -f deploy/docker-compose.yml"

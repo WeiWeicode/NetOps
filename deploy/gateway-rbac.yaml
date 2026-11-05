@@ -40,6 +40,15 @@ permissions:
   - { code: netops.kb-page.read, name: 知識庫, kind: menu, parent: netops.group.knowledge, sort: 10, includes: [netops.kb.read] }
   - { code: netops.kb-page.write, name: 新增 / 修改 / 刪除筆記, kind: button, parent: netops.kb-page.read, sort: 10, includes: [netops.kb.write] }
 
+  # AI(IMPL-PLAN A1,ARCHITECTURE D23):netops.ai.use 不是 .read,選單不能綁定(BACKEND-GUIDE §6.1),改由按鈕綁定;
+  #   AI 問答頁的選單只綁該頁需要的讀取權限。整理筆記寫知識庫,沿用 netops.kb.write(由 netops.kb-page.write 取得)
+  #   語意搜尋、向量庫狀態、外部 IP 學習狀態用 netops.kb.read;立即同步 / 學習用 netops.kb.write(知識庫頁既有的節點)
+  - { code: netops.pa-ask.read, name: AI 問答, kind: menu, parent: netops.group.firewall, sort: 50, includes: [netops.pa.read] }
+  - { code: netops.pa-ask.use, name: 使用 AI 問答, kind: button, parent: netops.pa-ask.read, sort: 10, includes: [netops.ai.use] }
+  - { code: netops.pa-dashboard.ai, name: AI 分析, kind: button, parent: netops.pa-dashboard.read, sort: 10, includes: [netops.ai.use] }
+  - { code: netops.ad-ask.read, name: AI 問答, kind: menu, parent: netops.group.ad, sort: 40, includes: [netops.ad.read] }
+  - { code: netops.ad-ask.use, name: 使用 AI 問答, kind: button, parent: netops.ad-ask.read, sort: 10, includes: [netops.ai.use] }
+
 roles:
   - code: netops-admin
     name: 資訊網通管理系統管理員
@@ -57,9 +66,15 @@ roles:
       - netops.ad-files.manage
       - netops.kb-page.read
       - netops.kb-page.write
+      # AI(A1;netops.ai.use 給 admin 與 viewer,2026-11-05 決定)
+      - netops.pa-ask.read
+      - netops.pa-ask.use
+      - netops.pa-dashboard.ai
+      - netops.ad-ask.read
+      - netops.ad-ask.use
   - code: netops-viewer
     name: 資訊網通管理系統檢視者
-    description: 資訊網通管理系統全部畫面唯讀(不含 FTP 同步 / 分析與知識庫編輯)
+    description: 資訊網通管理系統全部畫面唯讀(不含 FTP 同步 / 分析與知識庫編輯;含 AI 分析與問答)
     permissions:
       - netops.app.access
       - netops.pa-dashboard.read
@@ -70,3 +85,9 @@ roles:
       - netops.ad-search.read
       - netops.ad-files.read
       - netops.kb-page.read
+      # AI(A1)
+      - netops.pa-ask.read
+      - netops.pa-ask.use
+      - netops.pa-dashboard.ai
+      - netops.ad-ask.read
+      - netops.ad-ask.use

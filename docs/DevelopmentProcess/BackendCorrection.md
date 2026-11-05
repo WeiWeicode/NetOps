@@ -2,6 +2,13 @@
 
 > `backend/`、`deploy/` 的修改;新紀錄加在最上方,格式見 `AGENT.md` §11。
 
+## 2026-11-05 A1-api:AI API(SSE)、知識庫 AI 功能、權限與部署設定
+- 工作項目:A1(第 2 批 `feature/a1-ai-api`,從第 1 批開出)
+- 內容:`modules/ai/service.ts` 搬舊版 `routes/ai.js` 的分析、問答、整理筆記、翻譯流程(送給模型的內容不變);`modules/ai/sse.ts` 是 AI 共用的 SSE(依 S0 §3.6:`x-timeout-ms: 60000`、立即送 `open`、心跳 15 秒、`X-Accel-Buffering: no`、名額滿 429、`preClose` 結束;每人 2 個、全系統 6 個,單一回答最長 15 分鐘,使用者關頁時中斷掃描與模型);`modules/ai/routes.ts`:`GET /v1/ai/status`、`POST /v1/ai/{analyses,questions,translations,notes}`;`modules/kb/ai-routes.ts`:`GET /v1/kb/{semantic-search,vector-status,ip-learning}`、`POST /v1/kb/{vector-syncs,ip-learnings}`;`modules/ai/index.ts` 組裝(模型、向量庫、RDAP 用戶端,向量同步與外部 IP 學習的排程);知識庫服務新增 `onChange`(向量同步用)。權限 `netops.ai.use`(OpenAPI `x-permissions`;不是 `.read`,`gateway-rbac.yaml` 以按鈕 `netops.pa-ask.use`、`netops.ad-ask.use`、`netops.pa-dashboard.ai` 綁定,另加選單 `netops.pa-ask.read`、`netops.ad-ask.read`;admin 與 viewer 都有);整理筆記用 `netops.kb.write`。部署:compose 加 AI 設定(預設 `.46`、`VECTOR_SYNC=0`、`IPLEARN_HOUR=-1`)與機密 `qdrant_api_key`(`host2-set-secrets.sh` 隱藏輸入;CI 檢查)。
+- 與舊版不同:翻譯、整理筆記改 SSE(舊版同步回應最長 180 秒,超過路由上限);問答期間最長 31 天;AI 未設定回 409(不回 5xx);串流開始前的錯誤回 4xx、開始後以 `error` 事件回分類訊息(不含主機位址與上游原文);`status` 不回主機位址;`meta` / `evidence` / `notes` 多 `missing`、`vectorError`(AGENT.md §5);整理筆記與外部 IP 學習寫入的標題、標籤壓成一行;外部 IP 學習狀態補回 `hour`;`GET /ai/context`(開發用)不搬。
+- 檔案:`backend/src/modules/ai/{index,routes,service,sse}.ts`、`backend/src/modules/kb/{ai-routes,service}.ts`、`backend/src/{app,openapi}.ts`、`backend/test/{helpers.ts,fixtures/fake-ai.ts,unit/ai.test.ts,unit/app.test.ts}`、`deploy/{docker-compose.yml,gateway-rbac.yaml,host2-set-secrets.sh,test.env.example}`、`.gitlab-ci.yml`、`docs/API.md` §2、§7、§8、§9、§10、`docs/ARCHITECTURE.md` §5、`docs/Gherkin/{ai/ai.feature,kb/ai.feature,README.md,check-scenarios.mjs}`
+- 驗證:`npm run typecheck`、`npm test`(161 項通過,新增 13 項:SSE 標頭與事件順序、只送摘要不送原始 log、問答查連線組合 / 掃 FTP / 追問沿用條件、驗證錯誤 4xx、名額 429、整理筆記寫入知識庫、翻譯、語意搜尋、向量同步關閉、模型連不到、外部 IP 學習 API)、`npm run build`、`check-scenarios.mjs`(74 個 x-gherkin 場景全部對應,0 個問題)
+
 ## 2026-11-05 A1-core 審查修正(與舊版不同)
 - 工作項目:A1(第 1 批;`security-auditor`、`code-reviewer` 審查後,與搬移分開提交)
 - 內容:① 向量同步(共用 collection):payload 沒有 `noteId` 的 point 不列入、不刪除;知識庫是空的,或一次要刪除超過現有 20%(至少 5 筆)時整次不同步並回錯誤(寫入前就檢查);scroll 最多 200 頁、`next_page_offset` 重複時停止。② `queryFlows` 符合的組合最多 20 萬列,超過標 `truncated`(寬網段一次可能數百萬列);舊版 `out.push(...found)` 在組合很多時會超過函式參數上限,改逐一加入。③ 外部 IP 學習:RDAP 的名稱、說明、國家壓成一行、去掉控制字元並限制長度(登記人可填入要模型照做的文字,之後會寫進知識庫);DNS 反查名稱只接受主機名稱格式;模型回的 `key` 只接受這一批的分組;內容先截 8,000 字再去掉註記;管理者改過的筆記(`noteState` 為 manual)不覆寫,已刪除的重新建立,寫入失敗記錄並略過(舊版任何錯誤都改成新建,可能重複);自動學習筆記上限 1,000 則(預留管理者額度)。④ RDAP 轉址只跟到五個登記處的 https 網址(最多 3 次);`createRdap` 的解析函式改必填。⑤ `infra/llm`:使用者中斷與逾時分開判斷;串流一行超過 1 MB 視為格式錯誤。

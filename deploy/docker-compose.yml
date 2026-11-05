@@ -8,7 +8,7 @@
 #   在 GigaItApp「服務與路由」審查發佈後才生效
 # 機密(NETOPS_SECRETS_DIR,uid 1000 可讀;deploy/host2-set-secrets.sh 產生):
 #   gw_api_key(Gateway CLI client:create --code netops-api)、monitor_api_key(giga-observe ingest Key,服務 netops-api;D1)、
-#   ftp_password(FTP 10.10.130.66 唯讀帳號;B1)
+#   ftp_password(FTP 10.10.130.66 唯讀帳號;B1)、qdrant_api_key(AI 主機 Qdrant 的 API Key,與舊版 IIS 相同;A1)
 # 資料目錄(B1):主機 NETOPS_DATA_HOST_DIR(/srv/giga-netops/test,WSL 檔案系統、uid 1000 可寫)掛到容器 /data;只經 infra/store 存取
 # FTP 目錄與同步:FTP_ROOT、FTP_LOG_DIR、FTP_AD_DIR、FTP_*_DIR 未設定時用程式預設值(backend/src/config.ts,與舊版相同)
 # 單一容器(ARCHITECTURE D9):背景工作在程序內執行,不要加 replicas
@@ -57,9 +57,21 @@ services:
       FTP_MAX_CONNECTIONS: ${FTP_MAX_CONNECTIONS:-1}
       # 0 = 不自動同步,只在 FTP Log 檔案頁手動同步
       FTP_SYNC_MINUTES: ${FTP_SYNC_MINUTES:-0}
+      # AI(A1,ARCHITECTURE D23):直接呼叫 AI 主機;.45 配置相同作為備用,換主機只改 netops.env。翻譯沿用 LLM_URL / LLM_MODEL
+      LLM_URL: ${LLM_URL:-http://10.10.130.46:8080/v1}
+      LLM_MODEL: ${LLM_MODEL:-Qwen3.6-35B-A3B-FP8}
+      EMBED_URL: ${EMBED_URL:-http://10.10.130.46:8081/v1}
+      # 沿用舊版 Qdrant 的 NetOpsKb(embedding 同為 Qwen3-Embedding-8B 4096 維,2026-11-05 查證)
+      QDRANT_URL: ${QDRANT_URL:-http://10.10.130.46:6333}
+      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-NetOpsKb}
+      QDRANT_API_KEY_FILE: /run/secrets/qdrant_api_key
+      # 0 = 只做語意搜尋、不寫入向量庫(舊版 IIS 仍同步同一個 collection;D18 切換後再開)
+      VECTOR_SYNC: ${VECTOR_SYNC:-0}
+      # 外部 IP 自動學習每天幾點(-1 = 不自動,知識庫頁可手動執行)
+      IPLEARN_HOUR: ${IPLEARN_HOUR:--1}
     volumes:
       - ${NETOPS_DATA_HOST_DIR:?NETOPS_DATA_HOST_DIR 必須設定}:/data
-    secrets: [gw_api_key, monitor_api_key, ftp_password]
+    secrets: [gw_api_key, monitor_api_key, ftp_password, qdrant_api_key]
     networks:
       gateway:
         aliases: [netops-api]
@@ -117,6 +129,8 @@ secrets:
     file: ${NETOPS_SECRETS_DIR}/monitor_api_key
   ftp_password:
     file: ${NETOPS_SECRETS_DIR}/ftp_password
+  qdrant_api_key:
+    file: ${NETOPS_SECRETS_DIR}/qdrant_api_key
   # 建置用:GitLab npm Registry 讀取 Token(環境變數 GITLAB_NPM_TOKEN;CI 由主機機密檔讀入)
   npm_token:
     environment: GITLAB_NPM_TOKEN

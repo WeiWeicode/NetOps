@@ -59,7 +59,8 @@ describe('OpenAPI(BACKEND-GUIDE.md §6.1)', () => {
       const perm = op['x-permission'] as string;
       assert.ok(perm === 'public' || perm === 'authenticated' || declared.has(perm), `${id} 的 x-permission 未列在 x-permissions:${perm}`);
     }
-    for (const p of doc['x-permissions'] as { code: string }[]) assert.match(p.code, /^netops\.[a-z0-9-]+\.(read|write)$/, `權限代碼格式:${p.code}`);
+    // {system}.{resource}.{action}(BACKEND-GUIDE §6.1);use 只有 netops.ai.use(A1,2026-11-05 決定;不是 .read,只能由按鈕節點綁定)
+    for (const p of doc['x-permissions'] as { code: string }[]) assert.match(p.code, /^netops\.[a-z0-9-]+\.(read|write)$|^netops\.ai\.use$/, `權限代碼格式:${p.code}`);
     assert.equal(doc.paths['/healthz'], undefined, '健康檢查不應出現在 OpenAPI');
     assert.equal(doc.paths['/v1/ping'].get['x-permission'], 'netops.ping.read');
     // 冪等 DELETE 回 204(docs/API.md §1.1、§7):OpenAPI 要宣告,Gateway 匯入後才看得到正確的回應

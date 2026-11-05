@@ -2,6 +2,12 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。
 
+## 2026-11-05 S0 串流驗證:SSE 驗證路由與腳本
+- 工作項目:S0
+- 內容:新增 SSE 驗證路由 `GET /api/netops/pa-live/stream-test` 與驗證腳本,作為 A1(AI 問答串流)與 R1(即時監控)的共同前提。檢查 Gateway `develop` 的 Nginx 與 BFF 後判定不需改 Gateway:Nginx 依 `X-Accel-Buffering: no` 關閉緩衝、BFF 串流轉送且 undici `bodyTimeout` 是閒置時間、斷路器只計標頭前的失敗。AGENT §7.3 加 SSE 例外說明。測試區驗證待合併部署後進行。
+- 檔案:`backend/src/modules/pa-live/routes.ts`、`backend/scripts/sse-probe.mjs`、`docs/API.md` §3.1、`docs/test-reports/2026-11-05-s0-sse.md`(草稿)、`AGENT.md` §7.3、`docs/IMPL-PLAN.md`、`docs/PROJECT-MAP.md`、`docs/HANDOFF.md`
+- 驗證:見 `BackendCorrection.md` 同日紀錄
+
 ## 2026-11-04 重新規劃:取消 AI 中控台、PA 即時監控、不寫資料庫
 - 工作項目:S0、A1、R0–R2(新增)
 - 內容:使用者與系統、網通開會後決定:取消 AI 中控台,舊版 AI 功能搬進 `netops-api`,直接呼叫 AI 主機 `10.10.130.46`(`.45` 配置相同);防火牆群組新增「即時監控」選單,用官方 pan-os-python SDK 輪詢設備狀態並接收 HTTP Log Forwarding,資料放 NetOps 自己的 Redis(log 保留 2 天);不寫入資料庫,歷史用 FTP 事後查詢;第一版只讀,封鎖 IP 排 R2。ARCHITECTURE 新增 D19–D24,改寫 D7、D8、D10、D16、D17、D18;AGENT §7.2 原始 log 規則加 Redis 例外。程式尚未改動。

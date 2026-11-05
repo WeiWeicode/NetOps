@@ -3,7 +3,7 @@
 > 以 Gherkin(繁體中文關鍵字,`# language: zh-TW`)描述 NetOps 新版(接入 Gateway 後)的**目標行為**。寫法沿用員工入口網 `giga-Portal/docs/Gherkin/`。
 > 依據:`backend/src` 各路由的 `x-gherkin`、[API.md](../API.md)、[ARCHITECTURE.md](../ARCHITECTURE.md)(D6、D8、D14–D18、§5)、[UI-GUIDE.md](../UI-GUIDE.md)。舊版 `server/`、`src/` 只作比對,行為不同處標 `@changed`。
 > AI 功能(問答、分析、翻譯、整理筆記、語意搜尋、向量同步、外部 IP 自動學習)不搬移(D17),不寫。
-> **最後更新:2026-11-05**(`fix/d1-uat-findings`:D1 驗收修正的場景;2026-11-03 依 `develop` e3475f8:B0–B2 全部合併;前端依 `origin/feature/netops-f1-*`)。
+> **最後更新:2026-11-05**(`feature/s0-sse`:S0 串流驗證場景 `pa-live/stream-test.feature`;`fix/d1-uat-findings`:D1 驗收修正的場景;2026-11-03 依 `develop` e3475f8:B0–B2 全部合併;前端依 `origin/feature/netops-f1-*`)。
 
 ## 1. 檔案一覽
 
@@ -18,6 +18,7 @@
 | `ftp/ad-files.feature` | FTP Log 檔案(AD):清單(工作模式)、同步、重新匯入、刪除 | API.md §5.2;D14 | B2 |
 | `ad/events.feature` | AD 已匯入日期、總覽、明細查詢、匯出 | API.md §6 | B2 |
 | `kb/notes.feature` | 知識庫筆記查詢、下載、匯整檔、新增、修改、刪除 | API.md §7;D17 | B2 |
+| `pa-live/stream-test.feature` | S0 SSE 串流驗證:open / heartbeat、重連、連線上限、經 Gateway 長連線 | API.md §3.1;IMPL-PLAN S0 | S0 |
 | `ui/navigation.feature` | 應用層守衛(`/?denied=netops`)、選單依權限、403、一般連結 | UI-GUIDE §5;FRONTEND-GUIDE §7.4 | F1 |
 | `ui/requests.feature` | CSRF、不存 Token、下載、工作輪詢與取消、資料不完整提示、DOMPurify | FRONTEND-GUIDE §6;API.md §1 | F1 |
 | `check-scenarios.mjs` | 比對 `x-gherkin` 與本目錄場景的腳本(§5) | — | — |
@@ -26,7 +27,7 @@
 
 | 標籤 | 意義 | 如何驗證 |
 | --- | --- | --- |
-| `@B0` `@B1` `@B2` `@F1` | 所屬工作項目(IMPL-PLAN) | — |
+| `@B0` `@B1` `@B2` `@F1` `@S0` | 所屬工作項目(IMPL-PLAN) | — |
 | `@auto` | 已有自動化測試涵蓋(測試名稱不一定與場景相同,§4 列對照) | `backend/`:`npm test`;`frontend/`:`npm test` |
 | `@manual` | 以瀏覽器或主控台操作驗證 | 修正紀錄或 MR 寫明步驟 |
 | `@e2e` | 要經 Gateway(BFF 檢查登入與 `x-permission`)才能驗證 | 測試區瀏覽器 |
@@ -46,7 +47,7 @@
 
 ## 4. 進度
 
-`@auto` 對應的測試:`backend/test/unit/{app,config,jobs,store,ftp,pa,ad,kb,logs}.test.ts`、F1 的 `frontend/test/{guard,menu,links,useJob,usePolling,ftpFiles}.test.ts`。
+`@auto` 對應的測試:`backend/test/unit/{app,config,jobs,store,ftp,pa,ad,kb,logs,pa-live}.test.ts`、F1 的 `frontend/test/{guard,menu,links,useJob,usePolling,ftpFiles}.test.ts`。
 
 | 檔案 | 場景 | `@auto` | `@manual` / `@e2e` | `@untested` | `@pending-ui` | `@changed` |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -59,15 +60,16 @@
 | `ftp/ad-files.feature` | 15 | 13 | 1 | 1 | 0 | 5 |
 | `ad/events.feature` | 11 | 10 | 0 | 1 | 0 | 4 |
 | `kb/notes.feature` | 18 | 16 | 0 | 2 | 0 | 7 |
+| `pa-live/stream-test.feature` | 8 | 6 | 5 | 0 | 0 | 0 |
 | `ui/navigation.feature` | 11 | 9 | 0 | 1 | 2 | 2 |
 | `ui/requests.feature` | 9 | 2 | 1 | 2 | 4 | 2 |
-| **合計** | **144** | **120** | **6** | **14** | **6** | **39 + 2 個功能** |
+| **合計** | **152** | **126** | **11** | **14** | **6** | **39 + 2 個功能** |
 
 (場景數含 `場景大綱`;數字以 §5 的腳本輸出為準。)
 
 ## 5. API → 場景 → 檔案對照
 
-**`x-gherkin` 50 個場景全部對應到同名場景**(35 個 operation;`check-scenarios.mjs` 於 2026-11-03 比對,0 個問題)。重新比對:
+**`x-gherkin` 55 個場景全部對應到同名場景**(36 個 operation;`check-scenarios.mjs` 於 2026-11-05 比對,0 個問題)。重新比對:
 
 ```bash
 cd backend && npm run -s openapi > ../openapi.tmp.json && node ../docs/Gherkin/check-scenarios.mjs ../openapi.tmp.json --table
@@ -78,6 +80,10 @@ cd backend && npm run -s openapi > ../openapi.tmp.json && node ../docs/Gherkin/c
 | `GET /api/netops/ping` | 有權限的使用者取得自己的身分 | `api/skeleton.feature` |
 | `GET /api/netops/ping` | 沒有權限時拒絕 | `api/skeleton.feature` |
 | `GET /api/netops/ping` | 直連服務沒有內部 Token | `api/skeleton.feature` |
+| `GET /api/netops/pa-live/stream-test` | 連線後立即收到 open 事件 | `pa-live/stream-test.feature` |
+| `GET /api/netops/pa-live/stream-test` | 每 15 秒收到 heartbeat | `pa-live/stream-test.feature` |
+| `GET /api/netops/pa-live/stream-test` | 斷線後重連序號接續 | `pa-live/stream-test.feature` |
+| `GET /api/netops/pa-live/stream-test` | 沒有權限時拒絕 | `pa-live/stream-test.feature` |
 | `GET /api/netops/pa/days` | 列出有資料的日期 | `pa/overview.feature` |
 | `GET /api/netops/pa/overview` | 查詢期間總覽 | `pa/overview.feature` |
 | `GET /api/netops/pa/overview` | 沒有資料的期間 | `pa/overview.feature` |

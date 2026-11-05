@@ -2,6 +2,14 @@
 
 > 接手時先讀 `AGENT.md`,再讀 `docs/ARCHITECTURE.md`、`docs/IMPL-PLAN.md`。
 
+## 2026-11-05 S0 串流驗證(`feature/s0-sse`)
+
+- **狀態:程式與文件完成,待合併部署後在測試區驗證**。結論先寫在這:**不需改 Gateway**,只靠 NetOps 回應標頭與路由逾時(理由見 `docs/test-reports/2026-11-05-s0-sse.md` §4)。
+- 驗證路由 `GET /api/netops/pa-live/stream-test`(`netops.ping.read`;`x-timeout-ms: 60000`;立即送 `open`,每 15 秒 `heartbeat`;`X-Accel-Buffering: no`;`Last-Event-ID` 接續;單一連線 10 分鐘;每人 2 條、全系統 20 條,滿了回 429)。介面見 `docs/API.md` §3.1。
+- 驗證腳本 `backend/scripts/sse-probe.mjs`:Cookie 由需求方在提示時貼上(不回顯、不留歷史),腳本不印 Cookie、只送到 GigaNexus 網域;或在 `/netops/` 頁 Console 用 `EventSource`(報告 §3.3)。
+- **合併後要做**:1. CI `deploy-api-test` 通過;2. 需求方在 GigaItApp「服務與路由」確認草稿 `netops.pa-live.stream-test` 逾時 60000 ms 後發佈;3. 驗證帳號有 `netops.ping.read`;4. 依報告 §3 跑 6 分鐘(含一次斷線重連)並查 giga-observe 斷路器;5. 結果填回報告,IMPL-PLAN S0 改為完成或改輪詢。
+- **給 A1、R1**:SSE 路由一定要設 `x-timeout-ms` 大於心跳間隔(預設 10 秒會在第一次心跳前被切斷)、立即送第一個事件、回 `X-Accel-Buffering: no`;名額滿時回 4xx 不回 5xx(上游 5xx 會累積 BFF 斷路器失敗);服務關閉用 `preClose` 結束串流;寫法照 `modules/pa-live/routes.ts`。R1 的連線最長時間要再縮短(撤權後多久停止,見報告 §6)。
+
 ## 2026-11-05 D1 驗收修正(`fix/d1-uat-findings`)
 
 依驗收報告 `docs/test-reports/2026-11-05-d1-uat-pending.md` 與需求方 2026-11-05 的決定修正(MR 描述有細節):

@@ -1,6 +1,6 @@
 # 專案地圖 — NetOps
 
-> **最後更新:2026-11-05**(D1 驗收修正:測試區 `FTP_LOG_DIR=/my-data` 寫進 CI、`netops-kb-backup` healthcheck、FTP 清單不列系統資料夾、AD FTP 清單改手動;2026-11-04:D1 完成並上測試區,有未驗項目:CI 發佈前端 SPA 與套用畫面權限、`deploy/gateway-rbac.yaml`、知識庫 NAS 備份 `deploy/kb-backup/`、監控 Key;驗收報告 `docs/test-reports/2026-11-04-d1-uat.md`。2026-11-03:F1、B2 完成;舊版程式未改動)。
+> **最後更新:2026-11-05**(S0 串流驗證:`modules/pa-live/` SSE 驗證路由、`backend/scripts/sse-probe.mjs`,不改 Gateway;D1 驗收修正:測試區 `FTP_LOG_DIR=/my-data` 寫進 CI、`netops-kb-backup` healthcheck、FTP 清單不列系統資料夾、AD FTP 清單改手動;2026-11-04:D1 完成並上測試區,有未驗項目:CI 發佈前端 SPA 與套用畫面權限、`deploy/gateway-rbac.yaml`、知識庫 NAS 備份 `deploy/kb-backup/`、監控 Key;驗收報告 `docs/test-reports/2026-11-04-d1-uat.md`。2026-11-03:F1、B2 完成;舊版程式未改動)。
 > 開發新功能後,在同一個變更內更新本文件(`AGENT.md` §9)。只寫結構與職責,細節連到 `docs/`。
 
 資訊網通管理系統:PA-560 防火牆 log、AD 事件與網通知識庫;AI 問答只留在舊版(ARCHITECTURE D17)。目標是接入 GigaNexus Gateway(`/netops/`、`netops-api` :51292),目前部署於 IIS `/NetOps`。
@@ -42,13 +42,15 @@ NetOps/
 │  │  ├─ shared/            時間轉換(核心本地時間 ↔ ISO 8601)、共用 schema、匯出 CSV
 │  │  └─ modules/
 │  │     ├─ ping/routes.ts  GET /v1/ping(對外 /api/netops/ping,netops.ping.read)
+│  │     ├─ pa-live/routes.ts  S0 串流驗證 GET /v1/pa-live/stream-test(SSE,heartbeat 15 秒,x-timeout-ms 60000,netops.ping.read);R1 即時監控也放這裡
 │  │     ├─ pa/             core/palog.js(舊版逐字)、core/flows.js、core/scan.js、importer.ts(TRAFFIC 匯入)、routes.ts(總覽)、
 │  │     │                  log-routes.ts(明細查詢與匯出,工作模式)
 │  │     ├─ pa-events/      core/paevents.js(舊版逐字)、importer.ts(其他類型 log 匯入)、routes.ts(安全事件總覽)
 │  │     ├─ ad/             core/adlog.js(舊版逐字)、importer.ts(AD 匯入)、routes.ts(總覽、明細、匯出)
 │  │     ├─ kb/             core/notes.js(舊版 kb.js 的格式與匯整)、service.ts、routes.ts
 │  │     └─ ftp/            routes.ts(PA)、ad-routes.ts(AD;清單為工作模式)
-│  ├─ test/unit/            app、config、jobs、store、ftp、pa / ad(與舊版結果比對);test/fixtures 假 log、假 AD 匯出檔、假 FTP
+│  ├─ scripts/sse-probe.mjs S0 驗證腳本:經 Gateway 連 SSE,記錄事件到達時間、斷線與重連(Cookie 由執行者放環境變數)
+│  ├─ test/unit/            app、config、jobs、store、ftp、pa / ad(與舊版結果比對)、pa-live(SSE,真實 HTTP 連線);test/fixtures 假 log、假 AD 匯出檔、假 FTP
 │  └─ Dockerfile、.npmrc(@giganexus/* 取自 GitLab npm Registry)
 ├─ frontend/                netops-web(Vue 3 + TypeScript,base /netops/;F1 完成,框架由入口網複製,docs/UI-GUIDE.md)
 │  ├─ src/
@@ -116,6 +118,7 @@ NetOps/
 | 舊版連結(AI、Veeam) | `frontend/src/config/links.ts`(舊版網址待使用者確認) |
 | 新版權限代碼(前端) | `frontend/src/api/perms.ts`(ARCHITECTURE §5) |
 | 新版 API、權限代碼 | `docs/API.md`(介面定稿)、`backend/src/modules/*/routes.ts`、`backend/src/openapi.ts` |
+| SSE 串流(S0 驗證、R1、A1 問答) | `backend/src/modules/pa-live/routes.ts`、`docs/API.md` §3.1(逾時與標頭條件)、`docs/test-reports/2026-11-05-s0-sse.md` |
 | 新版部署 | `.gitlab-ci.yml`、`deploy/` |
 | 接入規劃與決策 | `docs/ARCHITECTURE.md`、`docs/IMPL-PLAN.md`、`docs/PA-LIVE-PLAN.md`(PA 即時監控與 AI 搬移) |
 | 資料與 AI 流程(現況、過渡期、未來目標) | `docs/FLOW-ARCHITECTURE.md` |

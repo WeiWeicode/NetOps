@@ -70,7 +70,7 @@ PA 匯入在背景佇列執行;同步、分析只是送進佇列,畫面輪詢狀
 
 | 權限代碼 | 名稱 | 用在 |
 | --- | --- | --- |
-| `netops.ping.read` | 連線驗證:查詢 | §3 |
+| `netops.ping.read` | 連線驗證:查詢 | §3(含 §3.1 串流驗證) |
 | `netops.pa.read` | PA 防火牆:查詢 | §4.1、§4.2 |
 | `netops.pa-log.read` | PA Log 明細:查詢 | §4.3 |
 | `netops.ftp.read` | FTP Log 檔案:查詢 | §5 讀取 |
@@ -91,6 +91,20 @@ PA 匯入在背景佇列執行;同步、分析只是送進佇列,畫面輪詢狀
 | 方法 | 路徑 | 權限 | 說明 |
 | --- | --- | --- | --- |
 | GET | `/api/netops/ping` | `netops.ping.read` | 回 `{ service, emp, name, dept, roles, requestId, time }` |
+
+### 3.1 串流驗證(S0)— 批次 `feature/s0-sse`
+
+| 方法 | 路徑 | 權限 | 說明 |
+| --- | --- | --- | --- |
+| GET | `/api/netops/pa-live/stream-test` | `netops.ping.read` | Server-Sent Events;確認 SSE 經 Nginx 與 BFF 不被緩衝、不因閒置逾時中斷(IMPL-PLAN S0、PA-LIVE-PLAN §7) |
+
+- 回應標頭:`Content-Type: text/event-stream; charset=utf-8`、`Cache-Control: no-cache, no-transform`、`X-Accel-Buffering: no`(Nginx 依此關閉這個回應的緩衝)。
+- 事件:連線後立即送 `retry: 5000` 與 `open`,之後每 15 秒送 `heartbeat`。`id` 為序號;`data` 為 `{ seq, time, connectionId, elapsedSec }`,`open` 另帶 `heartbeatSec`、`maxSec`、`resumedFrom`。
+- 重連:瀏覽器 `EventSource` 斷線 5 秒後自動重連並帶 `Last-Event-ID`;序號接續,`open.resumedFrom` 為該 id(不是正整數時為 `null`、從 0 開始)。
+- 上限:單一連線最長 10 分鐘,到時伺服器結束連線(瀏覽器自動重連,BFF 重新檢查登入與權限,所以登出或撤權最晚 10 分鐘後生效);每人(工號)同時 2 條、全系統 20 條,超過回 **429** `NETOPS_STREAM_BUSY`。用戶端讀不動、待送資料超過 64 KB 時中斷;服務關閉時結束全部串流。
+- **逾時(不受 AGENT.md §7.3 一般 API 10 秒限制的原因)**:BFF 對上游的 `bodyTimeout` 等於路由逾時,而 undici 的 `bodyTimeout` 是「兩個資料塊之間」的閒置時間,不是總時長;本路由設 `x-timeout-ms: 60000`,心跳 15 秒,所以連線可以一直開著。BFF 斷路器計入「收到標頭之前」的逾時與連線錯誤,以及上游回 5xx;串流已回 200 之後的中斷不累積,所以名額滿時回 **429**(回 5xx 會讓有權限的人藉此打開斷路器、整個 `netops-api` 停 30 秒)。**SSE 路由一定要設 `x-timeout-ms` 大於心跳間隔**(預設 10 秒會在第一次心跳前被切斷),心跳不可超過 60 秒。
+- 權限用 `netops.ping.read`:同 §3 是連線驗證用,不綁畫面節點、不在 `gateway-rbac.yaml` 的角色內,在 GigaItApp 個別指派(B0 時指派給 `it-admin`,現況以 GigaItApp 為準);S0 驗證完成後可把這條路由在 GigaItApp 停用;不新增權限代碼,`gateway-rbac.yaml` 不變。R1 正式串流用 `netops.pa-realtime.read`(PA-LIVE-PLAN §8)。
+- 驗證腳本 `backend/scripts/sse-probe.mjs`,步驟見 `docs/test-reports/2026-11-05-s0-sse.md`。
 
 ---
 
@@ -439,6 +453,7 @@ AI 相關(語意搜尋、向量同步、外部 IP 自動學習)不搬移(ARCHITE
 | 409 | `NETOPS_AD_SYNC_BUSY` | AD 正在同步 |
 | 409 | `NETOPS_IMPORT_QUEUE_FULL` | 分析佇列已滿 |
 | 409 | `NETOPS_KB_LIMIT` | 知識庫筆記已達上限 |
+| 429 | `NETOPS_STREAM_BUSY` | 串流驗證連線數已達上限(§3.1,每人 2 條、全系統 20 條);不用 5xx,避免累積 BFF 斷路器失敗 |
 | 422 | `NETOPS_EXPORT_TOO_LARGE` | 匯出筆數超過上限 |
 | 502 | `NETOPS_FTP_UNAVAILABLE` | FTP 連線或讀取失敗。訊息為「動作 + FTP 路徑:原因」,原因只有分類(連線逾時、拒絕連線、找不到主機、連線中斷、TLS 憑證驗證失敗、帳號或密碼錯誤(FTP 530)、檔案或目錄不存在,或沒有權限(FTP 550)…),不含 FTP 主機、port 與原始錯誤;原始錯誤只寫服務日誌。匯入狀態的 `lastSyncError`、檔案的 `error`、工作的 `error.message` 同樣規則 |
 | 503 | `NETOPS_FTP_NOT_CONFIGURED` | 未設定 FTP(只會在 dev) |

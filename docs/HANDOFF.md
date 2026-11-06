@@ -12,11 +12,11 @@
 | --- | --- | --- |
 | D1 驗收修正 | 已合併(!30 報告、!31 修正);重驗延後到 A1、R1 完成後一起做 | — |
 | S0 串流驗證 | **完成**(!32、!33;Gateway !23 文件已合併) | — |
-| A1 AI 搬移 | 三批程式完成,本機測試通過(backend 165、frontend 79、Gherkin 74/74);**功能盤點進行中**(需求方要求「重新盤點新舊功能差異,功能不用全部搬」) | !34 核心 → !35 API → !36 前端 |
+| A1 AI 搬移 | 三批程式完成,本機測試通過(backend 165、frontend 79、Gherkin 74/74);**功能盤點完成(!42),等需求方決定**(需求方要求「重新盤點新舊功能差異,功能不用全部搬」) | !34 核心 → !35 API → !36 前端 |
 | R1 PA 即時監控 | 四批程式完成(用假 PA 開發);**!40 的 `security-auditor` 還沒補跑**(額度中斷) | !37 收集器 → !38 部署 → !39 API → !40 前端 |
 | R0 前置 | 等網通:PA-560 管理 IP、PAN-OS 版本、唯讀 API Key、轉送設定、網路放行;給網通的規格在 !38 的 `docs/PA-FORWARDING-SPEC.md` | — |
 
-子任務(Claude Desktop):`netops-a1-ai`(A1,盤點中)、`netops-r1-pa-live`(R1)。下週可以接續同一個子任務,脈絡太長就新開,brief 指向本段與各 MR 描述。
+子任務(Claude Desktop):`netops-a1-ai`(A1,盤點完成)、`netops-r1-pa-live`(R1)。下週可以接續同一個子任務,脈絡太長就新開,brief 指向本段與各 MR 描述。
 
 ### 需求方的決定(2026-11-05 / 11-06,不要重新討論)
 
@@ -30,7 +30,7 @@
 
 ### 下一步(依序)
 
-1. **A1 盤點**:讀 `netops-a1-ai` 產出的功能盤點表,請需求方決定哪些不搬,再由子任務從 !35 / !36 拿掉。
+1. **A1 盤點**:盤點已完成,見 !42 `docs/AI-FEATURE-INVENTORY.md`(決定記為 ARCHITECTURE D25)。建議:分析、PA / AD 問答、語意搜尋、向量同步、IP 學習都搬;**整理筆記改成先回草稿**(§2.1 選項 B);翻譯可以搬,或確認沒人用就不搬;`/ai/context`、獨立翻譯模型、`vec-probe` 不搬。請需求方決定 #5 翻譯和 #6 整理筆記,再由子任務改 !35 / !36。舊版使用量沒查到,查法見盤點 §3。
 2. **R1 補資安審查**:`netops-r1-pa-live` 對 !40 補跑 `security-auditor` 並修正。
 3. **合併**:A1 與 R1 兩組 MR 互相衝突(主討論串 2026-11-06 模擬合併:`backend/src/app.ts`、`config.ts`、`test/helpers.ts`、`test/unit/config.test.ts`、`deploy/docker-compose.yml`、`docs/API.md`、`DevelopmentProcess/*Correction.md`、`docs/Gherkin/README.md`、`frontend/mock/gateway.ts`)。建議先合併 R1(!37 → !40),A1 盤點修改後 `git merge origin/develop`,依工作區 AGENT §9.3 先回報衝突、需求方同意後再解(多半是雙方新增的段落都保留)。
 4. 合併後在測試區:發佈路由草稿、確認角色節點,再把 D1 修正、純 viewer 帳號、知識庫筆記備份、A1、R1 一起驗收(D1 修正的重驗清單見下方「2026-11-05 D1 驗收修正」)。

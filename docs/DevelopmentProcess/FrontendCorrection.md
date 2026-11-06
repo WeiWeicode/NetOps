@@ -2,6 +2,13 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。範圍:`frontend/`。
 
+## 2026-11-05 R1 即時監控頁(防火牆群組最上方)
+- 工作項目:R1
+- 內容:新增 `/firewall/live`「即時監控」(選單 `netops.pa-live.read`,API `netops.pa-realtime.read`;`deploy/gateway-rbac.yaml` 登記節點 sort 5 並加入 `netops-admin`、`netops-viewer`)。設備狀態(Session、管理 / 資料平面 CPU、整體流量、介面流量;快照過期顯示「停止更新」)、最近 1 小時趨勢、即時排行(類型 × 5 / 15 / 60 分鐘)、即時 log(EventSource 串流、類型切換、IP / Port / Action 篩選、暫停、最多 500 筆、標示 Redis 最早時間並連到 Log 明細查詢)。收集器停止、未啟用、Redis 連不上時頁首明確提示,排行與 log 標示「不是即時的」(AGENT §5)。串流非 200 時改用一般 API 檢查登入並 10 秒後重連,串流斷線期間每 10 秒輪詢快照。假 Gateway `mock/paLive.ts`(`MOCK_PA_LIVE=stopped|disabled|unavailable`)。
+- 檔案:`frontend/src/pages/firewall/Live.vue`、`frontend/src/api/paLive.ts`、`frontend/src/composables/paLive.ts`、`frontend/src/router.ts`、`frontend/src/api/perms.ts`、`frontend/src/ui/icons.ts`、`frontend/mock/{paLive,gateway}.ts`、`frontend/test/paLive.test.ts`、`deploy/gateway-rbac.yaml`
+- 依 `code-reviewer` 審查修正:預載 log 接在串流之後(不打亂順序)、切換類型時丟棄舊請求、處理 SSE `degraded`、串流卡住或快照 API 失敗時不顯示舊數字。`security-auditor` 因額度中斷未完成(見 MR)。
+- 驗證:`npm run typecheck`、`npm test`(72 passed)、`npm run build`;內建瀏覽器以假 Gateway 檢查正常與 `stopped` 狀態(API 皆 200、停止時不顯示舊數字)
+
 ## 2026-11-05 D1 驗收修正:FTP 勾選、AD 清單改手動、導回時不回報錯誤
 - 工作項目:D1(驗收報告 `docs/test-reports/2026-11-05-d1-uat-pending.md` §3.1、§4.2、§4.4)
 - 內容:① PA「FTP Log 檔案」:後端只分析 TRAFFIC 目錄直屬(`path === logDir`)與各類型目錄的檔案,其他目錄(例如 `FTP_LOG_DIR` 之外的 `/my-data`)勾了一定被略過。選改動最小的做法:**這些目錄不顯示勾選框與全選 / 分析 / 刪除列**,改顯示「這個目錄的檔案只能瀏覽,不能分析」與 TRAFFIC 目錄(`ftpFiles.ts` `analyzableDir`;API 不變)。略過時的 toast 也寫明 TRAFFIC 目錄。② AD「FTP Log 檔案」:依需求方決定,載入時只查 `GET /ftp/ad/status`,不送 `POST /ftp/ad/listings`;有 `netops.ad-files.manage` 的人按「列出 FTP 資料夾」才送出,沒有的人看不到按鈕(改顯示「重新整理」只更新同步狀態);同步 / 匯入結束時只在已列過清單時才重新列出。③ 未登入或沒有應用權限時,守衛 `return false` 中止第一次導覽,`router.isReady()` 以不帶訊息的 NavigationFailure 拒絕,`App.vue` 的 `.finally()` 讓它變成未處理的 Promise 拒絕,被 web-kit 監控回報成 `netops-web` 錯誤(正式建置堆疊對到 vue-router 的 `createRouterError`)。改成導覽中止時吞掉並維持載入畫面(`guard.ts` `isLeavingNavigation`),其他錯誤照常回報。

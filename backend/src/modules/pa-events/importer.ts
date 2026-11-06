@@ -2,7 +2,7 @@
  * PA 其他類型 log 的匯入(由舊版 server/lib/paevimport.js 搬移,IMPL-PLAN B2;類型定義與研判在 core/paevents.js 不動)
  *   威脅、URL、資料過濾、WildFire、解密、GlobalProtect、User-ID;FTP 目錄見設定 FTP_*_DIR
  *   與 TRAFFIC 相同從 FTP 串流讀取,原始 log 不存本機;用 1 條 FTP 連線依序分析
- * AI 用的 eventsForIps / eventsContext 不搬移(ARCHITECTURE D17)。
+ * AI 用的 eventsForIps / eventsContext 於 IMPL-PLAN A1 搬移(文字與舊版相同)。
  */
 import path from 'node:path';
 import type { EventType, FtpConfig } from '../../config.js';
@@ -10,7 +10,7 @@ import { cancelledError, type Ftp, type FtpStream } from '../../infra/ftp/index.
 import type { PaStore } from '../../infra/store/index.js';
 import { readLog } from '../pa/core/palog.js';
 import { errorText, MAX_QUEUE, modKey, queueFull, sumName, type FileListState, type FileState, type Log, type QueueItem, type RemoteFile } from '../pa/importer.js';
-import { createEventSummary, EVENT_TYPES, EVENT_VERSION, mergeEventSummaries } from './core/paevents.js';
+import { aggText, createEventSummary, EVENT_TYPES, EVENT_VERSION, mergeEventSummaries } from './core/paevents.js';
 
 interface EventFileState extends FileState {
   type: string;
@@ -29,7 +29,9 @@ interface Running extends EventItem {
 
 const LOG_RE = /\.(csv|gz)$/i;
 // core/paevents.js 的類型定義(JS 推斷的型別太窄,這裡只取用到的欄位)
-const TYPE_DEFS = EVENT_TYPES as unknown as Record<string, { label: string; columns: unknown; numeric?: unknown }>;
+const TYPE_DEFS = EVENT_TYPES as unknown as Record<string, { label: string; columns: unknown; numeric?: unknown; ips: string[]; dims: [string, ...unknown[]][] }>;
+/** core/paevents.js 的 aggText(JS 推斷的型別太窄) */
+const agg = aggText as unknown as (type: string, rows: unknown[][]) => { total: number; kinds: number; text: string };
 
 export type EventImporter = ReturnType<typeof createEventImporter>;
 
@@ -315,5 +317,53 @@ export function createEventImporter({ ftp, store, ftpConfig, log }: { ftp: Ftp; 
     return { ...mergeEventSummaries(type, list, topN), missing: files.length - list.length };
   }
 
-  return { eventTypes, typeOfDir, eventLogType, status, enqueue, cancel, listRemote, sync, start, stop, forget, isEventPath, eventTypeOfPath, overview, summary };
+  /* ───────── 給 AI 的文字(由舊版 paevimport.js 搬移,IMPL-PLAN A1;內容不變) ───────── */
+
+  /**
+   * AI 問答:問題中的 IP 在各類型 log 的紀錄(每小時組合依 IP 篩選)
+   *   test(ip) → 是否符合;from / to 為 'yyyy/MM/dd HH:mm'
+   * 回傳 { text, hits: [{ type, label, total, kinds }] };都沒有回傳 text = ''
+   */
+  function eventsForIps(from: string, to: string, test: (ip: string) => boolean) {
+    const parts: string[] = [];
+    const hits: { type: string; label: string; total: number; kinds: number }[] = [];
+    const end = `${to}:59`;
+    for (const t of eventTypes()) {
+      const def = TYPE_DEFS[t.type]!;
+      const ipIdx = def.ips.map((k) => def.dims.findIndex(([d]) => d === k) + 1);
+      const nd = def.dims.length;
+      const rows: unknown[][] = [];
+      let overflow = 0;
+      for (const f of filesInRange(t.type, from, to)) {
+        if (f.aggOverflow) overflow++;
+        const s = readSummary(f.summary!) as { agg?: unknown[][] } | null;
+        for (const r of s?.agg ?? []) {
+          if ((r[nd + 3] as string) < from || (r[nd + 2] as string) > end) continue;
+          if (ipIdx.some((i) => r[i] && test(r[i] as string))) rows.push(r);
+        }
+      }
+      if (!rows.length) continue;
+      const a = agg(t.type, rows);
+      hits.push({ type: t.type, label: t.label, total: a.total, kinds: a.kinds });
+      parts.push(`### ${t.label}（${t.type}）：${a.total.toLocaleString('en-US')} 次、${a.kinds} 種組合${overflow ? `（${overflow} 個檔案事件太多沒有組合統計，可能不完整）` : ''}\n${a.text}`);
+    }
+    return { text: parts.length ? `## PA 其他 log（威脅 / URL / 資料過濾 / WildFire / 解密 / GlobalProtect / User-ID）中與問題 IP 相關的紀錄\n\n${parts.join('\n\n')}` : '', hits };
+  }
+
+  /** AI 分析 / 問答(沒有 IP 時):期間內各類型的重點摘要文字 */
+  function eventsContext(from: string, to: string, { types = null, topN = 10 }: { types?: string[] | null; topN?: number } = {}) {
+    const out: string[] = [];
+    for (const t of eventTypes()) {
+      if (types && !types.includes(t.type)) continue;
+      const m = summary(t.type, from, to, topN) as unknown as { rows: number; timeMin: string; timeMax: string; kpis: { title: string; items: { key: string; n: number }[] }[]; tops: { title: string; items: { key: string; n: number }[] }[] };
+      if (!m.rows) continue;
+      const lines = [`### ${t.label}（${t.type}）：${m.rows.toLocaleString('en-US')} 筆，${m.timeMin} ~ ${m.timeMax}`];
+      for (const k of m.kpis) lines.push(`- ${k.title}：${k.items.slice(0, 8).map((x) => `${x.key} ${x.n.toLocaleString('en-US')}`).join('、')}`);
+      for (const tp of m.tops) if (tp.items.length) lines.push(`- ${tp.title}：${tp.items.slice(0, topN).map((x) => `${x.key}（${x.n.toLocaleString('en-US')}）`).join('、')}`);
+      out.push(lines.join('\n'));
+    }
+    return out.length ? `## PA 其他 log 摘要（${from} ~ ${to}）\n\n${out.join('\n\n')}` : '';
+  }
+
+  return { eventTypes, typeOfDir, eventLogType, status, enqueue, cancel, listRemote, sync, start, stop, forget, isEventPath, eventTypeOfPath, overview, summary, eventsForIps, eventsContext };
 }

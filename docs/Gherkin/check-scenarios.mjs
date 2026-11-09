@@ -15,7 +15,7 @@ const doc = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 
 /** 後端路徑 → feature 檔(由長到短比對) */
 const FILES = [
-  // A1:AI(問答、分析、翻譯、整理筆記)與知識庫的 AI 功能
+  // A1:AI(問答、分析)與知識庫的 AI 功能
   ['/v1/ai/', 'ai/ai.feature'],
   ['/v1/kb/semantic-search', 'kb/ai.feature'],
   ['/v1/kb/vector-', 'kb/ai.feature'],

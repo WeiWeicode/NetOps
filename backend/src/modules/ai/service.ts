@@ -1,5 +1,5 @@
 /**
- * AI 分析、問答、整理筆記、翻譯(由舊版 server/routes/ai.js 搬移,IMPL-PLAN A1、ARCHITECTURE D23)
+ * AI 分析、問答(由舊版 server/routes/ai.js 搬移,IMPL-PLAN A1、ARCHITECTURE D23;整理筆記與翻譯依 2026-11-09 決定不搬,D25)
  *   流程與送給模型的內容同舊版:期間內 PA 摘要 → 精簡文字(只送統計與彙整,不送原始 log;AGENT.md §7.4)
  *   問答:問題有 IP / Port → 先查連線組合統計,沒有統計的檔案才從 FTP 串流掃描(原始 log 不落地),彙整後送給模型
  *   事件(SSE):meta、scan(掃描進度)、evidence(查到的資料)、events(PA 其他 log)、ad(AD 事件)、notes(帶入的知識庫筆記)、
@@ -20,9 +20,8 @@ import { queryFlows } from '../pa/core/flows.js';
 import { ipMatcher, mergeSummaries } from '../pa/core/palog.js';
 import { scanFiles } from '../pa/core/scan.js';
 import type { TrafficImporter } from '../pa/importer.js';
-import { ASK_PROMPT, buildContext, EVENT_Q, kbSection, NOTE_PROMPT, parseJsonReply, SYSTEM_PROMPT } from './core/context.js';
+import { ASK_PROMPT, buildContext, EVENT_Q, kbSection, SYSTEM_PROMPT } from './core/context.js';
 import { buildCondition, createCollector, parseQuestion } from './core/evidence.js';
-import { chunks, joinParts, LANGS, translateSystem } from './core/translate.js';
 import type { SseStream } from './sse.js';
 import { dayOut, logTimeOut } from '../../shared/time.js';
 
@@ -319,67 +318,6 @@ export function createAiService(deps: {
     }
   }
 
-  /* ───────── 請 AI 記錄:管理者的說明 → 知識庫筆記 ───────── */
-
-  async function note(input: { text: string; history?: HistoryItem[] }, author: string, signal?: AbortSignal) {
-    const llm = llmOf();
-    const text = input.text;
-    const history = (input.history ?? [])
-      .filter((m) => ['user', 'assistant'].includes(m?.role) && m.content)
-      .slice(-6)
-      .map((m) => `【${m.role === 'user' ? '管理者' : 'AI'}】${String(m.content).slice(0, 2500)}`)
-      .join('\n\n');
-    const reply = await llm.chatOnce({
-      signal,
-      messages: [
-        { role: 'system', content: NOTE_PROMPT },
-        { role: 'user', content: `${history ? `前面的對話（只用來理解代名詞指誰）：\n${history}\n\n` : ''}管理者要記錄的說明：\n${text}` },
-      ],
-    });
-    const j = parseJsonReply(reply) as { title?: unknown; ips?: unknown; tags?: unknown; content?: unknown } | null;
-    // AI 沒有回 JSON 時直接存原文,不讓記錄失敗(同舊版)
-    const ips = [...new Set([...(Array.isArray(j?.ips) ? j.ips.map(String) : []), ...(parseQuestion(text) as Cond).ips])];
-    return kb.saveNote(
-      {
-        // 新版筆記的標題與標籤不可含換行(B2-kb 資安修正):模型回的值壓成一行
-        title: oneLine(typeof j?.title === 'string' && j.title ? j.title : text.split('\n')[0]!.slice(0, 40)).slice(0, 300),
-        ips: ips.slice(0, 30),
-        tags: Array.isArray(j?.tags) ? j.tags.map((t) => oneLine(String(t)).slice(0, 100)).filter(Boolean).slice(0, 10) : [],
-        content: (typeof j?.content === 'string' && j.content ? j.content : text).slice(0, 20000),
-        source: text.slice(0, 1000),
-      },
-      author,
-    );
-  }
-
-  /* ───────── 翻譯:AI 回答 → en / zh / ja / th(同舊版:分段平行、關閉思考) ───────── */
-
-  /** 串流開始前驗證(錯誤回 400):語言、分段數(與舊版不同,審查修正:最多 TRANSLATE_MAX_PARTS 段、同時 TRANSLATE_PARALLEL 段;舊版全部同時送,AI 主機與其他系統共用) */
-  function checkTranslate(text: string, target: string) {
-    llmOf();
-    if (!(target in LANGS)) throw new AppError(400, 'VALIDATION_FAILED', '參數驗證失敗', [{ field: 'target', message: '不支援的語言' }]);
-    if (!text.trim()) throw new AppError(400, 'VALIDATION_FAILED', '參數驗證失敗', [{ field: 'text', message: '沒有要翻譯的內容' }]);
-    const list = chunks(text);
-    if (list.length > TRANSLATE_MAX_PARTS) throw new AppError(400, 'VALIDATION_FAILED', '參數驗證失敗', [{ field: 'text', message: `內容太長(分段超過 ${TRANSLATE_MAX_PARTS} 段),請分次翻譯` }]);
-    return list;
-  }
-
-  async function translate(text: string, target: string, signal?: AbortSignal) {
-    const llm = llmOf();
-    const list = checkTranslate(text, target);
-    const t0 = Date.now();
-    const parts: string[] = new Array(list.length);
-    let next = 0;
-    const worker = async () => {
-      while (next < list.length) {
-        const i = next++;
-        parts[i] = await llm.chatOnce({ signal, maxTokens: 6000, messages: [{ role: 'system', content: translateSystem(target) }, { role: 'user', content: list[i]! }] });
-      }
-    };
-    await Promise.all(Array.from({ length: Math.min(TRANSLATE_PARALLEL, list.length) }, worker));
-    return { target, text: joinParts(parts), seconds: Math.round((Date.now() - t0) / 100) / 10 };
-  }
-
   async function status() {
     if (!deps.llm) return { enabled: false, ok: false, model: '', message: '尚未設定 AI 服務(LLM_URL)' };
     try {
@@ -391,10 +329,6 @@ export function createAiService(deps: {
     }
   }
 
-  return { enabled: () => Boolean(deps.llm), requireEnabled: () => void llmOf(), checkTranslate, prepareAnalysis, analyze, prepareQuestion, ask, note, translate, status, summarize };
+  return { enabled: () => Boolean(deps.llm), requireEnabled: () => void llmOf(), prepareAnalysis, analyze, prepareQuestion, ask, status, summarize };
 }
 
-const oneLine = (s: string) => s.replace(/[\r\n]+/g, ' ').trim();
-/** 翻譯:最多幾段、同時幾段 */
-const TRANSLATE_MAX_PARTS = 12;
-const TRANSLATE_PARALLEL = 3;

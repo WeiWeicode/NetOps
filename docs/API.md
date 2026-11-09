@@ -78,8 +78,8 @@ PA 匯入在背景佇列執行;同步、分析只是送進佇列,畫面輪詢狀
 | `netops.ad.read` | AD 事件:查詢 | §6.1 |
 | `netops.ad-log.read` | AD Log 明細:查詢 | §6.2 |
 | `netops.kb.read` | 知識庫:查詢 | §7 讀取、§10.2 讀取(語意搜尋、向量庫與外部 IP 學習狀態) |
-| `netops.kb.write` | 知識庫:編輯 | §7 寫入、§10.1 整理筆記、§10.2 立即同步 / 學習 |
-| `netops.ai.use` | AI 分析與問答:使用 | §10.1(分析、問答、翻譯、狀態)。不是 `.read`:選單不能綁定,由按鈕 `netops.pa-ask.use`、`netops.ad-ask.use`、`netops.pa-dashboard.ai` 綁定(`gateway-rbac.yaml`);給 `netops-admin`、`netops-viewer`(2026-11-05 決定) |
+| `netops.kb.write` | 知識庫:編輯 | §7 寫入、§10.2 立即同步 / 學習 |
+| `netops.ai.use` | AI 分析與問答:使用 | §10.1(分析、問答、狀態)。不是 `.read`:選單不能綁定,由按鈕 `netops.pa-ask.use`、`netops.ad-ask.use`、`netops.pa-dashboard.ai` 綁定(`gateway-rbac.yaml`);給 `netops-admin`、`netops-viewer`(2026-11-05 決定) |
 
 稽核:Log 明細查詢與匯出、知識庫下載、AI 分析與問答(§10.1)設 `x-audit-level: meta`。
 
@@ -510,8 +510,6 @@ AI 串流(§10.1)開始後的錯誤以 `error` 事件回傳 `{ code, message }`:
 | `GET /ai/status` | `GET /ai/status`(A1;不回 AI 主機位址) |
 | `POST /ai/analyze` | `POST /ai/analyses`(SSE) |
 | `POST /ai/ask` | `POST /ai/questions`(SSE) |
-| `POST /ai/note` | `POST /ai/notes`(SSE,舊版同步回應) |
-| `POST /ai/translate` | `POST /ai/translations`(SSE,舊版同步回應) |
 | `GET /kb?semantic=1` | `GET /kb/semantic-search` |
 | `POST /kb/vector-sync` | `POST /kb/vector-syncs`(202,背景執行);狀態 `GET /kb/vector-status` |
 | `GET /kb/learn-ips`、`POST /kb/learn-ips` | `GET /kb/ip-learning`、`POST /kb/ip-learnings`(202) |
@@ -524,6 +522,7 @@ AI 串流(§10.1)開始後的錯誤以 `error` 事件回傳 `{ code, message }`:
 | `POST /jump/:system` | Veeam 改一般連結(D11),不寫 `PortalSolar.SyncLoginInfo` |
 | `GET /theme.css` | 新版前端主題由 `src/ui/` 提供(D5) |
 | `GET /ai/context` | 開發用(看送給 AI 的資料),不搬移;其他 AI API 於 A1 搬移,見 §9.1(D17 已由 D23 取代) |
+| `POST /ai/note`、`POST /ai/translate` | 整理筆記(請 AI 記錄)與翻譯:需求方 2026-11-09 依 `docs/AI-FEATURE-INVENTORY.md` 決定不搬(ARCHITECTURE D25);管理者在知識庫頁自己寫筆記 |
 
 舊版的 `.env` 名單(`VIEW_USERS`、`VIEW_DEPTS`、`KB_ADMINS`)與 `JWT_*` 不再使用,權限改由 Gateway RBAC(D15)。
 
@@ -533,22 +532,21 @@ AI 串流(§10.1)開始後的錯誤以 `error` 事件回傳 `{ code, message }`:
 
 由舊版 `server/routes/ai.js` 搬移,直接呼叫 AI 主機(ARCHITECTURE D23;`LLM_URL`、`LLM_MODEL`、`EMBED_URL`、`QDRANT_URL` 只從設定讀)。送給模型的內容與舊版相同,**只送統計與彙整,不送原始 log 檔**(AGENT.md §7.4;問答的彙整含最多 15 筆範例紀錄、AD 事件訊息前 400 字,同舊版)。沒有設定 `LLM_URL` 時回 409 `NETOPS_AI_DISABLED`。
 
-### 10.1 分析、問答、翻譯、整理筆記(SSE)
+### 10.1 分析、問答(SSE)
 
 | 方法 | 路徑 | 權限 | 說明 |
 | --- | --- | --- | --- |
 | GET | `/api/netops/ai/status` | `netops.ai.use` | `{ enabled, ok, model, message }`;不回主機位址 |
 | POST | `/api/netops/ai/analyses` | `netops.ai.use` | 期間分析;`{ from, to?, think?, question? }`(`YYYY-MM-DD`,最長 92 天) |
 | POST | `/api/netops/ai/questions` | `netops.ai.use` | 問答;`{ from, to, question, history?, think?, source? }`(ISO 8601,最長 31 天;`source: 'ad'` 只看 AD) |
-| POST | `/api/netops/ai/translations` | `netops.ai.use` | `{ text, target }`(`en`、`zh`、`ja`、`th`;30,000 字內、分段最多 12 段,同時翻 3 段;超過回 400) |
-| POST | `/api/netops/ai/notes` | `netops.kb.write` | 整理成知識庫筆記;`{ text, history? }`(4,000 字內) |
 
 - **全部回 SSE**(`text/event-stream`):掃描 FTP 與模型回答可能超過路由逾時(AGENT.md §7.3),寫法依 S0(本文件 §3.1、`docs/test-reports/2026-11-05-s0-sse.md` §3.6):`x-timeout-ms: 60000`、立即送 `open`、每 15 秒 `heartbeat`、`X-Accel-Buffering: no`。POST,前端以 `fetch` 讀串流(`EventSource` 只能 GET);一次性回答,不重連。
 - 參數錯誤、沒有資料(404 `NETOPS_PA_NO_DATA`)、AI 未設定在串流開始前回 4xx;開始後的錯誤以 `error` 事件回傳(§8)。
-- 同時進行的 AI 回答(四支共用名額)每人 2 個、全系統 6 個(`AI_MAX_STREAMS`、`AI_MAX_STREAMS_PER_USER`,程式預設值,compose 未列出),超過回 429 `NETOPS_STREAM_BUSY`;單一回答最長 15 分鐘;使用者關頁時中斷掃描與模型呼叫。問答需要從 FTP 掃原始 log 時,全系統同時只掃 1 個(FTP 連線與匯入、明細查詢共用),其餘排隊並送 `scan` 事件 `{ waiting: true }`;掃描並行數為 `FTP_MAX_CONNECTIONS`(舊版另開一條)。
+- 同時進行的 AI 回答(分析與問答共用名額)每人 2 個、全系統 6 個(`AI_MAX_STREAMS`、`AI_MAX_STREAMS_PER_USER`,程式預設值,compose 未列出),超過回 429 `NETOPS_STREAM_BUSY`;單一回答最長 15 分鐘;使用者關頁時中斷掃描與模型呼叫。問答需要從 FTP 掃原始 log 時,全系統同時只掃 1 個(FTP 連線與匯入、明細查詢共用),其餘排隊並送 `scan` 事件 `{ waiting: true }`;掃描並行數為 `FTP_MAX_CONNECTIONS`(舊版另開一條)。
 - `history`:最多 100 則、每則 20,000 字;只送最近 6 則、每則前 4,000 字(同舊版)。問答的問題沒有 IP / Port 時沿用前面的條件(追問);同樣的條件 10 分鐘內不重複掃描(所有人共用,同舊版;資料不完整的結果不快取)。
 - **`netops.ai.use` 的資料範圍是 PA + AD + 知識庫**:問答依問題帶入 PA log 彙整、AD 事件與筆記標題,分析帶入 PA 摘要;所以 `gateway-rbac.yaml` 的三個 AI 按鈕都一併綁定 `netops.pa.read`、`netops.ad.read`、`netops.kb.read`。
-- 稽核:分析、問答、翻譯、整理筆記、立即同步、外部 IP 學習都設 `x-audit-level: meta`。
+- 稽核:分析、問答、立即同步、外部 IP 學習都設 `x-audit-level: meta`。
+- 翻譯(舊版 `POST /ai/translate`)與整理筆記(舊版 `POST /ai/note`)依 2026-11-09 決定不搬(D25、`docs/AI-FEATURE-INVENTORY.md`)。
 
 | 事件 | 資料 | 出現在 |
 | --- | --- | --- |
@@ -561,13 +559,13 @@ AI 串流(§10.1)開始後的錯誤以 `error` 事件回傳 `{ code, message }`:
 | `notes` | `{ used: [{ id, title, related }], omitted, vectorError }` | 問答 |
 | `thinking` | `{ chars }`(思考內容不顯示,只回字數) | 分析、問答(`think: true`) |
 | `content` | `{ text }`(Markdown 片段) | 分析、問答 |
-| `done` | 分析 / 問答:`{ finish, truncated }`;翻譯:`{ target, text, seconds }`;整理筆記:`{ note }`(§7 的筆記格式) | 全部 |
+| `done` | `{ finish, truncated }` | 全部 |
 | `error` | `{ code, message }` | 全部 |
 | `heartbeat` | `{ time }` | 全部 |
 
 **資料不完整要明確標示**(AGENT.md §5):`missing` 是摘要檔讀不到的檔案數;`evidence.partial` 為 true 表示 FTP 掃描逾時;`vectorError` 為 true 表示向量庫失敗、筆記改用關鍵字 / IP 比對。模型收到的資料也會註明(舊版既有的文字,例如「掃描逾時…資料不完整」)。
 
-與舊版不同:翻譯、整理筆記改 SSE(舊版同步回應,最長 180 秒);問答期間最長 31 天;參數超過長度上限回 400(舊版截斷);模型連不到時以 `error` 事件回傳(舊版串流前回 5xx);`meta` 的 `from` / `to` 改 ISO 8601;`status` 不回主機位址;錯誤訊息不含上游原文;`meta` / `evidence` / `notes` 多 `missing`、`vectorError`;整理筆記的標題與標籤壓成一行(新版筆記規則)。
+與舊版不同:問答期間最長 31 天;參數超過長度上限回 400(舊版截斷);模型連不到時以 `error` 事件回傳(舊版串流前回 5xx);`meta` 的 `from` / `to` 改 ISO 8601;`status` 不回主機位址;錯誤訊息不含上游原文;`meta` / `evidence` / `notes` 多 `missing`、`vectorError`;沒有翻譯與整理筆記(D25)。
 
 ### 10.2 知識庫的 AI 功能
 

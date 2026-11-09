@@ -1,5 +1,5 @@
 /**
- * A1 AI API(docs/API.md §10;IMPL-PLAN A1):分析、問答、整理筆記、翻譯(SSE),語意搜尋、向量庫、外部 IP 自動學習
+ * A1 AI API(docs/API.md §10;IMPL-PLAN A1):分析、問答(SSE),語意搜尋、向量庫、外部 IP 自動學習(翻譯與整理筆記依 2026-11-09 決定不搬)
  *   - SSE 依 S0 §3.6:標頭、立即送 open、事件順序、名額滿回 429(不回 5xx)
  *   - 驗證錯誤在串流開始前回 4xx;模型錯誤以 error 事件回傳,不含主機位址
  *   - 送給模型的內容:問答帶查到的 log 彙整與知識庫筆記(不送原始 log 檔)
@@ -28,20 +28,20 @@ const FILES: Record<string, string> = {
   '/PA-560_traffic_2026_11_02_last_calendar_day_0.csv': trafficCsv('2026/11/01', 1500, 41),
   '/PA-560_traffic_2026_11_03_last_calendar_day_0.csv': trafficCsv('2026/11/02', 1500, 42),
 };
-const NOTE_JSON = '```json\n{"title":"10.10.130.154 是防毒伺服器","ips":["10.10.130.154"],"tags":["防毒","Port 5517"],"content":"- 5517 是防毒更新"}\n```';
+
+/** AD 問答:不需要已分析的 PA log,適合測串流本身(名額、斷線、模型錯誤) */
+const AD_ASK = { from: '2026-12-01T00:00:00+08:00', to: '2026-12-01T23:00:00+08:00', question: '帳號被鎖定', source: 'ad' };
 
 describe('AI 未設定(LLM_URL 空白)', () => {
   let t: TestApp;
   before(async () => (t = await createTestApp()));
   after(async () => t.close());
 
-  it('狀態回 enabled false;分析、問答、翻譯回 409 NETOPS_AI_DISABLED(不回 5xx)', async () => {
+  it('狀態回 enabled false;分析、問答、外部 IP 學習回 409 NETOPS_AI_DISABLED(不回 5xx)', async () => {
     assert.deepEqual((await t.call({ url: '/v1/ai/status' })).json(), { enabled: false, ok: false, model: '', message: '尚未設定 AI 服務(LLM_URL)' });
     for (const [url, payload] of [
       ['/v1/ai/analyses', { from: '2026-11-02' }],
       ['/v1/ai/questions', { from: '2026-11-02T00:00:00+08:00', to: '2026-11-02T23:59:00+08:00', question: '10.10.1.5' }],
-      ['/v1/ai/translations', { text: 'x', target: 'en' }],
-      ['/v1/ai/notes', { text: 'x' }],
       ['/v1/kb/ip-learnings', {}],
     ] as const) {
       const res = await t.call({ method: 'POST', url, payload });
@@ -51,10 +51,14 @@ describe('AI 未設定(LLM_URL 空白)', () => {
     assert.equal((await t.call({ url: '/v1/kb/ip-learning' })).json().enabled, false);
     assert.equal((await t.call({ method: 'POST', url: '/v1/kb/vector-syncs' })).json().code, 'NETOPS_VECTOR_SYNC_DISABLED');
   });
+
+  it('翻譯與整理筆記不搬(2026-11-09,D25):沒有這兩支 API', async () => {
+    for (const url of ['/v1/ai/translations', '/v1/ai/notes']) assert.equal((await t.call({ method: 'POST', url, payload: { text: 'x', target: 'en' } })).statusCode, 404, url);
+  });
 });
 
 describe('AI 已設定', () => {
-  const host = fakeAiHost({ noteReply: NOTE_JSON, streamDelayMs: 0 });
+  const host = fakeAiHost({ streamDelayMs: 0 });
   let t: TestApp;
   let ftp: FakeFtp;
   let base = '';
@@ -195,30 +199,6 @@ describe('AI 已設定', () => {
     }
   });
 
-  it('整理筆記:模型回 JSON → 存進知識庫,記錄人為登入者', async () => {
-    const res = await t.call({ method: 'POST', url: '/v1/ai/notes', payload: { text: '10.10.130.154 是防毒伺服器,5517 port 是正常的', history: [{ role: 'user', content: '這台是誰' }] } });
-    assert.equal(res.statusCode, 200);
-    const done = events(res.body).find((e) => e.event === 'done')!.data.note;
-    assert.equal(done.title, '10.10.130.154 是防毒伺服器');
-    assert.equal(done.author, 'S112009 測試S112009');
-    assert.deepEqual(done.ips, ['10.10.130.154']);
-    assert.match(done.created, /\+08:00$/);
-    const saved = (await t.call({ url: `/v1/kb/notes/${done.id}` })).json();
-    assert.equal(saved.content, '- 5517 是防毒更新');
-    const [c] = chats();
-    assert.ok(c!.body.messages[1].content.includes('【管理者】這台是誰'));
-    assert.equal(c!.body.chat_template_kwargs.enable_thinking, false);
-  });
-
-  it('翻譯:分段翻譯後合併;不支援的語言 400', async () => {
-    const res = await t.call({ method: 'POST', url: '/v1/ai/translations', payload: { text: '## 結論\n正常', target: 'en' } });
-    const done = events(res.body).find((e) => e.event === 'done')!.data;
-    assert.equal(done.target, 'en');
-    assert.equal(done.text, '譯:## 結論\n正常');
-    assert.equal((await t.call({ method: 'POST', url: '/v1/ai/translations', payload: { text: 'x', target: 'fr' } })).statusCode, 400);
-    chats();
-  });
-
   it('語意搜尋與向量庫狀態;沒開 VECTOR_SYNC 時不能同步', async () => {
     host.points.set('p1', { id: 'p1', payload: { noteId: '202611011030-a1b2c3', title: '內部 PC 網段' } });
     const res = await t.call({ url: '/v1/kb/semantic-search?q=' + encodeURIComponent('使用者電腦在哪個網段') });
@@ -237,7 +217,8 @@ describe('AI 已設定', () => {
   it('模型連不到:error 事件,訊息不含主機位址', async () => {
     const t2 = await createTestApp({ env: { LLM_URL: 'http://127.0.0.1:1/v1' } });
     try {
-      const res = await t2.call({ method: 'POST', url: '/v1/ai/translations', payload: { text: '## 結論', target: 'ja' } });
+      // AD 問答不需要 PA 資料:驗證通過後開始串流,取模型名稱時失敗
+      const res = await t2.call({ method: 'POST', url: '/v1/ai/questions', payload: AD_ASK });
       assert.equal(res.statusCode, 200, '已開始串流,錯誤以事件回傳(不回 5xx)');
       const err = events(res.body).find((e) => e.event === 'error')!.data;
       assert.equal(err.code, 'NETOPS_AI_UNAVAILABLE');
@@ -298,24 +279,24 @@ describe('AI 串流的名額與生命週期(S0 §3.6;審查補測)', () => {
   let base = '';
   before(async () => (base = await host.start()));
   after(() => host.close());
-  const TRANSLATE = { method: 'POST' as const, url: '/v1/ai/translations', payload: { text: '## 結論', target: 'en' } };
+  const ASK = { method: 'POST' as const, url: '/v1/ai/questions', payload: AD_ASK };
+  /** 假模型延遲 400 毫秒才開始回答,讓前面的請求佔住名額 */
+  const slow = (async (url: string | URL, init?: RequestInit) => {
+    if (String(url).endsWith('/chat/completions')) await new Promise((r) => setTimeout(r, 400));
+    return fetch(url, init);
+  }) as typeof fetch;
 
-  it('AI 串流共用每人名額(翻譯、整理筆記);結束後歸還', async () => {
-    // 假模型延遲 400 毫秒回應,讓前兩個請求佔住名額
-    const slow = (async (url: string | URL, init?: RequestInit) => {
-      if (String(url).endsWith('/chat/completions')) await new Promise((r) => setTimeout(r, 400));
-      return fetch(url, init);
-    }) as typeof fetch;
+  it('分析與問答共用每人名額;結束後歸還', async () => {
     const t = await createTestApp({ env: { LLM_URL: `${base}/v1` }, ai: { fetch: slow } });
     try {
-      const a = t.call(TRANSLATE);
-      const b = t.call({ ...TRANSLATE, payload: { text: '## 二', target: 'ja' } });
+      const a = t.call(ASK);
+      const b = t.call(ASK);
       await new Promise((r) => setTimeout(r, 100));
-      const c = await t.call({ method: 'POST', url: '/v1/ai/notes', payload: { text: '10.10.1.5 是印表機' } });
-      assert.equal(c.statusCode, 429, '整理筆記與翻譯共用名額');
+      const c = await t.call(ASK);
+      assert.equal(c.statusCode, 429);
       assert.equal(c.json().code, 'NETOPS_STREAM_BUSY');
       for (const r of await Promise.all([a, b])) assert.equal(r.statusCode, 200);
-      const again = await t.call(TRANSLATE);
+      const again = await t.call(ASK);
       assert.equal(again.statusCode, 200, '結束後歸還名額');
       assert.ok(events(again.body).some((e) => e.event === 'done'));
     } finally {
@@ -324,16 +305,12 @@ describe('AI 串流的名額與生命週期(S0 §3.6;審查補測)', () => {
   });
 
   it('全系統上限(AI_MAX_STREAMS):別人也被擋', async () => {
-    const slow = (async (url: string | URL, init?: RequestInit) => {
-      await new Promise((r) => setTimeout(r, 400));
-      return fetch(url, init);
-    }) as typeof fetch;
     const t = await createTestApp({ env: { LLM_URL: `${base}/v1`, AI_MAX_STREAMS: '2' }, ai: { fetch: slow } });
     try {
-      const a = t.call({ ...TRANSLATE, emp: 'S000001' });
-      const b = t.call({ ...TRANSLATE, emp: 'S000002' });
+      const a = t.call({ ...ASK, emp: 'S000001' });
+      const b = t.call({ ...ASK, emp: 'S000002' });
       await new Promise((r) => setTimeout(r, 100));
-      const c = await t.call({ ...TRANSLATE, emp: 'S000003' });
+      const c = await t.call({ ...ASK, emp: 'S000003' });
       assert.equal(c.statusCode, 429);
       await Promise.all([a, b]);
     } finally {
@@ -343,8 +320,10 @@ describe('AI 串流的名額與生命週期(S0 §3.6;審查補測)', () => {
 
   it('用戶端中途斷線:中斷模型呼叫並歸還名額', async () => {
     let aborted = 0;
+    let calls = 0;
+    // 第一次模型呼叫一直不回(直到被中斷),之後照常
     const hang = (async (url: string | URL, init?: RequestInit) => {
-      if (String(url).endsWith('/chat/completions'))
+      if (String(url).endsWith('/chat/completions') && ++calls === 1)
         return new Promise<Response>((_, rej) => init?.signal?.addEventListener('abort', () => (aborted++, rej(new DOMException('aborted', 'AbortError')))));
       return fetch(url, init);
     }) as typeof fetch;
@@ -354,7 +333,7 @@ describe('AI 串流的名額與生命週期(S0 §3.6;審查補測)', () => {
       const port = (t.app.server.address() as AddressInfo).port;
       const token = await t.token();
       await new Promise<void>((resolve, reject) => {
-        const req = http.request({ host: '127.0.0.1', port, method: 'POST', path: '/v1/ai/translations', headers: { 'content-type': 'application/json', 'x-internal-token': token } }, (res) => {
+        const req = http.request({ host: '127.0.0.1', port, method: 'POST', path: '/v1/ai/questions', headers: { 'content-type': 'application/json', 'x-internal-token': token } }, (res) => {
           assert.equal(res.statusCode, 200);
           res.once('data', () => {
             req.destroy();
@@ -362,27 +341,14 @@ describe('AI 串流的名額與生命週期(S0 §3.6;審查補測)', () => {
           });
         });
         req.on('error', () => {});
-        req.end(JSON.stringify(TRANSLATE.payload));
+        req.end(JSON.stringify(AD_ASK));
         setTimeout(() => reject(new Error('沒有收到第一個事件')), 3000);
       });
       await waitFor(() => aborted === 1, 3000);
-      // 名額已歸還(每人 1 個):同一人可以再開一個
-      const ok = await t.call({ method: 'POST', url: '/v1/ai/translations', payload: { text: '   ', target: 'en' } });
-      assert.equal(ok.statusCode, 400, '空白內容在串流前回 400(不佔名額)');
-    } finally {
-      await t.close();
-    }
-  });
-
-  it('翻譯:空白內容、分段超過上限回 400(串流開始前)', async () => {
-    const t = await createTestApp({ env: { LLM_URL: `${base}/v1` } });
-    try {
-      const blank = await t.call({ method: 'POST', url: '/v1/ai/translations', payload: { text: '  \n ', target: 'en' } });
-      assert.equal(blank.statusCode, 400);
-      const long = Array.from({ length: 13 }, (_, i) => `## 第 ${i} 段\n${'x'.repeat(2000)}`).join('\n');
-      const r = await t.call({ method: 'POST', url: '/v1/ai/translations', payload: { text: long, target: 'en' } });
-      assert.equal(r.statusCode, 400);
-      assert.match(JSON.stringify(r.json().details), /分段超過 12 段/);
+      // 名額已歸還(每人 1 個):同一人可以再問一次並完成
+      const again = await t.call(ASK);
+      assert.equal(again.statusCode, 200);
+      assert.ok(events(again.body).some((e) => e.event === 'done'));
     } finally {
       await t.close();
     }

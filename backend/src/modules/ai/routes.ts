@@ -1,13 +1,12 @@
 /**
- * AI 分析、問答、翻譯、整理筆記(docs/API.md §10;舊版 server/routes/ai.js;IMPL-PLAN A1、ARCHITECTURE D23)
- *   分析與問答、翻譯、整理筆記都用 SSE(POST,前端以 fetch 讀串流):掃描 FTP 與模型回答可能超過路由逾時(AGENT.md §7.3),
+ * AI 分析、問答(docs/API.md §10;舊版 server/routes/ai.js;IMPL-PLAN A1、ARCHITECTURE D23;翻譯與整理筆記依 2026-11-09 決定不搬,D25)
+ *   分析與問答都用 SSE(POST,前端以 fetch 讀串流):掃描 FTP 與模型回答可能超過路由逾時(AGENT.md §7.3),
  *   串流的寫法照 S0 報告 §3.6(sse.ts)。只做驗證、權限宣告與格式轉換;流程在 service.ts。
- * 權限:netops.ai.use(netops-admin、netops-viewer,2026-11-05 決定);整理筆記會寫知識庫,沿用 netops.kb.write。
+ * 權限:netops.ai.use(netops-admin、netops-viewer,2026-11-05 決定,D25 維持一個權限)。
  */
 import type { FastifyPluginAsync } from 'fastify';
-import { AppError } from '../../errors.js';
 import { looseObject } from '../../shared/schemas.js';
-import { dayRange, logTimeOut, timeIn, validation } from '../../shared/time.js';
+import { dayRange, timeIn, validation } from '../../shared/time.js';
 import type { AiService, HistoryItem } from './service.js';
 import { SSE_TIMEOUT_MS, type SseHub } from './sse.js';
 
@@ -26,12 +25,6 @@ const HISTORY = {
 const sse = { 'x-timeout-ms': SSE_TIMEOUT_MS } as const;
 
 const aiRoutes: FastifyPluginAsync<{ ai: AiService; hub: SseHub }> = async (app, { ai, hub }) => {
-  const author = (identity: { emp?: string; name?: string } | null) => {
-    const who = [identity?.emp, identity?.name].filter(Boolean).join(' ');
-    if (!who) throw new AppError(403, 'NETOPS_KB_AUTHOR_UNKNOWN', '無法識別記錄人(沒有工號與姓名),不能編輯筆記');
-    return who;
-  };
-
   app.get(
     '/v1/ai/status',
     {
@@ -162,81 +155,6 @@ const aiRoutes: FastifyPluginAsync<{ ai: AiService; hub: SseHub }> = async (app,
       const p = ai.prepareQuestion(input);
       const owner = hub.reserve(req);
       return hub.open(req, reply, owner, (s) => ai.ask(s, { from, to, question, think: req.body.think === true }, p));
-    },
-  );
-
-  app.post<{ Body: { text: string; history?: HistoryItem[] } }>(
-    '/v1/ai/notes',
-    {
-      schema: {
-        operationId: 'netops.ai.note',
-        summary: '請 AI 整理成知識庫筆記(SSE)',
-        description:
-          '把管理者在問答中提供的說明(可參考前面的對話理解代名詞)請模型整理成筆記(標題、IP、標籤、Markdown 內容)並存進知識庫;模型沒有回 JSON 時直接存原文。記錄人為登入者「工號 姓名」。' +
-          '模型回答可能超過路由逾時,以 SSE 回傳:open、heartbeat、done({ note })、error。',
-        tags: ['AI'],
-        'x-permission': 'netops.kb.write',
-        'x-audit-level': 'meta',
-        ...sse,
-        'x-gherkin': [
-          '場景: 整理成筆記',
-          '  假如 使用者擁有 netops.kb.write',
-          '  當 呼叫 POST /api/netops/ai/notes 帶 text "10.10.130.154 是防毒伺服器,5517 port 是正常的"',
-          '  那麼 回應 200 且 Content-Type 為 text/event-stream',
-          '  而且 done 事件帶出新增的筆記,author 為登入者',
-          '',
-          '場景: 只有 AI 使用權限不能整理筆記',
-          '  假如 使用者只有 netops.ai.use',
-          '  當 呼叫 POST /api/netops/ai/notes',
-          '  那麼 回應 403',
-        ].join('\n'),
-        body: { type: 'object', required: ['text'], additionalProperties: false, properties: { text: { type: 'string', minLength: 1, maxLength: 4000 }, history: HISTORY } },
-        response: SSE_RESPONSE('open、heartbeat、done、error'),
-      },
-    },
-    async (req, reply) => {
-      const text = req.body.text.trim();
-      if (!text) throw validation('text', '請輸入要記錄的內容');
-      const who = author(req.identity);
-      ai.requireEnabled();
-      const owner = hub.reserve(req);
-      return hub.open(req, reply, owner, async (s) => {
-        const note = await ai.note({ text, history: req.body.history }, who, s.signal);
-        req.log.info({ noteId: note.id, emp: req.identity?.emp }, 'AI 整理知識庫筆記');
-        s.send('done', { note: { ...note, created: logTimeOut(note.created), updated: logTimeOut(note.updated) } });
-      });
-    },
-  );
-
-  app.post<{ Body: { text: string; target: string } }>(
-    '/v1/ai/translations',
-    {
-      schema: {
-        operationId: 'netops.ai.translate',
-        summary: '翻譯 AI 回答(SSE)',
-        description: '把 AI 回答(Markdown)翻成 en / zh / ja / th:依段落分段平行翻譯,保留格式、IP、Port 與規則名稱;沿用 LLM_URL / LLM_MODEL 並關閉思考模式。以 SSE 回傳:open、heartbeat、done({ target, text, seconds })、error。',
-        tags: ['AI'],
-        'x-permission': 'netops.ai.use',
-        'x-audit-level': 'meta',
-        ...sse,
-        'x-gherkin': [
-          '場景: 翻譯成英文',
-          '  假如 使用者擁有 netops.ai.use',
-          '  當 呼叫 POST /api/netops/ai/translations 帶 text 與 target "en"',
-          '  那麼 done 事件的 target 為 "en"、text 為譯文',
-          '',
-          '場景: 不支援的語言',
-          '  當 呼叫 POST /api/netops/ai/translations 帶 target "fr"',
-          '  那麼 回應 400 VALIDATION_FAILED',
-        ].join('\n'),
-        body: { type: 'object', required: ['text', 'target'], additionalProperties: false, properties: { text: { type: 'string', minLength: 1, maxLength: 30000 }, target: { type: 'string', enum: ['en', 'zh', 'ja', 'th'] } } },
-        response: SSE_RESPONSE('open、heartbeat、done、error'),
-      },
-    },
-    async (req, reply) => {
-      ai.checkTranslate(req.body.text, req.body.target);
-      const owner = hub.reserve(req);
-      return hub.open(req, reply, owner, async (s) => s.send('done', await ai.translate(req.body.text, req.body.target, s.signal)));
     },
   );
 };

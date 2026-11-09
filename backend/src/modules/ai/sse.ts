@@ -35,7 +35,7 @@ export interface SseHubOptions {
 
 export type SseHub = ReturnType<typeof createSseHub>;
 
-/** 全部 AI 串流共用的名額(問答、分析、翻譯、整理筆記) */
+/** 全部 AI 串流共用的名額(問答、分析) */
 export function createSseHub(app: FastifyInstance, opts: SseHubOptions) {
   const heartbeatMs = opts.heartbeatMs ?? 15_000;
   const maxMs = opts.maxMs ?? 15 * 60_000;
@@ -79,7 +79,7 @@ export function createSseHub(app: FastifyInstance, opts: SseHubOptions) {
       clearTimeout(limit);
       active.delete(stream);
     };
-    /** 結束串流;同時中斷還在進行的工作(例如翻譯其中一段失敗時,其餘段落不再等) */
+    /** 結束串流;同時中斷還在進行的工作(例如使用者關頁、最長時間到) */
     const end = () => {
       if (ended) return;
       ended = true;

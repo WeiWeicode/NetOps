@@ -31,6 +31,12 @@ ALIVE_MAX_AGE = 30
 log = logging.getLogger("netops_pa")
 
 
+def quiet_sdk_logs() -> None:
+    """SDK 與 HTTP 函式庫的除錯日誌可能含請求內容(key=),一律只留 WARNING 以上(main 與 check 都呼叫)。"""
+    for noisy in ("panos", "pan", "urllib3"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+
+
 def health() -> int:
     try:
         return 0 if time.time() - os.path.getmtime(ALIVE_FILE) < ALIVE_MAX_AGE else 1
@@ -46,9 +52,7 @@ def main() -> int:
         log.error("設定錯誤:%s", e)
         return 2
     logging.getLogger().setLevel(cfg.log_level)
-    # SDK 與 HTTP 函式庫的除錯日誌可能含請求網址(key=),一律只留 WARNING 以上
-    for noisy in ("panos", "pan", "urllib3"):
-        logging.getLogger(noisy).setLevel(logging.WARNING)
+    quiet_sdk_logs()
 
     # 機密值登記到遮罩清單:不論以什麼格式出現在錯誤訊息都會被取代
     if cfg.poll:
@@ -121,5 +125,6 @@ if __name__ == "__main__":
         # 連線檢查(check.py):只跑一次唯讀查詢,不寫 Redis
         from .check import run
 
+        quiet_sdk_logs()
         sys.exit(run())
     sys.exit(main())

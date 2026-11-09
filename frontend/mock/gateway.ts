@@ -14,6 +14,7 @@ import { handleKb } from './kb.ts';
 import { handlePaLog } from './paLog.ts';
 import { handlePa } from './pa.ts';
 import { handlePaEvents } from './paEvents.ts';
+import { handlePaLive, streamPaLive } from './paLive.ts';
 import type { MockCtx } from './types.ts';
 
 type Role = 'admin' | 'viewer' | 'noapp' | 'anon';
@@ -24,6 +25,7 @@ const MENUS = [
   { code: 'netops.group.firewall', name: '防火牆 PA-560', kind: 'group', parentCode: 'netops.app.access', sort: 10, icon: 'shield' },
   { code: 'netops.group.ad', name: 'AD 網域', kind: 'group', parentCode: 'netops.app.access', sort: 20, icon: 'gateway' },
   { code: 'netops.group.knowledge', name: '網通知識', kind: 'group', parentCode: 'netops.app.access', sort: 30, icon: 'book-open' },
+  { code: 'netops.pa-live.read', name: '即時監控', kind: 'menu', parentCode: 'netops.group.firewall', sort: 5, icon: null },
   { code: 'netops.pa-dashboard.read', name: '流量總覽', kind: 'menu', parentCode: 'netops.group.firewall', sort: 10, icon: null },
   { code: 'netops.pa-events.read', name: '安全事件', kind: 'menu', parentCode: 'netops.group.firewall', sort: 20, icon: null },
   { code: 'netops.pa-search.read', name: 'Log 明細查詢', kind: 'menu', parentCode: 'netops.group.firewall', sort: 30, icon: null },
@@ -36,7 +38,7 @@ const MENUS = [
   { code: 'netops.kb-page.read', name: '知識庫', kind: 'menu', parentCode: 'netops.group.knowledge', sort: 10, icon: null },
   { code: 'netops.kb-page.write', name: '編輯', kind: 'button', parentCode: 'netops.kb-page.read', sort: 10, icon: null },
 ];
-const READ_API = ['netops.ping.read', 'netops.pa.read', 'netops.pa-log.read', 'netops.ftp.read', 'netops.ad.read', 'netops.ad-log.read', 'netops.kb.read'];
+const READ_API = ['netops.ping.read', 'netops.pa-realtime.read', 'netops.pa.read', 'netops.pa-log.read', 'netops.ftp.read', 'netops.ad.read', 'netops.ad-log.read', 'netops.kb.read'];
 const WRITE_API = ['netops.ftp.write', 'netops.kb.write'];
 const BUTTONS = MENUS.filter((m) => m.kind === 'button').map((m) => m.code);
 const PAGES = MENUS.filter((m) => m.kind === 'app' || m.kind === 'menu').map((m) => m.code);
@@ -81,7 +83,7 @@ async function readBody(req: IncomingMessage): Promise<unknown> {
 }
 
 /** 各模組的假 API(依序嘗試,處理了就回 true) */
-const HANDLERS: ((ctx: MockCtx) => boolean)[] = [handleFtp, handleAd, handlePaEvents, handlePa, handlePaLog, handleKb];
+const HANDLERS: ((ctx: MockCtx) => boolean)[] = [handleFtp, handleAd, handlePaEvents, handlePa, handlePaLog, handleKb, handlePaLive];
 const fail = (res: ServerResponse, status: number, code: string, message: string) => send(res, status, { code, message, requestId: rid() });
 
 export function mockGateway(role: string | undefined): Plugin | null {
@@ -107,6 +109,8 @@ export function mockGateway(role: string | undefined): Plugin | null {
         const m = me(r);
         const need = (perm: string) => m.permissions.includes(perm) || (fail(res, 403, 'PERMISSION_DENIED', `沒有權限 ${perm}`), false);
         const method = req.method ?? 'GET';
+        // 即時監控 SSE(R1):直接寫串流,不經下面的延遲與 JSON 回應
+        if (path === '/api/netops/pa-live/stream' && method === 'GET') return need('netops.pa-realtime.read') ? streamPaLive(url, res) : undefined;
         const ctx: MockCtx = {
           method,
           path,

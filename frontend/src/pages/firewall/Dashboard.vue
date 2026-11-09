@@ -3,22 +3,25 @@
  * 防火牆 › 流量總覽(docs/API.md §4.1;舊版 src/views/PaDashboard.vue):
  *   合併期間內各 TRAFFIC log 檔的摘要(FTP Log 檔案頁分析後才有資料):KPI、每小時連線數 / 流量、流量排行、
  *   資料外流與 AI 應用、阻擋與風險、動作分布、疑似掃描。點排行 / 每小時長條 / KPI 帶條件到 Log 明細查詢(/firewall/search)。
- *   AI 分析不改寫(ARCHITECTURE D17):按鈕另開舊版流量總覽。期間最長 92 天;結果不完整時要提示(AGENT.md §5)。
+ *   AI 分析(IMPL-PLAN A1):按鈕開對話框分析目前期間(components/AiAnalysis.vue;按鈕權限 netops.pa-dashboard.ai)。期間最長 92 天;結果不完整時要提示(AGENT.md §5)。
  */
 import { computed, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { describeError, can } from '@/api/gateway';
 import { fmtNum, fmtPct, fmtShort, fmtSize, fmtTime } from '@/api/format';
 import { actionOf, pa, type PaDay, type PaOverview, type TopEntry } from '@/api/pa';
-import { NETOPS } from '@/api/perms';
+import { NETOPS, UI } from '@/api/perms';
+import AiAnalysis from '@/components/AiAnalysis.vue';
 import TopList from '@/components/TopList.vue';
 import { daysBetween } from '@/composables/dates';
 import { PICK, scanVerdict, withApps, type SearchCond } from '@/composables/paDashboard';
-import { LINKS } from '@/config/links';
 
 const MAX_DAYS = 92;
 const TOP = 15;
 const router = useRouter();
+/** AI 分析對話框 */
+const aiOpen = ref(false);
+const canAi = computed(() => can(UI.paDashboardAi));
 const canSearch = computed(() => can(NETOPS.paSearch));
 
 // ---------- 有資料的日期 ----------
@@ -197,9 +200,7 @@ const many = (n: number) => (n >= 1000 ? '1000+' : String(n));
   <div class="stack" style="--gap: 16px">
     <Teleport to="#page-actions" defer>
       <GButton icon="refresh" :loading="loading" @click="() => void refresh()">重新整理</GButton>
-      <a :href="LINKS.paDashboard" target="_blank" rel="noopener noreferrer" title="AI 分析在舊版(ARCHITECTURE D17)">
-        <GButton icon="sparkles" icon-right="external">AI 分析(舊版)</GButton>
-      </a>
+      <GButton v-if="canAi" icon="sparkles" :disabled="!range.from || !!rangeError || !data?.files" @click="aiOpen = true">AI 分析</GButton>
     </Teleport>
 
     <GCard padding="sm">
@@ -474,6 +475,7 @@ const many = (n: number) => (n >= 1000 ? '1000+' : String(n));
         </GTable>
       </GCard>
     </template>
+    <AiAnalysis v-model="aiOpen" :from="range.from" :to="range.to" />
   </div>
 </template>
 

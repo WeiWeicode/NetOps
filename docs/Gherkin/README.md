@@ -24,6 +24,7 @@
 | `pa-live/realtime.feature` | R1 PA 即時監控:收集器狀態(停止更新不顯示舊快照)、趨勢、排行、最新 log、SSE 串流;收集器開關、唯讀、接收驗證、保留時間 | API.md §3.2;PA-LIVE-PLAN;IMPL-PLAN R1 | R1 |
 | `ui/navigation.feature` | 應用層守衛(`/?denied=netops`)、選單依權限、403、一般連結 | UI-GUIDE §5;FRONTEND-GUIDE §7.4 | F1 |
 | `ui/requests.feature` | CSRF、不存 Token、下載、工作輪詢與取消、資料不完整提示、DOMPurify | FRONTEND-GUIDE §6;API.md §1 | F1 |
+| `ui/ai.feature` | AI 問答、AI 分析、知識庫 AI 功能的畫面:SSE 串流(CSRF)、按鈕權限、資料不完整提示、不連舊版 | API.md §10;D23 | A1 |
 | `check-scenarios.mjs` | 比對 `x-gherkin` 與本目錄場景的腳本(§5) | — | — |
 
 ## 2. 標籤

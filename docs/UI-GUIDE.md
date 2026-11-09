@@ -52,7 +52,7 @@
 
 `GTable` 的儲存格插槽內容全是 `v-if` 落空(只剩註解)時會顯示預設值,要留 `<span v-else />`。
 
-**只換畫面,不改功能**:篩選條件、排行點擊帶到明細、知識庫操作都要保留。AI 畫面不改寫,選單放連結到舊版(ARCHITECTURE D17、D18)。
+**只換畫面,不改功能**:篩選條件、排行點擊帶到明細、知識庫操作都要保留。AI 畫面於 A1 搬進新版(ARCHITECTURE D23):`PaAsk` → `pages/ai/Ask.vue`(PA 與 AD 共用)、`AiAnalysis` → `components/AiAnalysis.vue`(流量總覽的對話框)、知識庫的語意搜尋與自動學習 → `pages/knowledge/Knowledge.vue`、`components/IpLearning.vue`;AI 回答一律經 `AiMarkdown`(DOMPurify)。舊版的翻譯(`TranslateBox`)與問答頁「請 AI 記錄」依 2026-11-09 決定不搬(D25)。
 
 ## 4. 移除
 
@@ -61,7 +61,7 @@
 - Element Plus、Tailwind、`unplugin-auto-import`、`unplugin-vue-components`。
 - 舊配色系統:`themes/`、`src/themes/`、`scripts/make-themes.mjs`、`/theme.css`、`/__themes`。
 - 字體大小控制 `FontSizeControl`、`useFontScale`:GigaItApp 與入口網都沒有。
-- AI 畫面:`PaAsk`、`AiAnalysis`、`TranslateBox`、知識庫頁的語意搜尋與自動學習區塊(D17)。
+- AI 畫面:`PaAsk`、`AiAnalysis`、`TranslateBox`、知識庫頁的語意搜尋與自動學習區塊(新版已於 A1 改寫,`TranslateBox` 與「請 AI 記錄」不搬(D25);舊版檔案等 A1 正式區上線、舊版 IIS 停用後移除;D18、D23)。
 
 ## 5. 權限與禁止事項
 

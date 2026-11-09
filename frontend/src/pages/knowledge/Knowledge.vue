@@ -3,16 +3,18 @@
  * 網通知識 › 知識庫(docs/API.md §7;舊版 src/views/Knowledge.vue):
  *   筆記查詢(關鍵字以空白分隔、全部符合)、閱讀(Markdown 經 DOMPurify)、下載 .md、匯整檔預覽與下載;
  *   有編輯權限(UI.kbWrite)可新增、修改、刪除。?id= 記住目前筆記(__all__ = 匯整檔)。
- *   不改寫(ARCHITECTURE D17):語意搜尋、向量同步、外部 IP 自動學習、在 AI 問答請 AI 記錄 → 連到舊版。
+ *   AI 功能(IMPL-PLAN A1;docs/API.md §10.2):語意搜尋(向量庫)、向量庫狀態與立即同步(VECTOR_SYNC 開啟時)、外部 IP 自動學習(components/IpLearning.vue);
+ *   請 AI 記錄筆記在 AI 問答頁。
  */
-import { computed, onMounted, reactive, ref, shallowRef, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { can, describeError, download } from '@/api/gateway';
 import { fmtTime } from '@/api/format';
 import { KB_CONTENT_MAX, KB_IPS_MAX, KB_TAGS_MAX, KB_TITLE_MAX, kb, splitList, type KbCompilation, type KbNote } from '@/api/kb';
 import { UI } from '@/api/perms';
 import { renderMarkdown } from '@/composables/markdown';
-import { LINKS } from '@/config/links';
+import { ai, type VectorStatus } from '@/api/ai';
+import IpLearning from '@/components/IpLearning.vue';
 import { confirm, toast } from '@/ui';
 
 const ALL = '__all__';
@@ -31,6 +33,11 @@ const loading = ref(false);
 const error = ref<Error | null>(null);
 const currentId = ref(typeof route.query.id === 'string' ? route.query.id : '');
 let seq = 0;
+/** 語意搜尋(向量庫):依意思相近排序,每則附相近度;不分頁(最多 20 則) */
+const semantic = ref(false);
+const scores = shallowRef<Map<string, number>>(new Map());
+const vector = shallowRef<VectorStatus | null>(null);
+const learnOpen = ref(false);
 
 /** reloadAll:新增、修改、刪除後要重抓匯整檔 */
 async function load(p = 1, reloadAll = false) {
@@ -38,11 +45,25 @@ async function load(p = 1, reloadAll = false) {
   loading.value = true;
   error.value = null;
   try {
-    const r = await kb.list(q.value, p, PAGE_SIZE);
-    if (my !== seq) return;
+    let r: { items: KbNote[]; compilation: KbCompilation };
+    if (semantic.value && q.value.trim()) {
+      // 語意搜尋的回應沒有匯整檔資訊:同時取(新增、修改、刪除後也要更新);全部取回後才更新畫面
+      const [s, list] = await Promise.all([ai.semanticSearch(q.value.trim()), !compilation.value || reloadAll ? kb.list('', 1, 1) : null]);
+      if (my !== seq) return;
+      r = { items: s.items, compilation: list?.compilation ?? compilation.value! };
+      scores.value = new Map(s.items.map((n) => [n.id, n.score]));
+      total.value = s.items.length;
+      page.value = 1;
+      vector.value = s.vector;
+    } else {
+      const res = await kb.list(q.value, p, PAGE_SIZE);
+      if (my !== seq) return;
+      r = res;
+      scores.value = new Map();
+      total.value = res.total;
+      page.value = res.page;
+    }
     notes.value = r.items;
-    total.value = r.total;
-    page.value = r.page;
     compilation.value = r.compilation;
     if (currentId.value === ALL) {
       // 沒有任何筆記時匯整檔入口會消失,改回未選取
@@ -187,16 +208,53 @@ async function remove(n: KbNote) {
   }
 }
 
-onMounted(() => void load());
+/** 向量庫狀態(沒有權限或 AI 未設定時不顯示語意搜尋);同步中每 3 秒查一次直到結束 */
+let vectorTimer: ReturnType<typeof setTimeout> | undefined;
+let unmounted = false;
+async function loadVector() {
+  clearTimeout(vectorTimer);
+  try {
+    vector.value = await ai.vectorStatus();
+  } catch {
+    vector.value = null;
+  }
+  if (vector.value?.syncing && !unmounted) vectorTimer = setTimeout(() => void loadVector(), 3000);
+}
+const syncing = ref(false);
+async function syncVector() {
+  syncing.value = true;
+  try {
+    vector.value = await ai.vectorSync();
+    toast.success('已開始同步向量庫');
+    clearTimeout(vectorTimer);
+    if (!unmounted) vectorTimer = setTimeout(() => void loadVector(), 3000);
+  } catch (e) {
+    toast.fromError(e, '無法同步向量庫');
+  } finally {
+    syncing.value = false;
+  }
+}
+
+// 切換語意搜尋:有關鍵字就重查;取消時清掉相近度
+watch(semantic, (on) => {
+  if (q.value.trim()) void load(1);
+  else if (!on) scores.value = new Map();
+});
+
+onMounted(() => {
+  void load();
+  void loadVector();
+});
+onBeforeUnmount(() => {
+  unmounted = true;
+  clearTimeout(vectorTimer);
+});
 </script>
 
 <template>
   <div class="stack" style="--gap: 16px">
     <Teleport to="#page-actions" defer>
-      <a :href="LINKS.knowledge" target="_blank" rel="noopener noreferrer" title="語意搜尋與外部 IP 自動學習在舊版(ARCHITECTURE D17)">
-        <GButton icon="sparkles" icon-right="external">語意搜尋 / 自動學習(舊版)</GButton>
-      </a>
-      <a :href="LINKS.paAsk" target="_blank" rel="noopener noreferrer"><GButton icon="message" icon-right="external">到 AI 問答記錄(舊版)</GButton></a>
+      <GButton icon="globe" @click="learnOpen = true">外部 IP 自動學習</GButton>
       <GButton v-if="canWrite" variant="primary" icon="plus" @click="openEdit()">新增筆記</GButton>
     </Teleport>
 
@@ -207,9 +265,17 @@ onMounted(() => void load());
           <GInput v-model="q" icon="search" placeholder="IP、標題、內容、標籤(空白分隔多個關鍵字)" clearable class="grow" />
           <GButton type="submit" icon="search" :loading="loading" square aria-label="查詢" />
         </form>
+        <GCheckbox v-if="vector?.enabled" v-model="semantic" class="sem" label="語意搜尋(找意思相近的筆記)" />
         <p class="xs faint meta">
           共 {{ total.toLocaleString() }} 則<template v-if="pages > 1"> · 第 {{ page }} / {{ pages }} 頁</template>
+          <template v-if="semantic && q.trim()"> · 依相近度排序</template>
         </p>
+        <p v-if="vector?.enabled" class="xs faint meta">
+          向量庫 {{ vector.points.toLocaleString() }} 筆<template v-if="vector.lastSync"> · 同步於 {{ fmtTime(vector.lastSync) }}</template>
+          <template v-if="!vector.sync"> · 只搜尋、不同步(與舊版共用)</template>
+          <GButton v-else-if="canWrite" size="sm" variant="ghost" icon="refresh" :loading="syncing || vector.syncing" @click="syncVector">立即同步</GButton>
+        </p>
+        <GAlert v-if="vector?.error" tone="warning">向量庫:{{ vector.error }}(語意搜尋可能沒有結果)</GAlert>
         <GAlert v-if="error" tone="danger">{{ describeError(error) }}</GAlert>
         <ul class="notes">
           <li v-if="compilation?.count">
@@ -225,7 +291,7 @@ onMounted(() => void load());
             <button type="button" class="note" :class="{ active: n.id === currentId }" @click="select(n.id)">
               <span class="t">{{ n.title }}</span>
               <span class="xs muted ellipsis">{{ n.ips.join('、') || '一般說明' }}</span>
-              <span class="xs faint">{{ fmtTime(n.updated) }} · {{ n.author }}</span>
+              <span class="xs faint">{{ fmtTime(n.updated) }} · {{ n.author }}<template v-if="scores.has(n.id)"> · 相近度 {{ scores.get(n.id)!.toFixed(2) }}</template></span>
             </button>
           </li>
         </ul>
@@ -304,6 +370,7 @@ onMounted(() => void load());
         <GButton variant="primary" icon="save" :loading="dialog.saving" :disabled="!!dialogError" @click="save">儲存</GButton>
       </template>
     </GModal>
+    <IpLearning v-model="learnOpen" :can-run="canWrite" @learned="load(page, true)" />
   </div>
 </template>
 
@@ -321,6 +388,9 @@ onMounted(() => void load());
 .grow {
   flex: 1;
   min-width: 0;
+}
+.sem {
+  margin-top: 8px;
 }
 .meta {
   margin: 8px 2px;

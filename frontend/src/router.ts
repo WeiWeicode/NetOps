@@ -1,7 +1,7 @@
 /**
  * 路由(History 模式,base = /netops/;FRONTEND-GUIDE §4.2):
  *   第一層:選單群組(MENU_GROUPS,BFF 代碼 netops.group.*;ARCHITECTURE §5)
- *   第二層:功能頁(TabbedPage),meta 定義標題與 Tab;MENU_PAGES 由這裡的路由產生,另加一般連結(D11、D18)
+ *   第二層:功能頁(TabbedPage),meta 定義標題與 Tab;MENU_PAGES 由這裡的路由產生,另加一般連結(D11)
  *   第三層:Tab = 子路由(重新整理停在同一個 Tab)(目前各頁都只有單一內容,需要時加入 meta.tabs)
  * 守衛(同入口網與 GigaItApp;FRONTEND-GUIDE §7.4):
  *   BFF 無法連線 → /unavailable;未登入 → 入口網 /login?redirect=/netops/...;
@@ -124,6 +124,19 @@ const PAGES: PageDef[] = [
     view: page(() => import('./pages/firewall/Files.vue')),
   },
   {
+    path: 'firewall/ask',
+    meta: {
+      permission: NETOPS.paAsk,
+      requires: [API.paRead],
+      title: 'AI 問答',
+      subtitle: 'PA-560 AI Q&A',
+      icon: 'sparkles',
+      group: 'firewall',
+      description: '問題寫 IP / Port,系統從防火牆 log 查出相關紀錄交給公司內部 AI 判斷(IMPL-PLAN A1)',
+    },
+    view: page(() => import('./pages/ai/PaAsk.vue')),
+  },
+  {
     path: 'ad/events',
     meta: {
       permission: NETOPS.adEvents,
@@ -163,6 +176,19 @@ const PAGES: PageDef[] = [
     view: page(() => import('./pages/ad/Files.vue')),
   },
   {
+    path: 'ad/ask',
+    meta: {
+      permission: NETOPS.adAsk,
+      requires: [API.adRead],
+      title: 'AI 問答',
+      subtitle: 'AD AI Q&A',
+      icon: 'sparkles',
+      group: 'ad',
+      description: '問 AD 網域控制站的事件:帳號、登入、鎖定、特權異動、DNS、Kerberos、事件 ID(IMPL-PLAN A1)',
+    },
+    view: page(() => import('./pages/ai/AdAsk.vue')),
+  },
+  {
     path: 'knowledge',
     meta: {
       permission: NETOPS.kbPage,
@@ -171,7 +197,7 @@ const PAGES: PageDef[] = [
       subtitle: 'Network Knowledge',
       icon: 'book-open',
       group: 'knowledge',
-      description: '網通環境筆記;AI 問答與分析會自動參考(語意搜尋與自動學習在舊版,ARCHITECTURE D17)',
+      description: '網通環境筆記;AI 問答與分析會自動參考;可語意搜尋、自動學習外部 IP 的擁有者'
     },
     view: page(() => import('./pages/knowledge/Knowledge.vue')),
   },
@@ -179,9 +205,6 @@ const PAGES: PageDef[] = [
 
 /** 一般連結(另開分頁;D11、D18) */
 const LINK_PAGES: MenuPage[] = [
-  // AI 問答查的是 PA / AD 資料:有對應的讀取權限才顯示
-  { path: 'link:pa-ask', href: LINKS.paAsk, group: 'firewall', title: 'AI 問答(舊版)', icon: 'sparkles', requires: [API.paRead] },
-  { path: 'link:ad-ask', href: LINKS.adAsk, group: 'ad', title: 'AI 問答(舊版)', icon: 'sparkles', requires: [API.adRead] },
   { path: 'link:veeam', href: LINKS.veeam, group: 'other', title: 'Veeam 備份監控', icon: 'database' },
 ];
 

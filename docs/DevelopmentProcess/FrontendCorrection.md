@@ -2,6 +2,25 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。範圍:`frontend/`。
 
+## 2026-11-09 A1-frontend:移除翻譯與「請 AI 記錄」(決定不搬)
+- 工作項目:A1(`feature/a1-ai-frontend`;需求方 2026-11-09 依 `docs/AI-FEATURE-INVENTORY.md` 決定翻譯(#5)與整理筆記(#6)不搬,ARCHITECTURE D25)
+- 內容:合併 `feature/a1-ai-api`(後端已拿掉 `/ai/translations`、`/ai/notes`)後,前端拿掉 `components/TranslateBox.vue`(問答與 AI 分析下方的翻譯)、問答頁的「記錄到知識庫」按鈕與「請記錄:…」判斷(`NOTE_RE`、`record()`、筆記結果的顯示)、由連結帶入時的「請確認」提示(原本只為防止連結誘導寫入知識庫)、`api/ai.ts` 的 `translate`、`note`、`TRANSLATE_LANGS`;假 Gateway 拿掉兩支 API。問答頁改提示「要補充環境資訊,請到知識庫新增筆記」。權限代碼不變(問答頁原本用的 `UI.kbWrite` 是知識庫頁既有的按鈕代碼)。
+- 檔案:`frontend/src/{api/ai.ts,composables/aiChat.ts,components/{AiAnalysis,TranslateBox(刪除)}.vue,pages/ai/Ask.vue}`、`frontend/mock/ai.ts`、`frontend/test/ai.test.ts`、`docs/Gherkin/{ui/ai.feature,README.md}`、`docs/UI-GUIDE.md`
+- 驗證:`npm run typecheck`、`npm test`(78 項通過;移除前 79 項,拿掉「請記錄」判斷 1 項)、`npm run build`
+
+## 2026-11-05 A1-frontend 審查修正
+- 工作項目:A1(第 3 批;`code-reviewer`、`security-auditor` 審查後)
+- 內容:① AI 回答(`AiMarkdown` → `renderMarkdown(text, { ai: true })`):不同網域的連結改成「文字(網址)」純文字、不顯示圖片(模型可能被 log / RDAP 內容誘導出釣魚連結;圖片會自動帶 Cookie 發 GET);知識庫筆記不變。② 由連結(`?q=`)帶入的問題,第一次送出一律當成問題,不因「請記錄」字樣改寫入知識庫,並提示「問題由連結帶入」。③ 串流沒收到 `done` 就結束時丟 `NETOPS_STREAM_INCOMPLETE`(保留已收到的內容並標示不完整;舊版當成完成);結束或丟錯時 `reader.cancel()`;最後一段沒有結尾空行也處理。④ 停止時標示「已停止,回答不完整」,不放進之後的對話紀錄;「看原始紀錄」用送出那一題的期間。⑤ `IpLearning` 輪詢:卸載後不再排程,只有最新一次查詢可以排下一輪(不會重複輪詢);天數與筆數送出前限制範圍。⑥ 知識庫:語意搜尋等全部回應取回後才更新畫面(連續查詢不互相覆蓋),新增 / 修改 / 刪除後也更新匯整檔資訊;勾選語意搜尋改用 `watch`;向量庫同步中每 3 秒查狀態直到結束,離開頁面時清除。⑦ 權限:記錄到知識庫用按鈕代碼 `UI.kbWrite`(同知識庫頁);安全事件頁點 IP 改檢查 `UI.paAskUse`。⑧ 無障礙:對話列表 `aria-live`、狀態 `role="status"`、輸入框加標籤。
+- 檔案:`frontend/src/{api/ai.ts,composables/{markdown,aiChat}.ts,components/{AiMarkdown,AiAnalysis,IpLearning}.vue,pages/ai/Ask.vue,pages/knowledge/Knowledge.vue,pages/firewall/Events.vue}`、`frontend/mock/ai.ts`、`frontend/test/ai.test.ts`、`docs/Gherkin/ui/ai.feature`
+- 驗證:`npm run typecheck`、`npm test`(79 項通過,新增 2 項)、`npm run build`;`MOCK=admin` 瀏覽器確認:連結帶入「請記錄:…」送出後走問答、沒有寫入;外部連結變純文字、同網域連結可點、圖片拿掉
+- 未改:SPA 內登出再換人登入時,模組層級的對話會保留(web-kit 登出是整頁導向入口網,目前不會發生;之後若改成不重新載入要清掉)
+
+## 2026-11-05 A1-frontend:AI 問答、AI 分析、翻譯、知識庫 AI 功能
+- 工作項目:A1(第 3 批 `feature/a1-ai-frontend`,從第 2 批開出)
+- 內容:舊版 AI 畫面搬進新版(ARCHITECTURE D23):① `pages/ai/Ask.vue`(PA `/firewall/ask`、AD `/ad/ask` 共用;由舊版 `src/views/PaAsk.vue` 搬移):SSE 串流顯示查詢進度、查到的資料、PA 其他 log、AD 事件、參考的知識庫筆記與回答;追問、停止、清除、複製、翻譯、看原始紀錄(帶條件到明細查詢)、範例問題;有 `netops.kb.write` 可「記錄到知識庫」(或輸入「請記錄:…」);對話放在模組層級的 reactive(`composables/aiChat.ts`,切頁回來還在,重新整理清空,不存 localStorage)。② `components/AiAnalysis.vue`:流量總覽的「AI 分析」對話框(按鈕權限 `netops.pa-dashboard.ai`)。③ `components/TranslateBox.vue`、`AiMarkdown.vue`(一律經 DOMPurify)。④ 知識庫頁:語意搜尋(勾選後依相近度排序、顯示相近度)、向量庫狀態(只搜尋不同步時註明;開啟同步時有「立即同步」)、外部 IP 自動學習對話框(`components/IpLearning.vue`,執行中每 2 秒查狀態,完成後重新整理清單)。⑤ `api/ai.ts`:POST SSE 以 `fetch` 讀串流,帶 Cookie 與 CSRF、不帶 Bearer,401 先 Refresh;串流開始前的錯誤是 `ApiError`,`error` 事件是 `AiStreamError`。⑥ 移除連到舊版 NetOps 的連結(`config/links.ts` 只剩 Veeam):選單的「AI 問答(舊版)」改成新版頁面;安全事件頁點 IP 改到新版 AI 問答(沒有 AI 問答權限時不可點)。⑦ `api/perms.ts`:`NETOPS.paAsk` / `adAsk`、`UI.paAskUse` / `adAskUse` / `paDashboardAi`、`API.aiUse`。⑧ 假 Gateway `mock/ai.ts`(`MOCK=admin`):固定的 SSE 事件、翻譯、整理筆記、向量庫狀態、外部 IP 學習。
+- 與舊版不同:對話紀錄只送最近 20 則(後端只用最近 6 則);AI 回答與知識庫一樣用 `composables/markdown.ts` 清理(連結另開分頁、外部圖片拿掉);深入思考改成 GCheckbox;日期改兩個 `datetime-local`;服務資訊不再寫死主機位址(舊版畫面寫 10.10.130.45)。
+- 檔案:`frontend/src/{api/ai.ts,api/perms.ts,composables/aiChat.ts,components/{AiMarkdown,AiAnalysis,TranslateBox,IpLearning}.vue,pages/ai/{Ask,PaAsk,AdAsk}.vue,pages/firewall/{Dashboard,Events}.vue,pages/knowledge/Knowledge.vue,router.ts,config/links.ts}`、`frontend/mock/{ai,gateway,types}.ts`、`frontend/test/{ai,links}.test.ts`、`docs/Gherkin/ui/{ai,navigation}.feature`、`docs/UI-GUIDE.md`
+- 驗證:`npm run typecheck`、`npm test`(13 檔 77 項通過,新增 10 項)、`npm run build`;以 `MOCK=admin` 本機假 Gateway 在瀏覽器確認:AI 問答串流顯示(查到的資料、掃描逾時資料不完整、其他 log、知識庫、Markdown 表格、惡意 `onerror` 已清掉)、翻譯、流量總覽 AI 分析(摘要讀不到的提示)、外部 IP 學習輪詢完成。經 Gateway 的實際串流待測試區驗收
 ## 2026-11-05 R1 即時監控頁(防火牆群組最上方)
 - 工作項目:R1
 - 內容:新增 `/firewall/live`「即時監控」(選單 `netops.pa-live.read`,API `netops.pa-realtime.read`;`deploy/gateway-rbac.yaml` 登記節點 sort 5 並加入 `netops-admin`、`netops-viewer`)。設備狀態(Session、管理 / 資料平面 CPU、整體流量、介面流量;快照過期顯示「停止更新」)、最近 1 小時趨勢、即時排行(類型 × 5 / 15 / 60 分鐘)、即時 log(EventSource 串流、類型切換、IP / Port / Action 篩選、暫停、最多 500 筆、標示 Redis 最早時間並連到 Log 明細查詢)。收集器停止、未啟用、Redis 連不上時頁首明確提示,排行與 log 標示「不是即時的」(AGENT §5)。串流非 200 時改用一般 API 檢查登入並 10 秒後重連,串流斷線期間每 10 秒輪詢快照。假 Gateway `mock/paLive.ts`(`MOCK_PA_LIVE=stopped|disabled|unavailable`)。

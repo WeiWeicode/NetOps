@@ -8,6 +8,7 @@
 - 檔案:`deploy/docker-compose.yml`、`.gitlab-ci.yml`、`deploy/host2-set-pa-secrets.sh`、`deploy/test.env.example`、`docs/PA-FORWARDING-SPEC.md`、`docs/PA-LIVE-PLAN.md` §9
 - 依 `security-auditor` 審查修正:Compose 帶入憑證設定(`/srv/giganexus/netops-pa-tls` 唯讀掛載,`PA_CA_FILE`、`PA_TLS_*`、`PA_RECEIVE_PLAINTEXT`)、Redis `cap_drop` 與 `stop_grace_period`、CI 先建置 netops-pa 並檢查 AOF / RDB / maxmemory、腳本 trap 順序、規格的 API Key 產生指令(密碼從標準輸入、驗證憑證)、Syslog 安全限制與主機 3 防火牆注意事項(附錄 F.4.1)、手動重建改用 CI 映像。
 - 驗證:`docker compose -f deploy/docker-compose.yml config` 通過(本機無 Docker daemon,未實際啟動;CI 部署時驗證);`.gitlab-ci.yml` 以 YAML 解析器確認
+- 2026-11-09 補充(準備接真的 PA-560):`docs/PA-FORWARDING-SPEC.md` 加入管理介面 Permitted IP Addresses(A.0)、憑證 SAN 規則(用 IP 連線時 SAN 要有該 IP)、附錄 F.4 改為先查憑證 SAN 再用 `python -m netops_pa check` 檢查後才打開輪詢、新增 G 節「請網通回覆的資訊」清單
 
 ## 2026-11-05 R1 收集器 `pa-collector/`(netops-pa)
 - 工作項目:R1

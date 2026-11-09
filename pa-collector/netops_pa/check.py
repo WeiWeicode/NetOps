@@ -23,7 +23,8 @@ HINTS: list[tuple[tuple[str, ...], str]] = [
     (("403", "invalid credential", "unauthorized"), "API Key 無效、過期或角色沒有 XML API Operational Requests 權限"),
     (("timed out", "timeout"), "連線逾時:網路未放行,或管理介面 Permitted IP Addresses 沒有加入本主機"),
     (("refused", "unreachable", "no route", "name or service", "getaddrinfo", "errno"), "連不到 PA-560:確認 PA_HOST、PA_PORT 與網路放行"),
-    (("invalid syntax", "not supported", "unknown command"), "設備不支援此查詢(PAN-OS 版本差異),請回報版本"),
+    (("invalid syntax", "not supported", "unknown command", "non null value"),
+     "設備不支援此查詢或指令格式不符(PAN-OS 版本差異),請回報版本"),
 ]
 
 

@@ -55,3 +55,9 @@ def test_check_config_errors():
 def test_hint_certificate():
     assert "SAN" in hint("SSLCertVerificationError: certificate verify failed: IP address mismatch")
     assert load_poll({"GW_ENV": "test", "PA_HOST": "pa", "PA_API_KEY": "k"}).port == 443
+
+
+def test_hint_pan_os_command_error():
+    # PAN-OS 12.1.7-h3 實測的錯誤訊息
+    msg = "PanDeviceXapiError:  show -> counter -> interface -> all needs to have non NULL value\n show -> counter -> interface is invalid"
+    assert "PAN-OS 版本差異" in hint(msg)

@@ -130,3 +130,20 @@ def test_parsers_tolerate_version_differences():
 def test_whitelist_has_no_write_commands():
     for cmd in READ_ONLY_COMMANDS.values():
         assert cmd.startswith("show ")
+
+
+def test_counter_interface_sends_value_not_element(fake_pa):
+    """PAN-OS 12.1.7-h3 實測:interface 要的是值;show counter interface all 會被 SDK 轉成 <all/> 而失敗。"""
+    poller, r, _ = make(fake_pa)
+    assert "interfaces" not in poller.poll_once()
+    cmds = [p["cmd"] for p in fake_pa.requests]
+    assert "<show><counter><interface>all</interface></counter></show>" in cmds
+    assert snap(r, "interfaces")["items"]
+
+
+def test_fake_pa_rejects_counter_interface_element(fake_pa):
+    """假 PA 照實機:<interface><all/> 回 non NULL value 錯誤(白名單若改回沒加引號的寫法,上一個測試會失敗)。"""
+    good = fake_pa.respond({"key": "test-key", "cmd": "<show><counter><interface>all</interface></counter></show>"})
+    bad = fake_pa.respond({"key": "test-key", "cmd": "<show><counter><interface><all></all></interface></counter></show>"})
+    assert 'status="success"' in good
+    assert 'status="error"' in bad and "non NULL value" in bad

@@ -2,12 +2,14 @@
  * AD 事件記錄匯入(由舊版 server/lib/adimport.js 搬移,IMPL-PLAN B2;解析與統計在 core/adlog.js 不動)
  *   FTP {FTP_AD_DIR}/yyyyMMdd/*.csv → store.ad(一天一份,全部事件,一天約幾千筆)
  *   每天資料夾裡任一檔案大小或時間改變就重新匯入;與 PA log 共用 FTP_SYNC_MINUTES 自動同步
- * 與舊版不同:列目錄與下載用同一條 FTP 連線(舊版會同時開兩條);同步在背景執行;AI 用的 adContext 等不搬移(D17)。
+ * 與舊版不同:列目錄與下載用同一條 FTP 連線(舊版會同時開兩條);同步在背景執行。
+ * AI 用的 adContext(IMPL-PLAN A1 搬移,文字在 core/ad-ai.js)。
  */
 import type { FtpConfig } from '../../config.js';
 import type { Ftp, FtpEntry, FtpSession } from '../../infra/ftp/index.js';
 import type { AdStore } from '../../infra/store/index.js';
 import { errorText, type Log } from '../pa/importer.js';
+import { adContext as adContextJs } from './core/ad-ai.js';
 import { buildAdFilter, channelOf, enrichEvent, parseAdCsv, summarizeAd } from './core/adlog.js';
 
 export interface AdEvent {
@@ -57,6 +59,9 @@ export interface AdFilter {
   ip?: string;
   issueOnly?: boolean;
 }
+
+/** core/ad-ai.js 的型別(JS 推斷的參數型別太窄) */
+const adContextText = adContextJs as unknown as (events: AdEvent[], days: { day: string; files: { channel?: string; rows: number }[] }[], from: string, to: string, opts: object) => string;
 
 const DAY_RE = /^\d{8}$/;
 const slash = (d: string) => `${d.slice(0, 4)}/${d.slice(4, 6)}/${d.slice(6, 8)}`;
@@ -273,8 +278,12 @@ export function createAdImporter({ ftp, store, ftpConfig, log }: { ftp: Ftp; sto
     return { rows: all.filter(test) as AdEvent[], scanned: all.length };
   }
 
+  /** AI 分析 / 問答用:期間的 AD 事件 → 給模型的文字(沒有資料回 '';同舊版 adContext) */
+  const adContext = (from: string, to: string, opts: { ips?: string[]; eventIds?: number[]; accounts?: string[]; full?: boolean } = {}): string =>
+    adContextText(eventsInRange(from, to), days(), from, to, opts);
+
   /** 是否有設定 FTP(沒有時同步、匯入直接回 503,不在背景才失敗) */
   const configured = () => Boolean(ftpConfig);
 
-  return { status, configured, days, listRemote, forget, sync, start, stop, summary, daysInRange, search };
+  return { status, configured, days, listRemote, forget, sync, start, stop, summary, daysInRange, search, eventsInRange, adContext };
 }

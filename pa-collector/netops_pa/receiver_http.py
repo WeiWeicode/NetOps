@@ -82,7 +82,21 @@ class Handler(BaseHTTPRequestHandler):
 
     def _reject(self, status: int, code: str, counter: str = "rejected") -> None:
         self.server.status.add(counter)
+        self._discard_body()
         self._reply(status, {"code": code})
+
+    def _discard_body(self) -> None:
+        """回錯誤前讀掉未讀的本文(上限 max_body):不讀就關閉連線時,對方(Windows、PA-560)可能收到 RST 而看不到錯誤碼。"""
+        raw = self.headers.get("Content-Length", "") if self.headers else ""
+        if getattr(self, "_body_read", False) or not (raw.isascii() and raw.isdigit() and len(raw) <= 9):
+            return
+        n = int(raw)
+        if 0 < n <= self.server.max_body:
+            try:
+                self.rfile.read(n)
+            except OSError:
+                pass
+        self._body_read = True
 
     def do_GET(self) -> None:  # noqa: N802
         self._reject(405, "METHOD_NOT_ALLOWED")
@@ -109,6 +123,7 @@ class Handler(BaseHTTPRequestHandler):
         if length > srv.max_body:
             return self._reject(413, "TOO_LARGE")
         body = self.rfile.read(length)
+        self._body_read = True
         if len(body) != length:
             return self._reject(400, "INCOMPLETE", "malformed")
         items = parse_body(body)

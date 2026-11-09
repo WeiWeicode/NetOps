@@ -2,7 +2,7 @@
 
 > 給負責 PA-560 的網通同仁照著設定。對應 NetOps [PA-LIVE-PLAN.md](PA-LIVE-PLAN.md) §3.1、§4、§9 與 IMPL-PLAN R0。
 > **PAN-OS 版本尚未確認**(P1):本文以 PAN-OS 10.x / 11.x 的畫面與欄位名稱撰寫;版本不同時,以設備畫面上「可選欄位清單」為準,表格裡標「版本」的欄位可能不存在,**不存在就整個 `"key":"$變數"` 拿掉**,其他照設。
-> 設定完成後請回覆:PA-560 管理 IP、PAN-OS 版本、送出 log 的來源 IP(管理介面或 service route)、實際使用的傳輸方式(HTTP / HTTPS、TCP / SSL)。
+> 設定完成後請回覆 **G 節的清單**(管理 IP、PAN-OS 版本、憑證、送 log 的來源 IP、傳輸方式等)。
 
 ---
 
@@ -15,7 +15,7 @@
 | C. Syslog Server Profile | PA-560 → NetOps `:51294` | **TRAFFIC log**(量大,每天約 1,000 萬筆) | 同上 |
 | D. Log Forwarding Profile | — | 把 B、C 套到安全政策 | — |
 
-**網路放行**(PA-LIVE-PLAN §9):`10.10.130.124`、`10.10.130.122` → PA-560 管理 IP `TCP 443`;PA-560 送 log 的來源 IP → `10.10.130.124`、`10.10.130.122` 的 `TCP 51293`、`TCP 51294`。
+**網路放行**(PA-LIVE-PLAN §9;另外管理介面本身的 **Permitted IP Addresses** 也要加入兩台主機,見 A.0):`10.10.130.124`、`10.10.130.122` → PA-560 管理 IP `TCP 443`;PA-560 送 log 的來源 IP → `10.10.130.124`、`10.10.130.122` 的 `TCP 51293`、`TCP 51294`。
 
 **測試區只在測試期間轉送**:測試區的接收端點預設關閉(2026-11-05 需求方決定)。請先只把**正式區**(`10.10.130.122`)加進 B、C 的伺服器清單;測試時再由需求方通知加入 `10.10.130.124`,測完移除,避免 PA-560 對沒開的 port 一直重試。
 
@@ -25,6 +25,7 @@
 
 ## A. 唯讀 API 帳號(SDK 輪詢)
 
+0. **Device > Setup > Interfaces > Management > Permitted IP Addresses**:若有設定清單,加入 `10.10.130.124`(測試區)、`10.10.130.122`(正式區);沒加時 API 會連線逾時。若管理介面在另一個網段,請確認路由與防火牆政策也放行。
 1. **Device > Admin Roles > Add**,名稱 `netops-readonly`:
    - **Web UI**:全部停用(Disable)。
    - **XML API**:只啟用 **Operational Requests**;Report、Log、Configuration、Commit、User-ID Agent、Import、Export、IoT Agent 全部停用。
@@ -47,7 +48,7 @@
 | 會執行的指令 | `show session info`、`show system resources`、`show running resource-monitor second last 1`、`show counter interface all` |
 | 頻率 | 正式區每 10–15 秒一輪;測試區平常不輪詢,測試期間才開 |
 | Key 失效 | 改密碼或 Device > Setup > Management > Authentication Settings 的 **API Key Lifetime** 到期時 Key 會失效,畫面會顯示「資料停止更新」;換 Key 時請通知需求方 |
-| 憑證 | NetOps 預設**驗證**管理介面的 HTTPS 憑證。管理介面若是自簽憑證,請提供該憑證(或簽發的內部 CA 憑證,公開資訊、非機密);測試區可暫時不驗證,正式區不行 |
+| 憑證 | NetOps 預設**驗證**管理介面的 HTTPS 憑證,而且**連線用的位址要出現在憑證的 SAN**:用 IP 連線時 SAN 要有該 IP(只在 CN 不算)。PA 出廠的自簽憑證通常沒有 IP SAN。請提供:① 管理介面憑證(或簽發的內部 CA 憑證,公開資訊、非機密);② 憑證 SAN 內的名稱或 IP(NetOps 會用它當 `PA_HOST`;用名稱時公司 DNS 要查得到)。無法提供時,測試區可暫時不驗證(`PA_TLS_INSECURE=1`),正式區不行,需重新簽發含 SAN 的憑證(Device > Certificate Management) |
 
 ---
 
@@ -317,9 +318,35 @@ netsh interface portproxy show v4tov4
 ### F.4 開啟 SDK 輪詢(測試時)
 
 1. 拿到 API Key 後:`sudo rm /srv/giganexus/netops-secrets/pa_api_key && sudo sh deploy/host2-set-pa-secrets.sh`(隱藏輸入)。
-2. `netops.env`:`PA_HOST=<PA-560 管理 IP>`、`PA_POLL_ENABLED=1`;管理介面是自簽憑證且還沒拿到憑證時,測試區可暫設 `PA_TLS_INSECURE=1`(正式區不可)。
-3. 重建 `netops-pa`(同 F.3 第 3 步),日誌預期:`SDK 輪詢已啟用:每 15 秒(PA <IP>:443)`;即時監控頁「設備狀態」有數字。
-4. 測完 `PA_POLL_ENABLED=0` 再重建。
+2. 先查管理介面憑證的 SAN(在主機 2 的 WSL,公開資訊):
+
+   ```bash
+   echo | openssl s_client -connect <PA-560 管理 IP>:443 2>/dev/null | openssl x509 -noout -subject -issuer -ext subjectAltName
+   ```
+
+   - SAN 有該 IP 或名稱、且由公司 CA 簽發 → `PA_HOST` 用 SAN 裡的值,把 CA 憑證放 `/srv/giganexus/netops-pa-tls/pa-mgmt-ca.pem` 並設 `PA_CA_FILE=/run/pa-tls/pa-mgmt-ca.pem`(F.6)。
+   - 自簽、沒有 SAN(出廠憑證常見)→ 測試區先設 `PA_TLS_INSECURE=1`,請網通重新簽發含 SAN 的憑證後再拿掉(正式區不可用 `PA_TLS_INSECURE`)。
+3. `netops.env`:`PA_HOST=<上一步決定的值>`,**先不要**打開 `PA_POLL_ENABLED`;重建 `netops-pa`(同 F.3 第 3 步)後執行連線檢查(只跑一次唯讀查詢、不寫 Redis):
+
+   ```bash
+   sudo docker exec giganexus-netops-test-netops-pa-1 python -m netops_pa check
+   ```
+
+   預期(數字依設備):
+
+   ```text
+   PA-560 <PA_HOST>:443,驗證憑證(PA_CA_FILE),逾時 8 秒
+   ✓ show system info:model=PA-560、sw-version=10.2.x、hostname=…、serial=…1234
+   ✓ show session info:{'active': 3912, 'max': 262142, …}
+   ✓ show system resources:{'mgmt': 10.0, …}
+   ✓ show running resource-monitor second last "1":{'dataplane': 5.0}
+   ✓ show counter interface all:{'interfaces': 8}
+   結果:全部成功
+   ```
+
+   失敗的項目會印 `✗` 與可能原因(憑證 SAN、API Key 或角色權限、網路或 Permitted IP、PAN-OS 版本);把輸出(API Key 已遮罩)回報給系統負責人。**把 `sw-version` 回報**,用來核對 B、C 節的欄位變數。
+4. 檢查全部成功後,`PA_POLL_ENABLED=1` 再重建;日誌預期:`SDK 輪詢已啟用:每 15 秒(PA <PA_HOST>:443)`;即時監控頁「設備狀態」有數字。
+5. 測完 `PA_POLL_ENABLED=0` 再重建。
 
 ### F.4.1 安全限制(目前版本)
 
@@ -341,3 +368,20 @@ netsh interface portproxy show v4tov4
 | `pa-client-ca.pem` | `PA_TLS_CLIENT_CA_FILE=/run/pa-tls/pa-client-ca.pem` | 要求並驗證 PA-560 的用戶端憑證(C 節) | 644 |
 
 正式區沒有 `server.crt` / `server.key` 時接收端點不會啟動;需求方決定接受明文時才設 `PA_RECEIVE_PLAINTEXT=1`。私鑰是機密:由需求方放入,不要貼到聊天或工單。
+
+---
+
+## G. 請網通回覆的資訊(R0)
+
+| # | 項目 | 用在 | 狀態(2026-11-09) |
+| --- | --- | --- | --- |
+| G1 | 唯讀 API Key(A 節) | SDK 輪詢 | **已取得**(需求方以 `deploy/host2-set-pa-secrets.sh` 寫入主機,AI 不經手) |
+| G2 | PA-560 管理介面 IP(或 DNS 名稱) | `PA_HOST` | 待回覆 |
+| G3 | PAN-OS 版本(Dashboard 或 `show system info` 的 sw-version) | 核對 B、C 節標「版本」的欄位;連線檢查也會印出 | 待回覆 |
+| G4 | 管理介面憑證:是否自簽、SAN 內有哪些名稱 / IP、簽發的 CA 憑證 | `PA_CA_FILE`;決定是否需暫用 `PA_TLS_INSECURE`(只限測試區) | 待回覆 |
+| G5 | 管理介面 Permitted IP Addresses 已加入 `10.10.130.124`(與正式區 `.122`)、網路放行到管理介面 `:443` | 輪詢 | 待回覆 |
+| G6 | PA-560 送 log 的**來源 IP**(管理介面或 service route 指定的介面) | 主機 Windows 防火牆規則(附錄 F.2) | 待回覆 |
+| G7 | HTTP 用 HTTPS 或 HTTP;Syslog 用 SSL 或 TCP;PA-560 是否信任公司內部 CA(信任才能用 HTTPS / SSL) | 接收端點憑證(F.6) | 待回覆 |
+| G8 | Syslog SSL 能否設定**用戶端憑證**,能的話提供簽發的 CA 憑證 | Syslog 唯一能驗證來源的方式(F.4.1) | 待回覆 |
+| G9 | B、C、D 節設定完成(先只加正式區;測試時再加測試區 `10.10.130.124`) | 接收 | 待設定 |
+| G10 | 開 TRAFFIC 前後的管理平面 CPU 與 log 轉送佇列觀察(E4) | 負載 | 設定後 |

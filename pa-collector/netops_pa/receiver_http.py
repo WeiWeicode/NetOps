@@ -27,6 +27,8 @@ TOKEN_HEADER = "X-NetOps-Token"  # noqa: S105 — 標頭名稱,不是機密
 PATH_PREFIX = "/v1/logs/"
 # 一個請求最多幾筆(PA 一次送一筆或小批;超過視為異常)
 MAX_RECORDS = 2000
+# 拒收時最多讀掉多少本文(沒通過驗證的連線不讓伺服器讀大量資料);超過就直接關閉
+DISCARD_MAX = 64 * 1024
 
 
 def parse_body(body: bytes) -> list[Any] | None:
@@ -65,6 +67,11 @@ class Handler(BaseHTTPRequestHandler):
     # 每次讀取的逾時(秒):慢速連線、閒置的 keep-alive 連線不長期佔住名額
     timeout = 10
 
+    def parse_request(self) -> bool:
+        # keep-alive 同一條連線的每個請求都重設
+        self._body_read = False
+        return super().parse_request()
+
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A002 — 覆寫標準函式庫簽名
         # 預設會把請求列印到 stderr;只記錄錯誤(send_error),不記路徑以外的內容
         log.debug("%s %s", self.client_address[0], format % args)
@@ -86,12 +93,12 @@ class Handler(BaseHTTPRequestHandler):
         self._reply(status, {"code": code})
 
     def _discard_body(self) -> None:
-        """回錯誤前讀掉未讀的本文(上限 max_body):不讀就關閉連線時,對方(Windows、PA-560)可能收到 RST 而看不到錯誤碼。"""
+        """回錯誤前讀掉未讀的本文(上限 64 KB,超過就不讀、直接關閉):不讀就關閉連線時,對方(Windows、PA-560)可能收到 RST 而看不到錯誤碼。"""
         raw = self.headers.get("Content-Length", "") if self.headers else ""
         if getattr(self, "_body_read", False) or not (raw.isascii() and raw.isdigit() and len(raw) <= 9):
             return
         n = int(raw)
-        if 0 < n <= self.server.max_body:
+        if 0 < n <= min(DISCARD_MAX, self.server.max_body):
             try:
                 self.rfile.read(n)
             except OSError:

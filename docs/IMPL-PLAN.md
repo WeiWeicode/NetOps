@@ -148,8 +148,8 @@ D13:骨架直接留用;AI 不在這次範圍,不做串流驗證(D7、D17)。
 ## A1 AI 搬移
 
 1. 替舊版 AI 核心(`evidence.js`、`llm.js`、`vector.js`、`iplearn.js`)補測試基準,再搬進 `backend/`(D4,`refactor-assistant`)。
-2. 設定改連 `10.10.130.46`(`LLM_URL`、`LLM_MODEL`、`EMBED_URL`);Qdrant 與翻譯依 PA-LIVE-PLAN P6 定案。
-3. API 補 `x-permission`、`x-gherkin`;`gateway-rbac.yaml` 加 AI 權限;前端加回 AI 分析、問答、翻譯、整理筆記、語意搜尋。
+2. 設定改連 `10.10.130.46`(`LLM_URL`、`LLM_MODEL`、`EMBED_URL`);Qdrant 依 PA-LIVE-PLAN P6 定案(沿用舊版 `NetOpsKb`)。
+3. API 補 `x-permission`、`x-gherkin`;`gateway-rbac.yaml` 加 AI 權限;前端加回 AI 分析、問答、語意搜尋、外部 IP 自動學習。翻譯與整理筆記依 2026-11-09 決定不搬(ARCHITECTURE D25、[AI-FEATURE-INVENTORY.md](AI-FEATURE-INVENTORY.md))。
 4. 確認主機 2、3 容器可連 AI 主機與 RDAP;測試區驗收。
 5. 正式區上線後停用舊版 IIS(`main` 已打標籤)。
 

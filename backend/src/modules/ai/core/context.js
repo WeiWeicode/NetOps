@@ -1,7 +1,7 @@
 /**
  * AI 分析與問答的資料整理與提示(由舊版 server/routes/ai.js 搬移,IMPL-PLAN A1;ARCHITECTURE D4、D23)
  *   buildContext:期間內 PA 摘要 → 精簡文字(只送統計摘要給模型,不送原始 log,AGENT.md §7.4)
- *   SYSTEM_PROMPT / ASK_PROMPT / NOTE_PROMPT:提示文字與舊版逐字相同
+ *   SYSTEM_PROMPT / ASK_PROMPT:提示文字與舊版逐字相同(整理筆記的 NOTE_PROMPT 與 parseJsonReply 依 2026-11-09 決定不搬,ARCHITECTURE D25)
  * 只搬純函式:摘要的讀取由呼叫端注入 summarize(from, to, topN)(舊版直接呼叫 importer 的 filesInRange / readSummary)。
  */
 
@@ -197,21 +197,3 @@ ${EV_NOTES}
 
 /** 問到這些關鍵字（沒有 IP 時）帶入 PA 其他類型 log 的期間摘要 */
 export const EVENT_Q = /威脅|攻擊|入侵|漏洞|暴力|破解|撞密碼|brute|threat|ips\b|url|網站|網址|瀏覽|vpn|globalprotect|wildfire|沙箱|惡意|病毒|木馬|解密|decrypt|tls|ssl|資料過濾|data.?filter|檔案|上傳|user.?id|哪個使用者|是誰/i
-
-export const NOTE_PROMPT = `你負責把 MIS 管理者在防火牆問答中提供的說明，整理成之後分析防火牆 log 時可以參考的知識庫筆記。
-只記錄管理者明確說明的事實（主機用途、服務與 Port、已知正常 / 異常的連線、處理結果、公司規定等）；可以參考前面的對話補足管理者說的「這台」「上面那個」指的是哪個 IP，但不可加入對話中 AI 自己的推測。
-只輸出一個 JSON 物件，不要任何其他文字：
-{"title": "簡短標題（30 字內，例如：10.10.130.154 是防毒伺服器）", "ips": ["相關 IP 或網段"], "tags": ["2~5 個標籤，例如 防毒、Port 5517、正常連線"], "content": "Markdown 內容：條列重點，寫清楚 IP、Port、用途、判斷方式與處理方式"}`
-
-/** AI 回答 → JSON（容許前後多了文字或 \`\`\`json 區塊） */
-export function parseJsonReply(text) {
-  const t = String(text).replace(/```(?:json)?/gi, '')
-  const start = t.indexOf('{')
-  const end = t.lastIndexOf('}')
-  if (start < 0 || end <= start) return null
-  try {
-    return JSON.parse(t.slice(start, end + 1))
-  } catch {
-    return null
-  }
-}

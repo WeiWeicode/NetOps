@@ -2,6 +2,12 @@
 
 > `backend/`、`deploy/` 的修改;新紀錄加在最上方,格式見 `AGENT.md` §11。
 
+## 2026-11-09 A1-core:移除翻譯與整理筆記的核心(決定不搬)
+- 工作項目:A1(`fix/a1-core-trim`;需求方 2026-11-09 依 `docs/AI-FEATURE-INVENTORY.md` 決定翻譯(#5)與整理筆記(#6)不搬,ARCHITECTURE D25)
+- 內容:刪除 `modules/ai/core/translate.js`(語言清單、分段、翻譯提示);`ai/core/context.js` 拿掉整理筆記用的 `NOTE_PROMPT` 與 `parseJsonReply`;測試基準拿掉翻譯分段的比對與 `NOTE_PROMPT` / `parseJsonReply` 的比對(其餘提示仍與舊版逐字比對)。`infra/llm` 的 `chatOnce` 保留(外部 IP 自動學習使用),只改註解。設定與 `.env.example` 的說明改為「AI 未設定回 409」(與 API 一致)。
+- 檔案:`backend/src/modules/ai/core/{context.js,translate.js(刪除)}`、`backend/src/infra/llm/index.ts`、`backend/src/config.ts`、`backend/.env.example`、`backend/test/unit/ai-core.test.ts`
+- 驗證:`npm run typecheck`、`npm test`(147 項通過;移除前 148 項,少 1 項翻譯分段的比對)、`npm run build`
+
 ## 2026-11-05 A1-api 審查修正
 - 工作項目:A1(第 2 批;`code-reviewer`、`security-auditor` 審查後)
 - 內容:① SSE:用戶端在處理請求前就斷線時不開始(否則掃描與模型照跑、名額佔到最長時間);串流結束時一併中斷還在進行的工作(翻譯其中一段失敗,其餘段落不再等);用戶端讀不動被中斷時寫 warn 日誌。② 翻譯最多 12 段、同時 3 段(舊版全部同時送,AI 主機與其他系統共用),空白內容與分段超過上限在串流開始前回 400。③ 問答的 FTP 掃描全系統同時只跑 1 個(排隊時送 `scan` `{ waiting: true }`;唯讀使用者不能藉 AI 問答佔滿 FTP 連線);掃描逾時或連線組合超過 20 萬列(`queryFlows` 的 `truncated`)時標資料不完整且不快取。④ `gateway-rbac.yaml`:三個 AI 按鈕一併綁定 `netops.pa.read`、`netops.ad.read`、`netops.kb.read`(`netops.ai.use` 實際可取得 PA、AD 與知識庫的彙整,授權畫面要看得到)。⑤ 稽核:整理筆記、翻譯、立即同步、外部 IP 學習加 `x-audit-level: meta`。⑥ `/ai/status` 與外部 IP 學習紀錄不帶上游原文(模型回應不是 JSON 時改分類錯誤;寫入知識庫與 RDAP 連線錯誤只留固定文字,原文寫日誌)。⑦ 排程:筆記異動的同步計時器在關閉時清除,`setInterval` 用 `clearInterval`。⑧ `history` 上限放寬到 100 則(只送最近 6 則)。⑨ `host2-set-secrets.sh` 的 Qdrant Key 輸入先設 trap 再關回顯。

@@ -70,7 +70,7 @@ export function createLlm(cfg: LlmConfig, fetchImpl: typeof fetch = fetch) {
     return res;
   }
 
-  /** 查詢中的 /models(翻譯分段同時呼叫時只查一次;舊版先取模型名稱再平行翻譯) */
+  /** 查詢中的 /models(同時呼叫時只查一次) */
   let pending: Promise<string> | null = null;
 
   /** 模型名稱(沒設定時取 /models 第一個,快取 10 分鐘) */
@@ -96,7 +96,7 @@ export function createLlm(cfg: LlmConfig, fetchImpl: typeof fetch = fetch) {
     return id;
   }
 
-  /** 一次取得完整回答(不串流、不思考),例如整理筆記、翻譯;timeoutMs 預設同舊版(LLM_TIMEOUT_MS,最多 180 秒) */
+  /** 一次取得完整回答(不串流、不思考),例如外部 IP 學習整理筆記;timeoutMs 預設同舊版(LLM_TIMEOUT_MS,最多 180 秒) */
   async function chatOnce({ messages, maxTokens = 3000, temperature = 0.2, signal, timeoutMs }: { messages: ChatMessage[]; maxTokens?: number; temperature?: number; signal?: AbortSignal; timeoutMs?: number }): Promise<string> {
     const m = await model();
     const timeout = AbortSignal.timeout(timeoutMs ?? Math.min(cfg.timeoutMs, 180000));

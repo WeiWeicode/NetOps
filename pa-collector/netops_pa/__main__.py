@@ -2,6 +2,7 @@
 
 單一程序(PA-LIVE-PLAN §2):寫入執行緒(Redis)、輪詢執行緒(PA_POLL_ENABLED)、HTTP 與 Syslog 接收(PA_RECEIVE_ENABLED)。
 `python -m netops_pa health`:容器健康檢查(主迴圈 30 秒內有更新存活檔)。
+`python -m netops_pa check`:第一次接 PA-560 時的連線檢查(check.py)。
 """
 
 from __future__ import annotations
@@ -114,4 +115,11 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(health() if sys.argv[1:] == ["health"] else main())
+    if sys.argv[1:] == ["health"]:
+        sys.exit(health())
+    if sys.argv[1:] == ["check"]:
+        # 連線檢查(check.py):只跑一次唯讀查詢,不寫 Redis
+        from .check import run
+
+        sys.exit(run())
+    sys.exit(main())

@@ -12,7 +12,7 @@ vi.mock('@giganexus/web-kit', async (orig) => ({
 
 const { AiStreamError, createSseParser, streamPost } = await import('@/api/ai');
 const { ApiError } = await import('@giganexus/web-kit');
-const { applyEvent, historyOf, NOTE_RE, searchLink } = await import('@/composables/aiChat');
+const { applyEvent, historyOf, searchLink } = await import('@/composables/aiChat');
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -115,24 +115,18 @@ describe('applyEvent(同舊版 PaAsk.vue 的事件處理)', () => {
   });
 });
 
-describe('historyOf / NOTE_RE / searchLink', () => {
-  it('對話紀錄不含記錄筆記的訊息與錯誤,最多送 20 則', () => {
+describe('historyOf / searchLink', () => {
+  it('對話紀錄不含錯誤(停止、中斷)的回答,最多送 20 則', () => {
     const m = [
       { role: 'user' as const, content: 'q1' },
       { role: 'assistant' as const, content: 'a1' },
-      { role: 'user' as const, content: '請記錄 x', kind: 'note' as const },
       { role: 'assistant' as const, content: '', error: '失敗' },
       ...Array.from({ length: 30 }, (_, i) => ({ role: (i % 2 ? 'assistant' : 'user') as 'user' | 'assistant', content: `m${i}` })),
     ];
     const h = historyOf(m);
     expect(h).toHaveLength(20);
     expect(h.at(-1)).toEqual({ role: 'assistant', content: 'm29' });
-    expect(historyOf(m.slice(0, 4))).toEqual([{ role: 'user', content: 'q1' }, { role: 'assistant', content: 'a1' }]);
-  });
-
-  it('「請記錄」類的說法當成要 AI 記錄', () => {
-    for (const s of ['請記錄:10.10.130.154 是防毒伺服器', '記起來 5517 是正常的', '幫我記下這台']) expect(NOTE_RE.test(s), s).toBe(true);
-    expect(NOTE_RE.test('10.10.1.5 為什麼被擋')).toBe(false);
+    expect(historyOf(m.slice(0, 3))).toEqual([{ role: 'user', content: 'q1' }, { role: 'assistant', content: 'a1' }]);
   });
 
   it('看原始紀錄:PA 帶 IP / 關鍵字 / Port / 阻擋;AD 帶 IP', () => {

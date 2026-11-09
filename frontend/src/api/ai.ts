@@ -1,7 +1,7 @@
 /**
- * AI 分析、問答、翻譯、整理筆記與知識庫的 AI 功能(docs/API.md §10;IMPL-PLAN A1)
- *   分析 / 問答 / 翻譯 / 整理筆記回 SSE(POST,EventSource 只能 GET):以 fetch 讀串流,帶 Cookie 與 CSRF、不帶 Bearer(同 gateway.ts download)
- *   權限:netops.ai.use(按鈕 netops.pa-ask.use、netops.ad-ask.use、netops.pa-dashboard.ai);整理筆記 netops.kb.write
+ * AI 分析、問答與知識庫的 AI 功能(docs/API.md §10;IMPL-PLAN A1;翻譯與整理筆記依 2026-11-09 決定不搬,D25)
+ *   分析 / 問答回 SSE(POST,EventSource 只能 GET):以 fetch 讀串流,帶 Cookie 與 CSRF、不帶 Bearer(同 gateway.ts download)
+ *   權限:netops.ai.use(按鈕 netops.pa-ask.use、netops.ad-ask.use、netops.pa-dashboard.ai)
  * 串流開始前的錯誤(400 / 404 / 409 / 429)丟 ApiError;開始後的錯誤是 error 事件(呼叫端丟出 AiStreamError)。
  */
 import { ApiError, readCookie, redirectToLogin, refreshSession } from '@giganexus/web-kit';
@@ -124,14 +124,6 @@ export async function streamPost(path: ApiPath, body: unknown, onEvent: (e: SseE
   if (!finished) throw new AiStreamError('NETOPS_STREAM_INCOMPLETE', '連線中斷,回答可能不完整,請再試一次');
 }
 
-/** 一次性的 SSE(翻譯、整理筆記):回傳 done 事件的資料 */
-async function streamResult<T>(path: ApiPath, body: unknown, signal?: AbortSignal): Promise<T> {
-  let result: T | undefined;
-  await streamPost(path, body, (e) => e.event === 'done' && (result = e.data as T), signal);
-  if (result === undefined) throw new AiStreamError('NETOPS_AI_FAILED', '連線中斷,沒有收到結果,請再試一次');
-  return result;
-}
-
 export interface VectorStatus {
   enabled: boolean;
   sync: boolean;
@@ -162,14 +154,6 @@ export interface IpLearnStatus {
   lastRun?: { at: string; by: string; range: string; candidates: number; looked: number; cached: number; manualSkip: number; failed: number; groups: number; notes: number } | null;
 }
 
-export const TRANSLATE_LANGS = [
-  { value: 'en', label: 'English' },
-  { value: 'ja', label: '日本語' },
-  { value: 'th', label: 'ภาษาไทย' },
-  { value: 'zh', label: '繁體中文' },
-] as const;
-export type TranslateTarget = (typeof TRANSLATE_LANGS)[number]['value'];
-
 export const ai = {
   status: () => http.get<AiStatus>('/api/netops/ai/status'),
   /** 期間分析:from / to 為 YYYY-MM-DD */
@@ -178,8 +162,6 @@ export const ai = {
   /** 問答:from / to 為 ISO 8601 含時區 */
   ask: (body: { from: string; to: string; question: string; history: HistoryItem[]; think: boolean; source: 'pa' | 'ad' }, onEvent: (e: SseEvent) => void, signal?: AbortSignal) =>
     streamPost('/api/netops/ai/questions', body, onEvent, signal),
-  translate: (text: string, target: TranslateTarget, signal?: AbortSignal) => streamResult<{ target: string; text: string; seconds: number }>('/api/netops/ai/translations', { text, target }, signal),
-  note: (text: string, history: HistoryItem[], signal?: AbortSignal) => streamResult<{ note: KbNote }>('/api/netops/ai/notes', { text, history }, signal),
   semanticSearch: (q: string) => http.get<{ items: (KbNote & { score: number })[]; vector: VectorStatus }>('/api/netops/kb/semantic-search', { query: { q } }),
   vectorStatus: () => http.get<VectorStatus>('/api/netops/kb/vector-status'),
   vectorSync: () => http.post<VectorStatus>('/api/netops/kb/vector-syncs'),

@@ -13,10 +13,9 @@ export interface Req {
   body: any;
 }
 /**
- * opts.noteReply:整理筆記(系統提示含「知識庫筆記」)時的非串流回答
  * opts.streamDelayMs:串流回答開始前等多久(測試同時上限用)
  */
-export function fakeAiHost(opts: { noteReply?: string; streamDelayMs?: number } = {}) {
+export function fakeAiHost(opts: { streamDelayMs?: number } = {}) {
   const reqs: Req[] = [];
   const points = new Map<string, { id: string; payload: Record<string, unknown> }>();
   const server = http.createServer((req, res) => {
@@ -34,7 +33,6 @@ export function fakeAiHost(opts: { noteReply?: string; streamDelayMs?: number } 
       }
       if (u === '/v1/chat/completions') {
         const last = body.messages.at(-1).content as string;
-        if (!body.stream && opts.noteReply && String(body.messages[0].content).includes('知識庫筆記')) return json({ choices: [{ message: { content: opts.noteReply } }] });
         if (!body.stream) return json({ choices: [{ message: { content: `譯:${last.slice(0, 30)}` } }] });
         res.setHeader('content-type', 'text/event-stream');
         const lines = [

@@ -4,7 +4,7 @@
  *   PA:問題有 IP / Port → 後端查連線組合統計或從 FTP 掃 log,彙整後送給公司內部 AI;問到 AD 時一併附上 AD 事件
  *   AD:只看已匯入的 AD 事件記錄,不掃防火牆 log;兩邊的對話分開保存(composables/aiChat.ts)
  *   追問沒寫 IP 會沿用前面的 IP;對話只存在這個分頁,重新整理就清空(同舊版)
- *   有知識庫編輯權限(netops.kb.write)可請 AI 把說明整理成筆記(「請記錄:…」或按「記錄到知識庫」)
+ *   舊版的「請 AI 記錄」(整理成知識庫筆記)與翻譯依 2026-11-09 決定不搬(ARCHITECTURE D25)
  *   使用 AI 需要按鈕權限(netops.pa-ask.use / netops.ad-ask.use → netops.ai.use);沒有時只顯示說明(BFF 一定再檢查)
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef } from 'vue';
@@ -15,8 +15,7 @@ import { can, describeError } from '@/api/gateway';
 import { pa } from '@/api/pa';
 import { UI } from '@/api/perms';
 import AiMarkdown from '@/components/AiMarkdown.vue';
-import TranslateBox from '@/components/TranslateBox.vue';
-import { applyEvent, clearMessages, historyOf, messagesOf, NOTE_RE, searchLink, type ChatMessage, type Source } from '@/composables/aiChat';
+import { applyEvent, clearMessages, historyOf, messagesOf, searchLink, type ChatMessage, type Source } from '@/composables/aiChat';
 import { localToIso, toLocalInput } from '@/composables/searchQuery';
 import { toast } from '@/ui';
 
@@ -25,8 +24,6 @@ const isAd = props.source === 'ad';
 const route = useRoute();
 const router = useRouter();
 const canUse = computed(() => can(isAd ? UI.adAskUse : UI.paAskUse));
-// 按鈕代碼(同知識庫頁);BFF 以 netops.kb.write 檢查
-const canRecord = computed(() => can(UI.kbWrite));
 
 const TEXT = isAd
   ? {
@@ -52,11 +49,6 @@ const running = ref(false);
 const service = shallowRef<AiStatus | null>(null);
 const listEl = ref<HTMLElement | null>(null);
 let controller: AbortController | null = null;
-/**
- * 輸入框的內容是由連結(?q=)帶入:第一次送出一律當成問題,不因「請記錄」字樣改成寫入知識庫
- * (避免外部連結誘導有編輯權限的人寫入筆記;審查修正)
- */
-const fromLink = ref(false);
 
 const rangeError = computed(() => {
   if (!range.from || !range.to) return '請選擇時間範圍';
@@ -76,37 +68,9 @@ function push(m: ChatMessage): ChatMessage {
   return messages[messages.length - 1]!;
 }
 
-/** 請 AI 把說明整理成知識庫筆記 */
-async function record(text = input.value) {
-  const content = text.trim();
-  if (!content || running.value) return;
-  const history = historyOf(messages);
-  push({ role: 'user', content, kind: 'note' });
-  const r = push({ role: 'assistant', content: '', kind: 'note', status: 'AI 整理筆記中...', error: '' });
-  input.value = '';
-  running.value = true;
-  controller = new AbortController();
-  void scrollDown();
-  try {
-    const { note } = await ai.note(content, history, controller.signal);
-    r.note = note;
-    r.content = `已記錄到知識庫:**${note.title}**\n\n${note.content}`;
-  } catch (e) {
-    r.error = (e as Error).name === 'AbortError' ? '已停止' : describeError(e);
-  } finally {
-    r.status = '';
-    running.value = false;
-    controller = null;
-    void scrollDown();
-  }
-}
-
 async function send(text = input.value) {
   const question = text.trim();
   if (!question || running.value || unavailable.value) return;
-  const linked = fromLink.value;
-  fromLink.value = false;
-  if (canRecord.value && !linked && NOTE_RE.test(question)) return record(question);
   if (rangeError.value) return toast.warning(rangeError.value);
   const history = historyOf(messages);
   push({ role: 'user', content: question });
@@ -168,7 +132,6 @@ onMounted(async () => {
   if (typeof q.from === 'string' && toLocalInput(q.from)) Object.assign(range, { from: toLocalInput(q.from), to: toLocalInput(typeof q.to === 'string' ? q.to : q.from, true) });
   if (typeof q.q === 'string' && q.q.trim()) {
     input.value = q.q.slice(0, 2000);
-    fromLink.value = true;
     void router.replace({ query: {} });
   }
 });
@@ -206,10 +169,7 @@ const onKey = (e: KeyboardEvent) => {
           <GIcon name="sparkles" :size="36" class="tone-primary ic-lg" />
           <p class="strong">{{ TEXT.empty }}</p>
           <p class="small muted">{{ TEXT.desc }}</p>
-          <p v-if="canRecord" class="small muted">
-            可以補充說明並請 AI 記錄,例如「請記錄:10.10.130.154 是防毒伺服器,5517 是用戶端回報 Port」,會存到
-            <RouterLink to="/knowledge">知識庫</RouterLink>,之後的問答會自動參考。
-          </p>
+          <p class="small muted">回答會參考<RouterLink to="/knowledge">知識庫</RouterLink>的筆記;要補充環境資訊,請到知識庫新增筆記。</p>
           <div class="examples">
             <button v-for="q in TEXT.examples" :key="q" type="button" class="example" :disabled="unavailable" @click="send(q)">{{ q }}</button>
           </div>
@@ -218,7 +178,7 @@ const onKey = (e: KeyboardEvent) => {
 
         <template v-for="(m, i) in messages" :key="i">
           <div v-if="m.role === 'user'" class="row-user">
-            <div class="bubble-user"><GIcon v-if="m.kind === 'note'" name="book-open" :size="14" class="tone-primary" /> {{ m.content }}</div>
+            <div class="bubble-user">{{ m.content }}</div>
           </div>
           <div v-else class="bubble-ai">
             <!-- 查到的資料 -->
@@ -256,30 +216,22 @@ const onKey = (e: KeyboardEvent) => {
             </div>
             <AiMarkdown v-if="m.content" :text="m.content" />
             <p v-if="m.truncated" class="xs c-warning">回答超過長度上限,內容可能不完整</p>
-            <div v-if="m.note" class="xs muted note-meta">
-              <span>相關 IP:{{ m.note.ips.join('、') || '(無)' }}</span>
-              <span>標籤:{{ m.note.tags.join('、') || '(無)' }}</span>
-              <RouterLink :to="{ path: '/knowledge', query: { id: m.note.id } }">到知識庫查看 / 修改</RouterLink>
-            </div>
             <p v-if="m.status" class="small muted status" role="status"><span class="spin" aria-hidden="true" />{{ m.status }}</p>
             <p v-if="m.error" class="small c-danger">{{ m.error }}</p>
             <div v-if="m.content && !m.status" class="tools">
               <GButton size="sm" variant="ghost" icon="file-text" @click="copy(m.content)">複製</GButton>
-              <TranslateBox v-if="canUse" :text="m.content" />
             </div>
           </div>
         </template>
       </div>
 
       <div class="composer">
-        <p v-if="fromLink" class="xs c-warning">問題由連結帶入,請確認內容後再送出</p>
         <GTextarea v-model="input" label="問題" :rows="3" :placeholder="TEXT.placeholder" :disabled="running || unavailable" maxlength="2000" @keydown="onKey" />
         <div class="actions">
           <GCheckbox v-model="think" :disabled="running || unavailable" label="深入思考(較慢,先推理再回答)" />
           <span class="spacer" />
           <GButton v-if="running" variant="danger" icon="square" @click="stop">停止</GButton>
           <template v-else>
-            <GButton v-if="canRecord" icon="book-open" :disabled="!input.trim() || unavailable" @click="record()">記錄到知識庫</GButton>
             <GButton variant="primary" icon="send" :disabled="!input.trim() || unavailable" @click="send()">送出</GButton>
           </template>
         </div>
@@ -385,12 +337,6 @@ const onKey = (e: KeyboardEvent) => {
 }
 .note-link {
   margin-right: 8px;
-}
-.note-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  margin-top: 4px;
 }
 .status {
   display: flex;

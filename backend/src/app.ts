@@ -144,7 +144,7 @@ export async function buildApp(config: Config, deps: { ftp?: Ftp; streamTest?: S
   await app.register(adFtpRoutes, { ad });
   const kb = createKbService(app.store.kb, app.log);
   await app.register(kbRoutes, { kb });
-  // AI 分析、問答、翻譯、整理筆記、語意搜尋、外部 IP 自動學習(IMPL-PLAN A1;deps.ai 只給測試注入假 AI 主機)
+  // AI 分析、問答、語意搜尋、外部 IP 自動學習(IMPL-PLAN A1;deps.ai 只給測試注入假 AI 主機)
   await registerAi(app, { config, traffic, events, ad, kb, ftp, paStore: app.store.pa, ...deps.ai });
   await app.register(ftpRoutes, {
     ftp,

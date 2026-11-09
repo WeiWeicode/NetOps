@@ -1,6 +1,6 @@
 /**
  * 假 Gateway:AI(docs/API.md §10)。不連 AI 主機:分析、問答回固定的 SSE 事件(逐字送出,看得到串流效果);
- * 翻譯、整理筆記回 done;語意搜尋回知識庫的第一則;外部 IP 學習模擬 6 秒的背景執行。
+ * 語意搜尋回空清單;外部 IP 學習模擬 6 秒的背景執行。
  * 問題含「錯誤」時回 error 事件,含「忙碌」時回 429(看畫面的錯誤顯示)。
  */
 import type { MockCtx } from './types.ts';
@@ -84,18 +84,6 @@ export function handleAi(ctx: MockCtx): boolean {
       events.push(...contentEvents(ANSWER), ['done', { finish: 'stop', truncated: false }]);
     }
     void stream(ctx, events);
-    return true;
-  }
-  if (path === '/api/netops/ai/translations' && method === 'POST') {
-    if (!ctx.need('netops.ai.use')) return true;
-    void stream(ctx, [['done', { target: b.target, text: `(${String(b.target)} 譯文)\n\n${String(b.text ?? '').slice(0, 400)}`, seconds: 2.1 }]], 800);
-    return true;
-  }
-  if (path === '/api/netops/ai/notes' && method === 'POST') {
-    if (!ctx.need('netops.kb.write')) return true;
-    const t = String(b.text ?? '');
-    const now = new Date().toISOString().slice(0, 19) + '+08:00';
-    void stream(ctx, [['done', { note: { id: `mock-${Date.now()}`, title: t.slice(0, 30), ips: t.match(/(?:\d{1,3}\.){3}\d{1,3}/g) ?? [], tags: ['AI 記錄'], author: ctx.user, created: now, updated: now, updatedBy: ctx.user, source: t, content: `- ${t}` } }]], 800);
     return true;
   }
   if (path === '/api/netops/kb/semantic-search' && method === 'GET') {

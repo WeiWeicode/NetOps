@@ -93,7 +93,7 @@ D13:骨架直接留用;AI 不在這次範圍,不做串流驗證(D7、D17)。
 2. **畫面**:由低風險到高風險逐頁改寫,每頁對照舊版功能:FTP Log 檔案 → 明細查詢 → AD 事件總覽 → 安全事件 `feature/netops-f1-pa-events` → 流量總覽 → 知識庫。
 3. **收尾**:移除 `Login.vue`、`SyncLogin.vue`、`stores/token.js`、舊配色系統與 Element Plus、Tailwind。
 
-- **不改寫**(D17):`PaAsk.vue`、`AiAnalysis.vue`、`TranslateBox.vue`,以及知識庫頁的語意搜尋與自動學習區塊。
+- **不改寫**(D17):`PaAsk.vue`、`AiAnalysis.vue`、`TranslateBox.vue`,以及知識庫頁的語意搜尋與自動學習區塊。(已由 D23 取代,於 A1 改寫;`TranslateBox` 與「請 AI 記錄」依 2026-11-09 決定不搬,D25)
 - 頁面依權限顯示;寫入(`POST` / `PUT` / `DELETE`)經 web-kit 帶 CSRF,下載(`GET`)經 web-kit、不需 CSRF,都不帶 Bearer。
 - 無權限導回 `/?denied=netops`。
 - Veeam、舊版 AI 問答改一般連結(D11、D18)。
@@ -148,8 +148,8 @@ D13:骨架直接留用;AI 不在這次範圍,不做串流驗證(D7、D17)。
 ## A1 AI 搬移
 
 1. 替舊版 AI 核心(`evidence.js`、`llm.js`、`vector.js`、`iplearn.js`)補測試基準,再搬進 `backend/`(D4,`refactor-assistant`)。
-2. 設定改連 `10.10.130.46`(`LLM_URL`、`LLM_MODEL`、`EMBED_URL`);Qdrant 與翻譯依 PA-LIVE-PLAN P6 定案。
-3. API 補 `x-permission`、`x-gherkin`;`gateway-rbac.yaml` 加 AI 權限;前端加回 AI 分析、問答、翻譯、整理筆記、語意搜尋。
+2. 設定改連 `10.10.130.46`(`LLM_URL`、`LLM_MODEL`、`EMBED_URL`);Qdrant 依 PA-LIVE-PLAN P6 定案(沿用舊版 `NetOpsKb`)。
+3. API 補 `x-permission`、`x-gherkin`;`gateway-rbac.yaml` 加 AI 權限;前端加回 AI 分析、問答、語意搜尋、外部 IP 自動學習。翻譯與整理筆記依 2026-11-09 決定不搬(ARCHITECTURE D25、[AI-FEATURE-INVENTORY.md](AI-FEATURE-INVENTORY.md))。
 4. 確認主機 2、3 容器可連 AI 主機與 RDAP;測試區驗收。
 5. 正式區上線後停用舊版 IIS(`main` 已打標籤)。
 

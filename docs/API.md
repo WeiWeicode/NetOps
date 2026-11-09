@@ -565,7 +565,7 @@ AI 串流(§10.1)開始後的錯誤以 `error` 事件回傳 `{ code, message }`:
 
 ## 10. AI — 批次 `feature/a1-ai-api`(IMPL-PLAN A1)
 
-由舊版 `server/routes/ai.js` 搬移,直接呼叫 AI 主機(ARCHITECTURE D23;`LLM_URL`、`LLM_MODEL`、`EMBED_URL`、`QDRANT_URL` 只從設定讀)。送給模型的內容與舊版相同,**只送統計與彙整,不送原始 log 檔**(AGENT.md §7.4;問答的彙整含最多 15 筆範例紀錄、AD 事件訊息前 400 字,同舊版)。沒有設定 `LLM_URL` 時回 409 `NETOPS_AI_DISABLED`。
+由舊版 `server/routes/ai.js` 搬移,直接呼叫 AI 主機(ARCHITECTURE D23;`LLM_URL`、`LLM_MODEL`、`EMBED_URL`、`QDRANT_URL` 只從設定讀)。送給模型的內容與舊版相同,**只送統計與彙整,不送原始 log 檔**(AGENT.md §7.4;問答的彙整含最多 15 筆範例紀錄、AD 事件訊息前 400 字,同舊版,為 §7.4 的例外,ARCHITECTURE D25)。哪些功能保留見 [AI-FEATURE-INVENTORY.md](AI-FEATURE-INVENTORY.md)。沒有設定 `LLM_URL` 時回 409 `NETOPS_AI_DISABLED`。
 
 ### 10.1 分析、問答(SSE)
 
@@ -612,6 +612,6 @@ AI 串流(§10.1)開始後的錯誤以 `error` 事件回傳 `{ code, message }`:
 | GET | `/api/netops/kb/ip-learning` | `netops.kb.read` | 外部 IP 自動學習狀態(含 `hour`:每天自動執行的時間,-1 = 不自動) |
 | POST | `/api/netops/kb/ip-learnings` | `netops.kb.write` | `{ days?: 1–60, max?: 1–500, rewrite? }`;202,背景執行,畫面輪詢 `ip-learning` |
 
-- 向量庫沿用舊版 Qdrant `10.10.130.46:6333` 的 `NetOpsKb`(embedding 同為 Qwen3-Embedding-8B 4096 維,2026-11-05 查證)。**`VECTOR_SYNC` 預設 0**:舊版 IIS 仍在同步同一個 collection,兩邊都同步會互刪對方的筆記;關閉時只做語意搜尋,搜尋結果只回新版知識庫存在的筆記。D18 切換、舊版停止寫入後再開。開啟時:筆記異動 3 秒後、啟動 5 秒後、每 30 分鐘同步(同舊版);一次要刪除超過現有 20%(至少 5 筆)或知識庫是空的時整次不同步。
-- 外部 IP 自動學習(D10):`IPLEARN_HOUR` 預設 -1(不自動,舊版 3 點);管理者改過的自動學習筆記不覆寫;自動學習筆記上限 1,000 則。
+- 向量庫沿用舊版 Qdrant `10.10.130.46:6333` 的 `NetOpsKb`(embedding 同為 Qwen3-Embedding-8B 4096 維,2026-11-05 查證)。**`VECTOR_SYNC` 預設 0**:舊版 IIS 仍在同步同一個 collection,兩邊都同步會互刪對方的筆記;關閉時只做語意搜尋,搜尋結果只回新版知識庫存在的筆記。D18 切換、舊版停止寫入後再開(D25;測試區一直關,正式區切換步驟見 AI-FEATURE-INVENTORY §4)。開啟時:筆記異動 3 秒後、啟動 5 秒後、每 30 分鐘同步(同舊版);一次要刪除超過現有 20%(至少 5 筆)或知識庫是空的時整次不同步。
+- 外部 IP 自動學習(D10):`IPLEARN_HOUR` 預設 -1(不自動,舊版 3 點;D25:舊版 IIS 停用後正式區改 3);管理者改過的自動學習筆記不覆寫;自動學習筆記上限 1,000 則。
 - 時間欄位(`lastSync`、`startedAt`、`finishedAt`)輸出 `+08:00`。

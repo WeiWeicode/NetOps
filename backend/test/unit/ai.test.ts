@@ -180,12 +180,14 @@ describe('AI 已設定', () => {
   });
 
   it('同時進行的 AI 回答每人 2 個,超過回 429 NETOPS_STREAM_BUSY', async () => {
-    host.setStreamDelay(300);
+    // 假模型收到請求後 2 秒才開始回答;等兩個請求都到了模型(名額已佔用)才送第三個,不用固定的等待時間(CI 主機忙時會不穩)
+    host.setStreamDelay(2000);
+    chats();
     try {
       const p = { method: 'POST' as const, url: '/v1/ai/analyses', payload: { from: '2026-11-01' } };
       const a = t.call(p);
       const b = t.call(p);
-      await new Promise((r) => setTimeout(r, 100));
+      await waitFor(() => host.reqs.filter((r) => r.url === '/v1/chat/completions').length >= 2, 10000);
       const c = await t.call(p);
       assert.equal(c.statusCode, 429);
       assert.equal(c.json().code, 'NETOPS_STREAM_BUSY');
@@ -280,21 +282,38 @@ describe('AI 串流的名額與生命週期(S0 §3.6;審查補測)', () => {
   before(async () => (base = await host.start()));
   after(() => host.close());
   const ASK = { method: 'POST' as const, url: '/v1/ai/questions', payload: AD_ASK };
-  /** 假模型延遲 400 毫秒才開始回答,讓前面的請求佔住名額 */
-  const slow = (async (url: string | URL, init?: RequestInit) => {
-    if (String(url).endsWith('/chat/completions')) await new Promise((r) => setTimeout(r, 400));
-    return fetch(url, init);
-  }) as typeof fetch;
+  /**
+   * 假模型的閘門:模型呼叫先停在這裡(entered 計數),測試呼叫 open() 才放行。
+   * 用來確定前面的請求已佔住名額,不依賴固定的等待時間(CI 主機忙時固定等待會不穩)
+   */
+  function gated() {
+    let open!: () => void;
+    const opened = new Promise<void>((r) => (open = r));
+    const g = {
+      entered: 0,
+      open: () => open(),
+      fetch: (async (url: string | URL, init?: RequestInit) => {
+        if (String(url).endsWith('/chat/completions')) {
+          g.entered++;
+          await opened;
+        }
+        return fetch(url, init);
+      }) as typeof fetch,
+    };
+    return g;
+  }
 
   it('分析與問答共用每人名額;結束後歸還', async () => {
-    const t = await createTestApp({ env: { LLM_URL: `${base}/v1` }, ai: { fetch: slow } });
+    const g = gated();
+    const t = await createTestApp({ env: { LLM_URL: `${base}/v1` }, ai: { fetch: g.fetch } });
     try {
       const a = t.call(ASK);
       const b = t.call(ASK);
-      await new Promise((r) => setTimeout(r, 100));
+      await waitFor(() => g.entered >= 2, 10000);
       const c = await t.call(ASK);
       assert.equal(c.statusCode, 429);
       assert.equal(c.json().code, 'NETOPS_STREAM_BUSY');
+      g.open();
       for (const r of await Promise.all([a, b])) assert.equal(r.statusCode, 200);
       const again = await t.call(ASK);
       assert.equal(again.statusCode, 200, '結束後歸還名額');
@@ -305,13 +324,15 @@ describe('AI 串流的名額與生命週期(S0 §3.6;審查補測)', () => {
   });
 
   it('全系統上限(AI_MAX_STREAMS):別人也被擋', async () => {
-    const t = await createTestApp({ env: { LLM_URL: `${base}/v1`, AI_MAX_STREAMS: '2' }, ai: { fetch: slow } });
+    const g = gated();
+    const t = await createTestApp({ env: { LLM_URL: `${base}/v1`, AI_MAX_STREAMS: '2' }, ai: { fetch: g.fetch } });
     try {
       const a = t.call({ ...ASK, emp: 'S000001' });
       const b = t.call({ ...ASK, emp: 'S000002' });
-      await new Promise((r) => setTimeout(r, 100));
+      await waitFor(() => g.entered >= 2, 10000);
       const c = await t.call({ ...ASK, emp: 'S000003' });
       assert.equal(c.statusCode, 429);
+      g.open();
       await Promise.all([a, b]);
     } finally {
       await t.close();

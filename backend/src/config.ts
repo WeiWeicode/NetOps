@@ -49,6 +49,27 @@ export interface FtpConfig {
   syncMinutes: number;
 }
 
+/**
+ * AI(IMPL-PLAN A1、ARCHITECTURE D23、PA-LIVE-PLAN §6):直接呼叫 AI 主機,位址只從設定讀(AGENT.md §7.4)
+ *   LLM_URL 空白 = 不提供 AI 分析 / 問答 / 翻譯 / 整理筆記(API 回 503 NETOPS_AI_DISABLED);QDRANT_URL 空白 = 不使用向量庫
+ */
+export interface AiConfig {
+  llm: { url: string; model: string; apiKey: string; timeoutMs: number };
+  vector: { url: string; apiKey: string; collection: string; embedUrl: string };
+  /**
+   * 是否把筆記寫進向量庫(VECTOR_SYNC=1)。預設關閉:舊版 IIS 仍在同步同一個 collection(NetOpsKb),
+   * 兩邊都同步會互相刪除對方的筆記;關閉時只做語意搜尋(與舊版不同,D18 切換時再開)
+   */
+  vectorSync: boolean;
+  /** 外部 IP 自動學習(D10):每天幾點自動跑(-1 = 不自動,預設)、看最近幾天、一次最多查幾個新 IP、查過的 IP 幾天內不重查 */
+  ipLearn: { hour: number; days: number; max: number; ttlDays: number };
+  /** 每次送給 AI 的知識庫筆記最多幾個字(同舊版 KB_MAX_CHARS) */
+  kbMaxChars: number;
+  /** 同時進行的 AI 串流上限:全系統、每人(超過回 429,不回 5xx;S0 報告 §3.6) */
+  maxStreams: number;
+  maxStreamsPerUser: number;
+}
+
 export interface Config {
   gateway: GatewayEnv;
   /** giga-observe 監控(MONITOR_URL、MONITOR_API_KEY_FILE;dev 預設關閉) */
@@ -61,6 +82,7 @@ export interface Config {
   ftp: FtpConfig | null;
   /** 明細查詢:一次最多幾筆、最多掃描幾秒(工作模式,ARCHITECTURE D6) */
   search: { limit: number; seconds: number };
+  ai: AiConfig;
 }
 
 /** 空字串視同未設定(Compose 的 ${X:-} 會傳空字串) */
@@ -155,6 +177,40 @@ function loadFtp(env: NodeJS.ProcessEnv, gwEnv: GwEnv): FtpConfig | null {
   };
 }
 
+/** http(s) URL,結尾的 / 拿掉;空字串 = 未設定;格式錯誤啟動失敗 */
+function url(env: NodeJS.ProcessEnv, key: string): string {
+  const raw = str(env, key).replace(/\/+$/, '');
+  if (!raw) return '';
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    throw new GatewayEnvError(`${key} 不是正確的網址:${raw}`);
+  }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new GatewayEnvError(`${key} 只接受 http / https:${raw}`);
+  if (u.username || u.password) throw new GatewayEnvError(`${key} 不可帶帳密,請改用對應的 *_API_KEY_FILE`);
+  return raw;
+}
+
+function loadAi(env: NodeJS.ProcessEnv, gwEnv: GwEnv): AiConfig {
+  const llmUrl = url(env, 'LLM_URL');
+  const qdrantUrl = url(env, 'QDRANT_URL');
+  const embedUrl = url(env, 'EMBED_URL');
+  // 只設 Qdrant 沒設 embedding 時,語意搜尋一定失敗;啟動就擋下(舊版預設寫死 .45:8081)
+  if (qdrantUrl && !embedUrl) throw new GatewayEnvError('有設定 QDRANT_URL 時必須設定 EMBED_URL');
+  const collection = str(env, 'QDRANT_COLLECTION', 'NetOpsKb');
+  if (!/^[\w-]{1,64}$/.test(collection)) throw new GatewayEnvError(`QDRANT_COLLECTION 只能是英數、底線與 -:${collection}`);
+  return {
+    llm: { url: llmUrl, model: str(env, 'LLM_MODEL'), apiKey: readSecret(env, 'LLM_API_KEY', gwEnv), timeoutMs: int(env, 'LLM_TIMEOUT_MS', 300000, 10000, 600000) },
+    vector: { url: qdrantUrl, apiKey: readSecret(env, 'QDRANT_API_KEY', gwEnv), collection, embedUrl },
+    vectorSync: bool(env, 'VECTOR_SYNC'),
+    ipLearn: { hour: int(env, 'IPLEARN_HOUR', -1, -1, 23), days: int(env, 'IPLEARN_DAYS', 7, 1, 60), max: int(env, 'IPLEARN_MAX', 150, 1, 500), ttlDays: int(env, 'IPLEARN_TTL_DAYS', 90, 1, 3650) },
+    kbMaxChars: int(env, 'KB_MAX_CHARS', 20000, 1000, 200000),
+    maxStreams: int(env, 'AI_MAX_STREAMS', 6, 1, 50),
+    maxStreamsPerUser: int(env, 'AI_MAX_STREAMS_PER_USER', 2, 1, 10),
+  };
+}
+
 /** 資料目錄:test / prod 必填且為絕對路徑;dev 未設定時用本機暫存目錄(AGENT.md §6) */
 function loadDataDir(env: NodeJS.ProcessEnv, gwEnv: GwEnv): string {
   const dir = str(env, 'NETOPS_DATA_DIR');
@@ -181,5 +237,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, cwd?: string): 
     ftp: loadFtp(env, gateway.gwEnv),
     // 掃描秒數上限 600:工作模式不受路由逾時限制,但仍要有上限(AGENT.md §7.3)
     search: { limit: int(env, 'PA_SEARCH_LIMIT', 2000, 1, 10000), seconds: int(env, 'PA_SEARCH_SECONDS', 180, 10, 600) },
+    ai: loadAi(env, gateway.gwEnv),
   };
 }

@@ -5,9 +5,10 @@
  *   palogs/flows/{name}.tsv.gz        連線組合統計
  *   palogs/events/index.json          其他類型 log 的分析狀態
  *   palogs/events/{type}/{name}.json.gz  其他類型 log 的摘要(index 內記成 "{type}/{name}")
+ *   palogs/iplearn.json               外部 IP 自動學習查過的 IP、網段與分組(A1;同舊版位置)
  */
 import path from 'node:path';
-import { ensureDir, readGzipJson, readJson, removeFile, safeJoin, writeGzipJson, writeGzipText, writeJson } from './files.js';
+import { ensureDir, readGzipJson, readGzipText, readJson, removeFile, safeJoin, writeGzipJson, writeGzipText, writeJson } from './files.js';
 
 export interface PaIndex<T = unknown> {
   files: Record<string, T>;
@@ -21,6 +22,8 @@ export interface PaStore {
   readSummary<T>(name: string): T | null;
   removeSummary(name: string): void;
   saveFlows(name: string, text: string): void;
+  /** 連線組合統計(解壓後的文字);不存在回 null(AI 問答改掃 FTP) */
+  readFlows(name: string): Promise<string | null>;
   removeFlows(name: string): void;
   loadEventIndex<T>(): PaIndex<T>;
   saveEventIndex(index: PaIndex): void;
@@ -28,6 +31,9 @@ export interface PaStore {
   saveEventSummary(key: string, summary: unknown): void;
   readEventSummary<T>(key: string): T | null;
   removeEventSummary(key: string): void;
+  /** 外部 IP 自動學習的狀態;不存在回 null */
+  loadIpLearnState<T>(): T | null;
+  saveIpLearnState(state: unknown): void;
 }
 
 export function createPaStore(root: string, eventTypes: readonly string[]): PaStore {
@@ -57,11 +63,14 @@ export function createPaStore(root: string, eventTypes: readonly string[]): PaSt
     readSummary: (name) => readJson(safeJoin(sumDir, name)),
     removeSummary: (name) => removeFile(safeJoin(sumDir, name)),
     saveFlows: (name, text) => writeGzipText(safeJoin(flowDir, name), text),
+    readFlows: (name) => readGzipText(safeJoin(flowDir, name)),
     removeFlows: (name) => removeFile(safeJoin(flowDir, name)),
     loadEventIndex: <T>() => loadIdx<T>(evIndexFile),
     saveEventIndex: (index) => writeJson(evIndexFile, index),
     saveEventSummary: (key, summary) => writeGzipJson(eventFile(key), summary),
     readEventSummary: (key) => readGzipJson(eventFile(key)),
     removeEventSummary: (key) => removeFile(eventFile(key)),
+    loadIpLearnState: () => readJson(path.join(base, 'iplearn.json')),
+    saveIpLearnState: (state) => writeJson(path.join(base, 'iplearn.json'), state),
   };
 }

@@ -2,6 +2,22 @@
 
 > `backend/`、`deploy/` 的修改;新紀錄加在最上方,格式見 `AGENT.md` §11。
 
+## 2026-11-05 A1-core 審查修正(與舊版不同)
+- 工作項目:A1(第 1 批;`security-auditor`、`code-reviewer` 審查後,與搬移分開提交)
+- 內容:① 向量同步(共用 collection):payload 沒有 `noteId` 的 point 不列入、不刪除;知識庫是空的,或一次要刪除超過現有 20%(至少 5 筆)時整次不同步並回錯誤(寫入前就檢查);scroll 最多 200 頁、`next_page_offset` 重複時停止。② `queryFlows` 符合的組合最多 20 萬列,超過標 `truncated`(寬網段一次可能數百萬列);舊版 `out.push(...found)` 在組合很多時會超過函式參數上限,改逐一加入。③ 外部 IP 學習:RDAP 的名稱、說明、國家壓成一行、去掉控制字元並限制長度(登記人可填入要模型照做的文字,之後會寫進知識庫);DNS 反查名稱只接受主機名稱格式;模型回的 `key` 只接受這一批的分組;內容先截 8,000 字再去掉註記;管理者改過的筆記(`noteState` 為 manual)不覆寫,已刪除的重新建立,寫入失敗記錄並略過(舊版任何錯誤都改成新建,可能重複);自動學習筆記上限 1,000 則(預留管理者額度)。④ RDAP 轉址只跟到五個登記處的 https 網址(最多 3 次);`createRdap` 的解析函式改必填。⑤ `infra/llm`:使用者中斷與逾時分開判斷;串流一行超過 1 MB 視為格式錯誤。
+- 另記:`IPLEARN_DAYS` / `IPLEARN_MAX` / `IPLEARN_TTL_DAYS` 改嚴格驗證(舊版 `0` 或寫錯會退回預設,新版啟動失敗);舊版 `learnStatus` 的 `hour` 由第 2 批 API 補上。
+- 未改(交需求方決定):問答送給模型的逐筆範例(最多 15 筆 log,含使用者帳號)與 AD 事件訊息前 400 字(同舊版,是否符合 AGENT.md §7.4「只送統計與彙整」);AI 主機以 http 傳 API Key(內網);專用 collection(目前與舊版共用 `NetOpsKb`)。
+- 檔案:`backend/src/modules/{kb/core/vector.js,pa/core/flows.js,iplearn/core/iplearn.js}`、`backend/src/infra/{rdap,llm}/index.ts`、`backend/test/unit/ai-core.test.ts`
+- 驗證:`npm run typecheck`、`npm test`(新增 5 項:向量同步安全閥、關閉同步仍可搜尋、`queryFlows` 上限、RDAP 清理與轉址、管理者改過的筆記不覆寫與 TTL 不重查)、`npm run build`
+
+## 2026-11-05 A1-core:AI 核心搬移與測試基準(不含 API)
+- 工作項目:A1(第 1 批 `feature/a1-ai-core`;API 在第 2 批 `feature/a1-ai-api`)
+- 內容:舊版 AI 核心依 D4 先補測試基準再搬,研判、提示與送給模型的內容不變:`evidence.js` 逐字複製(只改 import 路徑)到 `modules/ai/core/`;`routes/ai.js` 的資料整理 `buildContext` 與全部提示搬到 `modules/ai/core/context.js`(摘要讀取改由呼叫端注入);翻譯分段與提示搬到 `ai/core/translate.js`;`kb.js` 的 `notesForAi` 搬到 `kb/core/ai-notes.js`;`flows.js` 的 `queryFlows` 搬回 `pa/core/flows.js`(讀檔改注入,store 新增 `readFlows`);`paevimport.js` 的 `eventsForIps` / `eventsContext` 加進 `pa-events/importer.ts`;`adimport.js` 的問題判斷與 `adContext` 搬到 `ad/core/ad-ai.js`(事件由 `ad/importer.ts` 傳入);`vector.js` 搬到 `kb/core/vector.js`、`iplearn.js` 搬到 `iplearn/core/iplearn.js`,都改成注入相依的工廠函式(舊版 import 時就啟動計時器、直接讀設定)。外部連線放 `infra/`:`infra/llm`(vLLM;串流改 async generator,請求內容同舊版)、`infra/vector`(Qdrant、embedding)、`infra/rdap`(RDAP、DNS 反查);主機位址只從設定讀。`config.ts` 新增 AI 設定(`LLM_URL`、`LLM_MODEL`、`LLM_API_KEY_FILE`、`LLM_TIMEOUT_MS`、`EMBED_URL`、`QDRANT_URL`、`QDRANT_COLLECTION`、`QDRANT_API_KEY_FILE`、`VECTOR_SYNC`、`IPLEARN_*`、`KB_MAX_CHARS`、`AI_MAX_STREAMS*`):網址格式錯誤、網址帶帳密、有 Qdrant 沒 embedding、正式區明文 Key 都啟動失敗;外部 IP 狀態檔沿用舊版位置 `palogs/iplearn.json`。
+- 與舊版不同:`VECTOR_SYNC` 預設關閉(舊版 IIS 仍同步同一個 `NetOpsKb`,兩邊都同步會互刪對方的 point;關閉時只做語意搜尋);`IPLEARN_HOUR` 預設 -1(不自動,舊版預設 3 點);模型 / 向量庫的錯誤原文(可能含主機位址)只寫日誌,對外只有分類訊息;翻譯分段同時取模型名稱時只查一次 `/models`;舊版在 `paevimport` / `adimport` / `kb` / `flows` 讀設定與檔案的地方改經 store 與匯入器。
+- 開工查證(唯讀,2026-11-05):`.46:8081`、`.45:8081` 都是 `Qwen3-Embedding-8B-Q8_0`(n_embd 4096),主機 2 容器內實算 4096 維,與舊版相同,不需重建 collection;Qdrant 需要 API Key(未查 `NetOpsKb` 維度與筆數);主機 2 容器可連 `.46` / `.45` 的 8080、8081、6333,RDAP ARIN / APNIC / RIPE 可連、LACNIC / AFRINIC 逾時,DNS 反查可用;主機 3 主機層可連 `.46` 三個 port 與 RDAP ARIN,容器內未驗。
+- 檔案:`backend/src/{config.ts,infra/llm,infra/vector,infra/rdap,infra/store/pa.ts}`、`backend/src/modules/{ai/core,iplearn/core,kb/core/ai-notes.js,kb/core/vector.js,ad/core/ad-ai.js,ad/importer.ts,pa-events/importer.ts,pa/core/flows.js}`、`backend/test/{legacy.ts,unit/ai-core.test.ts,unit/config.test.ts}`、`backend/.env.example`
+- 驗證:`npm run typecheck`、`npm test`(143 項通過,新增 18 項:同一批假資料以舊版 `server/` 原封不動執行(只換設定與 import),比對 `buildContext`、提示、`notesForAi`、`queryFlows`、`eventsForIps` / `eventsContext`、`adContext`、送給模型的請求與串流事件、翻譯分段、向量同步對 Qdrant 的請求、外部 IP 學習的筆記與狀態檔都一致;模型、Qdrant、RDAP 都是本機假服務)、`npm run build`
+
 ## 2026-11-05 R1 部署:netops-redis、netops-pa 加入 Compose 與 CI(測試區)
 - 工作項目:R1、R0
 - 內容:`deploy/docker-compose.yml` 新增 `netops-redis`(redis:7.4-alpine,`maxmemory` 2 GB、`noeviction`、RDB 開 / AOF 關、named volume,只在 `internal: true` 的 `netops-internal` 網路,不對主機開 port)與 `netops-pa`(唯讀根目錄、tmpfs /tmp、cap_drop ALL、日誌輪替;port 51293 / 51294 只綁 WSL `127.0.0.1`;`PA_POLL_ENABLED` / `PA_RECEIVE_ENABLED` 預設 0);`netops-api` 加 `REDIS_URL` 與 `netops-internal` 網路。CI `deploy-api-test` 檢查機密、建置(`--pull`)並啟動兩個容器、確認 `noeviction`。新增 `deploy/host2-set-pa-secrets.sh`(Token 自動產生、API Key 隱藏輸入,可先留空)。新增 `docs/PA-FORWARDING-SPEC.md`(給網通:唯讀角色與 API Key、HTTP / Syslog Server Profile、各類型 payload 欄位對應、Log Forwarding Profile;附錄 F 主機端 portproxy、防火牆、開啟步驟)。

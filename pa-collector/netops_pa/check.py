@@ -13,12 +13,9 @@ import os
 import sys
 from collections.abc import Callable
 
-from .config import ConfigError, PollConfig, _bool, _file, _int, _str, read_secret
-from .poller import READ_ONLY_COMMANDS, SdkClient, parse_counters, parse_dataplane, parse_session, parse_system, parse_throughput
+from .config import GW_ENVS, ConfigError, PollConfig, _bool, _file, _int, _str, read_secret
+from .poller import CHECK_COMMANDS, READ_ONLY_COMMANDS, SdkClient, parse_counters, parse_dataplane, parse_session, parse_system, parse_throughput
 from .status import mask, register_secret
-
-# 只用在檢查:唯讀
-SYSTEM_INFO = "show system info"
 
 HINTS: list[tuple[tuple[str, ...], str]] = [
     (("certificate verify failed", "hostname", "ip address mismatch", "doesn't match"),
@@ -28,6 +25,11 @@ HINTS: list[tuple[tuple[str, ...], str]] = [
     (("refused", "unreachable", "no route", "name or service", "getaddrinfo", "errno"), "連不到 PA-560:確認 PA_HOST、PA_PORT 與網路放行"),
     (("invalid syntax", "not supported", "unknown command"), "設備不支援此查詢(PAN-OS 版本差異),請回報版本"),
 ]
+
+
+def printable(v: str | None) -> str:
+    """設備傳回的字串:去掉控制字元(終端機跳脫序列),最多 64 字。"""
+    return "".join(ch for ch in (v or "") if ch.isprintable())[:64]
 
 
 def hint(msg: str) -> str:
@@ -41,6 +43,9 @@ def hint(msg: str) -> str:
 def load_poll(env: dict[str, str]) -> PollConfig:
     """同 config.load_config 的輪詢設定,但不要求 PA_POLL_ENABLED=1。"""
     gw_env = _str(env, "GW_ENV")
+    # 同 load_config:部署區只有三個值(否則正式區的檢查可能被繞過)
+    if gw_env not in GW_ENVS:
+        raise ConfigError(f"GW_ENV 必須是 {' / '.join(GW_ENVS)}:{gw_env or '(未設定)'}")
     host = _str(env, "PA_HOST")
     key = read_secret(env, "PA_API_KEY", gw_env)
     missing = [k for k, v in (("PA_HOST", host), ("PA_API_KEY_FILE", key)) if not v]
@@ -63,7 +68,12 @@ def run(env: dict[str, str] | None = None, out: Callable[[str], None] = print, c
     register_secret(cfg.api_key)
     tls = "不驗證憑證(PA_TLS_INSECURE=1,只限測試區)" if cfg.tls_insecure else f"驗證憑證({'PA_CA_FILE' if cfg.ca_file else '系統 CA'})"
     out(f"PA-560 {cfg.host}:{cfg.port},{tls},逾時 {cfg.timeout} 秒")
-    c = client or SdkClient(cfg)
+    try:
+        c = client or SdkClient(cfg)
+    except Exception as e:  # noqa: BLE001 — 例如 PA_CA_FILE 不是正確的憑證檔
+        msg = mask(f"{type(e).__name__}: {e}")
+        out(f"設定錯誤:{msg}\n    可能原因:{hint(msg)}")
+        return 2
     failed = 0
     parsers = {
         "session": lambda r: {**parse_session(r), **parse_throughput(r)},
@@ -71,17 +81,17 @@ def run(env: dict[str, str] | None = None, out: Callable[[str], None] = print, c
         "dataplane": lambda r: {"dataplane": parse_dataplane(r)},
         "interfaces": lambda r: {"interfaces": len(parse_counters(r))},
     }
-    for name, cmd in [("info", SYSTEM_INFO), *READ_ONLY_COMMANDS.items()]:
+    for name, cmd in [*CHECK_COMMANDS.items(), *READ_ONLY_COMMANDS.items()]:
         try:
-            # system info 不在輪詢白名單,直接用 SDK(同樣是 show 指令)
-            root = c._fw.op(cmd, xml=False, cmd_xml=True) if name == "info" else c.op(cmd)
+            # 一律經 SdkClient.op 的唯讀白名單
+            root = c.op(cmd)
         except Exception as e:  # noqa: BLE001 — 每一項分開回報
             failed += 1
             msg = mask(f"{type(e).__name__}: {e}")
             out(f"✗ {cmd}\n    {msg}\n    可能原因:{hint(msg)}")
             continue
         if name == "info":
-            fields = {k: (root.findtext(f".//{k}") or "") for k in ("model", "sw-version", "hostname", "serial")}
+            fields = {k: printable(root.findtext(f".//{k}")) for k in ("model", "sw-version", "hostname", "serial")}
             # 序號只印後 4 碼
             fields["serial"] = ("…" + fields["serial"][-4:]) if fields["serial"] else ""
             out(f"✓ {cmd}:" + "、".join(f"{k}={v}" for k, v in fields.items() if v))

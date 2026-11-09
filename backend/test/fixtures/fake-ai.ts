@@ -33,7 +33,7 @@ export function fakeAiHost(opts: { streamDelayMs?: number } = {}) {
       }
       if (u === '/v1/chat/completions') {
         const last = body.messages.at(-1).content as string;
-        if (!body.stream) return json({ choices: [{ message: { content: `譯:${last.slice(0, 30)}` } }] });
+        if (!body.stream) return json({ choices: [{ message: { content: `ok:${last.slice(0, 30)}` } }] });
         res.setHeader('content-type', 'text/event-stream');
         const lines = [
           ...Array.from({ length: body.chat_template_kwargs.enable_thinking ? 5 : 0 }, () => ({ choices: [{ delta: { reasoning: 'r'.repeat(90) } }] })),

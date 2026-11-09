@@ -124,6 +124,7 @@ async function legacyAi() {
       stub("import { config } from '../config.js'", 'config'),
       stub("import { filesInRange, readSummary } from '../lib/importer.js'", 'filesInRange, readSummary'),
       stub("import { eventsContext, eventsForIps } from '../lib/paevimport.js'", 'eventsContext, eventsForIps'),
+      // 這行要與舊版原始碼逐字相同才替換得到(舊版仍 import 翻譯用的 LANGS、translate;新版不搬,只是替換掉)
       stub("import { chatOnce, LANGS, llmModel, startSse, streamChat, translate } from '../lib/llm.js'", 'chatOnce, LANGS, llmModel, startSse, streamChat, translate'),
       stub("import { notesForAi, saveNote } from '../lib/kb.js'", 'notesForAi, saveNote'),
       stub("import { searchVectors } from '../lib/vector.js'", 'searchVectors'),
@@ -266,6 +267,7 @@ describe('模型用戶端(舊版 lib/llm.js)', () => {
   async function legacyLlm() {
     return loadLegacy('lib/llm.js', {
       replace: { "import { config } from '../config.js'": 'const { config } = globalThis.__legacy' },
+      // 舊版 llm.js 讀 config.translate(翻譯不搬,但舊版模組載入時需要這個欄位)
       deps: { config: { llm: { url: `${base}/v1`, model: '', apiKey: 'k1', timeoutMs: 5000 }, translate: { url: `${base}/v1`, model: '' } } },
     });
   }
@@ -292,6 +294,20 @@ describe('模型用戶端(舊版 lib/llm.js)', () => {
       assert.deepEqual(mineOut, res.out, `think=${think}`);
       assert.deepEqual(bodies(), legacyReqs);
     }
+  });
+
+  it('chatOnce:請求內容與舊版相同(外部 IP 自動學習使用)', async () => {
+    const L = await legacyLlm();
+    const messages = [{ role: 'system' as const, content: '你是助理' }, { role: 'user' as const, content: '整理這個分組' }];
+    const a = await L.chatOnce({ model: await L.llmModel(), messages, maxTokens: 6000 });
+    const legacyReqs = bodies().filter((r) => r.url === '/v1/chat/completions');
+    const llm = mine();
+    await llm.model();
+    bodies();
+    const b = await llm.chatOnce({ messages, maxTokens: 6000 });
+    assert.equal(b, a);
+    assert.deepEqual(bodies(), legacyReqs);
+    assert.equal(legacyReqs[0]!.body.chat_template_kwargs.enable_thinking, false);
   });
 
   it('模型名稱:有設定時不查 /models;連不到時丟出分類過的錯誤', async () => {

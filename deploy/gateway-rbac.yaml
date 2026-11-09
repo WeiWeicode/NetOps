@@ -41,7 +41,7 @@ permissions:
   - { code: netops.kb-page.write, name: 新增 / 修改 / 刪除筆記, kind: button, parent: netops.kb-page.read, sort: 10, includes: [netops.kb.write] }
 
   # AI(IMPL-PLAN A1,ARCHITECTURE D23):netops.ai.use 不是 .read,選單不能綁定(BACKEND-GUIDE §6.1),改由按鈕綁定;
-  #   AI 問答頁的選單只綁該頁需要的讀取權限。整理筆記寫知識庫,沿用 netops.kb.write(由 netops.kb-page.write 取得)
+  #   AI 問答頁的選單只綁該頁需要的讀取權限。舊版的整理筆記(寫知識庫)與翻譯依 2026-11-09 決定不搬(D25)
   #   語意搜尋、向量庫狀態、外部 IP 學習狀態用 netops.kb.read;立即同步 / 學習用 netops.kb.write(知識庫頁既有的節點)
 #   netops.ai.use 的資料範圍是 PA + AD + 知識庫(問答會依問題帶入 PA log、AD 事件與筆記;分析帶入 PA 摘要),
 #   所以三個 AI 按鈕都一併綁定這三個讀取權限,授權畫面看得到實際範圍(security-auditor 審查;是否拆成 PA / AD 各自的權限待需求方決定)

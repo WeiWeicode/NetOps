@@ -61,7 +61,7 @@
 - Element Plus、Tailwind、`unplugin-auto-import`、`unplugin-vue-components`。
 - 舊配色系統:`themes/`、`src/themes/`、`scripts/make-themes.mjs`、`/theme.css`、`/__themes`。
 - 字體大小控制 `FontSizeControl`、`useFontScale`:GigaItApp 與入口網都沒有。
-- AI 畫面:`PaAsk`、`AiAnalysis`、`TranslateBox`、知識庫頁的語意搜尋與自動學習區塊(新版已於 A1 改寫,舊版檔案等 A1 正式區上線、舊版 IIS 停用後移除;D18、D23)。
+- AI 畫面:`PaAsk`、`AiAnalysis`、`TranslateBox`、知識庫頁的語意搜尋與自動學習區塊(新版已於 A1 改寫,`TranslateBox` 與「請 AI 記錄」不搬(D25);舊版檔案等 A1 正式區上線、舊版 IIS 停用後移除;D18、D23)。
 
 ## 5. 權限與禁止事項
 

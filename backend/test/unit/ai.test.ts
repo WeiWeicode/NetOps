@@ -321,7 +321,7 @@ describe('AI 串流的名額與生命週期(S0 §3.6;審查補測)', () => {
   it('用戶端中途斷線:中斷模型呼叫並歸還名額', async () => {
     let aborted = 0;
     let calls = 0;
-    // 第一次模型呼叫一直不回(直到被中斷),之後照常
+    // 第一次模型呼叫一直不回(直到被中斷),之後照常。前提:AD 問答每次只呼叫一次 chat/completions;每人上限設 1,第二次能完成才代表名額已歸還
     const hang = (async (url: string | URL, init?: RequestInit) => {
       if (String(url).endsWith('/chat/completions') && ++calls === 1)
         return new Promise<Response>((_, rej) => init?.signal?.addEventListener('abort', () => (aborted++, rej(new DOMException('aborted', 'AbortError')))));

@@ -93,7 +93,7 @@
     # 來源: backend/src/modules/ai/routes.ts:1
     @auto @changed
     場景: 翻譯與整理筆記不搬
-      # 需求方 2026-11-09 依 docs/AI-FEATURE-INVENTORY.md 決定不搬(ARCHITECTURE D25);舊版 POST /ai/translate、POST /ai/note
+      # 負向場景,沒有對應的 x-gherkin(來源行號指檔頭說明)。需求方 2026-11-09 依 docs/AI-FEATURE-INVENTORY.md 決定不搬(ARCHITECTURE D25);舊版 POST /ai/translate、POST /ai/note
       當 呼叫 POST /api/netops/ai/translations 或 POST /api/netops/ai/notes
       那麼 回應 404(新版沒有這兩支 API)
       而且 管理者在知識庫頁自己新增筆記

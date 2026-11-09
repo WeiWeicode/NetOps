@@ -7,13 +7,13 @@
 - 內容:拿掉 `POST /v1/ai/notes`(整理筆記,原本直接寫知識庫)與 `POST /v1/ai/translations`(翻譯)兩支路由與服務(`note`、`translate`、`checkTranslate`、記錄人檢查、分段上限常數);先合併 `fix/a1-core-trim`(核心拿掉 `translate.js`、`NOTE_PROMPT`、`parseJsonReply`)。權限不變:`netops.ai.use` 仍給分析與問答;`netops.kb.write` 仍給知識庫編輯、立即同步與外部 IP 學習;`gateway-rbac.yaml` 沒有只為這兩支 API 存在的節點,不需修改。測試:名額、全系統上限、用戶端斷線改用 AD 問答測(不需要 PA 資料),斷線測試改成確認同一人可以再問並完成(原本只驗 400,沒有真的證明名額歸還);新增「沒有這兩支 API(404)」。
 - 合併衝突:`feature/a1-ai-api` 合併 `fix/a1-core-trim` 時,本檔(修正紀錄)檔頭兩邊都新增紀錄而衝突;依工作區 AGENT §9.4 三筆都保留、依日期排序,由主討論串核准(2026-11-09)。程式檔沒有衝突。
 - 檔案:`backend/src/modules/ai/{service,routes,sse}.ts`、`backend/src/{app,openapi}.ts`、`backend/test/{unit/ai.test.ts,fixtures/fake-ai.ts}`、`docs/API.md` §2、§9、§10、`docs/Gherkin/{ai/ai.feature,README.md}`
-- 驗證:`npm run typecheck`、`npm test`(162 項通過;移除前 165 項:拿掉整理筆記、翻譯、翻譯驗證 3 項與核心的翻譯比對 1 項,新增「沒有這兩支 API」1 項)、`npm run build`、`check-scenarios.mjs`(x-gherkin 70 個場景全部對應,0 個問題)
+- 驗證:`npm run typecheck`、`npm test`(163 項通過;移除前 165 項:拿掉整理筆記、翻譯、翻譯驗證 3 項與核心的翻譯比對 1 項,新增「沒有這兩支 API」與核心的 `chatOnce` 比對各 1 項)、`npm run build`、`check-scenarios.mjs`(x-gherkin 70 個場景全部對應,0 個問題)
 
 ## 2026-11-09 A1-core:移除翻譯與整理筆記的核心(決定不搬)
 - 工作項目:A1(`fix/a1-core-trim`;需求方 2026-11-09 依 `docs/AI-FEATURE-INVENTORY.md` 決定翻譯(#5)與整理筆記(#6)不搬,ARCHITECTURE D25)
-- 內容:刪除 `modules/ai/core/translate.js`(語言清單、分段、翻譯提示);`ai/core/context.js` 拿掉整理筆記用的 `NOTE_PROMPT` 與 `parseJsonReply`;測試基準拿掉翻譯分段的比對與 `NOTE_PROMPT` / `parseJsonReply` 的比對(其餘提示仍與舊版逐字比對)。`infra/llm` 的 `chatOnce` 保留(外部 IP 自動學習使用),只改註解。設定與 `.env.example` 的說明改為「AI 未設定回 409」(與 API 一致)。
+- 內容:刪除 `modules/ai/core/translate.js`(語言清單、分段、翻譯提示);`ai/core/context.js` 拿掉整理筆記用的 `NOTE_PROMPT` 與 `parseJsonReply`;測試基準拿掉翻譯分段與 `NOTE_PROMPT` / `parseJsonReply` 的比對(其餘提示仍與舊版逐字比對),改加一項 `chatOnce` 請求內容與舊版相同(外部 IP 自動學習仍使用;審查建議)。`infra/llm` 的 `chatOnce` 保留(外部 IP 自動學習使用),只改註解。設定與 `.env.example` 的說明改為「AI 未設定回 409」(與 API 一致)。
 - 檔案:`backend/src/modules/ai/core/{context.js,translate.js(刪除)}`、`backend/src/infra/llm/index.ts`、`backend/src/config.ts`、`backend/.env.example`、`backend/test/unit/ai-core.test.ts`
-- 驗證:`npm run typecheck`、`npm test`(147 項通過;移除前 148 項,少 1 項翻譯分段的比對)、`npm run build`
+- 驗證:`npm run typecheck`、`npm test`(148 項通過;與移除前同為 148 項:拿掉翻譯分段的比對、新增 `chatOnce` 的比對)、`npm run build`;`code-reviewer`、`security-auditor` 審查(無必修)
 
 ## 2026-11-05 A1-api 審查修正
 - 工作項目:A1(第 2 批;`code-reviewer`、`security-auditor` 審查後)

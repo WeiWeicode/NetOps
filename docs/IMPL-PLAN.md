@@ -93,7 +93,7 @@ D13:骨架直接留用;AI 不在這次範圍,不做串流驗證(D7、D17)。
 2. **畫面**:由低風險到高風險逐頁改寫,每頁對照舊版功能:FTP Log 檔案 → 明細查詢 → AD 事件總覽 → 安全事件 `feature/netops-f1-pa-events` → 流量總覽 → 知識庫。
 3. **收尾**:移除 `Login.vue`、`SyncLogin.vue`、`stores/token.js`、舊配色系統與 Element Plus、Tailwind。
 
-- **不改寫**(D17):`PaAsk.vue`、`AiAnalysis.vue`、`TranslateBox.vue`,以及知識庫頁的語意搜尋與自動學習區塊。
+- **不改寫**(D17):`PaAsk.vue`、`AiAnalysis.vue`、`TranslateBox.vue`,以及知識庫頁的語意搜尋與自動學習區塊。(已由 D23 取代,於 A1 改寫;`TranslateBox` 與「請 AI 記錄」依 2026-11-09 決定不搬,D25)
 - 頁面依權限顯示;寫入(`POST` / `PUT` / `DELETE`)經 web-kit 帶 CSRF,下載(`GET`)經 web-kit、不需 CSRF,都不帶 Bearer。
 - 無權限導回 `/?denied=netops`。
 - Veeam、舊版 AI 問答改一般連結(D11、D18)。

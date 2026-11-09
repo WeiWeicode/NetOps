@@ -2,6 +2,58 @@
 
 > 接手時先讀 `AGENT.md`,再讀 `docs/ARCHITECTURE.md`、`docs/IMPL-PLAN.md`。
 
+## 2026-11-06 收工(週額度用完,下週接續)
+
+**接手方式**:新討論串說「從 `NetOps/docs/HANDOFF.md`「2026-11-06 收工」接手」,用主討論串協調模式(只派工、核對、收尾)。
+
+### 現況
+
+| 工作 | 狀態 | MR(都是 → `develop`,**都還沒合併**) |
+| --- | --- | --- |
+| D1 驗收修正 | 已合併(!30 報告、!31 修正);重驗延後到 A1、R1 完成後一起做 | — |
+| S0 串流驗證 | **完成**(!32、!33;Gateway !23 文件已合併) | — |
+| A1 AI 搬移 | 三批程式完成,本機測試通過(backend 165、frontend 79、Gherkin 74/74);**功能盤點完成(!42),等需求方決定**(需求方要求「重新盤點新舊功能差異,功能不用全部搬」) | !34 核心 → !35 API → !36 前端 |
+| R1 PA 即時監控 | 四批程式完成(用假 PA 開發);**!40 的 `security-auditor` 還沒補跑**(額度中斷) | !37 收集器 → !38 部署 → !39 API → !40 前端 |
+| R0 前置 | 等網通:PA-560 管理 IP、PAN-OS 版本、唯讀 API Key、轉送設定、網路放行;給網通的規格在 !38 的 `docs/PA-FORWARDING-SPEC.md` | — |
+
+子任務(Claude Desktop):`netops-a1-ai`(A1,盤點完成)、`netops-r1-pa-live`(R1)。下週可以接續同一個子任務,脈絡太長就新開,brief 指向本段與各 MR 描述。
+
+### 需求方的決定(2026-11-05 / 11-06,不要重新討論)
+
+- `netops.ai.use` 給 `netops-admin`、`netops-viewer`;維持一個權限,不拆成 PA / AD。
+- 向量同步(`VECTOR_SYNC`)與每天 IP 自動學習(`IPLEARN_HOUR`):**舊版 IIS 停用後才開**(正式區);測試區一直關。
+- 問答送給模型的範例列(最多 15 筆)與 AD 訊息前 400 字:**接受,照舊版**(AGENT §7.4 例外,寫進 ARCHITECTURE)。
+- 整理筆記等功能:先盤點新舊 AI 功能差異,再決定哪些不搬(盤點文件由 A1 子任務產出,等需求方決定)。
+- 測試區 PA 收集器預設關閉,測試時才開(`PA_POLL_ENABLED`、`PA_RECEIVE_ENABLED` 預設 0)。
+- R1:Redis 連不上時 API 回 **424**(2026-11-06)。
+- PA SDK 用唯讀角色的 **API Key**(XML API 只開 Operational Requests),不存帳號密碼;需求方向網管申請中。
+
+### 下一步(依序)
+
+1. **A1 盤點**:盤點已完成,見 !42 `docs/AI-FEATURE-INVENTORY.md`(決定記為 ARCHITECTURE D25)。建議:分析、PA / AD 問答、語意搜尋、向量同步、IP 學習都搬;**整理筆記改成先回草稿**(§2.1 選項 B);翻譯可以搬,或確認沒人用就不搬;`/ai/context`、獨立翻譯模型、`vec-probe` 不搬。請需求方決定 #5 翻譯和 #6 整理筆記,再由子任務改 !35 / !36。舊版使用量沒查到,查法見盤點 §3。
+2. **R1 補資安審查**:`netops-r1-pa-live` 對 !40 補跑 `security-auditor` 並修正。
+3. **合併**:A1 與 R1 兩組 MR 互相衝突(主討論串 2026-11-06 模擬合併:`backend/src/app.ts`、`config.ts`、`test/helpers.ts`、`test/unit/config.test.ts`、`deploy/docker-compose.yml`、`docs/API.md`、`DevelopmentProcess/*Correction.md`、`docs/Gherkin/README.md`、`frontend/mock/gateway.ts`)。建議先合併 R1(!37 → !40),A1 盤點修改後 `git merge origin/develop`,依工作區 AGENT §9.3 先回報衝突、需求方同意後再解(多半是雙方新增的段落都保留)。
+4. 合併後在測試區:發佈路由草稿、確認角色節點,再把 D1 修正、純 viewer 帳號、知識庫筆記備份、A1、R1 一起驗收(D1 修正的重驗清單見下方「2026-11-05 D1 驗收修正」)。
+5. R0:網通回覆後放入 API Key、填 `PA_HOST`,依 `PA-FORWARDING-SPEC.md` 附錄 F 開啟輪詢與接收。
+6. 階段結束整理一次 `PROJECT-MAP.md`、`IMPL-PLAN.md`、本檔,更新架構資料(工作區 repo)與甘特圖。
+
+### 合併前需求方要在主機 2 執行
+
+- **合併 !38 前**:用 `feature/r1-deploy` 分支的 `deploy/host2-set-pa-secrets.sh`,在主機 2 WSL 以 root 執行。會產生 HTTP Token,API Key 還沒拿到可以直接按 Enter。
+- **合併 !35 前**:用 `feature/a1-ai-api` 分支的 `deploy/host2-set-secrets.sh`,在主機 2 WSL 以 root 執行,隱藏輸入 Qdrant API Key(和舊版 IIS `server/.env` 的 `QDRANT_API_KEY` 相同)。已存在的機密不會重建。
+
+### 待需求方決定
+
+| # | 事項 | 來源 |
+| --- | --- | --- |
+| R1-1 | Syslog 接收端點在設定 mTLS 前只靠 Windows 防火牆限制來源(容器看不到 PA-560 真實 IP);要在容器內驗證來源需改 Gateway Traefik + PROXY protocol | !38 |
+| R1-2 | `netops-redis` 沒有密碼 / ACL,只靠內部網路隔離 | !38 |
+| R1-3 | 容器與機密檔用 uid 1000,主機 WSL 一般帳號若也是 uid 1000 可直接讀機密 | !38 |
+| R1-4 | 正式區沒有接收端點憑證時,是否接受明文(`PA_RECEIVE_PLAINTEXT=1`) | !38 |
+| A1-1 | 哪些 AI 功能不搬(盤點後決定) | A1 盤點 |
+| A1-2 | 主機 3 容器內到 AI 主機與 RDAP 的連線還沒驗證(D2 前要補);RDAP 的 LACNIC、AFRINIC 從主機 2 逾時 | !34–!36 描述 |
+| — | 2026-11-04 收工段的 a–l 仍有效(k:Gateway 防提權缺口 High,屬 Gateway repo) | 本檔下方 |
+
 ## 2026-11-05 S0 完成(測試區驗證通過)
 
 - NetOps !32 合併(`develop` cce67e0,pipeline #702),路由已發佈。測試區驗證全部通過(報告 `docs/test-reports/2026-11-05-s0-sse.md` §3):SSE 經 Nginx 與 BFF 穩定長連線,**不改 Gateway、不改輪詢**。

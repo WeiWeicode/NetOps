@@ -51,7 +51,7 @@ export interface FtpConfig {
 
 /**
  * AI(IMPL-PLAN A1、ARCHITECTURE D23、PA-LIVE-PLAN §6):直接呼叫 AI 主機,位址只從設定讀(AGENT.md §7.4)
- *   LLM_URL 空白 = 不提供 AI 分析 / 問答 / 翻譯 / 整理筆記(API 回 503 NETOPS_AI_DISABLED);QDRANT_URL 空白 = 不使用向量庫
+ *   LLM_URL 空白 = 不提供 AI 分析 / 問答 / 外部 IP 自動學習(API 回 409 NETOPS_AI_DISABLED);QDRANT_URL 空白 = 不使用向量庫
  */
 export interface AiConfig {
   llm: { url: string; model: string; apiKey: string; timeoutMs: number };

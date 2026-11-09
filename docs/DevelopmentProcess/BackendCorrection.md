@@ -2,6 +2,12 @@
 
 > `backend/`、`deploy/` 的修改;新紀錄加在最上方,格式見 `AGENT.md` §11。
 
+## 2026-11-09 A1-core:移除翻譯與整理筆記的核心(決定不搬)
+- 工作項目:A1(`fix/a1-core-trim`;需求方 2026-11-09 依 `docs/AI-FEATURE-INVENTORY.md` 決定翻譯(#5)與整理筆記(#6)不搬,ARCHITECTURE D25)
+- 內容:刪除 `modules/ai/core/translate.js`(語言清單、分段、翻譯提示);`ai/core/context.js` 拿掉整理筆記用的 `NOTE_PROMPT` 與 `parseJsonReply`;測試基準拿掉翻譯分段與 `NOTE_PROMPT` / `parseJsonReply` 的比對(其餘提示仍與舊版逐字比對),改加一項 `chatOnce` 請求內容與舊版相同(外部 IP 自動學習仍使用;審查建議)。`infra/llm` 的 `chatOnce` 保留(外部 IP 自動學習使用),只改註解。設定與 `.env.example` 的說明改為「AI 未設定回 409」(與 API 一致)。
+- 檔案:`backend/src/modules/ai/core/{context.js,translate.js(刪除)}`、`backend/src/infra/llm/index.ts`、`backend/src/config.ts`、`backend/.env.example`、`backend/test/unit/ai-core.test.ts`
+- 驗證:`npm run typecheck`、`npm test`(148 項通過;與移除前同為 148 項:拿掉翻譯分段的比對、新增 `chatOnce` 的比對)、`npm run build`;`code-reviewer`、`security-auditor` 審查(無必修)
+
 ## 2026-11-05 A1-core 審查修正(與舊版不同)
 - 工作項目:A1(第 1 批;`security-auditor`、`code-reviewer` 審查後,與搬移分開提交)
 - 內容:① 向量同步(共用 collection):payload 沒有 `noteId` 的 point 不列入、不刪除;知識庫是空的,或一次要刪除超過現有 20%(至少 5 筆)時整次不同步並回錯誤(寫入前就檢查);scroll 最多 200 頁、`next_page_offset` 重複時停止。② `queryFlows` 符合的組合最多 20 萬列,超過標 `truncated`(寬網段一次可能數百萬列);舊版 `out.push(...found)` 在組合很多時會超過函式參數上限,改逐一加入。③ 外部 IP 學習:RDAP 的名稱、說明、國家壓成一行、去掉控制字元並限制長度(登記人可填入要模型照做的文字,之後會寫進知識庫);DNS 反查名稱只接受主機名稱格式;模型回的 `key` 只接受這一批的分組;內容先截 8,000 字再去掉註記;管理者改過的筆記(`noteState` 為 manual)不覆寫,已刪除的重新建立,寫入失敗記錄並略過(舊版任何錯誤都改成新建,可能重複);自動學習筆記上限 1,000 則(預留管理者額度)。④ RDAP 轉址只跟到五個登記處的 https 網址(最多 3 次);`createRdap` 的解析函式改必填。⑤ `infra/llm`:使用者中斷與逾時分開判斷;串流一行超過 1 MB 視為格式錯誤。

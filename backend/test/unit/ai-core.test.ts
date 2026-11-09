@@ -3,7 +3,7 @@
  *   - evidence.js 與舊版逐字相同(只差 import 路徑)
  *   - 分析資料 buildContext、提示文字、筆記 JSON 解析 = 舊版 routes/ai.js
  *   - 知識庫帶入 notesForAi、連線組合查詢 queryFlows、PA 其他 log 的 eventsForIps / eventsContext、AD 的 adContext 與問題判斷 = 舊版
- *   - 模型用戶端:送給模型的請求內容、串流事件 = 舊版 llm.js;翻譯分段 = 舊版
+ *   - 模型用戶端:送給模型的請求內容、串流事件 = 舊版 llm.js(翻譯、整理筆記依 2026-11-09 決定不搬)
  *   - 向量庫:同步時對 Qdrant / embedding 的請求、語意搜尋結果 = 舊版 vector.js
  *   - 外部 IP 自動學習:挑選的 IP、RDAP 解析、送給模型的內容、寫入的筆記與狀態檔 = 舊版 iplearn.js
  * 外部服務(模型、Qdrant、RDAP、DNS)都用本機假服務,不連 AI 主機(AGENT.md §9)。
@@ -25,7 +25,6 @@ import { createEmbedder, createQdrant } from '../../src/infra/vector/index.js';
 import { accountsIn, eventIdsIn, isAdQuestion } from '../../src/modules/ad/core/ad-ai.js';
 import { createAdImporter } from '../../src/modules/ad/importer.js';
 import * as context from '../../src/modules/ai/core/context.js';
-import { chunks, joinParts, translateSystem } from '../../src/modules/ai/core/translate.js';
 import * as iplearnCore from '../../src/modules/iplearn/core/iplearn.js';
 import { createIpLearner, parseRdap } from '../../src/modules/iplearn/core/iplearn.js';
 import { notesForAi } from '../../src/modules/kb/core/ai-notes.js';
@@ -124,6 +123,7 @@ async function legacyAi() {
       stub("import { config } from '../config.js'", 'config'),
       stub("import { filesInRange, readSummary } from '../lib/importer.js'", 'filesInRange, readSummary'),
       stub("import { eventsContext, eventsForIps } from '../lib/paevimport.js'", 'eventsContext, eventsForIps'),
+      // 這行要與舊版原始碼逐字相同才替換得到(舊版仍 import 翻譯用的 LANGS、translate;新版不搬,只是替換掉)
       stub("import { chatOnce, LANGS, llmModel, startSse, streamChat, translate } from '../lib/llm.js'", 'chatOnce, LANGS, llmModel, startSse, streamChat, translate'),
       stub("import { notesForAi, saveNote } from '../lib/kb.js'", 'notesForAi, saveNote'),
       stub("import { searchVectors } from '../lib/vector.js'", 'searchVectors'),
@@ -133,7 +133,7 @@ async function legacyAi() {
       stub("import { queryFlows } from '../lib/flows.js'", 'queryFlows'),
       stub("import { accountsIn, adContext, eventIdsIn, eventsInRange, isAdQuestion, searchAd } from '../lib/adimport.js'", 'accountsIn, adContext, eventIdsIn, eventsInRange, isAdQuestion, searchAd'),
     ]),
-    exports: ['buildContext', 'SYSTEM_PROMPT', 'ASK_PROMPT', 'NOTE_PROMPT', 'ENV_NOTES', 'AD_NOTES', 'EV_NOTES', 'KB_RULE', 'EVENT_Q', 'parseJsonReply', 'kbSection'],
+    exports: ['buildContext', 'SYSTEM_PROMPT', 'ASK_PROMPT', 'ENV_NOTES', 'AD_NOTES', 'EV_NOTES', 'KB_RULE', 'EVENT_Q', 'kbSection'],
     deps: {
       config: { llm: {}, ftp: {} },
       filesInRange: (from: string, to: string) => traffic.filesInRange(from, to),
@@ -163,11 +163,10 @@ describe('evidence 與分析資料、提示(舊版 routes/ai.js、lib/evidence.j
     assert.ok(context.buildContext(summarize, '2026/11/02', '2026/11/03')!.text.includes('前一段同長度期間 2026/10/31 ~ 2026/11/01'));
   });
 
-  it('提示文字、問題判斷與 JSON 解析與舊版相同', async () => {
+  it('提示文字與問題判斷與舊版相同', async () => {
     const L = await legacyAi();
-    for (const k of ['SYSTEM_PROMPT', 'ASK_PROMPT', 'NOTE_PROMPT', 'ENV_NOTES', 'AD_NOTES', 'EV_NOTES', 'KB_RULE'] as const) assert.equal((context as Record<string, unknown>)[k], L[k], k);
+    for (const k of ['SYSTEM_PROMPT', 'ASK_PROMPT', 'ENV_NOTES', 'AD_NOTES', 'EV_NOTES', 'KB_RULE'] as const) assert.equal((context as Record<string, unknown>)[k], L[k], k);
     assert.equal(context.EVENT_Q.source, L.EVENT_Q.source);
-    for (const s of ['```json\n{"title":"A","ips":["10.10.1.5"]}\n```', '好的:{"title":"B"} 以上', '不是 JSON', '{壞掉']) assert.deepEqual(context.parseJsonReply(s), L.parseJsonReply(s), s);
     assert.equal(context.kbSection({ text: 'x' }), L.kbSection({ text: 'x' }));
     assert.equal(context.kbSection({ text: '' }), L.kbSection({ text: '' }));
   });
@@ -336,7 +335,7 @@ describe('模型用戶端(舊版 lib/llm.js)', () => {
   async function legacyLlm() {
     return loadLegacy('lib/llm.js', {
       replace: { "import { config } from '../config.js'": 'const { config } = globalThis.__legacy' },
-      exports: ['chunks'],
+      // 舊版 llm.js 讀 config.translate(翻譯不搬,但舊版模組載入時需要這個欄位)
       deps: { config: { llm: { url: `${base}/v1`, model: '', apiKey: 'k1', timeoutMs: 5000 }, translate: { url: `${base}/v1`, model: '' } } },
     });
   }
@@ -365,18 +364,18 @@ describe('模型用戶端(舊版 lib/llm.js)', () => {
     }
   });
 
-  it('chatOnce 與翻譯分段:請求內容與舊版相同', async () => {
+  it('chatOnce:請求內容與舊版相同(外部 IP 自動學習使用)', async () => {
     const L = await legacyLlm();
-    const long = ['# 標題', ...Array.from({ length: 12 }, (_, i) => `## 第 ${i} 段\n${'內容 10.10.1.5:445 '.repeat(30)}`)].join('\n');
-    assert.deepEqual(chunks(long), L.chunks(long));
-    assert.ok(chunks(long).length > 1);
-    const a = await L.translate(long, 'ja');
-    const legacyReqs = bodies();
+    const messages = [{ role: 'system' as const, content: '你是助理' }, { role: 'user' as const, content: '整理這個分組' }];
+    const a = await L.chatOnce({ model: await L.llmModel(), messages, maxTokens: 6000 });
+    const legacyReqs = bodies().filter((r) => r.url === '/v1/chat/completions');
     const llm = mine();
-    const b = joinParts(await Promise.all(chunks(long).map((part) => llm.chatOnce({ maxTokens: 6000, messages: [{ role: 'system', content: translateSystem('ja') }, { role: 'user', content: part }] }))));
+    await llm.model();
+    bodies();
+    const b = await llm.chatOnce({ messages, maxTokens: 6000 });
     assert.equal(b, a);
-    const sort = (x: { body: unknown }[]) => [...x].sort((p, q) => String(JSON.stringify(p.body)).localeCompare(String(JSON.stringify(q.body))));
-    assert.deepEqual(sort(bodies()), sort(legacyReqs));
+    assert.deepEqual(bodies(), legacyReqs);
+    assert.equal(legacyReqs[0]!.body.chat_template_kwargs.enable_thinking, false);
   });
 
   it('模型名稱:有設定時不查 /models;連不到時丟出分類過的錯誤', async () => {

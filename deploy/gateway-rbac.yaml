@@ -23,6 +23,8 @@ permissions:
   - { code: netops.group.knowledge, name: 網通知識, kind: group, parent: netops.app.access, sort: 30, icon: book-open }
 
   # 防火牆 PA-560
+  # 即時監控(R1;PA-LIVE-PLAN §8):群組最上方,API 權限 netops.pa-realtime.read
+  - { code: netops.pa-live.read, name: 即時監控, kind: menu, parent: netops.group.firewall, sort: 5, includes: [netops.pa-realtime.read] }
   - { code: netops.pa-dashboard.read, name: 流量總覽, kind: menu, parent: netops.group.firewall, sort: 10, includes: [netops.pa.read] }
   - { code: netops.pa-events.read, name: 安全事件, kind: menu, parent: netops.group.firewall, sort: 20, includes: [netops.pa.read] }
   - { code: netops.pa-search.read, name: Log 明細查詢, kind: menu, parent: netops.group.firewall, sort: 30, includes: [netops.pa-log.read] }
@@ -57,6 +59,7 @@ roles:
     description: 資訊網通管理系統全部畫面與操作(FTP 同步 / 分析、知識庫編輯;按鈕綁定的寫入 API 一併取得)
     permissions:
       - netops.app.access
+      - netops.pa-live.read
       - netops.pa-dashboard.read
       - netops.pa-events.read
       - netops.pa-search.read
@@ -79,6 +82,7 @@ roles:
     description: 資訊網通管理系統全部畫面唯讀(不含 FTP 同步 / 分析與知識庫編輯;含 AI 分析與問答)
     permissions:
       - netops.app.access
+      - netops.pa-live.read
       - netops.pa-dashboard.read
       - netops.pa-events.read
       - netops.pa-search.read

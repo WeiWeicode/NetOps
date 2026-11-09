@@ -21,6 +21,7 @@
 | `pa-live/stream-test.feature` | S0 SSE 串流驗證:open / heartbeat、重連、連線上限、經 Gateway 長連線 | API.md §3.1;IMPL-PLAN S0 | S0 |
 | `ai/ai.feature` | AI 分析與問答(SSE)、AI 未設定、模型連不到、翻譯與整理筆記不搬 | API.md §10.1;D23 | A1 |
 | `kb/ai.feature` | 語意搜尋、向量庫狀態與同步、外部 IP 自動學習 | API.md §10.2;D10、D23 | A1 |
+| `pa-live/realtime.feature` | R1 PA 即時監控:收集器狀態(停止更新不顯示舊快照)、趨勢、排行、最新 log、SSE 串流;收集器開關、唯讀、接收驗證、保留時間 | API.md §3.2;PA-LIVE-PLAN;IMPL-PLAN R1 | R1 |
 | `ui/navigation.feature` | 應用層守衛(`/?denied=netops`)、選單依權限、403、一般連結 | UI-GUIDE §5;FRONTEND-GUIDE §7.4 | F1 |
 | `ui/requests.feature` | CSRF、不存 Token、下載、工作輪詢與取消、資料不完整提示、DOMPurify | FRONTEND-GUIDE §6;API.md §1 | F1 |
 | `ui/ai.feature` | AI 問答、AI 分析、知識庫 AI 功能的畫面:SSE 串流(CSRF)、按鈕權限、資料不完整提示、不連舊版 | API.md §10;D23 | A1 |
@@ -72,7 +73,7 @@
 
 ## 5. API → 場景 → 檔案對照
 
-**`x-gherkin` 70 個場景全部對應到同名場景**(44 個 operation;A1 加 15 個場景、8 個 operation,對照見 `ai/ai.feature`、`kb/ai.feature` 的 Rule;翻譯與整理筆記依 2026-11-09 決定不搬;`check-scenarios.mjs` 於 2026-11-09 比對,0 個問題)。重新比對:
+**`x-gherkin` 84 個場景全部對應到同名場景**(49 個 operation,含 R1 即時監控與 A1;A1 加 15 個場景、8 個 operation,對照見 `ai/ai.feature`、`kb/ai.feature` 的 Rule;翻譯與整理筆記依 2026-11-09 決定不搬;`check-scenarios.mjs` 於 2026-11-09 比對,0 個問題)。重新比對:
 
 ```bash
 cd backend && npm run -s openapi > ../openapi.tmp.json && node ../docs/Gherkin/check-scenarios.mjs ../openapi.tmp.json --table

@@ -1,5 +1,5 @@
 # NetOps Pipeline(Runner:主機 2 WSL shell executor,tag windows-runner;與 Gateway 同一台主機;IMPL-PLAN B0)
-#   check            所有分支:netops-api、netops-web(frontend/)型別檢查、單元測試、建置
+#   check            所有分支:netops-api、netops-web(frontend/)型別檢查、單元測試、建置;netops-pa(pa-collector/)ruff 與 pytest
 #   deploy-api-test  develop:在主機 2 建置並更新 netops-api(加入 Gateway 網路;啟動後自動註冊路由草稿)與知識庫 NAS 備份 netops-kb-backup
 #   deploy-web-test  develop:建置 SPA 並發佈到 Gateway 的 gw_www(Nginx /netops/;IMPL-PLAN D1,同 GigaItApp、giga-Portal)
 #   rbac-test        develop:以已部署的 Gateway 映像套用 deploy/gateway-rbac.yaml(netops.* 畫面權限、netops-admin / netops-viewer 角色;不指派成員)
@@ -39,6 +39,15 @@ check:frontend:
     - npm run typecheck
     - npm test
     - npm run build
+
+# netops-pa(Python,R1):在映像的 test 階段跑 ruff 與 pytest(Python 3.12,與執行映像同一個基底;假 PA、fakeredis,不連外部主機)
+check:pa-collector:
+  <<: *runner
+  stage: check
+  script:
+    # --pull:同 deploy-api-test(主機上的基底映像可能被其他專案覆寫)
+    - docker build --pull --target test -t "netops-pa-test:$CI_COMMIT_SHORT_SHA" pa-collector
+    - docker image rm "netops-pa-test:$CI_COMMIT_SHORT_SHA" >/dev/null 2>&1 || true
 
 deploy-api-test:
   <<: *runner

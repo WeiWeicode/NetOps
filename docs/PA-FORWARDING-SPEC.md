@@ -1,7 +1,7 @@
 # PA-560 設定規格(給網通):唯讀 API 帳號、HTTP 與 Syslog Log 轉送
 
 > 給負責 PA-560 的網通同仁照著設定。對應 NetOps [PA-LIVE-PLAN.md](PA-LIVE-PLAN.md) §3.1、§4、§9 與 IMPL-PLAN R0。
-> **PAN-OS 版本尚未確認**(P1):本文以 PAN-OS 10.x / 11.x 的畫面與欄位名稱撰寫;版本不同時,以設備畫面上「可選欄位清單」為準,表格裡標「版本」的欄位可能不存在,**不存在就整個 `"key":"$變數"` 拿掉**,其他照設。
+> **PAN-OS 版本:12.1.7-h3**(2026-11-09 連線檢查實測,G3)。本文的欄位以 PAN-OS 10.x / 11.x 的畫面與欄位名稱撰寫;12.1 的欄位尚未逐項核對,目前已知的差異是 **B.4 Decryption**(見該節)。設定時以設備畫面上「可選欄位清單」為準,表格裡標「版本」的欄位可能不存在,**不存在就整個 `"key":"$變數"` 拿掉**,其他照設。
 > 設定完成後請回覆 **G 節的清單**(管理 IP、PAN-OS 版本、憑證、送 log 的來源 IP、傳輸方式等)。
 
 ---
@@ -45,7 +45,7 @@
 | 注意 | 說明 |
 | --- | --- |
 | 權限範圍 | PAN-OS 的 XML API 權限只能開到「Operational Requests」這一層,無法限制只允許 `show`;NetOps 程式只送下列 4 個指令(程式內白名單,沒有任何設定、commit、封鎖的呼叫,ARCHITECTURE D22)。若內建角色 **Device administrator (read-only)** 在貴版本可以執行 XML API 的 `show` 指令,也可以改用(更嚴格),請網通評估 |
-| 會執行的指令 | `show session info`、`show system resources`、`show running resource-monitor second last 1`、`show counter interface all` |
+| 會執行的指令 | `show session info`、`show system resources`、`show running resource-monitor second last "1"`、`show counter interface "all"`(連線檢查印出的就是這 4 個;引號表示「值」,在 CLI 上等同 `second last 1`、`show counter interface all`)|
 | 頻率 | 正式區每 10–15 秒一輪;測試區平常不輪詢,測試期間才開 |
 | Key 失效 | 改密碼或 Device > Setup > Management > Authentication Settings 的 **API Key Lifetime** 到期時 Key 會失效,畫面會顯示「資料停止更新」;換 Key 時請通知需求方 |
 | 憑證 | NetOps 預設**驗證**管理介面的 HTTPS 憑證,而且**連線用的位址要出現在憑證的 SAN**:用 IP 連線時 SAN 要有該 IP(只在 CN 不算)。PA 出廠的自簽憑證通常沒有 IP SAN。請提供:① 管理介面憑證(或簽發的內部 CA 憑證,公開資訊、非機密);② 憑證 SAN 內的名稱或 IP(NetOps 會用它當 `PA_HOST`;用名稱時公司 DNS 要查得到)。無法提供時,測試區可暫時不驗證(`PA_TLS_INSECURE=1`),正式區不行,需重新簽發含 SAN 的憑證(Device > Certificate Management) |
@@ -123,6 +123,8 @@
 | `filedigest` / `filetype` | `$filedigest` / `$filetype` | filedigest / filetype | |
 
 ### B.4 Decryption(PAN-OS 10.0 以後)
+
+> **PAN-OS 12.1 差異(待網通在設備上確認)**:Palo Alto 文件說明 12.1(部分頁面寫 12.1.2 起)的 Decryption log 把欄位分成用戶端(client)與伺服器端(server)兩側,欄位名稱加上 client / server 前綴,並新增解密狀態、排除原因、憑證撤銷檢查等欄位。下面的 `$tls_version`、`$error`、`$sni` 等變數在 12.1.7-h3 可能已改名。請在 Custom Log Format 的欄位清單對照:**有同名變數就照設;改名的話用 client 側(例如 TLS 版本、SNI 取用戶端那一側)替換,並把實際變數名稱回覆需求方**;沒有對應的就拿掉。NetOps 收到時欄位可缺少,不影響其他欄位。
 
 ```json
 {"time":"$receive_time","src":"$src","dst":"$dst","rule":"$rule","app":"$app","dport":"$dport","action":"$action","error":"$error","errIndex":"$err_index","status":"$status","tls":"$tls_version","proxyType":"$proxy_type","policy":"$policy_name","sni":"$sni","repeat":"$repeatcnt"}
@@ -336,11 +338,11 @@ netsh interface portproxy show v4tov4
 
    ```text
    PA-560 <PA_HOST>:443,驗證憑證(PA_CA_FILE),逾時 8 秒
-   ✓ show system info:model=PA-560、sw-version=10.2.x、hostname=…、serial=…1234
+   ✓ show system info:model=PA-560、sw-version=12.1.7-h3、hostname=…、serial=…1234
    ✓ show session info:{'active': 3912, 'max': 262142, …}
    ✓ show system resources:{'mgmt': 10.0, …}
    ✓ show running resource-monitor second last "1":{'dataplane': 5.0}
-   ✓ show counter interface all:{'interfaces': 8}
+   ✓ show counter interface "all":{'interfaces': 8}
    結果:全部成功
    ```
 
@@ -376,9 +378,9 @@ netsh interface portproxy show v4tov4
 | # | 項目 | 用在 | 狀態(2026-11-09) |
 | --- | --- | --- | --- |
 | G1 | 唯讀 API Key(A 節) | SDK 輪詢 | **已取得**(需求方以 `deploy/host2-set-pa-secrets.sh` 寫入主機,AI 不經手) |
-| G2 | PA-560 管理介面 IP(或 DNS 名稱) | `PA_HOST` | 待回覆 |
-| G3 | PAN-OS 版本(Dashboard 或 `show system info` 的 sw-version) | 核對 B、C 節標「版本」的欄位;連線檢查也會印出 | 待回覆 |
-| G4 | 管理介面憑證:是否自簽、SAN 內有哪些名稱 / IP、簽發的 CA 憑證 | `PA_CA_FILE`;決定是否需暫用 `PA_TLS_INSECURE`(只限測試區) | 待回覆 |
+| G2 | PA-560 管理介面 IP(或 DNS 名稱) | `PA_HOST` | **10.10.115.35**(`:443`) |
+| G3 | PAN-OS 版本(Dashboard 或 `show system info` 的 sw-version) | 核對 B、C 節標「版本」的欄位;連線檢查也會印出 | **12.1.7-h3**(2026-11-09 在開發機 10.10.112.13 跑連線檢查取得);B.4 Decryption 欄位名稱待對照設備 |
+| G4 | 管理介面憑證:是否自簽、SAN 內有哪些名稱 / IP、簽發的 CA 憑證 | `PA_CA_FILE`;決定是否需暫用 `PA_TLS_INSECURE`(只限測試區) | **出廠自簽**:CN 與 SAN 都只有 `DNS:044109003916`(序號),沒有 IP SAN。測試區暫用 `PA_TLS_INSECURE=1`;**正式區要請網通換成公司 CA 簽發、SAN 含 `10.10.115.35`(或公司 DNS 名稱)的憑證**,並提供 CA 憑證 |
 | G5 | 管理介面 Permitted IP Addresses 已加入 `10.10.130.124`(與正式區 `.122`)、網路放行到管理介面 `:443` | 輪詢 | 待回覆 |
 | G6 | PA-560 送 log 的**來源 IP**(管理介面或 service route 指定的介面) | 主機 Windows 防火牆規則(附錄 F.2) | 待回覆 |
 | G7 | HTTP 用 HTTPS 或 HTTP;Syslog 用 SSL 或 TCP;PA-560 是否信任公司內部 CA(信任才能用 HTTPS / SSL) | 接收端點憑證(F.6) | 待回覆 |

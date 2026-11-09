@@ -4,7 +4,10 @@
   show session info                                  Session 數與使用率、整體流量(kbps / pps / cps)
   show system resources                              管理平面 CPU / 記憶體(top 文字輸出)
   show running resource-monitor second last "1"      資料平面 CPU
-  show counter interface all                         介面位元組計數(兩次輪詢相減算流量)
+  show counter interface "all"                       介面位元組計數(兩次輪詢相減算流量)
+指令字串經 pan-os-python cmd_xml 轉成 XML:沒加引號的字會變成元素(all → <all/>),加引號才是值。
+PAN-OS 的 interface 要的是值(<interface>all</interface>),寫成 all 會回「needs to have non NULL value」
+(2026-11-09 PA-560 PAN-OS 12.1.7-h3 實測);second last "1" 同理。
 PAN-OS 版本不同時 XML 結構略有差異:解析一律找元素名稱、找不到就略過,不依固定路徑。
 單一指令失敗不影響其他指令;該指標的快照 60 秒後過期,畫面顯示該項停止更新。
 """
@@ -30,7 +33,7 @@ READ_ONLY_COMMANDS = {
     "session": "show session info",
     "system": "show system resources",
     "dataplane": 'show running resource-monitor second last "1"',
-    "interfaces": "show counter interface all",
+    "interfaces": 'show counter interface "all"',
 }
 # 連線檢查(check.py)另外用的唯讀指令;不在輪詢裡執行
 CHECK_COMMANDS = {"info": "show system info"}

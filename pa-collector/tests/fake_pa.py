@@ -32,7 +32,12 @@ RESOURCE_MONITOR = """<response status="success"><result><resource-monitor><data
 COUNTERS = """<response status="success"><result><ifnet><ifnet>
 <entry><name>ethernet1/1</name><ibytes>{i1}</ibytes><obytes>{o1}</obytes><ipackets>10</ipackets></entry>
 <entry><name>ethernet1/2</name><ibytes>{i2}</ibytes><obytes>{o2}</obytes><ipackets>10</ipackets></entry>
-</ifnet></ifnet><hw><entry><name>ethernet1/1</name><port><rx-bytes>1</rx-bytes></port></entry></hw></result></response>"""
+</ifnet></ifnet><hw><entry><name>ethernet1/1</name><state>up</state><ibytes>1</ibytes><obytes>1</obytes><port><rx-bytes>1</rx-bytes></port></entry></hw></result></response>"""
+# 依 PAN-OS 文件的格式(ifnet 邏輯介面計數 + hw 實體埠計數);12.1 的實際回應待實機確認
+
+# PAN-OS 12.1.7-h3 實測:interface 底下送元素(<all/>)而不是值時的錯誤
+ERROR_NULL_VALUE = """<response status="error"><msg><line><![CDATA[ show -> counter -> interface -> all needs to have non NULL value]]></line>
+<line><![CDATA[ show -> counter -> interface is invalid]]></line></msg></response>"""
 
 ERROR_403 = '<response status="error" code="403"><result><msg>Invalid Credential</msg></result></response>'
 
@@ -89,8 +94,10 @@ class FakePa:
             return SYSTEM_RESOURCES.format(**v)
         if "<resource-monitor>" in cmd:
             return RESOURCE_MONITOR.format(**v)
-        if "<counter><interface" in cmd:
+        if "<counter><interface>all</interface>" in cmd:
             return COUNTERS.format(**v)
+        if "<counter><interface>" in cmd:
+            return ERROR_NULL_VALUE
         return '<response status="error" code="17"><msg><line>Invalid syntax.</line></msg></response>'
 
     def __enter__(self) -> FakePa:

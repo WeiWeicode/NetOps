@@ -2,6 +2,12 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。範圍:`frontend/`。
 
+## 2026-11-09 A1-frontend:移除翻譯與「請 AI 記錄」(決定不搬)
+- 工作項目:A1(`feature/a1-ai-frontend`;需求方 2026-11-09 依 `docs/AI-FEATURE-INVENTORY.md` 決定翻譯(#5)與整理筆記(#6)不搬,ARCHITECTURE D25)
+- 內容:合併 `feature/a1-ai-api`(後端已拿掉 `/ai/translations`、`/ai/notes`)後,前端拿掉 `components/TranslateBox.vue`(問答與 AI 分析下方的翻譯)、問答頁的「記錄到知識庫」按鈕與「請記錄:…」判斷(`NOTE_RE`、`record()`、筆記結果的顯示)、由連結帶入時的「請確認」提示(原本只為防止連結誘導寫入知識庫)、`api/ai.ts` 的 `translate`、`note`、`TRANSLATE_LANGS`;假 Gateway 拿掉兩支 API。問答頁改提示「要補充環境資訊,請到知識庫新增筆記」。權限代碼不變(問答頁原本用的 `UI.kbWrite` 是知識庫頁既有的按鈕代碼)。
+- 檔案:`frontend/src/{api/ai.ts,composables/aiChat.ts,components/{AiAnalysis,TranslateBox(刪除)}.vue,pages/ai/Ask.vue}`、`frontend/mock/ai.ts`、`frontend/test/ai.test.ts`、`docs/Gherkin/{ui/ai.feature,README.md}`、`docs/UI-GUIDE.md`
+- 驗證:`npm run typecheck`、`npm test`(78 項通過;移除前 79 項,拿掉「請記錄」判斷 1 項)、`npm run build`
+
 ## 2026-11-05 A1-frontend 審查修正
 - 工作項目:A1(第 3 批;`code-reviewer`、`security-auditor` 審查後)
 - 內容:① AI 回答(`AiMarkdown` → `renderMarkdown(text, { ai: true })`):不同網域的連結改成「文字(網址)」純文字、不顯示圖片(模型可能被 log / RDAP 內容誘導出釣魚連結;圖片會自動帶 Cookie 發 GET);知識庫筆記不變。② 由連結(`?q=`)帶入的問題,第一次送出一律當成問題,不因「請記錄」字樣改寫入知識庫,並提示「問題由連結帶入」。③ 串流沒收到 `done` 就結束時丟 `NETOPS_STREAM_INCOMPLETE`(保留已收到的內容並標示不完整;舊版當成完成);結束或丟錯時 `reader.cancel()`;最後一段沒有結尾空行也處理。④ 停止時標示「已停止,回答不完整」,不放進之後的對話紀錄;「看原始紀錄」用送出那一題的期間。⑤ `IpLearning` 輪詢:卸載後不再排程,只有最新一次查詢可以排下一輪(不會重複輪詢);天數與筆數送出前限制範圍。⑥ 知識庫:語意搜尋等全部回應取回後才更新畫面(連續查詢不互相覆蓋),新增 / 修改 / 刪除後也更新匯整檔資訊;勾選語意搜尋改用 `watch`;向量庫同步中每 3 秒查狀態直到結束,離開頁面時清除。⑦ 權限:記錄到知識庫用按鈕代碼 `UI.kbWrite`(同知識庫頁);安全事件頁點 IP 改檢查 `UI.paAskUse`。⑧ 無障礙:對話列表 `aria-live`、狀態 `role="status"`、輸入框加標籤。

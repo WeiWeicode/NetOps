@@ -5,7 +5,6 @@
  */
 import { reactive } from 'vue';
 import type { HistoryItem, SseEvent } from '@/api/ai';
-import type { KbNote } from '@/api/kb';
 
 export type Source = 'pa' | 'ad';
 
@@ -29,8 +28,6 @@ export interface Evidence {
 export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
-  /** note:請 AI 記錄的訊息(不算在對話紀錄裡) */
-  kind?: 'note';
   status?: string;
   error?: string;
   ips?: string[];
@@ -42,7 +39,6 @@ export interface ChatMessage {
   notesOmitted?: { id: string; title: string }[];
   vectorError?: boolean;
   truncated?: boolean;
-  note?: KbNote;
   /** 送出時的期間(datetime-local);看原始紀錄用 */
   from?: string;
   to?: string;
@@ -54,16 +50,13 @@ export function clearMessages(source: Source) {
   store[source].splice(0);
 }
 
-/** 對話紀錄(不含記錄筆記的訊息與錯誤;同舊版 historyOf) */
+/** 對話紀錄(不含錯誤與停止的回答;同舊版 historyOf) */
 export const historyOf = (messages: ChatMessage[]): HistoryItem[] =>
   messages
-    .filter((m) => m.content && !m.error && !m.kind)
+    .filter((m) => m.content && !m.error)
     .map((m) => ({ role: m.role, content: m.content.slice(0, 20000) }))
     // 後端只送最近 6 則給模型;請求最多 100 則(API.md §10.1)
     .slice(-20);
-
-/** 「請記錄 / 記下來 / 記起來」開頭或包含這些字 → 當成要 AI 記錄(同舊版) */
-export const NOTE_RE = /^\s*(請|幫我|麻煩)?\s*(ai\s*)?(記錄|紀錄|記下|記住|筆記|記起來)|請\s*(ai\s*)?(記錄|紀錄)|(記錄|紀錄)下來|記起來/i;
 
 const fmt = (n: number | undefined) => (Number(n) || 0).toLocaleString('en-US');
 

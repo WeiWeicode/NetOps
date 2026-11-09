@@ -52,7 +52,7 @@
 
 `GTable` 的儲存格插槽內容全是 `v-if` 落空(只剩註解)時會顯示預設值,要留 `<span v-else />`。
 
-**只換畫面,不改功能**:篩選條件、排行點擊帶到明細、知識庫操作都要保留。AI 畫面於 A1 搬進新版(ARCHITECTURE D23):`PaAsk` → `pages/ai/Ask.vue`(PA 與 AD 共用)、`AiAnalysis` → `components/AiAnalysis.vue`(流量總覽的對話框)、`TranslateBox` → `components/TranslateBox.vue`、知識庫的語意搜尋與自動學習 → `pages/knowledge/Knowledge.vue`、`components/IpLearning.vue`;AI 回答一律經 `AiMarkdown`(DOMPurify)。
+**只換畫面,不改功能**:篩選條件、排行點擊帶到明細、知識庫操作都要保留。AI 畫面於 A1 搬進新版(ARCHITECTURE D23):`PaAsk` → `pages/ai/Ask.vue`(PA 與 AD 共用)、`AiAnalysis` → `components/AiAnalysis.vue`(流量總覽的對話框)、知識庫的語意搜尋與自動學習 → `pages/knowledge/Knowledge.vue`、`components/IpLearning.vue`;AI 回答一律經 `AiMarkdown`(DOMPurify)。舊版的翻譯(`TranslateBox`)與問答頁「請 AI 記錄」依 2026-11-09 決定不搬(D25)。
 
 ## 4. 移除
 

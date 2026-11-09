@@ -10,7 +10,6 @@ import { ai, AiStreamError, type AiStatus } from '@/api/ai';
 import { describeError } from '@/api/gateway';
 import { toast } from '@/ui';
 import AiMarkdown from './AiMarkdown.vue';
-import TranslateBox from './TranslateBox.vue';
 
 const props = defineProps<{ from: string; to: string }>();
 const open = defineModel<boolean>({ default: false });
@@ -161,7 +160,6 @@ onBeforeUnmount(() => {
       </div>
       <div v-if="text && !running" class="tools">
         <GButton size="sm" variant="ghost" icon="file-text" @click="copy">複製</GButton>
-        <TranslateBox :text="text" />
       </div>
     </div>
   </GModal>

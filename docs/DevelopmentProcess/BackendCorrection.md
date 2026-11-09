@@ -2,6 +2,12 @@
 
 > `backend/`、`deploy/` 的修改;新紀錄加在最上方,格式見 `AGENT.md` §11。
 
+## 2026-11-09 A1-api:名額測試在 CI 不穩
+- 工作項目:A1(`feature/a1-ai-api`)
+- 內容:!35 的 pipeline 723(38c1937)`check:backend` 失敗,同一份後端程式在 !36 的 pipeline 724 通過(兩條 pipeline 同時在主機 2 跑)。三支名額測試(每人上限、全系統上限、分析的每人 2 個)固定等 100 毫秒就送第三個請求,假設前兩個已經佔住名額;主機忙時 Token 驗證較慢,前兩個還沒佔到名額,第三個就回 200 而不是 429。改成等前兩個請求真的到了假模型(名額已佔用)才送第三個:生命週期測試的假模型改成閘門(確認 429 後才放行),分析的測試改看假 AI 主機收到的請求數、模型延遲拉長到 2 秒。程式不變。
+- 檔案:`backend/test/unit/ai.test.ts`
+- 驗證:`npm test`(163 項通過;`ai.test.ts` 連跑 3 次、兩份完整測試同時跑都通過)
+
 ## 2026-11-09 A1-api:移除翻譯與整理筆記 API(決定不搬)
 - 工作項目:A1(`feature/a1-ai-api`;需求方 2026-11-09 依 `docs/AI-FEATURE-INVENTORY.md` 決定翻譯(#5)與整理筆記(#6)不搬,ARCHITECTURE D25)
 - 內容:拿掉 `POST /v1/ai/notes`(整理筆記,原本直接寫知識庫)與 `POST /v1/ai/translations`(翻譯)兩支路由與服務(`note`、`translate`、`checkTranslate`、記錄人檢查、分段上限常數);先合併 `fix/a1-core-trim`(核心拿掉 `translate.js`、`NOTE_PROMPT`、`parseJsonReply`)。權限不變:`netops.ai.use` 仍給分析與問答;`netops.kb.write` 仍給知識庫編輯、立即同步與外部 IP 學習;`gateway-rbac.yaml` 沒有只為這兩支 API 存在的節點,不需修改。測試:名額、全系統上限、用戶端斷線改用 AD 問答測(不需要 PA 資料),斷線測試改成確認同一人可以再問並完成(原本只驗 400,沒有真的證明名額歸還);新增「沒有這兩支 API(404)」。

@@ -1,0 +1,7 @@
+# netops-pa 執行相依(版本固定;升級前先在測試區驗證)
+# pan-os-python:PA-560 官方 SDK(ARCHITECTURE D19;只用唯讀 op 查詢,D22)
+pan-os-python==1.13.1
+# pan-os-python 的相依(XML API 用戶端),一併固定
+pan-python==0.17.0
+# redis-py:Redis 官方 Python 用戶端(寫 netops-redis)
+redis==8.1.0

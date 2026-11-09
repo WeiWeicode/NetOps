@@ -142,7 +142,7 @@ describe('部署區設定', () => {
 
   it('test 自動註冊,缺少必要設定時啟動失敗', () => {
     assert.throws(() => loadConfig({ ...base, GW_ENV: 'test' }), /GW_API_KEY_FILE、SERVICE_ADVERTISE_URL/);
-    const full = { GW_API_KEY: 'k', SERVICE_ADVERTISE_URL: 'http://netops-api:51292', NETOPS_DATA_DIR: '/data', FTP_HOST: 'ftp', FTP_USER: 'u', FTP_PASSWORD: 'p' };
+    const full = { GW_API_KEY: 'k', SERVICE_ADVERTISE_URL: 'http://netops-api:51292', NETOPS_DATA_DIR: '/data', FTP_HOST: 'ftp', FTP_USER: 'u', FTP_PASSWORD: 'p', REDIS_URL: 'redis://netops-redis:6379/0' };
     const c = loadConfig({ ...base, GW_ENV: 'test', ...full });
     assert.equal(c.gateway.autoRegister, true);
   });

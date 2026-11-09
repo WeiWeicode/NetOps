@@ -21,6 +21,12 @@
 - 與舊版不同:對話紀錄只送最近 20 則(後端只用最近 6 則);AI 回答與知識庫一樣用 `composables/markdown.ts` 清理(連結另開分頁、外部圖片拿掉);深入思考改成 GCheckbox;日期改兩個 `datetime-local`;服務資訊不再寫死主機位址(舊版畫面寫 10.10.130.45)。
 - 檔案:`frontend/src/{api/ai.ts,api/perms.ts,composables/aiChat.ts,components/{AiMarkdown,AiAnalysis,TranslateBox,IpLearning}.vue,pages/ai/{Ask,PaAsk,AdAsk}.vue,pages/firewall/{Dashboard,Events}.vue,pages/knowledge/Knowledge.vue,router.ts,config/links.ts}`、`frontend/mock/{ai,gateway,types}.ts`、`frontend/test/{ai,links}.test.ts`、`docs/Gherkin/ui/{ai,navigation}.feature`、`docs/UI-GUIDE.md`
 - 驗證:`npm run typecheck`、`npm test`(13 檔 77 項通過,新增 10 項)、`npm run build`;以 `MOCK=admin` 本機假 Gateway 在瀏覽器確認:AI 問答串流顯示(查到的資料、掃描逾時資料不完整、其他 log、知識庫、Markdown 表格、惡意 `onerror` 已清掉)、翻譯、流量總覽 AI 分析(摘要讀不到的提示)、外部 IP 學習輪詢完成。經 Gateway 的實際串流待測試區驗收
+## 2026-11-05 R1 即時監控頁(防火牆群組最上方)
+- 工作項目:R1
+- 內容:新增 `/firewall/live`「即時監控」(選單 `netops.pa-live.read`,API `netops.pa-realtime.read`;`deploy/gateway-rbac.yaml` 登記節點 sort 5 並加入 `netops-admin`、`netops-viewer`)。設備狀態(Session、管理 / 資料平面 CPU、整體流量、介面流量;快照過期顯示「停止更新」)、最近 1 小時趨勢、即時排行(類型 × 5 / 15 / 60 分鐘)、即時 log(EventSource 串流、類型切換、IP / Port / Action 篩選、暫停、最多 500 筆、標示 Redis 最早時間並連到 Log 明細查詢)。收集器停止、未啟用、Redis 連不上時頁首明確提示,排行與 log 標示「不是即時的」(AGENT §5)。串流非 200 時改用一般 API 檢查登入並 10 秒後重連,串流斷線期間每 10 秒輪詢快照。假 Gateway `mock/paLive.ts`(`MOCK_PA_LIVE=stopped|disabled|unavailable`)。
+- 檔案:`frontend/src/pages/firewall/Live.vue`、`frontend/src/api/paLive.ts`、`frontend/src/composables/paLive.ts`、`frontend/src/router.ts`、`frontend/src/api/perms.ts`、`frontend/src/ui/icons.ts`、`frontend/mock/{paLive,gateway}.ts`、`frontend/test/paLive.test.ts`、`deploy/gateway-rbac.yaml`
+- 依 `code-reviewer` 審查修正:預載 log 接在串流之後(不打亂順序)、切換類型時丟棄舊請求、處理 SSE `degraded`、串流卡住或快照 API 失敗時不顯示舊數字。`security-auditor` 因額度中斷未完成(見 MR)。
+- 驗證:`npm run typecheck`、`npm test`(72 passed)、`npm run build`;內建瀏覽器以假 Gateway 檢查正常與 `stopped` 狀態(API 皆 200、停止時不顯示舊數字)
 
 ## 2026-11-05 D1 驗收修正:FTP 勾選、AD 清單改手動、導回時不回報錯誤
 - 工作項目:D1(驗收報告 `docs/test-reports/2026-11-05-d1-uat-pending.md` §3.1、§4.2、§4.4)

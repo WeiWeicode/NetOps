@@ -5,6 +5,7 @@
  */
 export const NETOPS = {
   app: 'netops.app.access',
+  paLive: 'netops.pa-live.read',
   paDashboard: 'netops.pa-dashboard.read',
   paEvents: 'netops.pa-events.read',
   paSearch: 'netops.pa-search.read',
@@ -30,6 +31,7 @@ export const UI = {
 
 export const API = {
   ping: 'netops.ping.read',
+  paRealtime: 'netops.pa-realtime.read',
   paRead: 'netops.pa.read',
   paLogRead: 'netops.pa-log.read',
   ftpRead: 'netops.ftp.read',

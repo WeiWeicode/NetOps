@@ -46,6 +46,10 @@ def test_check_config_errors():
     assert run({"GW_ENV": "test"}, lines.append) == 2 and "PA_HOST" in lines[0]
     lines.clear()
     assert run({"GW_ENV": "prod", "PA_HOST": "h", "PA_API_KEY_FILE": "/nonexistent"}, lines.append) == 2
+    lines.clear()
+    # 部署區不是三個值之一:不放行(避免 PA_TLS_INSECURE 繞過正式區檢查)
+    assert run({"GW_ENV": "production", "PA_HOST": "h", "PA_API_KEY": "k", "PA_TLS_INSECURE": "1"}, lines.append) == 2
+    assert "GW_ENV" in lines[0]
 
 
 def test_hint_certificate():

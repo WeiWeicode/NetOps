@@ -32,6 +32,8 @@ READ_ONLY_COMMANDS = {
     "dataplane": 'show running resource-monitor second last "1"',
     "interfaces": "show counter interface all",
 }
+# 連線檢查(check.py)另外用的唯讀指令;不在輪詢裡執行
+CHECK_COMMANDS = {"info": "show system info"}
 MAX_INTERFACES = 64
 
 
@@ -70,7 +72,7 @@ class SdkClient:
         fw.generate_xapi = generate_xapi  # type: ignore[method-assign]
 
     def op(self, cmd: str) -> ET.Element:
-        if cmd not in READ_ONLY_COMMANDS.values():
+        if cmd not in READ_ONLY_COMMANDS.values() and cmd not in CHECK_COMMANDS.values():
             raise ValueError("不在唯讀指令白名單內")
         return self._fw.op(cmd, xml=False, cmd_xml=True)
 

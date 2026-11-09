@@ -4,14 +4,17 @@
  *   設備狀態(快照 + 最近 1 小時趨勢)、即時排行(5 / 15 / 60 分鐘)、即時 log(SSE,可篩選、暫停)。
  *   資料來源是收集器 netops-pa 寫入的 Redis;收集器停止、未啟用或 Redis 連不上時明確顯示「停止更新」,
  *   不把舊資料當即時(AGENT.md §5)。超過保留期間(TRAFFIC 明細 1 小時、統計 1 天;其他 2 天)引導到 Log 明細查詢與總覽(FTP)。
+ *   頁首分開顯示輪詢(設備狀態的來源)與接收(排行、即時 log 的來源)狀態;測試區另有暫停 / 繼續按鈕(UI.paLiveManage,2026-11-09 需求方決定)。
  */
 import { computed, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from 'vue';
-import { describeError } from '@/api/gateway';
+import { can, describeError } from '@/api/gateway';
+import { UI } from '@/api/perms';
+import { toast } from '@/ui/feedback';
 import { fmtNum, fmtShort, fmtSize, fmtTime } from '@/api/format';
 import { LOG_TYPES, paLive, type LiveLog, type LogType, type PaLiveSnapshot, type PaLiveTop } from '@/api/paLive';
 import type { Column } from '@/ui/components/GTable.vue';
 import TopList from '@/components/TopList.vue';
-import { collectorView, fmtBps, parseFilter, useLiveStream } from '@/composables/paLive';
+import { collectorBadges, collectorView, controlView, fmtBps, latestSnapTime, logSource, parseFilter, useLiveStream } from '@/composables/paLive';
 import { usePolling } from '@/composables/usePolling';
 
 // ---------- 設備狀態(串流的 snapshot 事件;串流連不上時退回每 10 秒輪詢) ----------
@@ -21,6 +24,29 @@ const view = computed(() => collectorView(snap.value?.collector));
 // 快照取得失敗(API 錯誤)時不顯示上一次的數字(AGENT.md §5)
 const m = computed(() => (snapError.value ? undefined : snap.value?.metrics));
 const c = computed(() => snap.value?.collector);
+const badges = computed(() => (snapError.value ? [] : collectorBadges(c.value)));
+// 排行與即時 log 來自接收端點(與設備狀態的輪詢分開說明)
+const source = computed(() => logSource(snapError.value ? null : c.value));
+const snapTime = computed(() => latestSnapTime(m.value));
+
+// ---------- 測試區暫停 / 繼續(正式區 control.available 為 false,不顯示) ----------
+const ctl = computed(() => controlView(snapError.value ? null : c.value, snap.value?.control, can(UI.paLiveManage)));
+const switching = ref<'poll' | 'receive' | null>(null);
+async function toggle(which: 'poll' | 'receive') {
+  const paused = !ctl.value[which].paused;
+  switching.value = which;
+  try {
+    const control = await paLive.setControl(which === 'poll' ? { pollPaused: paused } : { receivePaused: paused });
+    if (snap.value) snap.value = { ...snap.value, control };
+    const what = which === 'poll' ? '輪詢' : '接收';
+    toast.success(`已要求${paused ? '暫停' : '繼續'}${what}`, `收集器${which === 'poll' ? '在下一次輪詢前' : '在 5 秒內'}套用;頁首狀態會在下一次更新時改變`);
+    void snapPoll.run();
+  } catch (e) {
+    toast.fromError(e, '切換失敗');
+  } finally {
+    switching.value = null;
+  }
+}
 
 const stream = useLiveStream((s) => {
   snap.value = s;
@@ -257,6 +283,44 @@ function refresh() {
     </GAlert>
     <GAlert v-if="stream.streamError.value" tone="warning">{{ stream.streamError.value }}</GAlert>
 
+    <!-- 收集器狀態:輪詢 → 設備狀態;接收 → 排行與即時 log(驗收 §7.4-1、§7.4-2) -->
+    <GCard v-if="badges.length || ctl.visible" title="收集器" icon="radio" padding="sm">
+      <div class="collector">
+        <div class="row">
+          <GBadge v-for="b in badges" :key="b.key" :tone="b.tone" dot>{{ b.text }}</GBadge>
+          <span class="small muted">設備狀態來自 SDK 輪詢;排行與即時 log 來自接收端點(HTTP / Syslog)</span>
+        </div>
+        <div v-if="ctl.visible" class="row">
+          <span class="small strong">測試區開關</span>
+          <GButton
+            size="sm"
+            :icon="ctl.poll.paused ? 'play' : 'pause'"
+            :disabled="ctl.poll.disabled || switching !== null"
+            :loading="switching === 'poll'"
+            :title="ctl.poll.reason || undefined"
+            @click="toggle('poll')"
+            >輪詢:{{ ctl.poll.paused ? '開啟' : '停用' }}</GButton
+          >
+          <GButton
+            size="sm"
+            :icon="ctl.receive.paused ? 'play' : 'pause'"
+            :disabled="ctl.receive.disabled || switching !== null"
+            :loading="switching === 'receive'"
+            :title="ctl.receive.reason || undefined"
+            @click="toggle('receive')"
+            >接收:{{ ctl.receive.paused ? '開啟' : '停用' }}</GButton
+          >
+          <span v-if="snap?.control?.updatedAt" class="small muted">最後由 {{ snap.control.updatedBy ?? '—' }} 於 {{ fmtTime(snap.control.updatedAt) }} 切換</span>
+        </div>
+        <p v-if="ctl.visible && (ctl.poll.reason || ctl.receive.reason)" class="small muted">
+          <span v-if="ctl.poll.reason" class="block">輪詢:{{ ctl.poll.reason }}</span>
+          <span v-if="ctl.receive.reason && ctl.receive.reason !== ctl.poll.reason" class="block">接收:{{ ctl.receive.reason }}</span>
+        </p>
+      </div>
+    </GCard>
+
+    <p class="small muted">設備狀態最後更新:{{ snapTime ? fmtTime(snapTime) : '—(沒有 60 秒內的資料)' }}</p>
+
     <!-- 設備狀態 -->
     <div class="grid kpis">
       <GStatCard
@@ -319,7 +383,7 @@ function refresh() {
       <GAlert v-if="topError" tone="danger">{{ describeError(topError) }}</GAlert>
       <GSkeleton v-else-if="!top && topLoading" :lines="4" />
       <template v-else-if="top">
-        <GAlert v-if="!view.live" tone="warning">收集器沒有在更新:排行只含停止前收到的資料,不是即時的。</GAlert>
+        <GAlert v-if="!source.live && topLists.length" tone="warning">{{ source.stale }}</GAlert>
         <p class="small muted">
           最近 {{ top.minutes }} 分鐘:{{ fmtNum(top.totals.count ?? 0) }} 筆<template v-if="top.totals.bytes">、{{ fmtSize(top.totals.bytes) }}</template>
           <template v-if="top.type !== 'traffic'">(已乘上重複次數)</template>;每分鐘只保留前 200 名,排行為近似值。
@@ -337,7 +401,7 @@ function refresh() {
         <div v-if="topLists.length" class="grid tops">
           <TopList v-for="t in topLists" :key="t.dim" :title="t.title" :items="t.items" :by-bytes="t.byBytes" :show-bytes="t.byBytes" :pickable="() => false" />
         </div>
-        <GEmpty v-else icon="activity" title="這段期間沒有資料" :description="view.live ? '收集器有在運作,這段期間沒有收到這種 log' : '收集器沒有在更新,沒有資料不代表沒有發生'" />
+        <GEmpty v-else icon="activity" :title="source.live ? '這段期間沒有資料' : '沒有 log 來源'" :description="source.empty" />
       </template>
     </GCard>
 
@@ -362,9 +426,9 @@ function refresh() {
           <template v-if="stream.skipped.value"> 流量太大時部分 log 未顯示({{ fmtNum(stream.skipped.value) }} 次)。</template>
         </p>
         <GAlert v-if="stream.degraded.value" tone="warning">{{ stream.degraded.value.types.join('、') }} 讀取失敗,log 暫停更新:{{ stream.degraded.value.message }}</GAlert>
-        <GAlert v-if="!view.live && rows.length" tone="warning">收集器沒有在更新:以下是停止前收到的 log,不是即時的。</GAlert>
+        <GAlert v-if="!source.live && rows.length" tone="warning">{{ source.stale }}</GAlert>
         <GAlert v-if="preloadError" tone="danger">最近的 log 載入失敗:{{ describeError(preloadError) }}</GAlert>
-        <GTable :columns="logColumns" :rows="rows" row-key="key" :page-size="50" dense empty-title="還沒有 log" :empty-description="view.live ? '等待新的 log…' : '收集器沒有在更新'">
+        <GTable :columns="logColumns" :rows="rows" row-key="key" :page-size="50" dense empty-title="還沒有 log" :empty-description="source.live ? '等待新的 log…' : source.empty">
           <template #cell-receivedAt="{ row }">{{ clock(row.receivedAt) }}</template>
           <template #cell-action="{ row }"><span :class="BAD.test(String(row.action ?? '')) ? 'c-danger strong' : ''">{{ row.action ?? '—' }}</span></template>
           <template #cell-severity="{ row }"><span :class="BAD.test(String(row.severity ?? '')) ? 'c-danger strong' : ''">{{ row.severity ?? '—' }}</span></template>
@@ -394,6 +458,11 @@ function refresh() {
 }
 .block {
   display: block;
+}
+.collector {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 .ifs {
   list-style: none;

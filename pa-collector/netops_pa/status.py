@@ -55,7 +55,8 @@ class ThrottledLog:
 class Status:
     """心跳欄位(全部字串)。計數為程序啟動後累計。"""
 
-    COUNTERS = ("received", "dropped", "rejected", "malformed", "redisFailed")
+    # paused:接收暫停(測試區手動開關,control.py)期間丟棄的筆數
+    COUNTERS = ("received", "dropped", "rejected", "malformed", "redisFailed", "paused")
 
     def __init__(self, version: str, gw_env: str, poll_enabled: bool, receive_enabled: bool, **extra: str) -> None:
         self._lock = threading.Lock()
@@ -65,6 +66,9 @@ class Status:
             "startedAt": iso(),
             "pollEnabled": "1" if poll_enabled else "0",
             "receiveEnabled": "1" if receive_enabled else "0",
+            # 實際的暫停狀態(測試區手動開關,control.py);總開關關閉時一律 0
+            "pollPaused": "0",
+            "receivePaused": "0",
             **extra,
         }
         self._counts = dict.fromkeys(self.COUNTERS, 0)

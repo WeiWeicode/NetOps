@@ -97,7 +97,8 @@ flowchart TB
 | `netops:pa:log:{type}` | Stream | log 明細,`type` 為 `traffic`、`threat`、`url`、`wildfire`、`data`、`decryption`、`globalprotect`、`userid` | `traffic` **1 小時**;其他 2 天(`MINID` 依時間修剪) |
 | `netops:pa:agg:{type}:{yyyyMMddHHmm}` | Hash | 每分鐘統計:次數、位元組、依 action / app / rule / 來源 / 目的的計數 | `traffic` **1 天**;其他 2 天(TTL) |
 | `netops:pa:top:{type}:{dim}:{yyyyMMddHHmm}` | Sorted Set | 每分鐘排行(來源 IP、目的 IP、App、Rule、威脅名稱);每分鐘只留前 N 名(例如 200) | 同上 |
-| `netops:pa:heartbeat` | Hash | 收集器 / 接收端點最後成功時間、最後錯誤 | 無 |
+| `netops:pa:heartbeat` | Hash | 收集器 / 接收端點最後成功時間、最後錯誤;總開關 `pollEnabled` / `receiveEnabled`、實際暫停狀態 `pollPaused` / `receivePaused`、計數(含暫停期間丟棄的 `paused`) | 無 |
+| `netops:pa:control` | Hash | **測試區手動開關**(2026-11-09,ARCHITECTURE D26):`pollPaused`、`receivePaused`(`"1"` 暫停,`"0"` 或沒有 = 繼續)、`updatedAt`(ISO)、`updatedBy`(「姓名(工號)」)。**`netops-api` 寫入**(`PUT /pa-live/collector-control`,經 `infra/redis` `setCollectorControl`)、`netops-pa` 只讀:輪詢每次查 PA-560 前讀,接收每 5 秒(心跳時)讀;讀取失敗沿用上一次的狀態。正式區(`GW_ENV=prod`)兩邊都不用 | 無(Redis 資料遺失時回到「繼續」) |
 
 **log 欄位**:沿用舊版功能已在用的欄位,不新增。
 
@@ -184,10 +185,12 @@ flowchart TB
 ```text
 netops.group.firewall
 └─ netops.pa-live.read              即時監控 → netops.pa-realtime.read(API)
+   └─ netops.pa-live.manage         測試區暫停 / 繼續收集器(按鈕)→ netops.pa-realtime.write(API;只給 netops-admin)
 ```
 
 - `netops-viewer` 也有(全部 `.read`,ARCHITECTURE §5)。
 - 即時 log 是原始明細,API 設 `x-audit-level: meta`,同 Log 明細查詢。
+- **測試區收集器開關**(2026-11-09,ARCHITECTURE D26):頁首「收集器」區分開顯示輪詢(設備狀態的來源)與接收(排行、即時 log 的來源)狀態;有 `netops.pa-live.manage`(按鈕,`includes: [netops.pa-realtime.write]`,只給 `netops-admin`)且部署區不是正式區時,顯示「輪詢:開啟 / 停用」「接收:開啟 / 停用」。總開關(環境變數)關閉的那一個按鈕停用並說明「主機設定未開啟…」。
 - **單一連線最長 5 分鐘**(需求方 2026-11-05 決定):到時伺服器結束連線,瀏覽器自動重連時 BFF 重新檢查登入與權限,所以登出或撤權後最晚 5 分鐘停止收到即時 log(S0 驗證路由是 10 分鐘,只送心跳)。重連時以 `Last-Event-ID` 補送斷線期間的 log(Stream 的 ID)。
 
 ---

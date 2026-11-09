@@ -372,3 +372,95 @@ describe('PA 即時監控串流(SSE)', () => {
     }
   });
 });
+
+describe('測試區手動開關(PUT /v1/pa-live/collector-control)', () => {
+  const now = Date.parse('2026-11-09T10:00:00Z');
+  it('有開的部分都暫停為 paused;只暫停其中一個不影響另一個', () => {
+    const hb = { updatedAt: '2026-11-09T10:00:00Z', pollEnabled: '1', receiveEnabled: '0', pollPaused: '1' };
+    const st = deriveStatus(hb, now);
+    assert.equal(st.state, 'paused');
+    assert.equal(st.poll.paused, true);
+    // 接收總開關關閉時,receivePaused 不算暫停
+    assert.equal(deriveStatus({ ...hb, pollPaused: '0', receivePaused: '1' }, now).receive.paused, false);
+    assert.equal(deriveStatus({ ...hb, receiveEnabled: '1', receivePaused: '0' }, now).state, 'ok');
+    // 輪詢暫停時舊的輪詢錯誤不算 degraded
+    assert.equal(deriveStatus({ ...hb, receiveEnabled: '1', pollError: 'session: timeout' }, now).state, 'ok');
+    assert.equal(deriveStatus({ ...hb, pollEnabled: '0' }, now).state, 'disabled');
+    // 暫停中仍有 Redis 寫入錯誤時顯示 degraded
+    assert.equal(deriveStatus({ ...hb, redisError: 'OOM' }, now).state, 'degraded');
+  });
+
+  let t: TestApp;
+  let redis: FakeRedis;
+  before(async () => {
+    redis = new FakeRedis();
+    t = await createTestApp({ paLiveRedis: createPaLiveRedis(redis) });
+  });
+  after(async () => t.close());
+  beforeEach(() => {
+    redis.fail = false;
+    redis.hashes.clear();
+  });
+
+  it('寫入控制鍵並記錄操作人;snapshot 帶 control', async () => {
+    const res = await t.call({ method: 'PUT', url: '/v1/pa-live/collector-control', payload: { pollPaused: true } });
+    assert.equal(res.statusCode, 200);
+    const c = res.json();
+    assert.equal(c.available, true);
+    assert.equal(c.pollPaused, true);
+    assert.equal(c.receivePaused, false);
+    assert.equal(c.updatedBy, '測試S112009(S112009)');
+    assert.equal(redis.hashes.get('netops:pa:control')?.pollPaused, '1');
+    assert.equal(redis.hashes.get('netops:pa:control')?.receivePaused, undefined);
+    // 只改給的欄位
+    await t.call({ method: 'PUT', url: '/v1/pa-live/collector-control', payload: { receivePaused: true } });
+    assert.equal(redis.hashes.get('netops:pa:control')?.pollPaused, '1');
+    redis.setHeartbeat(hbOk());
+    const snap = (await t.call({ url: '/v1/pa-live/snapshot' })).json();
+    assert.equal(snap.control.available, true);
+    assert.equal(snap.control.pollPaused, true);
+    assert.equal(snap.control.receivePaused, true);
+  });
+
+  it('空內容或未知欄位回 400', async () => {
+    for (const payload of [{}, { pollPaused: 'yes' }, { other: true }]) {
+      const res = await t.call({ method: 'PUT', url: '/v1/pa-live/collector-control', payload });
+      assert.equal(res.statusCode, 400, JSON.stringify(payload));
+    }
+  });
+
+  it('Redis 連不上回 424', async () => {
+    redis.fail = true;
+    const res = await t.call({ method: 'PUT', url: '/v1/pa-live/collector-control', payload: { pollPaused: true } });
+    assert.equal(res.statusCode, 424);
+    assert.equal(res.json().code, 'NETOPS_REDIS_UNAVAILABLE');
+  });
+
+  it('OpenAPI:寫入權限 netops.pa-realtime.write、稽核 body', async () => {
+    const doc = (await t.app.inject({ url: '/openapi.json' })).json();
+    const op = doc.paths['/v1/pa-live/collector-control'].put;
+    assert.equal(op['x-permission'], 'netops.pa-realtime.write');
+    assert.equal(op['x-audit-level'], 'body');
+    assert.ok(doc['x-permissions'].some((p: { code: string }) => p.code === 'netops.pa-realtime.write'));
+  });
+});
+
+describe('測試區手動開關:正式區', () => {
+  let t: TestApp;
+  let redis: FakeRedis;
+  before(async () => {
+    redis = new FakeRedis();
+    t = await createTestApp({ paLiveRedis: createPaLiveRedis(redis), paLiveControl: false });
+  });
+  after(async () => t.close());
+  it('PUT 回 403 NETOPS_PA_CONTROL_DISABLED、不寫 Redis;snapshot 的 control.available 為 false 且不讀控制鍵', async () => {
+    redis.hashes.set('netops:pa:control', { pollPaused: '1' });
+    const res = await t.call({ method: 'PUT', url: '/v1/pa-live/collector-control', payload: { pollPaused: false } });
+    assert.equal(res.statusCode, 403);
+    assert.equal(res.json().code, 'NETOPS_PA_CONTROL_DISABLED');
+    assert.equal(redis.hashes.get('netops:pa:control')?.pollPaused, '1');
+    redis.setHeartbeat(hbOk());
+    const snap = (await t.call({ url: '/v1/pa-live/snapshot' })).json();
+    assert.deepEqual(snap.control, { available: false, pollPaused: false, receivePaused: false, updatedAt: null, updatedBy: null });
+  });
+});

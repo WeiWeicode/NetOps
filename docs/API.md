@@ -72,6 +72,7 @@ PA 匯入在背景佇列執行;同步、分析只是送進佇列,畫面輪詢狀
 | --- | --- | --- |
 | `netops.ping.read` | 連線驗證:查詢 | §3(含 §3.1 串流驗證) |
 | `netops.pa-realtime.read` | PA 即時監控:查詢 | §3.2(畫面節點 `netops.pa-live.read`) |
+| `netops.pa-realtime.write` | PA 即時監控:測試區暫停 / 繼續收集器 | §3.2 `collector-control`(按鈕 `netops.pa-live.manage`,只給 `netops-admin`;2026-11-09 需求方決定) |
 | `netops.pa.read` | PA 防火牆:查詢 | §4.1、§4.2 |
 | `netops.pa-log.read` | PA Log 明細:查詢 | §4.3 |
 | `netops.ftp.read` | FTP Log 檔案:查詢 | §5 讀取 |
@@ -82,7 +83,7 @@ PA 匯入在背景佇列執行;同步、分析只是送進佇列,畫面輪詢狀
 | `netops.kb.write` | 知識庫:編輯 | §7 寫入、§10.2 立即同步 / 學習 |
 | `netops.ai.use` | AI 分析與問答:使用 | §10.1(分析、問答、狀態)。不是 `.read`:選單不能綁定,由按鈕 `netops.pa-ask.use`、`netops.ad-ask.use`、`netops.pa-dashboard.ai` 綁定(`gateway-rbac.yaml`);給 `netops-admin`、`netops-viewer`(2026-11-05 決定) |
 
-稽核:Log 明細查詢與匯出、知識庫下載、即時 log(§3.2 `logs`、`stream`)、AI 分析與問答(§10.1)設 `x-audit-level: meta`。
+稽核:Log 明細查詢與匯出、知識庫下載、即時 log(§3.2 `logs`、`stream`)、AI 分析與問答(§10.1)設 `x-audit-level: meta`;測試區收集器開關(§3.2 `collector-control`)設 `body`(記錄要求的狀態)。
 
 取消工作(`DELETE …/{id}`)用該工作的**讀取**權限:只能取消自己送出的工作,不改變業務資料,因此不另設寫入權限(ARCHITECTURE §5)。
 
@@ -110,7 +111,7 @@ PA 匯入在背景佇列執行;同步、分析只是送進佇列,畫面輪詢狀
 
 ### 3.2 PA 即時監控(R1)— 批次 `feature/r1-api`
 
-資料來源是 `netops-redis`(`netops-pa` 收集器寫入,PA-LIVE-PLAN §3–§4),本服務只讀。保留:TRAFFIC 明細 1 小時、統計 1 天;其他類型 2 天(D21);更早的資料用 §4.3 Log 明細查詢(FTP)。權限一律 `netops.pa-realtime.read`。
+資料來源是 `netops-redis`(`netops-pa` 收集器寫入,PA-LIVE-PLAN §3–§4),本服務只讀;唯一的寫入是測試區手動開關 `netops:pa:control`(`collector-control`)。保留:TRAFFIC 明細 1 小時、統計 1 天;其他類型 2 天(D21);更早的資料用 §4.3 Log 明細查詢(FTP)。查詢權限一律 `netops.pa-realtime.read`;開關用 `netops.pa-realtime.write`。
 
 | 方法 | 路徑 | 說明 |
 | --- | --- | --- |
@@ -119,20 +120,23 @@ PA 匯入在背景佇列執行;同步、分析只是送進佇列,畫面輪詢狀
 | GET | `/api/netops/pa-live/top?type=&minutes=&limit=&dims=` | 最近 5 / 15 / 60 分鐘的排行與統計 |
 | GET | `/api/netops/pa-live/logs?type=&limit=&before=&ip=&port=&action=` | 最新 log(由新到舊;`x-audit-level: meta`) |
 | GET | `/api/netops/pa-live/stream?types=&ip=&port=&action=` | SSE 串流(`x-audit-level: meta`、`x-timeout-ms: 60000`) |
+| PUT | `/api/netops/pa-live/collector-control` | 測試區暫停 / 繼續收集器(`netops.pa-realtime.write`、`x-audit-level: body`;正式區 403) |
 
-**收集器狀態** `collector`:`state` 與中文 `message`、`updatedAt`(心跳時間)、`poll`(`enabled`、`lastOkAt`、`error`、`errorAt`)、`receive`(`enabled`、`tls`、`httpLastAt`、`syslogLastAt`)、`redis`(`error`)、`counters`(`received`、`dropped`、`rejected`、`malformed`、`redisFailed`,收集器啟動後累計)。
+**收集器狀態** `collector`:`state` 與中文 `message`、`updatedAt`(心跳時間)、`poll`(`enabled`、`paused`、`lastOkAt`、`error`、`errorAt`)、`receive`(`enabled`、`paused`、`tls`、`httpLastAt`、`syslogLastAt`)、`redis`(`error`)、`counters`(`received`、`dropped`、`rejected`、`malformed`、`redisFailed`、`paused`,收集器啟動後累計)。`enabled` 是主機設定的總開關(`PA_POLL_ENABLED`、`PA_RECEIVE_ENABLED`);`paused` 是測試區手動開關的**實際**狀態(收集器回報;總開關關閉時一律 `false`);`counters.paused` 是接收暫停期間丟棄的筆數。
 
 | `state` | 條件 | 畫面 |
 | --- | --- | --- |
 | `ok` | 心跳 30 秒內更新 | 正常顯示 |
 | `degraded` | 輪詢有錯誤(連不到 PA-560、Key 失效、某指令失敗)或 Redis 寫入錯誤 | 顯示錯誤;快照過期的指標顯示「停止更新」 |
-| `disabled` | `PA_POLL_ENABLED`、`PA_RECEIVE_ENABLED` 都關閉(測試區預設) | 「收集器未啟用」 |
+| `disabled` | `PA_POLL_ENABLED`、`PA_RECEIVE_ENABLED` 都關閉 | 「收集器未啟用」 |
+| `paused` | 總開關有開的部分都被測試區手動開關暫停 | 「收集器已暫停」;快照 60 秒後過期為「停止更新」 |
 | `stopped` | 心跳超過 30 秒沒更新 | 「資料停止更新」,`metrics` 全為 `null`(**不顯示舊快照**,AGENT §5) |
 | `not-running` | Redis 沒有心跳 | 「收集器沒有啟動過」 |
 | `unavailable` | Redis 連不上或未設定 | 「無法連線即時資料庫」,`metrics` 全為 `null` |
 
 - `snapshot` 在 Redis 連不上時仍回 **200**(`state: unavailable`):頁面每 10 秒更新,回 5xx 會累積 BFF 斷路器失敗、讓整個 `netops-api` 被短路。其他查詢回 **424** `NETOPS_REDIS_UNAVAILABLE`(同樣不用 5xx;R1 審查時確認 BFF `upstream.ts` 把上游 5xx 計為斷路器失敗)。Redis 回指令錯誤(程式或資料問題)回 500 `INTERNAL_ERROR`。Redis 不可用與恢復時 `netops-api` 各記一筆 warn。
 - 收集器心跳裡的錯誤(`poll.error`、`redis.error`)回給畫面前**只留分類**(例 `session:API Key 無效或權限不足`、`連不到主機`、`連線逾時`、`憑證驗證失敗`、`設備不支援此查詢`),不含主機、IP 與網址;原文看 `netops-pa` 容器日誌。
+- **測試區手動開關**(2026-11-09 需求方決定「在測試區我想要有按鈕可以停用或開啟」):`snapshot` 另回 `control`(`available`:這個部署區能不能切換,正式區 `false`;`pollPaused`、`receivePaused`:**要求的**狀態;`updatedAt`、`updatedBy`:最後操作時間與「姓名(工號)」)。`PUT /collector-control` 內容 `{ "pollPaused"?: boolean, "receivePaused"?: boolean }`(至少一個,未知欄位忽略),只寫要求的狀態並回 `control`;收集器每次輪詢前讀(輪詢)、每 5 秒讀一次(接收),實際狀態看 `collector.poll.paused` / `receive.paused`。輪詢暫停時不查 PA-560、清掉介面計數(繼續後第一輪介面流量為 `null`);接收暫停時端點仍開著,收到的 log **丟棄並計數** `counters.paused`(HTTP 仍回 200,避免 PA-560 重送),不寫 Redis。總開關關閉時寫入照樣成功但不會生效(畫面停用該按鈕並說明原因)。套用最長延遲:輪詢為一個輪詢間隔(預設 15 秒),接收為 5 秒。正式區 `PUT` 回 **403** `NETOPS_PA_CONTROL_DISABLED`,`netops-pa` 也不讀這個鍵。Redis 連不上回 424。
 - 查詢成本:`top` 60 分鐘的 TRAFFIC 全部維度約 540 個 Redis 指令(各維度同時送出);畫面每 30 秒查一次。
 - 每個快照 60 秒沒更新就過期為 `null`;快照帶 `time`(收集器取得的時間)。`session`:`active`、`max`、`utilization`(%)、`tcp`、`udp`、`icmp`;`throughput`:`bps`、`pps`、`cps`;`cpu`:`mgmt`(管理平面 %)、`dataplane`(資料平面各核心平均 %)、`memUsed`、`memTotal`(bytes);`interfaces.items[]`:`name`、`rxBps`、`txBps`(第一次輪詢或計數歸零時為 `null`)。
 - `top`:`totals`(`count`;TRAFFIC 另有 `bytes`、`packets`)、`kpis`(例 `action: { allow: 13, deny: 2 }`;每分鐘每項最多 50 種值,其餘併為 `(其他)`)、`tops[dim]: [{ key, value }]`(每分鐘只保留前 200 名,合併後為近似值;`*Bytes` 維度的 value 是位元組)、`perMinute: [{ minute, count }]`、`retentionSec`。次數已乘 Repeat Count(TRAFFIC 除外)。維度:TRAFFIC `src`、`dst`、`app`、`rule`、`port`、`srcBytes`、`dstBytes`、`appBytes`;其他類型見 `backend/src/infra/redis/index.ts` `TOP_DIMS`。
@@ -494,6 +498,7 @@ AI 相關(語意搜尋、向量同步、外部 IP 自動學習)見 §10.2(A1)。
 | 422 | `NETOPS_EXPORT_TOO_LARGE` | 匯出筆數超過上限 |
 | 502 | `NETOPS_FTP_UNAVAILABLE` | FTP 連線或讀取失敗。訊息為「動作 + FTP 路徑:原因」,原因只有分類(連線逾時、拒絕連線、找不到主機、連線中斷、TLS 憑證驗證失敗、帳號或密碼錯誤(FTP 530)、檔案或目錄不存在,或沒有權限(FTP 550)…),不含 FTP 主機、port 與原始錯誤;原始錯誤只寫服務日誌。匯入狀態的 `lastSyncError`、檔案的 `error`、工作的 `error.message` 同樣規則 |
 | 503 | `NETOPS_FTP_NOT_CONFIGURED` | 未設定 FTP(只會在 dev) |
+| 403 | `NETOPS_PA_CONTROL_DISABLED` | 正式區不能切換收集器的輪詢與接收(§3.2 `collector-control`,只有測試區可用) |
 | 424 | `NETOPS_REDIS_UNAVAILABLE` | 即時監控讀不到 `netops-redis`(§3.2;`snapshot` 例外,回 200 `state: unavailable`)。不用 5xx:避免累積 BFF 斷路器失敗。原始錯誤只寫服務日誌 |
 | 424 | `NETOPS_PA_LIVE_DISABLED` | 未設定 `REDIS_URL`(只會在 dev) |
 | 403 | `NETOPS_STREAM_OWNER_UNKNOWN` | 身分沒有工號也沒有 sub,不能建立即時串流(正常經 Gateway 不會發生) |

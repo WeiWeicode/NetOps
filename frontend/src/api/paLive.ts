@@ -17,17 +17,27 @@ export const LOG_TYPES = [
 ] as const;
 export type LogType = (typeof LOG_TYPES)[number]['value'];
 
-export type CollectorState = 'ok' | 'degraded' | 'disabled' | 'stopped' | 'not-running' | 'unavailable';
+export type CollectorState = 'ok' | 'degraded' | 'disabled' | 'paused' | 'stopped' | 'not-running' | 'unavailable';
 
 export interface CollectorStatus {
   state: CollectorState;
   message: string;
   updatedAt: string | null;
   version: string | null;
-  poll: { enabled: boolean; lastOkAt: string | null; error: string | null; errorAt: string | null };
-  receive: { enabled: boolean; tls: boolean; httpLastAt: string | null; syslogLastAt: string | null };
+  /** enabled = 主機設定的總開關;paused = 測試區手動開關的實際狀態(收集器回報) */
+  poll: { enabled: boolean; paused: boolean; lastOkAt: string | null; error: string | null; errorAt: string | null };
+  receive: { enabled: boolean; paused: boolean; tls: boolean; httpLastAt: string | null; syslogLastAt: string | null };
   redis: { error: string | null; errorAt: string | null };
-  counters: Record<'received' | 'dropped' | 'rejected' | 'malformed' | 'redisFailed', number>;
+  counters: Record<'received' | 'dropped' | 'rejected' | 'malformed' | 'redisFailed' | 'paused', number>;
+}
+
+/** 測試區手動開關(要求的狀態);available = 這個部署區可以切換(正式區 false) */
+export interface CollectorControl {
+  available: boolean;
+  pollPaused: boolean;
+  receivePaused: boolean;
+  updatedAt: string | null;
+  updatedBy: string | null;
 }
 
 export interface SessionSnap {
@@ -61,6 +71,8 @@ export interface PaLiveSnapshot {
   collector: CollectorStatus;
   /** 60 秒沒更新、收集器停止或 Redis 連不上時為 null(不顯示舊資料) */
   metrics: { session: SessionSnap | null; cpu: CpuSnap | null; throughput: ThroughputSnap | null; interfaces: InterfacesSnap | null };
+  /** 舊版後端沒有這個欄位 */
+  control?: CollectorControl;
 }
 
 export interface PaLiveTop {
@@ -104,6 +116,35 @@ export const paLive = {
     http.get<PaLiveTop>('/api/netops/pa-live/top', { query: { type, minutes, limit, dims: dims?.join(',') } }),
   logs: (type: LogType, filter: LogFilter = {}, limit = 100, before?: string) =>
     http.get<LiveLogs>('/api/netops/pa-live/logs', { query: { type, limit, before, ...filter } }),
+  /** 測試區暫停 / 繼續收集器(netops.pa-realtime.write;正式區 403 NETOPS_PA_CONTROL_DISABLED) */
+  setControl: (change: { pollPaused?: boolean; receivePaused?: boolean }) => http.put<CollectorControl>('/api/netops/pa-live/collector-control', change),
+  /**
+   * 串流連不上時查原因:EventSource 不提供 HTTP 狀態,改用 fetch 取得狀態碼後立即中斷(429 名額滿、404 路由未發佈、401 登入逾時)。
+   * 回 { status, code };網路錯誤 status 為 0。
+   */
+  async probeStream(url: string): Promise<{ status: number; code: string | null }> {
+    const ctl = new AbortController();
+    // 卡住(網路半斷、Gateway 不回)時 10 秒放棄,當成網路錯誤(status 0),重試計時器照常設定
+    const timer = setTimeout(() => ctl.abort(), 10_000);
+    try {
+      const res = await fetch(url, { credentials: 'same-origin', headers: { Accept: 'text/event-stream' }, signal: ctl.signal });
+      let code: string | null = null;
+      if (!res.ok) {
+        try {
+          code = ((await res.json()) as { code?: string }).code ?? null;
+        } catch {
+          // 非 JSON
+        }
+      }
+      return { status: res.status, code };
+    } catch {
+      return { status: 0, code: null };
+    } finally {
+      clearTimeout(timer);
+      // 200 時不讀串流,立即釋放名額
+      ctl.abort();
+    }
+  },
   /** SSE 網址(EventSource 用;同網域相對路徑,不寫死 / 開頭以外的主機) */
   streamUrl: (types: LogType[], filter: LogFilter = {}) => withQuery('/api/netops/pa-live/stream', { types: types.join(','), ...filter }),
 };

@@ -2,6 +2,11 @@
 
 > Bug 修改;新紀錄加在最上方,格式見 `AGENT.md` §11。
 
+## 2026-11-09 即時監控驗收發現的顯示問題與每次部署的 `/v1/ping` 401
+- 工作項目:R1(驗收報告 `docs/test-reports/2026-11-09-a1-r1-uat.md` §4.4、§4.5、§6-5、§7.4)
+- 內容:頁首沒有輪詢 / 接收狀態;接收未啟用時排行與 log 說明誤導;沒有設備狀態最後更新時間;串流 429 只寫「中斷」且每 10 秒重試;路由未發佈只顯示 `ROUTE_NOT_FOUND` 的訊息;CI 冒煙測試每次部署留一筆 `/v1/ping` 401。修正內容見 `FrontendCorrection.md`、`BackendCorrection.md` 同日紀錄。
+- 檔案:同上
+
 ## 2026-11-09 PA-560 介面計數查詢在 PAN-OS 12.1.7-h3 失敗
 - 工作項目:R1(需求方在開發機 10.10.112.13 對實機跑 `python -m netops_pa check`,5 項中 1 項失敗)
 - 內容:輪詢指令 `show counter interface all` 經 pan-os-python `cmd_xml` 轉成 `<show><counter><interface><all></all></interface></counter></show>`(沒加引號的字會變成元素),PAN-OS 要的是值,回「`show -> counter -> interface -> all needs to have non NULL value`」。改成 `show counter interface "all"`(轉成 `<interface>all</interface>`,與既有的 `second last "1"` 同寫法)。假 PA 原本只比對 `<counter><interface` 前綴所以沒抓到,改成照實機對錯誤寫法回同樣的錯誤,並補回歸測試;`check` 對這類 PAN-OS 指令錯誤(`non NULL value`)給「版本差異」提示。假 PA 的計數回應依 PAN-OS 文件格式補上 hw 區段的位元組計數(解析仍以 ifnet 為準),12.1 的實際回應格式待實機確認。規格 `docs/PA-FORWARDING-SPEC.md`:G2 填 10.10.115.35、G3 填 12.1.7-h3、G4 記錄出廠自簽憑證(SAN 只有序號);B.4 加註 12.1 Decryption 欄位分成 client / server 兩側、名稱待對照設備。

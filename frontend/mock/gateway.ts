@@ -27,6 +27,7 @@ const MENUS = [
   { code: 'netops.group.ad', name: 'AD 網域', kind: 'group', parentCode: 'netops.app.access', sort: 20, icon: 'gateway' },
   { code: 'netops.group.knowledge', name: '網通知識', kind: 'group', parentCode: 'netops.app.access', sort: 30, icon: 'book-open' },
   { code: 'netops.pa-live.read', name: '即時監控', kind: 'menu', parentCode: 'netops.group.firewall', sort: 5, icon: null },
+  { code: 'netops.pa-live.manage', name: '測試區暫停 / 繼續收集器', kind: 'button', parentCode: 'netops.pa-live.read', sort: 10, icon: null },
   { code: 'netops.pa-dashboard.read', name: '流量總覽', kind: 'menu', parentCode: 'netops.group.firewall', sort: 10, icon: null },
   { code: 'netops.pa-events.read', name: '安全事件', kind: 'menu', parentCode: 'netops.group.firewall', sort: 20, icon: null },
   { code: 'netops.pa-search.read', name: 'Log 明細查詢', kind: 'menu', parentCode: 'netops.group.firewall', sort: 30, icon: null },
@@ -48,7 +49,7 @@ const MENUS = [
 const READ_API = ['netops.ping.read', 'netops.pa-realtime.read', 'netops.pa.read', 'netops.pa-log.read', 'netops.ftp.read', 'netops.ad.read', 'netops.ad-log.read', 'netops.kb.read', 'netops.ai.use'];
 /** viewer 也有的 AI 按鈕(netops.ai.use 給 admin 與 viewer,2026-11-05 決定) */
 const AI_BUTTONS = ['netops.pa-ask.use', 'netops.pa-dashboard.ai', 'netops.ad-ask.use'];
-const WRITE_API = ['netops.ftp.write', 'netops.kb.write'];
+const WRITE_API = ['netops.ftp.write', 'netops.kb.write', 'netops.pa-realtime.write'];
 const BUTTONS = MENUS.filter((m) => m.kind === 'button').map((m) => m.code);
 const PAGES = MENUS.filter((m) => m.kind === 'app' || m.kind === 'menu').map((m) => m.code);
 
@@ -119,7 +120,7 @@ export function mockGateway(role: string | undefined): Plugin | null {
         const need = (perm: string) => m.permissions.includes(perm) || (fail(res, 403, 'PERMISSION_DENIED', `沒有權限 ${perm}`), false);
         const method = req.method ?? 'GET';
         // 即時監控 SSE(R1):直接寫串流,不經下面的延遲與 JSON 回應
-        if (path === '/api/netops/pa-live/stream' && method === 'GET') return need('netops.pa-realtime.read') ? streamPaLive(url, res) : undefined;
+        if (path === '/api/netops/pa-live/stream' && method === 'GET') return need('netops.pa-realtime.read') ? streamPaLive(url, res, fail.bind(null, res)) : undefined;
         const ctx: MockCtx = {
           method,
           path,

@@ -1,36 +1,49 @@
 /**
- * 假 Gateway:PA 即時監控(R1,docs/API.md §3.2)。數字為假資料;MOCK_PA_LIVE=stopped|disabled|unavailable 可看各種停止狀態。
+ * 假 Gateway:PA 即時監控(R1,docs/API.md §3.2)。數字為假資料;MOCK_PA_LIVE=stopped|disabled|unavailable 可看各種停止狀態,
+ * poll-only = 測試區現況(輪詢開、接收總開關關)。測試區手動開關(PUT collector-control)存在記憶體,暫停後 KPI / log 停止。
+ * MOCK_PA_LIVE_STREAM=busy|no-route:串流回 429 NETOPS_STREAM_BUSY / 404 ROUTE_NOT_FOUND(看畫面提示與重試間隔)。
  * 串流每 2 秒送一批假 log、每 10 秒 snapshot、每 15 秒 heartbeat;5 分鐘後結束(同後端)。
  */
 import type { ServerResponse } from 'node:http';
 import type { MockCtx } from './types.ts';
 
-const STATE = process.env.MOCK_PA_LIVE ?? 'ok';
+const MODE = process.env.MOCK_PA_LIVE ?? 'ok';
+const STATE = MODE === 'poll-only' ? 'ok' : MODE;
+const STREAM = process.env.MOCK_PA_LIVE_STREAM ?? '';
+const POLL_ENABLED = STATE !== 'disabled';
+const RECEIVE_ENABLED = STATE !== 'disabled' && MODE !== 'poll-only';
+/** 測試區手動開關(要求的狀態;假收集器立即套用) */
+const control = { pollPaused: false, receivePaused: false, updatedAt: null as string | null, updatedBy: null as string | null };
+const pollLive = () => STATE === 'ok' && !control.pollPaused;
+const receiveLive = () => STATE === 'ok' && RECEIVE_ENABLED && !control.receivePaused;
 const iso = (ms = Date.now()) => new Date(ms).toISOString();
 const rnd = (a: number, b: number) => Math.round(a + Math.random() * (b - a));
 
 function collector() {
   const stopped = STATE === 'stopped';
+  const paused = (!POLL_ENABLED || control.pollPaused) && (!RECEIVE_ENABLED || control.receivePaused) && STATE === 'ok';
   const base = {
-    state: STATE,
+    state: paused ? 'paused' : STATE,
     message:
-      { ok: '收集器運作中', stopped: '收集器停止更新:資料不是即時的', disabled: '收集器未啟用(輪詢與接收都關閉;測試區只在測試時開啟)', unavailable: '無法連線即時資料庫(Redis):資料停止更新' }[
+      { paused: '收集器已暫停(測試區手動開關):資料停止更新', ok: '收集器運作中', stopped: '收集器停止更新:資料不是即時的', disabled: '收集器未啟用(輪詢與接收都關閉;測試區只在測試時開啟)', unavailable: '無法連線即時資料庫(Redis):資料停止更新' }[
         STATE
       ] ?? STATE,
     updatedAt: iso(stopped ? Date.now() - 5 * 60_000 : Date.now()),
     version: '0.1.0',
-    poll: { enabled: STATE !== 'disabled', lastOkAt: iso(), error: null, errorAt: null },
-    receive: { enabled: STATE !== 'disabled', tls: false, httpLastAt: iso(), syslogLastAt: iso() },
+    poll: { enabled: POLL_ENABLED, paused: POLL_ENABLED && control.pollPaused, lastOkAt: iso(), error: null, errorAt: null },
+    receive: { enabled: RECEIVE_ENABLED, paused: RECEIVE_ENABLED && control.receivePaused, tls: false, httpLastAt: RECEIVE_ENABLED ? iso() : null, syslogLastAt: RECEIVE_ENABLED ? iso() : null },
     redis: { error: null, errorAt: null },
-    counters: { received: 123456, dropped: 0, rejected: 2, malformed: 1, redisFailed: 0 },
+    counters: { received: RECEIVE_ENABLED ? 123456 : 0, dropped: 0, rejected: 2, malformed: 1, redisFailed: 0, paused: 0 },
   };
+  if (paused) base.message = '收集器已暫停(測試區手動開關):資料停止更新';
   return base;
 }
 
 function snapshot() {
-  const live = STATE === 'ok';
+  const live = pollLive();
   return {
     collector: collector(),
+    control: { available: STATE !== 'unavailable', ...control },
     metrics: live
       ? {
           session: { time: iso(), active: rnd(3500, 4500), max: 262142, utilization: 1.5, tcp: 3100, udp: 800, icmp: 12 },
@@ -60,7 +73,16 @@ function fakeLog(type: string, ms = Date.now()) {
 
 const minutes = (n: number) => Array.from({ length: n }, (_, i) => ({ minute: iso(Date.now() - (n - 1 - i) * 60_000), count: rnd(3000, 9000) }));
 
-export function handlePaLive({ method, path, url, need, send, fail }: MockCtx): boolean {
+export function handlePaLive({ method, path, url, body, need, send, fail, user }: MockCtx): boolean {
+  if (path === '/api/netops/pa-live/collector-control' && method === 'PUT') {
+    if (!need('netops.pa-realtime.write')) return true;
+    const b = (body ?? {}) as { pollPaused?: unknown; receivePaused?: unknown };
+    if (typeof b.pollPaused !== 'boolean' && typeof b.receivePaused !== 'boolean') return (fail(400, 'VALIDATION_FAILED', '參數驗證失敗'), true);
+    if (typeof b.pollPaused === 'boolean') control.pollPaused = b.pollPaused;
+    if (typeof b.receivePaused === 'boolean') control.receivePaused = b.receivePaused;
+    Object.assign(control, { updatedAt: iso(), updatedBy: user });
+    return (send(200, { available: true, ...control }), true);
+  }
   if (!path.startsWith('/api/netops/pa-live/') || method !== 'GET') return false;
   if (!need('netops.pa-realtime.read')) return true;
   const sub = path.slice('/api/netops/pa-live/'.length);
@@ -74,6 +96,7 @@ export function handlePaLive({ method, path, url, need, send, fail }: MockCtx): 
   if (sub === 'top') {
     const type = url.searchParams.get('type') ?? 'traffic';
     const m = Number(url.searchParams.get('minutes') ?? 15);
+    if (!receiveLive()) return (send(200, { type, minutes: m, totals: {}, kpis: {}, tops: {}, perMinute: [], retentionSec: type === 'traffic' ? 86400 : 172800 }), true);
     const list = (xs: string[]) => xs.map((key) => ({ key, value: rnd(100, 9000) })).sort((a, b) => b.value - a.value);
     const tops =
       type === 'traffic'
@@ -84,7 +107,7 @@ export function handlePaLive({ method, path, url, need, send, fail }: MockCtx): 
   }
   if (sub === 'logs') {
     const type = url.searchParams.get('type') ?? 'traffic';
-    const items = STATE === 'ok' ? Array.from({ length: 30 }, (_, i) => fakeLog(type, Date.now() - (i + 1) * 3000)) : [];
+    const items = receiveLive() ? Array.from({ length: 30 }, (_, i) => fakeLog(type, Date.now() - (i + 1) * 3000)) : [];
     send(200, { type, items, nextBefore: null, scanned: items.length, truncated: false, earliest: iso(Date.now() - 55 * 60_000), retentionSec: type === 'traffic' ? 3600 : 172800 });
     return true;
   }
@@ -92,7 +115,9 @@ export function handlePaLive({ method, path, url, need, send, fail }: MockCtx): 
 }
 
 /** SSE(在 gateway.ts 的延遲之前處理,直接寫回應) */
-export function streamPaLive(url: URL, res: ServerResponse) {
+export function streamPaLive(url: URL, res: ServerResponse, fail: (status: number, code: string, message: string) => void) {
+  if (STREAM === 'busy') return fail(429, 'NETOPS_STREAM_BUSY', '串流連線數已達上限,請關閉其他分頁或稍後再試');
+  if (STREAM === 'no-route') return fail(404, 'ROUTE_NOT_FOUND', '找不到此 API');
   const types = (url.searchParams.get('types') ?? 'traffic,threat').split(',');
   res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache, no-transform' });
   const ev = (event: string, data: unknown, id?: string) => res.write(`${id ? `id: ${id}\n` : ''}event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
@@ -101,7 +126,7 @@ export function streamPaLive(url: URL, res: ServerResponse) {
   ev('snapshot', snapshot());
   const timers = [
     setInterval(() => {
-      if (STATE !== 'ok') return;
+      if (!receiveLive()) return;
       const items = types.flatMap((t) => Array.from({ length: rnd(0, t === 'traffic' ? 6 : 2) }, () => fakeLog(t)));
       if (items.length) ev('logs', { items, dropped: 0, skipped: [] }, types.map((t) => `${t}:${Date.now()}-0`).join(','));
     }, 2000),

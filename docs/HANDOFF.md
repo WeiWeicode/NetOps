@@ -2,6 +2,18 @@
 
 > 接手時先讀 `AGENT.md`,再讀 `docs/ARCHITECTURE.md`、`docs/IMPL-PLAN.md`。
 
+## 2026-11-09 驗收修正與測試區收集器開關(`feature/pa-live-uat-1109`)
+
+依驗收報告 `docs/test-reports/2026-11-09-a1-r1-uat.md`(§3.1、§3.7、§4、§6、§7.4、§7.5)與需求方 2026-11-09 的決定(MR 描述有細節):
+- **測試區收集器開關**:即時監控頁「收集器」區加「輪詢:開啟 / 停用」「接收:開啟 / 停用」(`netops.pa-live.manage` → `netops.pa-realtime.write`,只給 `netops-admin`)。環境變數仍是總開關;按鈕只切換暫停 / 繼續,存在 Redis `netops:pa:control`(PA-LIVE-PLAN §4)。正式區 API 回 403、不顯示按鈕。決定記為 ARCHITECTURE D26。
+- 頁首分開顯示輪詢 / 接收狀態;接收未啟用時排行與即時 log 寫「接收端點未啟用,沒有 log 來源」;設備狀態顯示最後更新時間。
+- 串流 429:畫面寫「串流連線數已達上限,請關閉其他即時監控分頁」,重試間隔 30 秒起倍增到 5 分鐘。
+- 404 `ROUTE_NOT_FOUND` 顯示「功能尚未啟用(路由未發佈)」(全站)。
+- `GET /v1/ping` 401 的來源是 CI `deploy-api-test` 的冒煙測試(故意不帶 Token),改打 `/healthz`;401 改由單元測試涵蓋。
+- R1-1~R1-4 接受、viewer 可以匯出 Log 明細(j):記在 ARCHITECTURE D26,下方待決定表已移除。
+
+**合併後要做**:1. CI 通過;2. GigaItApp「服務與路由」發佈草稿 `netops.pa-live.collector-control`;3. `rbac-test` 套用後確認 `netops-admin` 有 `netops.pa-live.manage`(重新登入);4. 依 MR 描述重驗。
+
 ## 2026-11-06 收工(週額度用完,下週接續)
 
 **接手方式**:新討論串說「從 `NetOps/docs/HANDOFF.md`「2026-11-06 收工」接手」,用主討論串協調模式(只派工、核對、收尾)。
@@ -46,10 +58,6 @@
 
 | # | 事項 | 來源 |
 | --- | --- | --- |
-| R1-1 | Syslog 接收端點在設定 mTLS 前只靠 Windows 防火牆限制來源(容器看不到 PA-560 真實 IP);要在容器內驗證來源需改 Gateway Traefik + PROXY protocol | !38 |
-| R1-2 | `netops-redis` 沒有密碼 / ACL,只靠內部網路隔離 | !38 |
-| R1-3 | 容器與機密檔用 uid 1000,主機 WSL 一般帳號若也是 uid 1000 可直接讀機密 | !38 |
-| R1-4 | 正式區沒有接收端點憑證時,是否接受明文(`PA_RECEIVE_PLAINTEXT=1`) | !38 |
 | A1-1 | 哪些 AI 功能不搬(盤點後決定) | A1 盤點 |
 | A1-2 | 主機 3 容器內到 AI 主機與 RDAP 的連線還沒驗證(D2 前要補);RDAP 的 LACNIC、AFRINIC 從主機 2 逾時 | !34–!36 描述 |
 | — | 2026-11-04 收工段的 a–l 仍有效(k:Gateway 防提權缺口 High,屬 Gateway repo) | 本檔下方 |
@@ -108,7 +116,7 @@
 - **驗收**(報告見 !27 `docs/test-reports/2026-11-04-d1-uat.md`):`netops-admin`、`netops-viewer`、無權限三種帳號的畫面與導回、應用切換、1440px / 375px、架構觀測(`netops-api` 心跳與請求、`netops-web` 事件)、NAS 備份產生都通過。指派角色曾被防提權擋下(403),以 Gateway !21 替 `gw-super-admin` 補 `netops.*` 後指派成功。
 
 **D1 未驗項目(下一階段先做)**
-1. **Log 明細查詢**的送出、結果表、取消、匯出(admin 與 viewer 各一次):測試區還沒有已分析的 TRAFFIC log,送出時回 404「沒有已分析的 log 檔」。要先在「FTP Log 檔案」分析至少一個 TRAFFIC 檔,這是寫入操作,**先取得使用者同意**。
+1. **Log 明細查詢**的送出、結果表、取消、匯出(admin 與 viewer 各一次):~~測試區還沒有已分析的 TRAFFIC log~~ 2026-11-09 驗收時 `/my-data` 已有 3,466 個已分析檔(2026-10-15 ~ 11-08),不需要再分析;已驗證通過(`docs/test-reports/2026-11-09-a1-r1-uat.md` §3.2、§4.1)。之後別再全選分析(一天約 110~170 檔、約 6 GB)。
 2. **安全事件頁無資料時**不再呼叫 API(!26):驗收時測試區已有資料,要找沒有資料的類型再看一次,並確認架構觀測不再新增 `pa-events/overview` 的 400。
 3. **知識庫備份可還原**:目前測試區 0 則筆記,備份是空的(`files=0`)。有筆記後解開一份備份核對內容與檔數。
 
@@ -139,7 +147,7 @@
 | g | `spa-netops` 以 root 掛整個 `gw_www` | 同 GigaItApp、giga-Portal;只掛子目錄要 Compose `volume.subpath`(Docker 26+) |
 | h | 知識庫備份是明文 | 放在附件服務共用的 NAS 分享;要不要獨立帳號 / ACL 或加密 |
 | i | PA、AD 的 FTP 管理按鈕共用 `netops.ftp.write` | 預設兩個角色不受影響,單獨指派按鈕時權限比預期大 |
-| j | viewer 可以查詢並匯出 Log 明細 | 依 ARCHITECTURE §5「全部 .read」;匯出行為待未驗項目 1 一起確認 |
+| j | ~~viewer 可以查詢並匯出 Log 明細~~ | **2026-11-09 決定:可以,維持現狀**(ARCHITECTURE D26) |
 | k | **Gateway 防提權缺口(High,兩個)** | `bff/src/modules/admin/rbac.ts`:① `PUT /api/admin/roles/:id/permissions` 不檢查操作人是否擁有要加入的權限,持有 `gw.admin.rbac.write` 者可把任意權限加進自己所屬的角色(例如 `employee`);② `POST` / `PATCH /api/admin/roles/:id/rules` 沒有保護 `gw-super-admin` 也沒有權限檢查,可建「自己的部門 → gw-super-admin」規則升為超級管理員。修法見 Gateway !21 描述;屬 Gateway repo |
 | l | 超級管理員可以寫入 NetOps | `gw-super-admin` 補了 `netops.*`(!21),所有超級管理員都能 FTP 同步 / 分析 / 刪除分析結果、編輯知識庫;成員有 AD 群組對應時群組內每個人都有 |
 
@@ -166,7 +174,7 @@
 | g | `spa-netops` 以 root 掛整個 `gw_www` | 同 GigaItApp、giga-Portal。只掛 `netops` 子目錄要用 Compose `volume.subpath`(Docker 26+),要先確認主機版本 |
 | h | 知識庫備份是明文 | 放在附件服務共用的 NAS 分享 `docker-folder`;要不要獨立帳號 / ACL 或加密 |
 | i | PA、AD 的 FTP 管理按鈕共用 `netops.ftp.write` | B1 的 API 設計;預設兩個角色不受影響,單獨指派按鈕時權限比預期大 |
-| j | viewer 可以查詢並匯出 Log 明細 | 依 ARCHITECTURE §5「全部 .read」;要不要收緊 |
+| j | ~~viewer 可以查詢並匯出 Log 明細~~ | **2026-11-09 決定:可以,維持現狀**(ARCHITECTURE D26) |
 
 待決定 a(CI Runner 只跑受保護分支)的影響變大:D1 後 develop 的 job 會寫 `gw_www` 與 Gateway RBAC。
 

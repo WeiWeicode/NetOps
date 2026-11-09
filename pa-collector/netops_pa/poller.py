@@ -172,8 +172,17 @@ def interface_rates(prev: dict[str, tuple[int, int]] | None, cur: dict[str, tupl
 
 # ---------- 輪詢 ----------
 class Poller:
-    def __init__(self, client: PaClient, write: Callable[[str, dict[str, Any], float], None], status: Status, interval: int) -> None:
+    def __init__(
+        self,
+        client: PaClient,
+        write: Callable[[str, dict[str, Any], float], None],
+        status: Status,
+        interval: int,
+        paused: Callable[[], bool] | None = None,
+    ) -> None:
         self.client = client
+        # 測試區手動開關(control.py):每次輪詢前呼叫,True 時這一輪不查 PA-560
+        self.paused = paused
         self.write = write
         self.status = status
         self.interval = interval
@@ -231,6 +240,20 @@ class Poller:
             self.status.ok("poll")
         return failed
 
+    def cycle(self) -> None:
+        """輪詢執行緒的一輪:先讀測試區手動開關,暫停就不查 PA-560。"""
+        if self.paused and self.paused():
+            self.pause()
+        else:
+            self.status.set(pollPaused="0")
+            self.poll_once()
+
+    def pause(self) -> None:
+        """暫停中:標示心跳、清掉前一次介面計數(繼續時第一輪介面流量為 null,不拿暫停前的計數相減)與舊的輪詢錯誤。"""
+        self.status.set(pollPaused="1")
+        self.status.clear("pollError", "pollErrorAt")
+        self._prev = None
+
     def start(self) -> None:
         self._thread.start()
 
@@ -242,7 +265,7 @@ class Poller:
         while not self._stop.is_set():
             started = time.monotonic()
             try:
-                self.poll_once()
+                self.cycle()
             except Exception as e:  # noqa: BLE001 — 輪詢執行緒不可因非預期錯誤結束
                 self.status.fail("poll", e)
                 # 不印堆疊:SDK 例外可能帶請求網址(含 key=),一律遮罩後只記類型與訊息

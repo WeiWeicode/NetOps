@@ -2,6 +2,12 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。範圍:`frontend/`。
 
+## 2026-11-09 R1:即時監控驗收修正與測試區收集器開關
+- 工作項目:R1(驗收報告 `docs/test-reports/2026-11-09-a1-r1-uat.md` §4.4、§6-5、§7.4;需求方 2026-11-09 決定)
+- 內容:① 頁首「收集器」區分開顯示輪詢(輪詢中 / 輪詢失敗 / 輪詢暫停 / 輪詢未啟用 / 停止更新)與接收(接收中 / 接收暫停 / 接收未啟用 / 停止更新),並說明設備狀態來自輪詢、排行與即時 log 來自接收端點。② 接收未啟用或暫停時,排行與即時 log 寫「接收端點未啟用,沒有 log 來源」/「接收已暫停…」,不再寫「收集器有在運作,這段期間沒有收到這種 log」。③ 設備狀態上方顯示「設備狀態最後更新」(快照 `time` 最新者)。④ 串流非 200 時用 `fetch` 查狀態碼(立即中斷):429 顯示「串流連線數已達上限,請關閉其他即時監控分頁」並以 30 秒起倍增到 5 分鐘重試,404 `ROUTE_NOT_FOUND` 顯示「功能尚未啟用(路由未發佈)」,其他 10 秒起倍增到 2 分鐘;收到 `open` 歸零。⑤ `describeError` 遇 `ROUTE_NOT_FOUND` 一律顯示「功能尚未啟用(路由未發佈)」(AI、知識庫等全站)。⑥ 測試區開關:有 `UI.paLiveManage` 且 `control.available` 時顯示「輪詢:開啟 / 停用」「接收:開啟 / 停用」;總開關關閉的那一個停用並說明原因;顯示最後操作人與時間。⑦ 假 Gateway:`MOCK_PA_LIVE=poll-only`(測試區現況)、開關 API、`MOCK_PA_LIVE_STREAM=busy|no-route`。
+- 檔案:`frontend/src/{api/{paLive,gateway,perms}.ts,composables/paLive.ts,pages/firewall/Live.vue}`、`frontend/mock/{paLive,gateway}.ts`、`frontend/test/{paLive,gateway}.test.ts`
+- 驗證:見 MR 描述;`MOCK=admin MOCK_PA_LIVE=poll-only` 瀏覽器確認頁首狀態、暫停輪詢後 KPI 停止更新與文案;`MOCK=viewer MOCK_PA_LIVE_STREAM=busy` 確認 429 訊息、沒有按鈕、14 秒內只有 1 次串流 + 1 次探測
+
 ## 2026-11-09 A1-frontend:移除翻譯與「請 AI 記錄」(決定不搬)
 - 工作項目:A1(`feature/a1-ai-frontend`;需求方 2026-11-09 依 `docs/AI-FEATURE-INVENTORY.md` 決定翻譯(#5)與整理筆記(#6)不搬,ARCHITECTURE D25)
 - 內容:合併 `feature/a1-ai-api`(後端已拿掉 `/ai/translations`、`/ai/notes`)後,前端拿掉 `components/TranslateBox.vue`(問答與 AI 分析下方的翻譯)、問答頁的「記錄到知識庫」按鈕與「請記錄:…」判斷(`NOTE_RE`、`record()`、筆記結果的顯示)、由連結帶入時的「請確認」提示(原本只為防止連結誘導寫入知識庫)、`api/ai.ts` 的 `translate`、`note`、`TRANSLATE_LANGS`;假 Gateway 拿掉兩支 API。問答頁改提示「要補充環境資訊,請到知識庫新增筆記」。權限代碼不變(問答頁原本用的 `UI.kbWrite` 是知識庫頁既有的按鈕代碼)。

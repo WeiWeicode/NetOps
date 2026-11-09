@@ -350,6 +350,13 @@ netsh interface portproxy show v4tov4
 4. 檢查全部成功後,`PA_POLL_ENABLED=1` 再重建;日誌預期:`SDK 輪詢已啟用:每 15 秒(PA <PA_HOST>:443)`;即時監控頁「設備狀態」有數字。
 5. 測完 `PA_POLL_ENABLED=0` 再重建。
 
+### F.4.0 測試區的暫停 / 繼續(2026-11-09,ARCHITECTURE D26)
+
+- `PA_POLL_ENABLED`、`PA_RECEIVE_ENABLED` 是**總開關**:決定這個功能能不能開,改了要重建 `netops-pa`。
+- 總開關開著時,`netops-admin` 可以在即時監控頁按「輪詢:停用 / 開啟」「接收:停用 / 開啟」暫停或繼續,**不用改主機設定**(狀態存在 Redis `netops:pa:control`,收集器在下一次輪詢前或 5 秒內套用)。接收暫停時 port 照開,收到的 log 丟棄並計數。
+- 想要完全停止(例如測試結束很久不用),仍照上面第 5 步把總開關改回 0。
+- 正式區沒有這兩個按鈕(API 回 403、收集器不讀這個鍵)。
+
 ### F.4.1 安全限制(目前版本)
 
 - 經 portproxy 時容器看不到真實來源(F.2),**沒有設定用戶端憑證(F.6)前,Syslog 51294 只靠 Windows 防火牆**;主機 2 本機與 WSL 內的程序(包括 CI Runner 上的 job)可以直接連 WSL 的 `127.0.0.1:51294` 送假的 TRAFFIC log。所以在 F.6 完成前,**即時 TRAFFIC 資料只作為監控參考,不作為資安判斷依據**(資安判斷以 HTTP 轉送的威脅類 log 與 FTP 歷史為準)。

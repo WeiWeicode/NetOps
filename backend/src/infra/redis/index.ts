@@ -1,5 +1,6 @@
 /**
- * netops-redis 讀取(R1,PA-LIVE-PLAN §3.3、§4;AGENT.md §7.2):只讀,寫入由 netops-pa(pa-collector/)負責。
+ * netops-redis 讀取(R1,PA-LIVE-PLAN §3.3、§4;AGENT.md §7.2):資料只讀,寫入由 netops-pa(pa-collector/)負責。
+ * 唯一的寫入是測試區手動開關 netops:pa:control(setCollectorControl;2026-11-09 需求方決定),只能經這裡的具名函式。
  * 鍵格式只在這裡組;與 pa-collector/netops_pa/keys.py 同一份規則,兩邊要一起改(改之前先回報需求方)。
  * 模組只呼叫這裡的具名函式,API 回應不暴露 Redis 鍵。分鐘桶為 UTC yyyyMMddHHmm(收集器收到 log 的時間)。
  */
@@ -36,6 +37,8 @@ const keys = {
   agg: (t: LogType, bucket: string) => `${PREFIX}:agg:${t}:${bucket}`,
   top: (t: LogType, dim: string, bucket: string) => `${PREFIX}:top:${t}:${dim}:${bucket}`,
   heartbeat: `${PREFIX}:heartbeat`,
+  /** 測試區手動開關(PA-LIVE-PLAN §4;同 keys.py CONTROL):netops-api 寫、netops-pa 讀 */
+  control: `${PREFIX}:control`,
 };
 
 /** Unix 毫秒 → UTC yyyyMMddHHmm */
@@ -50,6 +53,7 @@ export interface RedisClient {
   xrange(key: string, start: string, end: string, count: 'COUNT', n: number): Promise<[string, string[]][]>;
   xrevrange(key: string, end: string, start: string, count: 'COUNT', n: number): Promise<[string, string[]][]>;
   zrevrange(key: string, start: number, stop: number, withScores: 'WITHSCORES'): Promise<string[]>;
+  hset(key: string, fields: Record<string, string>): Promise<number>;
   quit(): Promise<unknown>;
 }
 
@@ -112,8 +116,27 @@ export interface PaLiveRedis {
   minuteAgg(type: LogType, bucket: string): Promise<Record<string, string>>;
   /** 某一分鐘某維度的排行(前 limit 名) */
   minuteTop(type: LogType, dim: string, bucket: string, limit: number): Promise<[string, number][]>;
+  /** 測試區手動開關(要求的狀態;實際狀態看心跳 pollPaused / receivePaused) */
+  collectorControl(): Promise<CollectorControl>;
+  /** 寫入手動開關:只更新有給的欄位,並記錄時間與操作人 */
+  setCollectorControl(change: { pollPaused?: boolean; receivePaused?: boolean }, by: string): Promise<CollectorControl>;
   close(): Promise<void>;
 }
+
+/** netops:pa:control 的內容 */
+export interface CollectorControl {
+  pollPaused: boolean;
+  receivePaused: boolean;
+  updatedAt: string | null;
+  updatedBy: string | null;
+}
+
+const toControl = (h: Record<string, string>): CollectorControl => ({
+  pollPaused: h.pollPaused === '1',
+  receivePaused: h.receivePaused === '1',
+  updatedAt: h.updatedAt || null,
+  updatedBy: h.updatedBy || null,
+});
 
 /** 每個指令包一層:Redis 回的錯誤(ReplyError)→ RedisReplyError;其他(連線、逾時)→ RedisUnavailableError。原因只寫日誌 */
 export function createPaLiveRedis(client: RedisClient): PaLiveRedis {
@@ -152,6 +175,15 @@ export function createPaLiveRedis(client: RedisClient): PaLiveRedis {
         const out: [string, number][] = [];
         for (let i = 0; i + 1 < flat.length; i += 2) out.push([flat[i]!, Number(flat[i + 1])]);
         return out;
+      }),
+    collectorControl: () => call(async () => toControl(await client.hgetall(keys.control))),
+    setCollectorControl: (change, by) =>
+      call(async () => {
+        const fields: Record<string, string> = { updatedAt: new Date().toISOString(), updatedBy: by.slice(0, 80) };
+        if (change.pollPaused !== undefined) fields.pollPaused = change.pollPaused ? '1' : '0';
+        if (change.receivePaused !== undefined) fields.receivePaused = change.receivePaused ? '1' : '0';
+        await client.hset(keys.control, fields);
+        return toControl(await client.hgetall(keys.control));
       }),
     close: async () => {
       await client.quit().catch(() => undefined);

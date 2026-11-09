@@ -1,7 +1,7 @@
 # NetOps API
 
 > `netops-api` 的對外介面:前端(F1)照本文件串接。決策見 [ARCHITECTURE.md](ARCHITECTURE.md),工作項目見 [IMPL-PLAN.md](IMPL-PLAN.md)。
-> **狀態:B1 定稿;B2-pa 已實作 §4.1、§5.1;B2-ad 已實作 §4.2、§5.2、§6;B2-kb 已實作 §7;B2-logs 已實作 §4.3(B2 全部完成)**。各模組在 B2 分批實作,「批次」欄是預定交付的 MR;實作與本文件不同時,以 MR 描述的「API 變更」為準並同步更新本文件。
+> **狀態:B1 定稿;B2-pa 已實作 §4.1、§5.1;B2-ad 已實作 §4.2、§5.2、§6;B2-kb 已實作 §7;B2-logs 已實作 §4.3(B2 全部完成);A1(AI 搬移)第 2 批 `feature/a1-ai-api` 實作 §10**。各模組在 B2 分批實作,「批次」欄是預定交付的 MR;實作與本文件不同時,以 MR 描述的「API 變更」為準並同步更新本文件。
 > 欄位的完整定義以服務的 `/openapi.json` 為準(上架時匯入 Gateway);本文件寫路徑、權限、請求與回應格式。
 
 ---
@@ -78,10 +78,11 @@ PA 匯入在背景佇列執行;同步、分析只是送進佇列,畫面輪詢狀
 | `netops.ftp.write` | FTP Log 檔案:同步與管理 | §5 寫入 |
 | `netops.ad.read` | AD 事件:查詢 | §6.1 |
 | `netops.ad-log.read` | AD Log 明細:查詢 | §6.2 |
-| `netops.kb.read` | 知識庫:查詢 | §7 讀取 |
-| `netops.kb.write` | 知識庫:編輯 | §7 寫入 |
+| `netops.kb.read` | 知識庫:查詢 | §7 讀取、§10.2 讀取(語意搜尋、向量庫與外部 IP 學習狀態) |
+| `netops.kb.write` | 知識庫:編輯 | §7 寫入、§10.2 立即同步 / 學習 |
+| `netops.ai.use` | AI 分析與問答:使用 | §10.1(分析、問答、狀態)。不是 `.read`:選單不能綁定,由按鈕 `netops.pa-ask.use`、`netops.ad-ask.use`、`netops.pa-dashboard.ai` 綁定(`gateway-rbac.yaml`);給 `netops-admin`、`netops-viewer`(2026-11-05 決定) |
 
-稽核:Log 明細查詢與匯出、知識庫下載、即時 log(§3.2 `logs`、`stream`)設 `x-audit-level: meta`。
+稽核:Log 明細查詢與匯出、知識庫下載、即時 log(§3.2 `logs`、`stream`)、AI 分析與問答(§10.1)設 `x-audit-level: meta`。
 
 取消工作(`DELETE …/{id}`)用該工作的**讀取**權限:只能取消自己送出的工作,不改變業務資料,因此不另設寫入權限(ARCHITECTURE §5)。
 
@@ -427,7 +428,7 @@ FTP 唯讀(AGENT.md §7.4):「刪除分析結果」只刪本系統的摘要,不�
 
 ## 7. 知識庫 — 批次 `feature/netops-b2-kb`
 
-AI 相關(語意搜尋、向量同步、外部 IP 自動學習)不搬移(ARCHITECTURE D17)。內容輸出前端時一律經 DOMPurify(AGENT.md §7.4)。
+AI 相關(語意搜尋、向量同步、外部 IP 自動學習)見 §10.2(A1)。內容輸出前端時一律經 DOMPurify(AGENT.md §7.4)。
 
 | 方法 | 路徑 | 權限 | 舊版 |
 | --- | --- | --- | --- |
@@ -485,7 +486,11 @@ AI 相關(語意搜尋、向量同步、外部 IP 自動學習)不搬移(ARCHITE
 | 409 | `NETOPS_AD_SYNC_BUSY` | AD 正在同步 |
 | 409 | `NETOPS_IMPORT_QUEUE_FULL` | 分析佇列已滿 |
 | 409 | `NETOPS_KB_LIMIT` | 知識庫筆記已達上限 |
-| 429 | `NETOPS_STREAM_BUSY` | 串流連線數已達上限(§3.1 串流驗證、§3.2 即時監控,每人 2 條、全系統 20 條);不用 5xx,避免累積 BFF 斷路器失敗 |
+| 409 | `NETOPS_AI_DISABLED` | 沒有設定 AI 服務(`LLM_URL`);設定狀態不是故障,不用 5xx(§10) |
+| 409 | `NETOPS_VECTOR_SYNC_DISABLED` | 沒有啟用向量庫同步(`VECTOR_SYNC=0`,只做語意搜尋;§10.2) |
+| 409 | `NETOPS_VECTOR_SYNC_BUSY` | 向量庫正在同步 |
+| 409 | `NETOPS_IPLEARN_BUSY` | 外部 IP 自動學習正在執行 |
+| 429 | `NETOPS_STREAM_BUSY` | 串流連線數已達上限:串流驗證與即時監控(§3.1、§3.2,每人 2 條、全系統 20 條)、AI 回答(§10.1,每人 2 個、全系統 6 個);不用 5xx,避免累積 BFF 斷路器失敗 |
 | 422 | `NETOPS_EXPORT_TOO_LARGE` | 匯出筆數超過上限 |
 | 502 | `NETOPS_FTP_UNAVAILABLE` | FTP 連線或讀取失敗。訊息為「動作 + FTP 路徑:原因」,原因只有分類(連線逾時、拒絕連線、找不到主機、連線中斷、TLS 憑證驗證失敗、帳號或密碼錯誤(FTP 530)、檔案或目錄不存在,或沒有權限(FTP 550)…),不含 FTP 主機、port 與原始錯誤;原始錯誤只寫服務日誌。匯入狀態的 `lastSyncError`、檔案的 `error`、工作的 `error.message` 同樣規則 |
 | 503 | `NETOPS_FTP_NOT_CONFIGURED` | 未設定 FTP(只會在 dev) |
@@ -498,13 +503,15 @@ AI 相關(語意搜尋、向量同步、外部 IP 自動學習)不搬移(ARCHITE
 | 503 | `NETOPS_JOB_ABORTED` | 服務正在關閉,不接受新工作 |
 | 500 | `INTERNAL_ERROR` | 非預期錯誤 |
 
+AI 串流(§10.1)開始後的錯誤以 `error` 事件回傳 `{ code, message }`:上表的代碼(例如 FTP 掃描失敗的 `NETOPS_FTP_UNAVAILABLE`),或 `NETOPS_AI_UNAVAILABLE`(連不到 AI 主機或回應錯誤)、`NETOPS_AI_TIMEOUT`(超過 `LLM_TIMEOUT_MS`)、`NETOPS_AI_FAILED`(非預期錯誤)、`NETOPS_STREAM_CLOSED`(服務重新啟動、超過 15 分鐘);訊息不含 AI 主機位址與上游原文。
+
 工作失敗時,`error.code` 可能是上表的代碼,或 `NETOPS_JOB_TIMEOUT`(超過執行時間上限)、`NETOPS_JOB_ABORTED`(服務關閉時中止)、`NETOPS_JOB_FAILED`(非預期錯誤)。
 
 ---
 
 ## 9. 舊版 API 對照與移除清單
 
-舊版共 **41** 支(`server/index.js`、`server/routes/*.js`,2026-11-03 盤點;IMPL-PLAN 原估 39)。搬移 27 支(含 `/health`),移除 14 支(`GET /kb?semantic=1` 是參數,不另計)。
+舊版共 **41** 支(`server/index.js`、`server/routes/*.js`,2026-11-03 盤點;IMPL-PLAN 原估 39)。搬移 27 支(含 `/health`),移除 14 支(`GET /kb?semantic=1` 是參數,不另計)。2026-11-04 取消 AI 中控台(D23)後,AI 的 8 支於 A1 搬移(§10),`GET /ai/context`(開發用)仍移除:合計搬移 35 支、移除 6 支。
 
 ### 9.1 搬移
 
@@ -535,6 +542,12 @@ AI 相關(語意搜尋、向量同步、外部 IP 自動學習)不搬移(ARCHITE
 | `GET /kb/:id/md` | `GET /kb/notes/{id}/markdown` |
 | `GET /kb/all/md` | `GET /kb/compilation` |
 | `POST /kb`、`PUT /kb/:id`、`DELETE /kb/:id` | `POST /kb/notes`、`PUT /kb/notes/{id}`、`DELETE /kb/notes/{id}` |
+| `GET /ai/status` | `GET /ai/status`(A1;不回 AI 主機位址) |
+| `POST /ai/analyze` | `POST /ai/analyses`(SSE) |
+| `POST /ai/ask` | `POST /ai/questions`(SSE) |
+| `GET /kb?semantic=1` | `GET /kb/semantic-search` |
+| `POST /kb/vector-sync` | `POST /kb/vector-syncs`(202,背景執行);狀態 `GET /kb/vector-status` |
+| `GET /kb/learn-ips`、`POST /kb/learn-ips` | `GET /kb/ip-learning`、`POST /kb/ip-learnings`(202) |
 
 ### 9.2 移除
 
@@ -543,8 +556,62 @@ AI 相關(語意搜尋、向量同步、外部 IP 自動學習)不搬移(ARCHITE
 | `POST /auth/login`、`GET /auth/sync`、`GET /auth/me` | 登入由 Gateway 處理(AGENT.md §7.1);身分改用 web-kit |
 | `POST /jump/:system` | Veeam 改一般連結(D11),不寫 `PortalSolar.SyncLoginInfo` |
 | `GET /theme.css` | 新版前端主題由 `src/ui/` 提供(D5) |
-| `GET /ai/status`、`POST /ai/analyze`、`POST /ai/ask`、`POST /ai/note`、`POST /ai/translate`、`GET /ai/context` | AI 不搬移,留在舊版 IIS(D17、D18) |
-| `GET /kb/learn-ips`、`POST /kb/learn-ips` | 外部 IP 自動學習屬 AI(D10、D17) |
-| `POST /kb/vector-sync`、`GET /kb?semantic=1` | 向量同步與語意搜尋屬 AI(D17) |
+| `GET /ai/context` | 開發用(看送給 AI 的資料),不搬移;其他 AI API 於 A1 搬移,見 §9.1(D17 已由 D23 取代) |
+| `POST /ai/note`、`POST /ai/translate` | 整理筆記(請 AI 記錄)與翻譯:需求方 2026-11-09 依 `docs/AI-FEATURE-INVENTORY.md` 決定不搬(ARCHITECTURE D25);管理者在知識庫頁自己寫筆記 |
 
 舊版的 `.env` 名單(`VIEW_USERS`、`VIEW_DEPTS`、`KB_ADMINS`)與 `JWT_*` 不再使用,權限改由 Gateway RBAC(D15)。
+
+---
+
+## 10. AI — 批次 `feature/a1-ai-api`(IMPL-PLAN A1)
+
+由舊版 `server/routes/ai.js` 搬移,直接呼叫 AI 主機(ARCHITECTURE D23;`LLM_URL`、`LLM_MODEL`、`EMBED_URL`、`QDRANT_URL` 只從設定讀)。送給模型的內容與舊版相同,**只送統計與彙整,不送原始 log 檔**(AGENT.md §7.4;問答的彙整含最多 15 筆範例紀錄、AD 事件訊息前 400 字,同舊版)。沒有設定 `LLM_URL` 時回 409 `NETOPS_AI_DISABLED`。
+
+### 10.1 分析、問答(SSE)
+
+| 方法 | 路徑 | 權限 | 說明 |
+| --- | --- | --- | --- |
+| GET | `/api/netops/ai/status` | `netops.ai.use` | `{ enabled, ok, model, message }`;不回主機位址 |
+| POST | `/api/netops/ai/analyses` | `netops.ai.use` | 期間分析;`{ from, to?, think?, question? }`(`YYYY-MM-DD`,最長 92 天) |
+| POST | `/api/netops/ai/questions` | `netops.ai.use` | 問答;`{ from, to, question, history?, think?, source? }`(ISO 8601,最長 31 天;`source: 'ad'` 只看 AD) |
+
+- **全部回 SSE**(`text/event-stream`):掃描 FTP 與模型回答可能超過路由逾時(AGENT.md §7.3),寫法依 S0(本文件 §3.1、`docs/test-reports/2026-11-05-s0-sse.md` §3.6):`x-timeout-ms: 60000`、立即送 `open`、每 15 秒 `heartbeat`、`X-Accel-Buffering: no`。POST,前端以 `fetch` 讀串流(`EventSource` 只能 GET);一次性回答,不重連。
+- 參數錯誤、沒有資料(404 `NETOPS_PA_NO_DATA`)、AI 未設定在串流開始前回 4xx;開始後的錯誤以 `error` 事件回傳(§8)。
+- 同時進行的 AI 回答(分析與問答共用名額)每人 2 個、全系統 6 個(`AI_MAX_STREAMS`、`AI_MAX_STREAMS_PER_USER`,程式預設值,compose 未列出),超過回 429 `NETOPS_STREAM_BUSY`;單一回答最長 15 分鐘;使用者關頁時中斷掃描與模型呼叫。問答需要從 FTP 掃原始 log 時,全系統同時只掃 1 個(FTP 連線與匯入、明細查詢共用),其餘排隊並送 `scan` 事件 `{ waiting: true }`;掃描並行數為 `FTP_MAX_CONNECTIONS`(舊版另開一條)。
+- `history`:最多 100 則、每則 20,000 字;只送最近 6 則、每則前 4,000 字(同舊版)。問答的問題沒有 IP / Port 時沿用前面的條件(追問);同樣的條件 10 分鐘內不重複掃描(所有人共用,同舊版;資料不完整的結果不快取)。
+- **`netops.ai.use` 的資料範圍是 PA + AD + 知識庫**:問答依問題帶入 PA log 彙整、AD 事件與筆記標題,分析帶入 PA 摘要;所以 `gateway-rbac.yaml` 的三個 AI 按鈕都一併綁定 `netops.pa.read`、`netops.ad.read`、`netops.kb.read`。
+- 稽核:分析、問答、立即同步、外部 IP 學習都設 `x-audit-level: meta`。
+- 翻譯(舊版 `POST /ai/translate`)與整理筆記(舊版 `POST /ai/note`)依 2026-11-09 決定不搬(D25、`docs/AI-FEATURE-INVENTORY.md`)。
+
+| 事件 | 資料 | 出現在 |
+| --- | --- | --- |
+| `open` | `{ requestId, heartbeatSec }` | 全部 |
+| `meta` | 分析:`{ model, from, to, files, missing, rows, contextChars, notes, vectorError }`;問答:`{ model, from, to, files, ips, ports, source }` | 分析、問答 |
+| `scan` | `{ label, filesScanned, files, matched, rows?, mode? }`(`mode: 'flows'` = 查連線組合統計) | 問答(有 IP / Port) |
+| `evidence` | `{ label, matched, allow, block, flows, filesScanned, files, flowFiles, rows, seconds, partial, cached }`;沒有 IP 時 `{ label, summary: true, files, missing }` | 問答 |
+| `events` | `{ hits: [{ type, label, total, kinds }] }` 或 `{ summary: true }` | 問答(PA 其他 log) |
+| `ad` | `{ label, total }`(`total` 0 = 沒有已匯入的 AD 事件) | 問答 |
+| `notes` | `{ used: [{ id, title, related }], omitted, vectorError }` | 問答 |
+| `thinking` | `{ chars }`(思考內容不顯示,只回字數) | 分析、問答(`think: true`) |
+| `content` | `{ text }`(Markdown 片段) | 分析、問答 |
+| `done` | `{ finish, truncated }` | 全部 |
+| `error` | `{ code, message }` | 全部 |
+| `heartbeat` | `{ time }` | 全部 |
+
+**資料不完整要明確標示**(AGENT.md §5):`missing` 是摘要檔讀不到的檔案數;`evidence.partial` 為 true 表示 FTP 掃描逾時;`vectorError` 為 true 表示向量庫失敗、筆記改用關鍵字 / IP 比對。模型收到的資料也會註明(舊版既有的文字,例如「掃描逾時…資料不完整」)。
+
+與舊版不同:問答期間最長 31 天;參數超過長度上限回 400(舊版截斷);模型連不到時以 `error` 事件回傳(舊版串流前回 5xx);`meta` 的 `from` / `to` 改 ISO 8601;`status` 不回主機位址;錯誤訊息不含上游原文;`meta` / `evidence` / `notes` 多 `missing`、`vectorError`;沒有翻譯與整理筆記(D25)。
+
+### 10.2 知識庫的 AI 功能
+
+| 方法 | 路徑 | 權限 | 說明 |
+| --- | --- | --- | --- |
+| GET | `/api/netops/kb/semantic-search?q&limit` | `netops.kb.read` | 語意搜尋:`{ items: [筆記 + score], vector }`;相近度 0.6 以上、依相近度排序;`x-timeout-ms: 60000` |
+| GET | `/api/netops/kb/vector-status` | `netops.kb.read` | `{ enabled, sync, collection, ok, points, lastSync, error, syncing, upserted, deleted }` |
+| POST | `/api/netops/kb/vector-syncs` | `netops.kb.write` | 立即同步(202,背景);`VECTOR_SYNC=0` 回 409 `NETOPS_VECTOR_SYNC_DISABLED` |
+| GET | `/api/netops/kb/ip-learning` | `netops.kb.read` | 外部 IP 自動學習狀態(含 `hour`:每天自動執行的時間,-1 = 不自動) |
+| POST | `/api/netops/kb/ip-learnings` | `netops.kb.write` | `{ days?: 1–60, max?: 1–500, rewrite? }`;202,背景執行,畫面輪詢 `ip-learning` |
+
+- 向量庫沿用舊版 Qdrant `10.10.130.46:6333` 的 `NetOpsKb`(embedding 同為 Qwen3-Embedding-8B 4096 維,2026-11-05 查證)。**`VECTOR_SYNC` 預設 0**:舊版 IIS 仍在同步同一個 collection,兩邊都同步會互刪對方的筆記;關閉時只做語意搜尋,搜尋結果只回新版知識庫存在的筆記。D18 切換、舊版停止寫入後再開。開啟時:筆記異動 3 秒後、啟動 5 秒後、每 30 分鐘同步(同舊版);一次要刪除超過現有 20%(至少 5 筆)或知識庫是空的時整次不同步。
+- 外部 IP 自動學習(D10):`IPLEARN_HOUR` 預設 -1(不自動,舊版 3 點);管理者改過的自動學習筆記不覆寫;自動學習筆記上限 1,000 則。
+- 時間欄位(`lastSync`、`startedAt`、`finishedAt`)輸出 `+08:00`。

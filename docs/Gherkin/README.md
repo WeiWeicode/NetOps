@@ -2,8 +2,8 @@
 
 > 以 Gherkin(繁體中文關鍵字,`# language: zh-TW`)描述 NetOps 新版(接入 Gateway 後)的**目標行為**。寫法沿用員工入口網 `giga-Portal/docs/Gherkin/`。
 > 依據:`backend/src` 各路由的 `x-gherkin`、[API.md](../API.md)、[ARCHITECTURE.md](../ARCHITECTURE.md)(D6、D8、D14–D18、§5)、[UI-GUIDE.md](../UI-GUIDE.md)。舊版 `server/`、`src/` 只作比對,行為不同處標 `@changed`。
-> AI 功能(問答、分析、翻譯、整理筆記、語意搜尋、向量同步、外部 IP 自動學習)不搬移(D17),不寫。
-> **最後更新:2026-11-05**(`feature/s0-sse`:S0 串流驗證場景 `pa-live/stream-test.feature`;`fix/d1-uat-findings`:D1 驗收修正的場景;2026-11-03 依 `develop` e3475f8:B0–B2 全部合併;前端依 `origin/feature/netops-f1-*`)。
+> AI 功能(問答、分析、語意搜尋、向量同步、外部 IP 自動學習)於 A1 搬移(D23,取代 D17),場景在 `ai/ai.feature`、`kb/ai.feature`;翻譯與整理筆記依 2026-11-09 決定不搬(D25)。
+> **最後更新:2026-11-05**(`feature/a1-ai-api`:A1 AI 場景 `ai/ai.feature`、`kb/ai.feature`;`feature/s0-sse`:S0 串流驗證場景 `pa-live/stream-test.feature`;`fix/d1-uat-findings`:D1 驗收修正的場景;2026-11-03 依 `develop` e3475f8:B0–B2 全部合併;前端依 `origin/feature/netops-f1-*`)。
 
 ## 1. 檔案一覽
 
@@ -19,6 +19,8 @@
 | `ad/events.feature` | AD 已匯入日期、總覽、明細查詢、匯出 | API.md §6 | B2 |
 | `kb/notes.feature` | 知識庫筆記查詢、下載、匯整檔、新增、修改、刪除 | API.md §7;D17 | B2 |
 | `pa-live/stream-test.feature` | S0 SSE 串流驗證:open / heartbeat、重連、連線上限、經 Gateway 長連線 | API.md §3.1;IMPL-PLAN S0 | S0 |
+| `ai/ai.feature` | AI 分析與問答(SSE)、AI 未設定、模型連不到、翻譯與整理筆記不搬 | API.md §10.1;D23 | A1 |
+| `kb/ai.feature` | 語意搜尋、向量庫狀態與同步、外部 IP 自動學習 | API.md §10.2;D10、D23 | A1 |
 | `pa-live/realtime.feature` | R1 PA 即時監控:收集器狀態(停止更新不顯示舊快照)、趨勢、排行、最新 log、SSE 串流;收集器開關、唯讀、接收驗證、保留時間 | API.md §3.2;PA-LIVE-PLAN;IMPL-PLAN R1 | R1 |
 | `ui/navigation.feature` | 應用層守衛(`/?denied=netops`)、選單依權限、403、一般連結 | UI-GUIDE §5;FRONTEND-GUIDE §7.4 | F1 |
 | `ui/requests.feature` | CSRF、不存 Token、下載、工作輪詢與取消、資料不完整提示、DOMPurify | FRONTEND-GUIDE §6;API.md §1 | F1 |
@@ -28,7 +30,7 @@
 
 | 標籤 | 意義 | 如何驗證 |
 | --- | --- | --- |
-| `@B0` `@B1` `@B2` `@F1` `@S0` | 所屬工作項目(IMPL-PLAN) | — |
+| `@B0` `@B1` `@B2` `@F1` `@S0` `@A1` | 所屬工作項目(IMPL-PLAN) | — |
 | `@auto` | 已有自動化測試涵蓋(測試名稱不一定與場景相同,§4 列對照) | `backend/`:`npm test`;`frontend/`:`npm test` |
 | `@manual` | 以瀏覽器或主控台操作驗證 | 修正紀錄或 MR 寫明步驟 |
 | `@e2e` | 要經 Gateway(BFF 檢查登入與 `x-permission`)才能驗證 | 測試區瀏覽器 |
@@ -70,7 +72,7 @@
 
 ## 5. API → 場景 → 檔案對照
 
-**`x-gherkin` 55 個場景全部對應到同名場景**(36 個 operation;`check-scenarios.mjs` 於 2026-11-05 比對,0 個問題)。重新比對:
+**`x-gherkin` 84 個場景全部對應到同名場景**(49 個 operation,含 R1 即時監控與 A1;A1 加 15 個場景、8 個 operation,對照見 `ai/ai.feature`、`kb/ai.feature` 的 Rule;翻譯與整理筆記依 2026-11-09 決定不搬;`check-scenarios.mjs` 於 2026-11-09 比對,0 個問題)。重新比對:
 
 ```bash
 cd backend && npm run -s openapi > ../openapi.tmp.json && node ../docs/Gherkin/check-scenarios.mjs ../openapi.tmp.json --table

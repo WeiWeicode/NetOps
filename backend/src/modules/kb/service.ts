@@ -41,6 +41,8 @@ const checkId = (id: string) => {
 
 export function createKbService(store: KbStore, log?: { warn(obj: object, msg: string): void }) {
   let cache: { sig: string; notes: Note[] } | null = null;
+  /** 新增 / 修改 / 刪除後通知(A1 向量同步;舊版 kbEvents 'change') */
+  const listeners: (() => void)[] = [];
   let all: { sig: string; text: string; order: string[]; updated: string; count: number } | null = null;
 
   /** 全部筆記(新的在前);檔案有變動才重新讀 */
@@ -108,6 +110,7 @@ export function createKbService(store: KbStore, log?: { warn(obj: object, msg: s
   function refresh() {
     cache = null;
     all = null;
+    for (const fn of listeners) fn();
     try {
       compilation();
     } catch (err) {
@@ -126,5 +129,7 @@ export function createKbService(store: KbStore, log?: { warn(obj: object, msg: s
     return { title: (parse(id, text) as Note).title, text };
   }
 
-  return { listNotes: () => listNotes().notes, getNote, saveNote, deleteNote, compilation, search, markdown };
+  const onChange = (fn: () => void) => void listeners.push(fn);
+
+  return { listNotes: () => listNotes().notes, getNote, saveNote, deleteNote, compilation, search, markdown, onChange };
 }

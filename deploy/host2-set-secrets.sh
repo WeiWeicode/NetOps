@@ -4,7 +4,8 @@
 # 產生(已存在的不覆寫;要重建先刪除該檔):
 #   /srv/giganexus/netops-secrets/   gw_api_key(Gateway CLI client:create --code netops-api;自動註冊 OpenAPI 草稿用)、
 #                                    monitor_api_key(giga-observe ingest Key,服務 netops-api;B0 留下的空檔會改寫為 Key;D1)、
-#                                    ftp_password(FTP 唯讀帳號密碼,執行時隱藏輸入;B1)
+#                                    ftp_password(FTP 唯讀帳號密碼,執行時隱藏輸入;B1)、
+#                                    qdrant_api_key(AI 主機 Qdrant 的 API Key,與舊版 IIS server/.env 的 QDRANT_API_KEY 相同,執行時隱藏輸入;A1)
 #   /srv/giga-netops/test            資料目錄(uid 1000 可寫;B1)
 #   /srv/giganexus/deploy/netops.env Compose 變數(範本 test.env.example;FTP_USER 執行時輸入)
 # 注意:client:create 再次執行即換發,舊金鑰立即失效;gw_api_key 已存在時本腳本不會重建
@@ -60,6 +61,16 @@ if [ ! -s "$D/ftp_password" ]; then
   stty -echo; trap 'stty echo; rm -rf "$TMP"' EXIT; IFS= read -r FTP_PWD; stty echo; echo
   [ -n "$FTP_PWD" ] || { echo "未輸入 FTP 密碼" >&2; exit 1; }
   printf '%s' "$FTP_PWD" > "$D/ftp_password"; unset FTP_PWD
+fi
+
+# ---------- Qdrant API Key(A1;舊版 IIS server/.env 的 QDRANT_API_KEY,隱藏輸入) ----------
+if [ ! -s "$D/qdrant_api_key" ]; then
+  [ -t 0 ] || { echo "請在終端機執行(要隱藏輸入 Qdrant API Key)" >&2; exit 1; }
+  printf 'Qdrant API Key(10.10.130.46:6333,與舊版 QDRANT_API_KEY 相同;輸入時不顯示):'
+  # trap 先設再關回顯(中斷時一定恢復)
+  trap 'stty echo; rm -rf "$TMP"' EXIT; stty -echo; IFS= read -r QDRANT_KEY; stty echo; echo
+  [ -n "$QDRANT_KEY" ] || { echo "未輸入 Qdrant API Key" >&2; exit 1; }
+  printf '%s' "$QDRANT_KEY" > "$D/qdrant_api_key"; unset QDRANT_KEY
 fi
 
 # 只限縮檔案(目錄需讓 CI 的 docker compose 讀得到 secret 路徑)

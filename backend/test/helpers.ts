@@ -31,7 +31,15 @@ export async function createTestApp({
   streamTest,
   paLiveRedis,
   liveStream,
-}: { ftp?: Ftp; env?: Record<string, string>; streamTest?: StreamTestOptions; paLiveRedis?: PaLiveRedis; liveStream?: LiveStreamOptions } = {}): Promise<TestApp> {
+  ai,
+}: {
+  ftp?: Ftp;
+  env?: Record<string, string>;
+  streamTest?: StreamTestOptions;
+  paLiveRedis?: PaLiveRedis;
+  liveStream?: LiveStreamOptions;
+  ai?: { fetch?: typeof fetch; heartbeatMs?: number };
+} = {}): Promise<TestApp> {
   const { publicKey, privateKey } = await generateKeyPair('ES256');
   const jwk = { ...(await exportJWK(publicKey)), kid: 'test', alg: 'ES256', use: 'sig' };
   const jwks = http.createServer((_req, res) => res.setHeader('content-type', 'application/json').end(JSON.stringify({ keys: [jwk] })));
@@ -39,7 +47,7 @@ export async function createTestApp({
   const jwksUrl = `http://127.0.0.1:${(jwks.address() as AddressInfo).port}/.well-known/jwks.json`;
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'netops-test-'));
   const config = loadConfig({ GW_ENV: 'dev', SERVICE_CODE: 'netops-api', GW_JWKS_URL: jwksUrl, LOG_LEVEL: 'silent', NETOPS_DATA_DIR: dataDir, FTP_HOST: 'fake-ftp', ...env });
-  const app = await buildApp(config, { ftp, streamTest, paLiveRedis, liveStream });
+  const app = await buildApp(config, { ftp, streamTest, paLiveRedis, liveStream, ai });
   const tokens = new Map<string, string>();
   const token = async (emp: string) => {
     if (!tokens.has(emp))

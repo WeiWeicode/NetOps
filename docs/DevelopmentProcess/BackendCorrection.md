@@ -2,11 +2,39 @@
 
 > `backend/`、`deploy/` 的修改;新紀錄加在最上方,格式見 `AGENT.md` §11。
 
+## 2026-11-09 A1-api:名額測試在 CI 不穩
+- 工作項目:A1(`feature/a1-ai-api`)
+- 內容:!35 的 pipeline 723(38c1937)`check:backend` 失敗,同一份後端程式在 !36 的 pipeline 724 通過(兩條 pipeline 同時在主機 2 跑)。三支名額測試(每人上限、全系統上限、分析的每人 2 個)固定等 100 毫秒就送第三個請求,假設前兩個已經佔住名額;主機忙時 Token 驗證較慢,前兩個還沒佔到名額,第三個就回 200 而不是 429。改成等前兩個請求真的到了假模型(名額已佔用)才送第三個:生命週期測試的假模型改成閘門(確認 429 後才放行),分析的測試改看假 AI 主機收到的請求數、模型延遲拉長到 2 秒。程式不變。
+- 檔案:`backend/test/unit/ai.test.ts`
+- 驗證:`npm test`(163 項通過;`ai.test.ts` 連跑 3 次、兩份完整測試同時跑都通過)
+
+## 2026-11-09 A1-api:移除翻譯與整理筆記 API(決定不搬)
+- 工作項目:A1(`feature/a1-ai-api`;需求方 2026-11-09 依 `docs/AI-FEATURE-INVENTORY.md` 決定翻譯(#5)與整理筆記(#6)不搬,ARCHITECTURE D25)
+- 內容:拿掉 `POST /v1/ai/notes`(整理筆記,原本直接寫知識庫)與 `POST /v1/ai/translations`(翻譯)兩支路由與服務(`note`、`translate`、`checkTranslate`、記錄人檢查、分段上限常數);先合併 `fix/a1-core-trim`(核心拿掉 `translate.js`、`NOTE_PROMPT`、`parseJsonReply`)。權限不變:`netops.ai.use` 仍給分析與問答;`netops.kb.write` 仍給知識庫編輯、立即同步與外部 IP 學習;`gateway-rbac.yaml` 沒有只為這兩支 API 存在的節點,不需修改。測試:名額、全系統上限、用戶端斷線改用 AD 問答測(不需要 PA 資料),斷線測試改成確認同一人可以再問並完成(原本只驗 400,沒有真的證明名額歸還);新增「沒有這兩支 API(404)」。
+- 合併衝突:`feature/a1-ai-api` 合併 `fix/a1-core-trim` 時,本檔(修正紀錄)檔頭兩邊都新增紀錄而衝突;依工作區 AGENT §9.4 三筆都保留、依日期排序,由主討論串核准(2026-11-09)。程式檔沒有衝突。
+- 檔案:`backend/src/modules/ai/{service,routes,sse}.ts`、`backend/src/{app,openapi}.ts`、`backend/test/{unit/ai.test.ts,fixtures/fake-ai.ts}`、`docs/API.md` §2、§9、§10、`docs/Gherkin/{ai/ai.feature,README.md}`
+- 驗證:`npm run typecheck`、`npm test`(163 項通過;移除前 165 項:拿掉整理筆記、翻譯、翻譯驗證 3 項與核心的翻譯比對 1 項,新增「沒有這兩支 API」與核心的 `chatOnce` 比對各 1 項)、`npm run build`、`check-scenarios.mjs`(x-gherkin 70 個場景全部對應,0 個問題)
+
 ## 2026-11-09 A1-core:移除翻譯與整理筆記的核心(決定不搬)
 - 工作項目:A1(`fix/a1-core-trim`;需求方 2026-11-09 依 `docs/AI-FEATURE-INVENTORY.md` 決定翻譯(#5)與整理筆記(#6)不搬,ARCHITECTURE D25)
 - 內容:刪除 `modules/ai/core/translate.js`(語言清單、分段、翻譯提示);`ai/core/context.js` 拿掉整理筆記用的 `NOTE_PROMPT` 與 `parseJsonReply`;測試基準拿掉翻譯分段與 `NOTE_PROMPT` / `parseJsonReply` 的比對(其餘提示仍與舊版逐字比對),改加一項 `chatOnce` 請求內容與舊版相同(外部 IP 自動學習仍使用;審查建議)。`infra/llm` 的 `chatOnce` 保留(外部 IP 自動學習使用),只改註解。設定與 `.env.example` 的說明改為「AI 未設定回 409」(與 API 一致)。
 - 檔案:`backend/src/modules/ai/core/{context.js,translate.js(刪除)}`、`backend/src/infra/llm/index.ts`、`backend/src/config.ts`、`backend/.env.example`、`backend/test/unit/ai-core.test.ts`
 - 驗證:`npm run typecheck`、`npm test`(148 項通過;與移除前同為 148 項:拿掉翻譯分段的比對、新增 `chatOnce` 的比對)、`npm run build`;`code-reviewer`、`security-auditor` 審查(無必修)
+
+## 2026-11-05 A1-api 審查修正
+- 工作項目:A1(第 2 批;`code-reviewer`、`security-auditor` 審查後)
+- 內容:① SSE:用戶端在處理請求前就斷線時不開始(否則掃描與模型照跑、名額佔到最長時間);串流結束時一併中斷還在進行的工作(翻譯其中一段失敗,其餘段落不再等);用戶端讀不動被中斷時寫 warn 日誌。② 翻譯最多 12 段、同時 3 段(舊版全部同時送,AI 主機與其他系統共用),空白內容與分段超過上限在串流開始前回 400。③ 問答的 FTP 掃描全系統同時只跑 1 個(排隊時送 `scan` `{ waiting: true }`;唯讀使用者不能藉 AI 問答佔滿 FTP 連線);掃描逾時或連線組合超過 20 萬列(`queryFlows` 的 `truncated`)時標資料不完整且不快取。④ `gateway-rbac.yaml`:三個 AI 按鈕一併綁定 `netops.pa.read`、`netops.ad.read`、`netops.kb.read`(`netops.ai.use` 實際可取得 PA、AD 與知識庫的彙整,授權畫面要看得到)。⑤ 稽核:整理筆記、翻譯、立即同步、外部 IP 學習加 `x-audit-level: meta`。⑥ `/ai/status` 與外部 IP 學習紀錄不帶上游原文(模型回應不是 JSON 時改分類錯誤;寫入知識庫與 RDAP 連線錯誤只留固定文字,原文寫日誌)。⑦ 排程:筆記異動的同步計時器在關閉時清除,`setInterval` 用 `clearInterval`。⑧ `history` 上限放寬到 100 則(只送最近 6 則)。⑨ `host2-set-secrets.sh` 的 Qdrant Key 輸入先設 trap 再關回顯。
+- 另記與舊版不同(審查指出原本漏記):`analyze` 的 `question`、`ask` 與 `note` 的文字超過上限回 400(舊版截斷);模型連不到時舊版在串流前回 5xx,新版以 `error` 事件回傳;掃描並行數改為 `FTP_MAX_CONNECTIONS`(舊版 `parallel + 1`,另開連線);整理筆記的 `source` 截 1,000 字;`ask` 的 `meta` 時間改 ISO 8601。
+- 未改(交需求方決定):`netops.ai.use` 是否拆成 PA / AD 各自的權限;整理筆記是否改成「先回草稿、管理者確認後才存」(AI 回答可能夾帶外部可控的文字,例如 URL、RDAP、PTR,記錄後會影響之後所有人的分析);AI 主機以 http 傳 API Key(內網,同舊版)。
+- 檔案:`backend/src/modules/ai/{sse,service,routes,index}.ts`、`backend/src/modules/kb/ai-routes.ts`、`backend/src/infra/llm/index.ts`、`backend/test/unit/ai.test.ts`、`deploy/{gateway-rbac.yaml,host2-set-secrets.sh}`、`docs/API.md` §8、§10
+- 驗證:`npm run typecheck`、`npm test`(165 項通過,新增 4 項:名額共用與歸還、全系統上限、用戶端中途斷線中斷模型並歸還名額、翻譯驗證)、`npm run build`、`check-scenarios.mjs`
+
+## 2026-11-05 A1-api:AI API(SSE)、知識庫 AI 功能、權限與部署設定
+- 工作項目:A1(第 2 批 `feature/a1-ai-api`,從第 1 批開出)
+- 內容:`modules/ai/service.ts` 搬舊版 `routes/ai.js` 的分析、問答、整理筆記、翻譯流程(送給模型的內容不變);`modules/ai/sse.ts` 是 AI 共用的 SSE(依 S0 §3.6:`x-timeout-ms: 60000`、立即送 `open`、心跳 15 秒、`X-Accel-Buffering: no`、名額滿 429、`preClose` 結束;每人 2 個、全系統 6 個,單一回答最長 15 分鐘,使用者關頁時中斷掃描與模型);`modules/ai/routes.ts`:`GET /v1/ai/status`、`POST /v1/ai/{analyses,questions,translations,notes}`;`modules/kb/ai-routes.ts`:`GET /v1/kb/{semantic-search,vector-status,ip-learning}`、`POST /v1/kb/{vector-syncs,ip-learnings}`;`modules/ai/index.ts` 組裝(模型、向量庫、RDAP 用戶端,向量同步與外部 IP 學習的排程);知識庫服務新增 `onChange`(向量同步用)。權限 `netops.ai.use`(OpenAPI `x-permissions`;不是 `.read`,`gateway-rbac.yaml` 以按鈕 `netops.pa-ask.use`、`netops.ad-ask.use`、`netops.pa-dashboard.ai` 綁定,另加選單 `netops.pa-ask.read`、`netops.ad-ask.read`;admin 與 viewer 都有);整理筆記用 `netops.kb.write`。部署:compose 加 AI 設定(預設 `.46`、`VECTOR_SYNC=0`、`IPLEARN_HOUR=-1`)與機密 `qdrant_api_key`(`host2-set-secrets.sh` 隱藏輸入;CI 檢查)。
+- 與舊版不同:翻譯、整理筆記改 SSE(舊版同步回應最長 180 秒,超過路由上限);問答期間最長 31 天;AI 未設定回 409(不回 5xx);串流開始前的錯誤回 4xx、開始後以 `error` 事件回分類訊息(不含主機位址與上游原文);`status` 不回主機位址;`meta` / `evidence` / `notes` 多 `missing`、`vectorError`(AGENT.md §5);整理筆記與外部 IP 學習寫入的標題、標籤壓成一行;外部 IP 學習狀態補回 `hour`;`GET /ai/context`(開發用)不搬。
+- 檔案:`backend/src/modules/ai/{index,routes,service,sse}.ts`、`backend/src/modules/kb/{ai-routes,service}.ts`、`backend/src/{app,openapi}.ts`、`backend/test/{helpers.ts,fixtures/fake-ai.ts,unit/ai.test.ts,unit/app.test.ts}`、`deploy/{docker-compose.yml,gateway-rbac.yaml,host2-set-secrets.sh,test.env.example}`、`.gitlab-ci.yml`、`docs/API.md` §2、§7、§8、§9、§10、`docs/ARCHITECTURE.md` §5、`docs/Gherkin/{ai/ai.feature,kb/ai.feature,README.md,check-scenarios.mjs}`
+- 驗證:`npm run typecheck`、`npm test`(161 項通過,新增 13 項:SSE 標頭與事件順序、只送摘要不送原始 log、問答查連線組合 / 掃 FTP / 追問沿用條件、驗證錯誤 4xx、名額 429、整理筆記寫入知識庫、翻譯、語意搜尋、向量同步關閉、模型連不到、外部 IP 學習 API)、`npm run build`、`check-scenarios.mjs`(74 個 x-gherkin 場景全部對應,0 個問題)
 
 ## 2026-11-05 A1-core 審查修正(與舊版不同)
 - 工作項目:A1(第 1 批;`security-auditor`、`code-reviewer` 審查後,與搬移分開提交)

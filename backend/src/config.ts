@@ -83,6 +83,8 @@ export interface Config {
   /** 明細查詢:一次最多幾筆、最多掃描幾秒(工作模式,ARCHITECTURE D6) */
   search: { limit: number; seconds: number };
   ai: AiConfig;
+  /** PA 即時監控的 netops-redis(R1,只讀);dev 未設定時為 null(即時監控回 424 / unavailable),test / prod 必填 */
+  redisUrl: string | null;
 }
 
 /** 空字串視同未設定(Compose 的 ${X:-} 會傳空字串) */
@@ -211,6 +213,17 @@ function loadAi(env: NodeJS.ProcessEnv, gwEnv: GwEnv): AiConfig {
   };
 }
 
+/** netops-redis 位址(R1):test / prod 必填;只接受 redis:// 或 rediss:// */
+function loadRedisUrl(env: NodeJS.ProcessEnv, gwEnv: GwEnv): string | null {
+  const url = str(env, 'REDIS_URL');
+  if (!url) {
+    if (gwEnv !== 'dev') throw new GatewayEnvError(`${gwEnv} 缺少必要設定:REDIS_URL`);
+    return null;
+  }
+  if (!/^rediss?:\/\//.test(url)) throw new GatewayEnvError('REDIS_URL 必須以 redis:// 或 rediss:// 開頭');
+  return url;
+}
+
 /** 資料目錄:test / prod 必填且為絕對路徑;dev 未設定時用本機暫存目錄(AGENT.md §6) */
 function loadDataDir(env: NodeJS.ProcessEnv, gwEnv: GwEnv): string {
   const dir = str(env, 'NETOPS_DATA_DIR');
@@ -238,5 +251,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, cwd?: string): 
     // 掃描秒數上限 600:工作模式不受路由逾時限制,但仍要有上限(AGENT.md §7.3)
     search: { limit: int(env, 'PA_SEARCH_LIMIT', 2000, 1, 10000), seconds: int(env, 'PA_SEARCH_SECONDS', 180, 10, 600) },
     ai: loadAi(env, gateway.gwEnv),
+    redisUrl: loadRedisUrl(env, gateway.gwEnv),
   };
 }

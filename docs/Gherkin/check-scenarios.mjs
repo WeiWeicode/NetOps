@@ -22,7 +22,8 @@ const FILES = [
   ['/v1/ftp/ad/', 'ftp/ad-files.feature'],
   ['/v1/ad/', 'ad/events.feature'],
   ['/v1/kb/', 'kb/notes.feature'],
-  ['/v1/pa-live/', 'pa-live/stream-test.feature'],
+  ['/v1/pa-live/stream-test', 'pa-live/stream-test.feature'],
+  ['/v1/pa-live/', 'pa-live/realtime.feature'],
   ['/v1/ping', 'api/skeleton.feature'],
 ];
 const fileOf = (p) => FILES.find(([prefix]) => p.startsWith(prefix))?.[1];

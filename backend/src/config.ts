@@ -61,7 +61,7 @@ export interface Config {
   ftp: FtpConfig | null;
   /** 明細查詢:一次最多幾筆、最多掃描幾秒(工作模式,ARCHITECTURE D6) */
   search: { limit: number; seconds: number };
-  /** PA 即時監控的 netops-redis(R1,只讀);dev 未設定時為 null(即時監控回 503 / unavailable),test / prod 必填 */
+  /** PA 即時監控的 netops-redis(R1,只讀);dev 未設定時為 null(即時監控回 424 / unavailable),test / prod 必填 */
   redisUrl: string | null;
 }
 

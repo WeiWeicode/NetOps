@@ -39,6 +39,8 @@ services:
       MONITOR_API_KEY_FILE: /run/secrets/monitor_api_key
       RELEASE_SHA: ${RELEASE_SHA:-dev}
       NETOPS_DATA_DIR: /data
+      # PA 即時監控(R1):只讀 netops-redis(netops-pa 寫入);Redis 停止時只有即時監控回 503,其他功能不受影響
+      REDIS_URL: redis://netops-redis:6379/0
       FTP_HOST: ${FTP_HOST:?FTP_HOST 必須設定}
       FTP_USER: ${FTP_USER:?FTP_USER 必須設定}
       FTP_PASSWORD_FILE: /run/secrets/ftp_password
@@ -63,6 +65,97 @@ services:
     networks:
       gateway:
         aliases: [netops-api]
+      netops-internal:
+
+  # PA 即時監控的 Redis(R1,PA-LIVE-PLAN §3.2):NetOps 專用,不共用 Gateway 的 Redis。
+  #   只在內部網路 netops-internal(internal: true,不對主機開 port、不能連外);只有 netops-api、netops-pa 連得到,所以不設密碼
+  #   maxmemory 2 GB + noeviction:滿了寫入失敗(netops-pa 心跳記錄錯誤),不默默丟資料;RDB 開、AOF 不開(2026-11-04 決定)
+  #   保留時間由 netops-pa 修剪(TRAFFIC 明細 1 小時、統計 1 天;其他 2 天);資料遺失時歷史仍可從 FTP 查
+  netops-redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --maxmemory
+      - ${NETOPS_REDIS_MAXMEMORY:-2gb}
+      - --maxmemory-policy
+      - noeviction
+      - --appendonly
+      - "no"
+      - --save
+      - "3600 1 300 100 60 10000"
+      # 只在內部網路;保護模式會擋掉容器間的無密碼連線
+      - --protected-mode
+      - "no"
+    volumes:
+      - netops_redis_data:/data
+    read_only: true
+    # 官方映像 entrypoint 以 su-exec 切到 redis 使用者,需要這三個 capability
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID]
+    security_opt: ["no-new-privileges:true"]
+    # 關閉前存 RDB(資料接近 2 GB 時需要較長時間)
+    stop_grace_period: 60s
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging: &pa-logging
+      options: { max-size: 10m, max-file: "3" }
+    networks: [netops-internal]
+
+  # PA-560 收集器(R1,Python,PA-LIVE-PLAN §3.1;pa-collector/):SDK 唯讀輪詢 + HTTP / Syslog 接收,只寫 netops-redis。
+  #   不是 Gateway 上游(D24),不註冊路由、不接 setupGateway;狀態寫心跳 netops:pa:heartbeat,由 netops-api 呈現
+  #   兩個開關(netops.env;測試區預設 0,測試時才開,2026-11-05 需求方決定):
+  #     PA_POLL_ENABLED     只控制 SDK 輪詢 PA-560(需 PA_HOST、機密 pa_api_key)
+  #     PA_RECEIVE_ENABLED  控制 HTTP 51293 / Syslog 51294 接收(需機密 pa_http_token、PA_ALLOWED_SOURCES)
+  #   port 只綁 WSL 的 127.0.0.1:Windows 以 portproxy 帶進來,Windows 防火牆只放行 PA-560(docs/PA-FORWARDING-SPEC.md 附錄 F)
+  #   機密(NETOPS_SECRETS_DIR,uid 1000 可讀;deploy/host2-set-pa-secrets.sh):pa_api_key(空檔 = 尚未取得)、pa_http_token
+  netops-pa:
+    image: ${NETOPS_IMAGE_PREFIX:-giganexus}/netops-pa:${IMAGE_TAG:-dev}
+    build:
+      context: ../pa-collector
+      target: runtime
+    restart: unless-stopped
+    init: true
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    logging: *pa-logging
+    depends_on:
+      netops-redis:
+        condition: service_healthy
+    environment:
+      GW_ENV: ${GW_ENV}
+      REDIS_URL: redis://netops-redis:6379/0
+      PA_POLL_ENABLED: ${PA_POLL_ENABLED:-0}
+      PA_HOST: ${PA_HOST:-}
+      PA_PORT: ${PA_PORT:-}
+      PA_API_KEY_FILE: /run/secrets/pa_api_key
+      PA_POLL_SECONDS: ${PA_POLL_SECONDS:-}
+      # 測試區 PA-560 是自簽憑證、尚未取得憑證時才設 1(正式區設了會啟動失敗)
+      PA_TLS_INSECURE: ${PA_TLS_INSECURE:-}
+      PA_RECEIVE_ENABLED: ${PA_RECEIVE_ENABLED:-0}
+      PA_HTTP_TOKEN_FILE: /run/secrets/pa_http_token
+      PA_ALLOWED_SOURCES: ${PA_ALLOWED_SOURCES:-}
+      # 憑證(選用;檔案放在主機 NETOPS_PA_TLS_HOST_DIR,唯讀掛到 /run/pa-tls,檔名固定見 docs/PA-FORWARDING-SPEC.md 附錄 F.6):
+      #   PA_CA_FILE            驗證 PA-560 管理介面憑證(公開資訊)
+      #   PA_TLS_CERT/KEY_FILE  接收端點改 HTTPS / Syslog SSL;PA_TLS_CLIENT_CA_FILE 要求 PA-560 用戶端憑證(Syslog 唯一的身分驗證)
+      #   PA_RECEIVE_PLAINTEXT  正式區沒有憑證時要明確設 1 才允許明文接收(需求方決定)
+      PA_CA_FILE: ${PA_CA_FILE:-}
+      PA_TLS_CERT_FILE: ${PA_TLS_CERT_FILE:-}
+      PA_TLS_KEY_FILE: ${PA_TLS_KEY_FILE:-}
+      PA_TLS_CLIENT_CA_FILE: ${PA_TLS_CLIENT_CA_FILE:-}
+      PA_RECEIVE_PLAINTEXT: ${PA_RECEIVE_PLAINTEXT:-}
+    volumes:
+      - ${NETOPS_PA_TLS_HOST_DIR:-/srv/giganexus/netops-pa-tls}:/run/pa-tls:ro
+    secrets: [pa_api_key, pa_http_token]
+    ports:
+      - "127.0.0.1:51293:51293"
+      - "127.0.0.1:51294:51294"
+    networks: [pa-ingress, netops-internal]
 
   # 知識庫每日備份到 NAS(唯讀掛載資料目錄;不連網路)。NAS 晚於容器掛載時需重建容器(--force-recreate,CI 部署每次都會)
   netops-kb-backup:
@@ -117,11 +210,17 @@ secrets:
     file: ${NETOPS_SECRETS_DIR}/monitor_api_key
   ftp_password:
     file: ${NETOPS_SECRETS_DIR}/ftp_password
+  pa_api_key:
+    file: ${NETOPS_SECRETS_DIR}/pa_api_key
+  pa_http_token:
+    file: ${NETOPS_SECRETS_DIR}/pa_http_token
   # 建置用:GitLab npm Registry 讀取 Token(環境變數 GITLAB_NPM_TOKEN;CI 由主機機密檔讀入)
   npm_token:
     environment: GITLAB_NPM_TOKEN
 
 volumes:
+  # netops-redis 的 RDB 快照(重啟後保留最近資料)
+  netops_redis_data:
   # Gateway Nginx 唯讀掛載的 SPA volume(Gateway DEPLOYMENT.md §3.4)
   gw_www:
     external: true
@@ -131,3 +230,8 @@ networks:
   gateway:
     external: true
     name: ${GW_NETWORK:-giganexus-gw_default}
+  # PA 即時監控(R1):netops-redis 只在這個內部網路(不能連外、不對主機開 port)
+  netops-internal:
+    internal: true
+  # netops-pa 連 PA-560 與接收轉送用(published port 需要非 internal 網路)
+  pa-ingress:

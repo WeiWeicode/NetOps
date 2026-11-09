@@ -141,6 +141,8 @@ export const ICONS: Record<string, Component> = {
   package: L.Package,
   'pie-chart': L.ChartPie,
   play: L.Play,
+  pause: L.Pause,
+  radio: L.Radio,
   'plus-circle': L.CirclePlus,
   printer: L.Printer,
   'refresh-cw': L.RefreshCw,

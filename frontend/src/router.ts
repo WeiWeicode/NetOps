@@ -58,6 +58,20 @@ interface PageDef {
 /** 功能頁(ARCHITECTURE §5 權限草案;選單順序同舊版 src/router/menu.js) */
 const PAGES: PageDef[] = [
   {
+    // R1:防火牆群組最上方(PA-LIVE-PLAN §8)
+    path: 'firewall/live',
+    meta: {
+      permission: NETOPS.paLive,
+      requires: [API.paRealtime],
+      title: '即時監控',
+      subtitle: 'PA-560 Live',
+      icon: 'radio',
+      group: 'firewall',
+      description: '設備狀態、即時排行與最新 log(TRAFFIC 明細 1 小時、其他 2 天;更早的看 Log 明細查詢);資料停止更新時會明確標示',
+    },
+    view: page(() => import('./pages/firewall/Live.vue')),
+  },
+  {
     path: 'firewall/dashboard',
     meta: {
       permission: NETOPS.paDashboard,

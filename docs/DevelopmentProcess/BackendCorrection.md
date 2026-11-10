@@ -2,6 +2,12 @@
 
 > `backend/`、`deploy/` 的修改;新紀錄加在最上方,格式見 `AGENT.md` §11。
 
+## 2026-11-10 C1:測試區新增 netops-clickhouse 與 POC 實測工具
+- 工作項目:C1(需求方 2026-11-10 同意 E6)
+- 內容:Compose 新增 `netops-clickhouse`(`clickhouse/clickhouse-server:26.3.62.3`;`mem_limit` / `memswap_limit` 1536m、`cpus` 2、uid 101、`cap_drop: ALL`、唯讀根目錄、只在 `netops-internal`、不開 port、healthcheck `/ping`;帳號檔以 `create_host_path: false` 掛載,不存在就啟動失敗)。`deploy/clickhouse/`:`config.d/low-memory.xml`(伺服器記憶體 = 容器 × 0.75、快取調小、背景池 4 與對應的 `merge_tree` 門檻、只留 `query_log` / `part_log` 3 天、log 只輸出 stdout)、`users.d/default.xml`(default 只限 127.0.0.1 / ::1)、`users.d/profiles.xml`(default / writer / reader / cold 設定檔,reader、cold 以 constraints 固定上限)、`schema.sql`(手冊 §7 DDL,`dst` 加 bloom_filter)、`apply-schema.sh`(依部署區代入 TTL,已存在的表 `MODIFY TTL`)。`deploy/host2-set-clickhouse-secrets.sh`:三個帳號的隨機密碼與帳號檔(只含 SHA-256 雜湊),使用者執行。CI `deploy-api-test`:檢查帳號檔、`up -d --wait netops-clickhouse`、`apply-schema.sh test`、確認伺服器記憶體上限。POC 工具 `deploy/clickhouse/poc/`(FTP 唯讀串流匯入一天、容量與查詢實測)。
+- 檔案:`deploy/docker-compose.yml`、`deploy/clickhouse/**`、`deploy/host2-set-clickhouse-secrets.sh`、`.gitlab-ci.yml`
+- 驗證:主機 2 臨時 POC 容器實測(報告 `docs/test-reports/2026-11-10-clickhouse-c1.md`);以臨時 project `GW_ENV=c1dry` 照 CI 指令跑 `up --wait`、`apply-schema.sh`、記憶體檢查、reader 登入,缺帳號檔時 `up` 失敗;`apply-schema.sh prod` / `test` 來回切 TTL。完成後刪除 POC 容器、volume 與一次性密碼
+
 ## 2026-11-10 R1:提高 TRAFFIC 即時 log 串流上限
 - 工作項目:R1(需求方 2026-11-10 驗收後決定「可以提高上限」;實測 5 分鐘 SSE:Redis 42,005 筆、頁面收 31,960 筆,`dropped` 9,300、`skipped` 2 次)
 - 內容:`live-routes.ts`:檢查間隔 2 秒 → 1 秒;`READ_PER_TICK` 500 → 1500;`SEND_PER_TICK` 200 → 1500(與讀取上限相同,正常不再捨棄);新增 `SEND_CHUNK` 200(大批分成多個 `logs` 事件,只有最後一個帶游標,斷線重連不漏、由瀏覽器依 id 去重);`MAX_PENDING_BYTES` 256 KB → 2 MB(單 tick 最壞約 1.5 MB,舊值會在尖峰誤殺連線)。每人 3 條、全系統 20 條、最長 5 分鐘、心跳 15 秒不變。新增單元測試(1200 筆批次全收、無重複、分段只有最後一段帶 id、Last-Event-ID 重連不重複;超過讀取上限標 `skipped`)。Gherkin 來源行號、`docs/API.md` §3.2、`PA-LIVE-PLAN.md` §8 同步。

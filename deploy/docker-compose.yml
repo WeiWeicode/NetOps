@@ -17,6 +17,7 @@
 #   docker compose --env-file <netops.env> -f deploy/docker-compose.yml --profile publish build --pull spa-netops
 #   docker compose --env-file <netops.env> -f deploy/docker-compose.yml --profile publish run --rm spa-netops                    # 發佈
 #   docker compose --env-file <netops.env> -f deploy/docker-compose.yml --profile publish run --rm spa-netops rollback netops    # 回滾到上一版
+# PA log ClickHouse(C1):netops-clickhouse 只在內部網路;帳號檔由 deploy/host2-set-clickhouse-secrets.sh 產生,建表 deploy/clickhouse/apply-schema.sh
 # 知識庫 NAS 備份(ARCHITECTURE Q3):netops-kb-backup 每天打包資料目錄的 knowledge/ 到 NAS(deploy/kb-backup/backup.sh;目錄與標記檔由 deploy/host2-setup-kb-backup.sh 建立)
 name: giganexus-netops-${GW_ENV:?GW_ENV 必須設定(test / prod)}
 
@@ -115,6 +116,51 @@ services:
       retries: 5
     logging: &pa-logging
       options: { max-size: 10m, max-file: "3" }
+    networks: [netops-internal]
+
+  # PA log 歷史(C1,ARCHITECTURE D27–D29、docs/PA-LOG-CLICKHOUSE-GUIDE.md §7、§10.2):TRAFFIC 與威脅類原始 log、每小時彙總。
+  #   只在內部網路 netops-internal(不對主機開 port、不能連外);C1 只建表與實測,寫入管線 netops-ingest 在 C2、查詢切換在 C3
+  #   記憶體:容器上限 NETOPS_CH_MEM_LIMIT(測試區 1536m,不給 swap),伺服器上限 = 容器上限 × 0.75(config.d/low-memory.xml)
+  #   資料表與 TTL:deploy/clickhouse/apply-schema.sh(CI 啟動後執行;測試區 3 天)
+  #   帳號:default 只允許容器內本機(管理用 docker exec);應用程式帳號 netops_writer / reader / cold 定義在主機機密檔
+  #         ${NETOPS_SECRETS_DIR}/clickhouse/netops-users.xml(只含密碼雜湊;deploy/host2-set-clickhouse-secrets.sh 由本人執行)
+  #   以映像內建的 clickhouse 使用者(uid 101)執行,不需要任何 capability;資料可由 FTP 重建,不另外備份(手冊 §13)
+  netops-clickhouse:
+    image: clickhouse/clickhouse-server:26.3.62.3
+    restart: unless-stopped
+    user: "101:101"
+    read_only: true
+    tmpfs: [/tmp]
+    mem_limit: ${NETOPS_CH_MEM_LIMIT:-1536m}
+    memswap_limit: ${NETOPS_CH_MEM_LIMIT:-1536m}
+    cpus: ${NETOPS_CH_CPUS:-2}
+    ulimits:
+      nofile: { soft: 262144, hard: 262144 }
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      # 帳號由 users.d 設定,映像不要自動建立 / 改 default
+      CLICKHOUSE_SKIP_USER_SETUP: "1"
+    volumes:
+      - netops_ch_data:/var/lib/clickhouse
+      - ./clickhouse/config.d/low-memory.xml:/etc/clickhouse-server/config.d/zz-netops-low-memory.xml:ro
+      - ./clickhouse/users.d/default.xml:/etc/clickhouse-server/users.d/zz-netops-default.xml:ro
+      - ./clickhouse/users.d/profiles.xml:/etc/clickhouse-server/users.d/zz-netops-profiles.xml:ro
+      # 機密檔不存在時啟動失敗,不讓 Docker 自動建立同名空目錄
+      - type: bind
+        source: ${NETOPS_SECRETS_DIR}/clickhouse/netops-users.xml
+        target: /etc/clickhouse-server/users.d/zz-netops-users.xml
+        read_only: true
+        bind: { create_host_path: false }
+    # 關閉前讓背景合併與緩衝寫完
+    stop_grace_period: 60s
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8123/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    logging: *pa-logging
     networks: [netops-internal]
 
   # PA-560 收集器(R1,Python,PA-LIVE-PLAN §3.1;pa-collector/):SDK 唯讀輪詢 + HTTP / Syslog 接收,只寫 netops-redis。
@@ -235,6 +281,8 @@ secrets:
 volumes:
   # netops-redis 的 RDB 快照(重啟後保留最近資料)
   netops_redis_data:
+  # netops-clickhouse 資料(C1;測試區 TTL 3 天,約 1–2 GB)
+  netops_ch_data:
   # Gateway Nginx 唯讀掛載的 SPA volume(Gateway DEPLOYMENT.md §3.4)
   gw_www:
     external: true

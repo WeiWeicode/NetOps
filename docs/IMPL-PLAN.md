@@ -16,7 +16,7 @@
 | R0 | PA 即時監控前置:設備帳號、Log Forwarding、網路、容量量測 | 完成(2026-11-10) |
 | R1 | PA 即時監控(唯讀):`netops-pa`、`netops-redis`、即時監控頁 | **測試區完成(2026-11-10)**;正式區上線併入 D2(D19、D21、D24、D26) |
 | R2 | 封鎖 IP(DAG 動態標籤) | 未排程(D22) |
-| C0–C6 | PA log 高吞吐架構(ClickHouse + Parquet 冷歸檔 + PA 精準查詢) | **已核准(2026-11-10)**,C0 外部前置事項進行中(D27–D33,[PA-LOG-CLICKHOUSE-GUIDE.md](PA-LOG-CLICKHOUSE-GUIDE.md)) |
+| C0–C6 | PA log 高吞吐架構(ClickHouse + Parquet 冷歸檔 + PA 精準查詢) | **已核准(2026-11-10)**,C0 外部前置事項進行中;**C1 實測完成、MR 待合併**(D27–D33,[PA-LOG-CLICKHOUSE-GUIDE.md](PA-LOG-CLICKHOUSE-GUIDE.md)) |
 | ~~後續~~ | ~~服務寫入資料庫~~ | 取消(D20;PA log 改寫 ClickHouse 見 C0–C6,D27) |
 | ~~後續~~ | ~~接入 AI 中控台~~ | 取消(D17 → D23) |
 
@@ -205,6 +205,8 @@ D13:骨架直接留用;AI 不在這次範圍,不做串流驗證(D7、D17)。
 | E5 | 需求方 → **IT**(主機 3) | 正式區上線前確認主機 3 資源:WSL `ext4.vhdx` 在哪個磁碟、剩餘空間(要 40 GB);記憶體不夠時能否把 WSL 加到約 10 GB(要重啟 WSL,舊系統一起中斷,要排時間)或改放其他主機 | C6(C1 實測後再確認數字) | CQ2 |
 | E6 | 需求方 | 同意 C1 在主機 2 測試區新增 `netops-clickhouse` 容器(記憶體上限 1.5 GB、TTL 3 天) | C1 | CQ2 |
 
+**E6 已同意(2026-11-10)**。C1 實測後的建議數字(`docs/test-reports/2026-11-10-clickhouse-c1.md` §8):**E2** 原始 log Parquet 一年約 80–122 GB,申請 **150 GB / 年**(只歸檔每小時彙總約 0.1 GB / 年);**E5** 主機 3 vhdx 所在磁碟預留 **20 GB**、ClickHouse 容器上限 **2 GB**,不必先加大 WSL。FTP `/my-data` 目前只看得到 25 天(2026-10-16 起,`2026_10_19` 缺檔),E1 仍要 FTP 管理者確認保留規則。
+
 **完成條件**:E1–E6 都有結果並寫回本節;E1 決定 CQ3 的分支後更新 ARCHITECTURE D30 狀態。
 
 ## C1 POC 與容量實測(已核准)
@@ -214,6 +216,8 @@ D13:骨架直接留用;AI 不在這次範圍,不做串流驗證(D7、D17)。
 3. 跑總覽、Top N、明細、冷查詢的代表查詢,記錄回應時間與記憶體;確認 `IPv6` 的 skip index 與 Parquet 讀回條件、低記憶體設定名稱。
 
 **前置**:E6。**負責人**:Claude;需求方同意與合併。**完成條件**:手冊 §4 的估算換成實測值;主機 2 測試區其他服務沒有受影響。
+
+**狀態:實測完成(2026-11-10),MR 待合併**。報告 `docs/test-reports/2026-11-10-clickhouse-c1.md`:一天 1,043 萬筆(FTP CSV 6.55 GB)匯入 228 秒,ClickHouse **205 MiB / 天(20.6 bytes / 筆)**、Parquet **200 MB / 天**;總覽與 Top N 查彙總表 7–119 ms,一天明細 30–284 ms,冷查詢(NAS)0.1–1.3 秒;記憶體最高 479 MiB(上限 1.15 GB),WSL available 最低 2.5 GB,其他服務沒有受影響。`dst` 用 `bloom_filter`、網段查詢用 `BETWEEN`。`netops-clickhouse`(26.3.62.3)、`deploy/clickhouse/`(設定、DDL、`apply-schema.sh`)、CI 啟動與建表進 develop;**合併前需求方在主機 2 執行 `sudo sh deploy/host2-set-clickhouse-secrets.sh`**。手冊 §4 已換成實測值。
 
 ## C2 寫入管線(已核准)
 

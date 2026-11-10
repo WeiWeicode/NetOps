@@ -2,6 +2,11 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。
 
+## 2026-11-10 C1 ClickHouse POC 與容量實測
+- 工作項目:C1
+- 內容:測試區 ClickHouse 容器與資料表(細節見 BackendCorrection 同日紀錄);匯入 FTP 一整天 TRAFFIC 實測容量與查詢,手冊 §4 換成實測值(每筆 20.6 bytes、30 天約 7–11 GB、Parquet 一年 80–122 GB),§7.1 `dst` 加 bloom_filter、§7.4 網段查詢改 `BETWEEN`、§10.2 補實作差異、§10.3 TTL 定案;IMPL-PLAN C0 補 E2 / E5 建議數字、C1 狀態。
+- 檔案:`docs/test-reports/2026-11-10-clickhouse-c1.md`、`docs/{IMPL-PLAN,PA-LOG-CLICKHOUSE-GUIDE,HANDOFF,PROJECT-MAP}.md`
+
 ## 2026-11-10 PA log 高吞吐架構決策核准(ClickHouse,CQ1–CQ14)
 - 工作項目:C0–C6
 - 內容:需求方 2026-11-10 核准 !52 手冊 §12 的 14 項決策(原話「全部照建議」)。ARCHITECTURE §3.1 D27–D33 改為已核准,寫明前置條件(CQ2 正式區資源、CQ3 待 FTP 保留期限、CQ6 網通開 Log 權限、CQ9 網通改轉送格式);D16、D20、D21、D22、D26 原文保留並加註「由 D2x 修改」;§5 加按鈕 `netops.pa-live.query`、viewer 排除 `netops.pa-query.read`;Q6 結案。AGENT §0、§2、§7.2 改寫「不寫資料庫」「原始 log 不存本機」「欄位不新增」並列出例外與依據。IMPL-PLAN C0 改為外部前置事項 E1–E6(誰、做什麼),C1–C6 改為已核准並列前置與負責人。手冊 §12 加「決定」欄,威脅類 TTL 改 90 天(CQ12),權限表註明只給 admin(CQ7)。只改文件。

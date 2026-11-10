@@ -54,6 +54,7 @@ chmod 644 "$ENV_FILE"
 
 ls -l "$D/pa_http_token" "$D/pa_api_key"
 echo "完成。開啟輪詢 / 接收的步驟見 docs/PA-FORWARDING-SPEC.md 附錄 F(PA_HOST、PA_ALLOWED_SOURCES 由你填,改完重跑 CI 部署或 docker compose up -d netops-pa)。"
+echo "這次有新增或更換機密檔時:CI 不會因為檔案內容變了就重建 netops-pa,手動執行 pipeline 時帶變數 NETOPS_PA_RECREATE=1(重建後請網通對 netops-syslog 再 Commit)。"
 if [ "${1:-}" = "--show-token" ]; then
   echo "---- pa_http_token(交給網通設定 X-NetOps-Token;不要貼到聊天、Email 或工單) ----"
   cat "$D/pa_http_token"; echo

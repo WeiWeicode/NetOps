@@ -317,9 +317,11 @@ netsh interface portproxy show v4tov4
 
    預期類似 `172.2x.0.1`。
 2. 編輯 `/srv/giganexus/deploy/netops.env`:`PA_ALLOWED_SOURCES=<上一步的閘道>`、`PA_RECEIVE_ENABLED=1`。
-3. 重建:**重跑 GitLab CI `develop` 最新 pipeline 的 `deploy-api-test`**(用 CI 建置的同一個映像)。手動時要指定目前部署的映像、不在主機上重新建置:
+3. 重建:**重跑 GitLab CI `develop` 最新 pipeline 的 `deploy-api-test`**(用 CI 建置的同一個映像)。`netops.env` 的 `PA_*` 改了會被偵測到並重建 `netops-pa`;只換了機密檔或憑證檔(內容變、設定沒變)時,要在 GitLab「Run pipeline」帶變數 `NETOPS_PA_RECREATE=1` 才會重建(`deploy/ci-netops-pa.sh`)。手動時要指定目前部署的映像、不在主機上重新建置:
    `cd /srv/giganexus/shared/NetOps 之類的 repo 目錄 && sudo IMAGE_TAG=<目前部署的 commit 短 SHA> GW_ENV=test docker compose --env-file /srv/giganexus/deploy/netops.env -f deploy/docker-compose.yml up -d --no-build --force-recreate netops-pa`(SHA 可由 `sudo docker ps --format '{{.Image}}' | grep netops-pa` 查到)。
 4. `sudo docker logs --tail 20 giganexus-netops-test-netops-pa-1`,預期:`接收端點已啟用:HTTP :51293、Syslog :51294;允許來源 172.2x.0.1/32`。
+
+> **重新 Commit 的時機**:PA-560 的 Syslog TCP 只有在 `netops-pa` 重建或重啟(連線被切斷)時才會斷,斷了不會自動重連,要請網通對 `netops-syslog` 再 Commit。**只有 `netops-pa` 重建時才需要**:CI 在 `pa-collector/`、Compose 的 `netops-pa` 段與 `netops.env` 都沒變時不重建 `netops-pa`,其他服務照常部署;有重建時 `deploy-api-test` 日誌會印 `WARN netops-pa 已重建,TRAFFIC Syslog 可能需要網通重新 Commit netops-syslog`。
 5. 若日誌出現「拒絕不在允許清單的來源 X」,X 才是實際看到的來源,把 `PA_ALLOWED_SOURCES` 改成 X 再重建。
 6. 請網通把 `10.10.130.124` 加進 HTTP / Syslog Server Profile(B.1、C.1),測完移除,並把 `PA_RECEIVE_ENABLED` 改回 0。
 7. **主機接收開好之後,請網通對 Syslog Server Profile 再 Commit 一次**:PA-560 連 Syslog TCP 失敗後(System log `syslog connection failed … error: 110`)不會自動重試(2026-11-10 測試區實測;E 節)。順序是先做完 F.2、本節 1–5,再 Commit;HTTP 每次送都重新連線,不受影響。

@@ -5,7 +5,8 @@
 > 寫入操作(都經同意):按「輪詢:停用 / 開啟」各一次、「接收:停用 / 開啟」各一次;以 viewer 送一次被拒絕的 `PUT collector-control`(403,沒有副作用);刪除知識庫測試筆記 1 則。沒有改主機設定,接收是主討論串先開的。
 > 第三階段(09:54 起):Syslog 通了之後驗 TRAFFIC,以及 !51(`70e24b0`)合併部署後的 6 項重驗(§3.3、§3.4);另按「輪詢:停用 / 開啟」各一次(都經同意並已恢復)。§2 前兩階段表是當時結果,後來修正的項目在「結果」欄與 §4 註明。
 > 補驗(11:09 後):giga-observe 的 `/v1/ping` 401、串流 429(§3.5)與 TRAFFIC、威脅對 PA Monitor 的詳細欄位(需求方回報一致)。
-> 仍未驗:威脅 log 在 NetOps 沒有來源 Port,PA 那邊有沒有未確認;「接收未啟用」文案;串流重連當下觸發 refresh 的時序;`gw-bff POST /api/auth/refresh` 403 的來源。
+> 11:20 再補:威脅與 TRAFFIC 各一筆的 PA 詳細檢視逐欄對照(§3.6,需求方貼截圖,Claude 逐欄核對);**威脅 log 缺來源 Port**(PA 有)確認為規格漏欄位。
+> 仍未驗:「接收未啟用」文案;串流重連當下觸發 refresh 的時序;`gw-bff POST /api/auth/refresh` 403 的來源。
 
 ## 1. 環境
 
@@ -200,6 +201,28 @@
 | Traffic(start 11:09:42,收到 11:10:49) | 10.10.112.37:64732 → 134.33.4.22:443;Rule `Lan to WAN port`、App `ms-update`;LAN → WAN;allow;bytes 106,107(sent 101,094 / recv 5,013);封包 105;持續 53 秒;`tcp-fin` |
 | Threat(11:08:36) | 10.10.130.3 → 10.10.10.10:53 udp;Rule `130 to other GSC`、App `dns-base`;Server → WAN;block;`generic:amlzqi.com(52316871)`、severity `high`、spyware、server-to-client、URL `amlzqi.com`;**NetOps 沒有來源 Port**(API 的 `sport` 空) |
 
+### 3.6 PA 詳細檢視逐欄對照(11:18 的兩筆,需求方貼 PA Monitor 截圖)
+
+**Traffic**:`10.10.112.13:57043 → 160.79.104.10:443`,Session ID 464751,長連線(start 09:45:29、結束 11:18:23)。**全部一致**:
+
+| 欄位 | NetOps | PA 詳細檢視 |
+| --- | --- | --- |
+| Action / 結束原因 | allow / `tcp-fin` | allow / tcp-fin |
+| Rule / App | `Lan to WAN app` / `ssl` | 相同 |
+| Zone / 介面 | LAN→WAN / ae3→ae1 | 相同 |
+| Bytes / Sent / Received | 139,566 / 71,043 / 68,523 | 139566 / 71043 / 68523 |
+| 封包 / 持續秒 | 1,869 / 5,560 | 1869 / 5560 |
+| Start / Receive Time | 09:45:29 / 11:18:23 | 2026/11/10 09:45:29 / 11:18:23 |
+| URL 類別 | `AI-conversational-assistant` | Category 相同 |
+| App Risk / 類別 / 子類別 / 技術 | 4 / networking / encrypted-tunnel / browser-based | 相同 |
+| 來源 / 目的國家 | 10.0.0.0-10.255.255.255 / United States | 相同 |
+
+`srcHost` / `dstHost`:PA 的 DeviceID 區塊有「Source Device Host」,這筆是**空白**,所以 NetOps 沒有這兩個欄位是一致的(只有空值時不帶);**有值的樣本未驗**。
+
+**Threat**:`150.241.69.115 → 172.16.2.2:443`,Session ID 598388,GlobalProtect 驗證嘗試。對照一致:Action alert、Rule `intrazone-default`、App `panos-global-protect`、Zone trust→trust、類型 vulnerability、ID 32256 與名稱、Category `brute-force`、來源國家 Germany、目的國家 `172.16.0.0-172.31.255.255`、NAT 來源 / 目的 IP、方向 client-to-server(Client to Server 打勾)、時間 11:18:16、相關 log 的 URL `125.22…` 與 URL 類別 `medium-risk`。
+
+**不一致(已確認的欄位缺口)**:PA 威脅詳細檢視有 **來源 Port 12822、NAT Port 12822、目的 NAT Port 20077**,NetOps 的威脅 log 沒有。原因:`PA-FORWARDING-SPEC.md` B.3 的威脅(及 URL、Data、WildFire)HTTP payload **只有 `dport`,沒有 `sport` 和 `natDport`**(`PA-FORWARDING-SPEC.md:99`;TRAFFIC 的 C.2 有 `sport`、`natDport`),所以是規格漏欄位,不是接收端或畫面的錯。影響:威脅類型的 Port 篩選只比對目的 Port(`service.ts:148` 同時比對 `dport` 與 `sport`,威脅沒有 `sport` 所以只剩目的),看不到來源 Port,也無法依來源 Port 追同一個連線。
+
 ## 4. 失敗項目與可能問題
 
 ### 4.1 即時排行與即時 log 的控制項沒有渲染(前端缺陷)— **已由 !51 修正,§3.4 項目 1、2 重驗通過**(以下為 10:00 前的發現)
@@ -251,7 +274,7 @@
 
 1. ~~giga-observe `/v1/ping` 401 與 429 計數~~:**已補驗通過**(§3.5)。
 2. **TRAFFIC 即時 log 只顯示約 76%**(§4.4 第 5 項):**需求方決定可以提高上限**(2026-11-10)。待開發:調高 `SEND_PER_TICK`(`live-routes.ts`,目前 200)與相關讀取上限(`READ_PER_TICK`),並重測約 107–117 筆/秒時的 `dropped` / `skipped`、頁面 CPU 與記憶體、`MAX_PENDING_BYTES`(慢消費者中斷);也可評估依篩選先過濾再取樣,或在畫面明確寫「流量太大,部分 log 未顯示」並顯示累計 `dropped`。上限沒有數字,要由實作時決定。
-3. ~~TRAFFIC bytes、封包、持續秒、威脅欄位對 PA Monitor~~:**需求方回報一致**(§3.5)。仍沒逐一核的:PAN-OS 12.1 的 Traffic 差異欄位(`risk_of_app`、`category_of_app`、`src_host`、`dst_host`)在 NetOps 的呈現;**威脅 log 在 NetOps 沒有來源 Port**(API 回的 `src` 只有 IP、沒有 `sport`),PA 威脅 log 有沒有 Source Port 未確認。
+3. ~~TRAFFIC bytes、封包、持續秒、威脅欄位對 PA Monitor~~:**已逐欄核對一致**(§3.5、§3.6);PAN-OS 12.1 的 Traffic 差異欄位(`risk_of_app` 等 4 個)一致。**仍待處理:威脅類型缺來源 Port**(§3.6)——規格 B.3 的威脅、URL、Data、WildFire payload 只有 `dport`,PA 有 Source Port(例 12822)與 NAT Port。要補就得**同時改 PA 的 HTTP Payload Format**(加 `"sport":"$sport","natDport":"$natdport"`,由需求方在 PA 操作)、`PA-FORWARDING-SPEC.md` B.3、`pa-collector/netops_pa/records.py` 的 `THREAT_FIELDS`(目前**沒有** `sport`、`natDport`,所以就算 PA 送了也會被丟掉;`NUMERIC` 已含這兩個,不用改),並在畫面顯示;是否值得做由需求方決定。`srcHost` / `dstHost` 有值的樣本沒驗。
 4. **「接收未啟用」文案**:測試區接收已常開,正式區上架前要重驗(用 mock 或暫時關閉接收)。
 5. **登入過期後串流重連的時序**(§3.4 項目 6):只看到 `me` 401 → `refresh` 200,沒有逐步證明「串流重連時」觸發 refresh;可在正式區上架前用較短的 token 逾時重測。
 6. **一次排行 API 無內容**(§4.4 第 6 項):沒再重現,若再出現請記狀態碼與 requestId。

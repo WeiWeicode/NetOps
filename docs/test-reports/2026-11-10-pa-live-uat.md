@@ -223,6 +223,30 @@
 
 **不一致(已確認的欄位缺口)**:PA 威脅詳細檢視有 **來源 Port 12822、NAT Port 12822、目的 NAT Port 20077**,NetOps 的威脅 log 沒有。原因:`PA-FORWARDING-SPEC.md` B.3 的威脅(及 URL、Data、WildFire)HTTP payload **只有 `dport`,沒有 `sport` 和 `natDport`**(`PA-FORWARDING-SPEC.md:99`;TRAFFIC 的 C.2 有 `sport`、`natDport`),所以是規格漏欄位,不是接收端或畫面的錯。影響:威脅類型的 Port 篩選只比對目的 Port(`service.ts:148` 同時比對 `dport` 與 `sport`,威脅沒有 `sport` 所以只剩目的),看不到來源 Port,也無法依來源 Port 追同一個連線。
 
+### 3.7 !56、!57、!58 合併後重驗(`c48247e`,pipeline #777 成功;映像 `netops-api` / `netops-pa` / `netops-kb-backup` `c48247e0`,11:50 部署)
+
+**!57 提高 TRAFFIC 即時 log 上限:通過**。11:52:09 在頁面攔截 `EventSource`(前端路由切走切回讓頁面自己建立連線),跑滿 5 分鐘:
+
+| 項目 | 舊版(§3.3,10:02) | !57 後(11:52–11:58) |
+| --- | --- | --- |
+| 頁面收到 / Redis 同區間 | 31,960 / 42,005(約 76%) | **44,163 / 44,163(100%)**(id 範圍 `1794282718977-0`…`1794283071524-82`) |
+| 重複 | 0 | 0 |
+| `dropped` | 9,300 | **0** |
+| `skipped` 批次 | 2 | **0** |
+| 每批最大筆數 | — | 200(分段送,符合 `SEND_CHUNK`) |
+
+- 重連:11:57:10 伺服器結束(error、readyState 0),11:57:15 自動重連(5 秒);重連後沒有重複。
+- 資源(`docker stats`,11:58):`netops-api` CPU 0.74%、記憶體 59.86 MiB;`netops-pa` CPU 1.58%、33.96 MiB;`netops-redis` CPU 0.87%、333.1 MiB(`used_memory` 312.45 MB)。
+- 心跳:`received` 58,821;`dropped`、`rejected`、`malformed`、`paused`、`redisFailed` 全 0。
+- **沒量**頁面卡頓(FPS、主執行緒時間);5 分鐘內串流與表格更新正常,沒有中斷。
+
+**!56 威脅來源 Port:通過**。需求方在 PA 的 HTTP Payload Format(`netops-threat`、`netops-url`、`netops-data`、`netops-wildfire`)加入 `"sport":"$sport","natDport":"$natdport"` 並 Commit 後:
+- 威脅表格表頭多了「來源 Port」(`收到時間 / ACTION / 嚴重度 / 來源 / 目的 / 來源 Port / 名稱 / URL / 檔名`);PA Commit 後的新 log 有值(例如 18914),之前的 43 筆舊 log 顯示「—」,符合預期(只有新進的帶值)。
+- API:威脅新進資料帶 `sport`、`natDport`;URL(新進一筆 `sport 16768`、`natDport 20077`)與資料過濾(`sport 64469`、`natDport 0`)也有。**WildFire 測試區沒有資料,驗不到。**
+- **對 PA Monitor 詳細檢視(需求方貼截圖,Claude 逐欄核對)一致**:`Suspicious HTTP Evasion Found(14984)`,時間 11:58:12;PA 來源 150.241.69.115、Port **18914**、NAT Port 18914;目的 172.16.2.2、Port 443、NAT IP 172.16.2.2、目的 **NAT Port 20077**;Rule `intrazone-default`、App `panos-global-protect`、trust、類型 spyware、嚴重度 informational、Client to Server。NetOps 同一筆:`sport 18914`、`dport 443`、`natDport 20077`。
+
+**!58 `refresh` 403 調查報告**(`docs/test-reports/2026-11-10-refresh-403.md`):403 是 `CSRF_INVALID`,發生在已沒有登入狀態(沒有 `gn_csrf` Cookie)時 `@giganexus/web-kit` 的 `refreshSession()` 仍送出換發、不帶 `X-CSRF-Token`;不是併發換發(55 筆 refresh,間隔小於 1.5 秒的 2 組都是 200 / 200)。NetOps 不需修改;修法在 `giga-api-gateway-bff`(web-kit 無 `gn_csrf` 時不送換發,或 BFF 改回 401),需需求方另開任務。觀測 10 / 62 次與日誌 5 / 38 次的差異未查明。本次驗收沒有重驗這份調查,只引用結論。
+
 ## 4. 失敗項目與可能問題
 
 ### 4.1 即時排行與即時 log 的控制項沒有渲染(前端缺陷)— **已由 !51 修正,§3.4 項目 1、2 重驗通過**(以下為 10:00 前的發現)
@@ -249,7 +273,7 @@
 2. admin 驗項目 4 時只開 2 個分頁就被擋;每人 2 條串流與需求方自己的瀏覽器分頁一併計算,多裝置同時開會互相影響。!51 把上限改成 3,多裝置仍會互相影響。
 3. 自建 `fetch` SSE 在登入約 14 分鐘後重連回 401;!51 後頁面會先換發(§3.4 項目 6),時序未完整驗證。
 4. URL 過濾 log 的「名稱」欄顯示 `9999(9999)` — **!51 已改成 URL 類別**;API 仍回 `name: 9999(9999)`。
-5. **TRAFFIC 即時 log 只顯示約 76%**:每次最多送 200 筆(`SEND_PER_TICK`),約 107 筆/秒時其餘捨棄(`dropped`)或因跟不上而跳過(`skipped`);有標示,但需求方要知道畫面不是完整 log,完整的要查 Log 明細。
+5. **TRAFFIC 即時 log 只顯示約 76%** — **!57 已修,§3.7 重驗 100%**(以下為當時的觀察)::每次最多送 200 筆(`SEND_PER_TICK`),約 107 筆/秒時其餘捨棄(`dropped`)或因跟不上而跳過(`skipped`);有標示,但需求方要知道畫面不是完整 log,完整的要查 Log 明細。
 6. 10:24 一次排行 API 回應沒有內容,原因不明(`netops-api` 同時段無非 200);沒再重現。
 7. NetOps `time`(PA Receive Time)比 `receivedAt` 晚約 8–11 秒;推測 PA 與主機 2 時鐘差,未驗證。
 8. 任務說明的映像 `6c0ceaaa` 與測試區實際 `300d032c` 不同(測試區在驗收前約 3 分鐘重建)。
@@ -273,12 +297,12 @@
 **還要追**
 
 1. ~~giga-observe `/v1/ping` 401 與 429 計數~~:**已補驗通過**(§3.5)。
-2. **TRAFFIC 即時 log 只顯示約 76%**(§4.4 第 5 項):**需求方決定可以提高上限**(2026-11-10)。待開發:調高 `SEND_PER_TICK`(`live-routes.ts`,目前 200)與相關讀取上限(`READ_PER_TICK`),並重測約 107–117 筆/秒時的 `dropped` / `skipped`、頁面 CPU 與記憶體、`MAX_PENDING_BYTES`(慢消費者中斷);也可評估依篩選先過濾再取樣,或在畫面明確寫「流量太大,部分 log 未顯示」並顯示累計 `dropped`。上限沒有數字,要由實作時決定。
-3. ~~TRAFFIC bytes、封包、持續秒、威脅欄位對 PA Monitor~~:**已逐欄核對一致**(§3.5、§3.6);PAN-OS 12.1 的 Traffic 差異欄位(`risk_of_app` 等 4 個)一致。**仍待處理:威脅類型缺來源 Port**(§3.6)——規格 B.3 的威脅、URL、Data、WildFire payload 只有 `dport`,PA 有 Source Port(例 12822)與 NAT Port。要補就得**同時改 PA 的 HTTP Payload Format**(加 `"sport":"$sport","natDport":"$natdport"`,由需求方在 PA 操作)、`PA-FORWARDING-SPEC.md` B.3、`pa-collector/netops_pa/records.py` 的 `THREAT_FIELDS`(目前**沒有** `sport`、`natDport`,所以就算 PA 送了也會被丟掉;`NUMERIC` 已含這兩個,不用改),並在畫面顯示;是否值得做由需求方決定。`srcHost` / `dstHost` 有值的樣本沒驗。
+2. ~~**TRAFFIC 即時 log 只顯示約 76%**~~ **已由 !57 修正並重驗通過(§3.7)**。當時的決定與待辦(留作紀錄):**需求方決定可以提高上限**(2026-11-10)。待開發:調高 `SEND_PER_TICK`(`live-routes.ts`,目前 200)與相關讀取上限(`READ_PER_TICK`),並重測約 107–117 筆/秒時的 `dropped` / `skipped`、頁面 CPU 與記憶體、`MAX_PENDING_BYTES`(慢消費者中斷);也可評估依篩選先過濾再取樣,或在畫面明確寫「流量太大,部分 log 未顯示」並顯示累計 `dropped`。上限沒有數字,要由實作時決定。
+3. ~~TRAFFIC bytes、封包、持續秒、威脅欄位對 PA Monitor~~:**已逐欄核對一致**(§3.5、§3.6);PAN-OS 12.1 的 Traffic 差異欄位(`risk_of_app` 等 4 個)一致。**威脅類型缺來源 Port 已由 !56 補上並重驗通過(§3.7;WildFire 沒資料驗不到)**。當時的缺口說明:(§3.6)——規格 B.3 的威脅、URL、Data、WildFire payload 只有 `dport`,PA 有 Source Port(例 12822)與 NAT Port。要補就得**同時改 PA 的 HTTP Payload Format**(加 `"sport":"$sport","natDport":"$natdport"`,由需求方在 PA 操作)、`PA-FORWARDING-SPEC.md` B.3、`pa-collector/netops_pa/records.py` 的 `THREAT_FIELDS`(目前**沒有** `sport`、`natDport`,所以就算 PA 送了也會被丟掉;`NUMERIC` 已含這兩個,不用改),並在畫面顯示;是否值得做由需求方決定。`srcHost` / `dstHost` 有值的樣本沒驗。
 4. **「接收未啟用」文案**:測試區接收已常開,正式區上架前要重驗(用 mock 或暫時關閉接收)。
 5. **登入過期後串流重連的時序**(§3.4 項目 6):只看到 `me` 401 → `refresh` 200,沒有逐步證明「串流重連時」觸發 refresh;可在正式區上架前用較短的 token 逾時重測。
 6. **一次排行 API 無內容**(§4.4 第 6 項):沒再重現,若再出現請記狀態碼與 requestId。
 7. **PA Syslog TCP 失敗不重試**:D2 正式區要在接收開好後 Commit 一次;建議在 `HANDOFF` 或 D2 檢查清單寫明,並考慮監控 `syslogOkAt`(!51 的 `118f901` 已補文件,內容我沒逐項核對)。
 8. **`time` 與 `receivedAt` 差 8–11 秒**:確認 PA / 主機 NTP;畫面顯示的是哪一個要讓使用者知道。
-9. **`gw-bff POST /api/auth/refresh` 403**(§3.5):近 7 天 10 次,最後約 10:40;我的網路紀錄裡 refresh 都是 200,來源與原因不明,可能是多個請求同時換發(換發權杖輪替)造成。建議查 BFF 日誌的 requestId,並確認 !51 的「先換發」是否會同時送出多個 refresh。
+9. **`gw-bff POST /api/auth/refresh` 403**:!58 已查出原因(§3.7:無 `gn_csrf` 時 web-kit 仍送換發),NetOps 不用改,**修法在 `giga-api-gateway-bff`,待需求方決定是否另開任務**;觀測與日誌次數差異未查明。原本的觀察(§3.5):近 7 天 10 次,最後約 10:40;我的網路紀錄裡 refresh 都是 200,來源與原因不明,可能是多個請求同時換發(換發權杖輪替)造成。建議查 BFF 日誌的 requestId,並確認 !51 的「先換發」是否會同時送出多個 refresh。
 10. **驗收未覆蓋**:threat / url / data 2 天保留的修剪、Redis 長時間(多日)穩定性、正式區流量。

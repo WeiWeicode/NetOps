@@ -47,6 +47,10 @@ describe('收集器狀態(純函式)', () => {
     assert.ok(!matchLog({ src: '10.0.0.1' }, { ip: '10.0.0.2' }));
     assert.ok(matchLog({ dport: 443, action: 'allow' }, { port: 443, action: 'allow' }));
     assert.ok(!matchLog({ dport: 443, action: 'deny' }, { action: 'allow' }));
+    // 威脅 log 帶 sport / natDport:Port 篩選同時比對目的與來源 Port,natDport 不參與
+    assert.ok(matchLog({ sport: 12822, dport: 443, natDport: 20077 }, { port: 12822 }));
+    assert.ok(matchLog({ sport: 12822, dport: 443, natDport: 20077 }, { port: 443 }));
+    assert.ok(!matchLog({ sport: 12822, dport: 443, natDport: 20077 }, { port: 20077 }));
   });
   it('錯誤原文只留分類,不含主機與 IP', () => {
     const out = summarizeError("session: URLError: reason=[Errno 111] Connection refused (10.10.1.1:443); dataplane: Invalid Credential")!;

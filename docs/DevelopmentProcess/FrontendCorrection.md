@@ -2,6 +2,12 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。範圍:`frontend/`。
 
+## 2026-11-10 R1:威脅類即時 log 新增「來源 Port」欄
+- 工作項目:R1(驗收報告 `docs/test-reports/2026-11-10-pa-live-uat.md` §3.6、§7-3)
+- 內容:`Live.vue` 威脅、URL 過濾、資料過濾、WildFire 的即時 log 表格在「目的」後新增「來源 Port」欄(手機寬度隱藏,同「規則」欄做法);缺值或 0 顯示「—」(PA 的 HTTP Payload 還沒加 `sport` 變數時)。TRAFFIC 欄位不變。
+- 檔案:`frontend/src/pages/firewall/Live.vue`、`frontend/test/live.mount.test.ts`
+- 驗證:`npm run typecheck`、`npm test`(116 通過,新增來源 Port 欄測試)、`npm run build`
+
 ## 2026-11-10 R1:即時監控驗收修正(排行切換、log 暫停、介面流量、URL 類別、串流 401)
 - 工作項目:R1(驗收報告 `docs/test-reports/2026-11-10-pa-live-uat.md` §4.1、§4.4-1、§4.4-3、§4.4-4、§7-5)
 - 內容:① `Live.vue` 兩處 `<template #extra>` 改 `#actions`(`GCard` 沒有 `extra` 插槽),即時排行的「類型」下拉、「5 / 15 / 60 分鐘」切換與即時 log 的「暫停 / 繼續」才會顯示。② 介面流量:新增 `interfaceView()`,輪詢暫停時顯示「停止更新(輪詢暫停,介面計數已清除)」,快照過期時顯示「停止更新(沒有 60 秒內的資料)」,不再顯示最後一輪的值、也不會整張卡片消失;輪詢沒開又沒資料才不顯示。③ URL 過濾的即時 log 不顯示「名稱」欄(URL Filtering 的 threatid 固定 9999,只會顯示 `9999(9999)`),改顯示「URL 類別」(`category`,收集器已寫入;只改前端欄位,API 不變)。④ 串流重連 401:`EventSource` 不經 web-kit,登入逾時不會自己換發;探測到 401 時先呼叫 web-kit `refreshSession()`(`api/gateway.ts` 轉出,web-kit 不用改),成功立即重連,失敗 `redirectToLogin()`;連線成功前只換發一次,之後仍 401 照一般錯誤 10 秒起退避;非 401 才呼叫 `snapshot` 更新設備狀態(原本與探測同時送)。⑤ 測試:新增 devDependencies `@vue/test-utils` 2.5.1、`happy-dom` 21.0.4(掛載元件需要 DOM;只用在測試,不進建置);`test/live.mount.test.ts` 掛載即時監控頁(API、EventSource 用假資料)檢查排行切換與暫停鈕真的有渲染、接收未啟用時排行與 log 的說明文字、輪詢暫停的介面流量、URL 類別欄;`test/slots.test.ts` 解析全部 `.vue`,檢查對共用元件用的 `<template #名稱>` 都是該元件宣告的插槽;`test/paLiveStream.test.ts` 測 401 換發、換發失敗導向登入、換發後仍 401 不無限重連、換發等待中換類型不殘留重連、429 不換發,與 `interfaceView`;使用者換類型或篩選時也重設換發旗標。

@@ -24,9 +24,9 @@ TRAFFIC_FIELDS = (
     "srcHost", "dstHost",
 )
 THREAT_FIELDS = (
-    "time", "subtype", "src", "dst", "natSrc", "natDst", "rule", "srcUser", "app", "fromZone", "toZone", "dport",
-    "proto", "action", "url", "name", "category", "severity", "direction", "srcCountry", "dstCountry", "repeat",
-    "thrCategory", "filedigest", "filetype",
+    "time", "subtype", "src", "dst", "natSrc", "natDst", "rule", "srcUser", "app", "fromZone", "toZone",
+    "sport", "dport", "natDport", "proto", "action", "url", "name", "category", "severity", "direction",
+    "srcCountry", "dstCountry", "repeat", "thrCategory", "filedigest", "filetype",
 )
 DECRYPTION_FIELDS = (
     "time", "src", "dst", "rule", "app", "dport", "action", "error", "errIndex", "status", "tls", "proxyType",

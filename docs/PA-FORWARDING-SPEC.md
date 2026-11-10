@@ -96,8 +96,10 @@
 ### B.3 THREAT(威脅、URL、資料過濾、WildFire 共用)
 
 ```json
-{"time":"$receive_time","subtype":"$subtype","src":"$src","dst":"$dst","natSrc":"$natsrc","natDst":"$natdst","rule":"$rule","srcUser":"$srcuser","app":"$app","fromZone":"$from","toZone":"$to","dport":"$dport","proto":"$proto","action":"$action","url":"$misc","name":"$threatid","category":"$category","severity":"$severity","direction":"$direction","srcCountry":"$srcloc","dstCountry":"$dstloc","repeat":"$repeatcnt","thrCategory":"$thr_category","filedigest":"$filedigest","filetype":"$filetype"}
+{"time":"$receive_time","subtype":"$subtype","src":"$src","dst":"$dst","natSrc":"$natsrc","natDst":"$natdst","rule":"$rule","srcUser":"$srcuser","app":"$app","fromZone":"$from","toZone":"$to","sport":"$sport","dport":"$dport","natDport":"$natdport","proto":"$proto","action":"$action","url":"$misc","name":"$threatid","category":"$category","severity":"$severity","direction":"$direction","srcCountry":"$srcloc","dstCountry":"$dstloc","repeat":"$repeatcnt","thrCategory":"$thr_category","filedigest":"$filedigest","filetype":"$filetype"}
 ```
+
+> **2026-11-10 新增 `sport`、`natDport`**:威脅、URL、資料過濾、WildFire 四種共用這份 payload。已設定過的 PA-560 要在 **HTTP Payload Format** 手動加這兩個變數(`"sport":"$sport","natDport":"$natdport"`;**只加變數,不改其他**)並 **Commit**;部署此版本後才會顯示,PA 沒加之前威脅表格的「來源 Port」顯示「—」。
 
 | key(NetOps) | PAN-OS 變數 | 舊版 CSV 欄位 | 備註 |
 | --- | --- | --- | --- |
@@ -109,7 +111,9 @@
 | `srcUser` | `$srcuser` | Source User | |
 | `app` | `$app` | Application | |
 | `fromZone` / `toZone` | `$from` / `$to` | Source / Destination Zone | |
+| `sport` | `$sport` | Source Port | 2026-11-10 新增(威脅 log 原本漏了,即時監控看不到來源 Port) |
 | `dport` | `$dport` | Destination Port | |
+| `natDport` | `$natdport` | NAT Destination Port | 2026-11-10 新增 |
 | `proto` | `$proto` | IP Protocol | |
 | `action` | `$action` | Action | |
 | `url` | `$misc` | URL/Filename | |

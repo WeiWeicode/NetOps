@@ -103,7 +103,7 @@ flowchart TB
 **log 欄位**:沿用舊版功能已在用的欄位,不新增。
 
 - TRAFFIC:`backend` 對應舊版 `server/lib/palog.js` 的 `COLUMNS`(時間、來源 / 目的 IP 與 Port、NAT、Rule、使用者、App、Zone、介面、協定、Action、位元組、封包、持續秒數、URL 分類、國家、結束原因、App 風險與分類、主機名稱)。
-- THREAT 等其他類型:對應 `server/lib/paevents.js` 的各類型欄位(威脅名稱、嚴重度、方向、URL / 檔名、Repeat Count、檔案摘要等)。
+- THREAT 等其他類型:對應 `server/lib/paevents.js` 的各類型欄位(威脅名稱、嚴重度、方向、URL / 檔名、Repeat Count、檔案摘要等)。威脅、URL、資料過濾、WildFire 另有來源 Port `sport`、目的 NAT Port `natDport`(2026-11-10 補;PA 的 HTTP Payload 要手動加變數,見 PA-FORWARDING-SPEC B.3)。
 - PA-560 的 HTTP Server Profile(JSON)與 Syslog Server Profile 的自訂格式,**欄位名稱直接用上面的 key**(`time`、`src`、`dst`…),讓 Node 端的彙總邏輯可以沿用。
 
 ---

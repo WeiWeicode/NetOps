@@ -2,6 +2,12 @@
 
 > `backend/`、`deploy/` 的修改;新紀錄加在最上方,格式見 `AGENT.md` §11。
 
+## 2026-11-10 R1:威脅類 log 帶出來源 Port
+- 工作項目:R1(需求方 2026-11-10 驗收後決定補;驗收報告 `docs/test-reports/2026-11-10-pa-live-uat.md` §3.6、§7-3)
+- 內容:PA Monitor 威脅詳細檢視有 Source Port、NAT Port,NetOps 沒有:規格 B.3 的 payload 漏了 `sport`、`natDport`,收集器 `THREAT_FIELDS` 也沒有,PA 就算送了也會被丟掉。`THREAT_FIELDS`(threat、url、data、wildfire 共用)加入 `sport`、`natDport`(`NUMERIC` 已含,非數字變 0)。`netops-api` 的 `toLogItem` 直接帶出所有欄位,不需修改;`matchLog` 的 Port 篩選本來就比對 `dport` 與 `sport`,補單元測試。規格 B.3、PA-LIVE-PLAN、API.md 同步。**需求方要在 PA 的 HTTP Payload Format 手動加 `"sport":"$sport","natDport":"$natdport"`(只加變數)並 Commit,部署後才有值**。不改 TRAFFIC 欄位與 `SEND_PER_TICK`。
+- 檔案:`pa-collector/netops_pa/records.py`、`pa-collector/tests/test_store.py`、`backend/test/unit/pa-live-r1.test.ts`、`docs/{PA-FORWARDING-SPEC,PA-LIVE-PLAN,API}.md`
+- 驗證:`ruff check`、`pytest`(82 通過);backend `typecheck`、`npm test`(192 通過)、`build`
+
 ## 2026-11-10 R1:即時監控串流每人上限 2 → 3
 - 工作項目:R1(需求方 2026-11-10 決定「提高到每人 3 條」;驗收報告 `docs/test-reports/2026-11-10-pa-live-uat.md` §3.1 項目 4、§4.4-2)
 - 內容:`GET /v1/pa-live/stream` 每人(工號)同時串流上限由 2 改為 3(`LIVE_MAX_PER_USER`),同一人多個分頁或多台裝置不再互相擠掉;全系統上限 20 不變。串流驗證(`stream-test`,§3.1)每人 2 條、AI 串流每人 2 個 / 全系統 6 個都不變。OpenAPI 說明與 `x-gherkin`、`docs/API.md` §3.2 與錯誤代碼表、Gherkin 同步;`x-gherkin` 來源行號依新位置更新。

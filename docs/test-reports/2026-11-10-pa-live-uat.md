@@ -4,7 +4,8 @@
 > 方式:Claude 內建瀏覽器操作測試區,**登入、登出、換帳號都由需求方本人完成**(Claude 沒有輸入帳密);主機 2 只執行唯讀指令。每一個按開關、刪除都先問過需求方並取得同意。
 > 寫入操作(都經同意):按「輪詢:停用 / 開啟」各一次、「接收:停用 / 開啟」各一次;以 viewer 送一次被拒絕的 `PUT collector-control`(403,沒有副作用);刪除知識庫測試筆記 1 則。沒有改主機設定,接收是主討論串先開的。
 > 第三階段(09:54 起):Syslog 通了之後驗 TRAFFIC,以及 !51(`70e24b0`)合併部署後的 6 項重驗(§3.3、§3.4);另按「輪詢:停用 / 開啟」各一次(都經同意並已恢復)。§2 前兩階段表是當時結果,後來修正的項目在「結果」欄與 §4 註明。
-> 未驗:giga-observe 端的 `/v1/ping` 401、429 計數;TRAFFIC 的 bytes、封包、持續秒對 PA Monitor;威脅類型欄位對 PA Monitor。
+> 補驗(11:09 後):giga-observe 的 `/v1/ping` 401、串流 429(§3.5)與 TRAFFIC、威脅對 PA Monitor 的詳細欄位(需求方回報一致)。
+> 仍未驗:威脅 log 在 NetOps 沒有來源 Port,PA 那邊有沒有未確認;「接收未啟用」文案;串流重連當下觸發 refresh 的時序;`gw-bff POST /api/auth/refresh` 403 的來源。
 
 ## 1. 環境
 
@@ -28,7 +29,7 @@
 | 2 | 輪詢開關 | **通過**(含「停止更新」偵測);「接收按鈕停用並說明原因」**不適用**(接收已開) |
 | 3 | viewer 看不到開關、PUT 回 403 | **通過** |
 | 4 | 第 3 個分頁顯示串流上限訊息、429 不再每 10 秒增加 | **通過**(giga-observe 端的 429 計數未查,見 §4) |
-| 5 | giga-observe 不再出現新的 `GET /v1/ping` 401 | **未驗**(giga-observe 容器日誌不記請求,無法查) |
+| 5 | giga-observe 不再出現新的 `GET /v1/ping` 401 | 當時**未驗**(容器日誌不記請求);11:09 後從 GigaItApp「架構觀測 › 錯誤」查到:**通過**(最後一次 401 是 20 小時前,之後部署 4 次沒有新增,見 §3.5) |
 
 ### 第二階段(接收,HTTP 類型)
 
@@ -179,6 +180,26 @@
 | 5. 第 3 個分頁可連、第 4 個才擋 | **通過(需求方回報)** | 需求方開 4 個分頁,第 4 個顯示「串流連線數已達上限,請關閉其他即時監控分頁(30 秒後再試)」、頁首「串流未連線」(截圖);之後關了 2 個。Claude 的分頁是否算在這 4 個內未確認,上限值 3 依 `7805ac0` 的變更 |
 | 6. 登入過期後串流重連 | **通過,時序未完整驗證** | 網路請求(只留最近一批,先前 220 筆已被丟棄):`GET /api/auth/me` 401 → `POST /api/auth/refresh` 200 → `me` 200,連續多次;`/api/netops/pa-live/stream` 全 200,沒有 401,少數 `ERR_ABORTED` 是切換篩選時本頁自己中斷。畫面維持「串流連線中」。無法證明「串流重連時」剛好觸發 refresh |
 
+### 3.5 補驗(11:09 後):giga-observe 與 PA Monitor 詳細欄位
+
+**giga-observe**(GigaItApp「Gateway 管理 › 架構觀測 › 錯誤」,近 7 天,4xx 與全部;唯讀)
+
+| 服務 / API | 狀態 | 次數 | 最後發生 | 判讀 |
+| --- | --- | --- | --- | --- |
+| `netops-api GET /v1/ping` | 401 | 24 | 20 小時前 | **!48 項目 5 通過**:之後 `300d032`、`985d620`、`70e24b0`、`371a3d3` 四次部署沒有新增 |
+| `netops-api GET /v1/pa-live/stream` | 429 | 25 | 29 分鐘前(需求方開第 4 個分頁) | **!48 項目 4 的 giga-observe 端通過**:7 天只有 25 次,沒有每 10 秒一次的累積 |
+| `netops-web GET /api/netops/pa-live/snapshot` | 502 | 13 | 1 分鐘前(11:08) | !53 合併後 develop 重新部署(映像 `371a3d38`)使 `netops-api` 重啟,屬部署重啟 |
+| `gw-bff POST /api/auth/refresh` | 403 | 10 | 約 10:40 | **來源不明**(見 §7 第 9 項) |
+| `gw-bff GET /api/auth/me` | 401 | 62 | 剛剛 | 過期後換發流程的一部分(多分頁並行) |
+| `gno-backup JOB dailyBackup`(mongodump 執行失敗) | 500 | 7 | 9 分鐘前 | giga-observe 自己的備份,與 NetOps 無關 |
+
+**PA Monitor 詳細欄位(需求方回報「一致」;需求方沒有貼截圖,Claude 未逐欄看到)**
+
+| 類型 | NetOps 值 |
+| --- | --- |
+| Traffic(start 11:09:42,收到 11:10:49) | 10.10.112.37:64732 → 134.33.4.22:443;Rule `Lan to WAN port`、App `ms-update`;LAN → WAN;allow;bytes 106,107(sent 101,094 / recv 5,013);封包 105;持續 53 秒;`tcp-fin` |
+| Threat(11:08:36) | 10.10.130.3 → 10.10.10.10:53 udp;Rule `130 to other GSC`、App `dns-base`;Server → WAN;block;`generic:amlzqi.com(52316871)`、severity `high`、spyware、server-to-client、URL `amlzqi.com`;**NetOps 沒有來源 Port**(API 的 `sport` 空) |
+
 ## 4. 失敗項目與可能問題
 
 ### 4.1 即時排行與即時 log 的控制項沒有渲染(前端缺陷)— **已由 !51 修正,§3.4 項目 1、2 重驗通過**(以下為 10:00 前的發現)
@@ -195,9 +216,9 @@
 - 現象:`netops:pa:log:traffic` 長度 0;心跳沒有 `syslogOkAt`;排行 `traffic` 全空。HTTP 類型(threat、url、data、globalprotect)有資料。主討論串 09:00 前後以 30 秒 pktmon 看主機 2 的 51294 沒有連線。
 - 影響:TRAFFIC 排行、欄位對應(PAN-OS 12.1 差異)、Port 篩選、TRAFFIC 1 小時 `MINID` 修剪、`INFO memory` 的真實用量都未驗。
 
-### 4.3 項目 5(giga-observe `/v1/ping` 401)與 giga-observe 429 無法驗
+### 4.3 項目 5(giga-observe `/v1/ping` 401)與 giga-observe 429 — **已補驗通過(§3.5)**
 
-- giga-observe backend 容器日誌不記請求。建議在 GigaItApp 監控畫面看 `netops-api` 最近的 401,或直接查 giga-observe 資料庫(本次驗收只讀容器日誌)。
+- 當時 giga-observe backend 容器日誌不記請求所以查不到;後來改從 GigaItApp「架構觀測 › 錯誤」查到。
 
 ### 4.4 其他觀察(未判定為缺陷)
 
@@ -228,12 +249,13 @@
 
 **還要追**
 
-1. **giga-observe `/v1/ping` 401 與 429 計數**(§4.3):容器日誌不記請求,要查 giga-observe 資料庫或 GigaItApp 監控畫面;原 !48 項目 5、項目 4 的 giga-observe 端都沒驗。
-2. **TRAFFIC 即時 log 只顯示約 76%**(§4.4 第 5 項):確認是否接受 `SEND_PER_TICK=200` 的設計;若要降低遺漏,可評估提高上限、依篩選先過濾再取樣,或在畫面明確寫「流量太大,部分 log 未顯示」並顯示累計 `dropped`。
-3. **TRAFFIC bytes、封包、持續秒** 欄位未對 PA Monitor 核(截圖沒露出),PAN-OS 12.1 的 Traffic 差異欄位(`risk_of_app`、`category_of_app`、`src_host`、`dst_host`)在 NetOps 的呈現也沒逐一核。威脅類型欄位未對 PA Monitor 核(只核了 URL)。
+1. ~~giga-observe `/v1/ping` 401 與 429 計數~~:**已補驗通過**(§3.5)。
+2. **TRAFFIC 即時 log 只顯示約 76%**(§4.4 第 5 項):**需求方決定可以提高上限**(2026-11-10)。待開發:調高 `SEND_PER_TICK`(`live-routes.ts`,目前 200)與相關讀取上限(`READ_PER_TICK`),並重測約 107–117 筆/秒時的 `dropped` / `skipped`、頁面 CPU 與記憶體、`MAX_PENDING_BYTES`(慢消費者中斷);也可評估依篩選先過濾再取樣,或在畫面明確寫「流量太大,部分 log 未顯示」並顯示累計 `dropped`。上限沒有數字,要由實作時決定。
+3. ~~TRAFFIC bytes、封包、持續秒、威脅欄位對 PA Monitor~~:**需求方回報一致**(§3.5)。仍沒逐一核的:PAN-OS 12.1 的 Traffic 差異欄位(`risk_of_app`、`category_of_app`、`src_host`、`dst_host`)在 NetOps 的呈現;**威脅 log 在 NetOps 沒有來源 Port**(API 回的 `src` 只有 IP、沒有 `sport`),PA 威脅 log 有沒有 Source Port 未確認。
 4. **「接收未啟用」文案**:測試區接收已常開,正式區上架前要重驗(用 mock 或暫時關閉接收)。
 5. **登入過期後串流重連的時序**(§3.4 項目 6):只看到 `me` 401 → `refresh` 200,沒有逐步證明「串流重連時」觸發 refresh;可在正式區上架前用較短的 token 逾時重測。
 6. **一次排行 API 無內容**(§4.4 第 6 項):沒再重現,若再出現請記狀態碼與 requestId。
 7. **PA Syslog TCP 失敗不重試**:D2 正式區要在接收開好後 Commit 一次;建議在 `HANDOFF` 或 D2 檢查清單寫明,並考慮監控 `syslogOkAt`(!51 的 `118f901` 已補文件,內容我沒逐項核對)。
 8. **`time` 與 `receivedAt` 差 8–11 秒**:確認 PA / 主機 NTP;畫面顯示的是哪一個要讓使用者知道。
-9. **驗收未覆蓋**:threat / url / data 2 天保留的修剪、Redis 長時間(多日)穩定性、正式區流量。
+9. **`gw-bff POST /api/auth/refresh` 403**(§3.5):近 7 天 10 次,最後約 10:40;我的網路紀錄裡 refresh 都是 200,來源與原因不明,可能是多個請求同時換發(換發權杖輪替)造成。建議查 BFF 日誌的 requestId,並確認 !51 的「先換發」是否會同時送出多個 refresh。
+10. **驗收未覆蓋**:threat / url / data 2 天保留的修剪、Redis 長時間(多日)穩定性、正式區流量。

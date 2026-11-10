@@ -3,6 +3,10 @@
 欄位 key 沿用舊版:TRAFFIC 對應 server/lib/palog.js 的 COLUMNS,其他類型對應 server/lib/paevents.js
 (THREAT_COLUMNS 與 decryption / globalprotect / userid 的 columns)。不新增欄位;PA-560 轉送格式
 (docs/PA-FORWARDING-SPEC.md)直接輸出這些 key。不在清單內的 key 一律丟掉,不寫進 Redis。
+
+例外(2026-11-10 核准,ARCHITECTURE D28、PA-LOG-CLICKHOUSE-GUIDE §12 CQ9):TRAFFIC 與威脅類(threat、url、data、
+wildfire)加 `seqno`(PA 的 Sequence Number)與 `sessionId`(Session ID),給 netops-ingest 寫進 ClickHouse,FTP 補漏時逐筆去重。
+seqno 是 64 位元無號整數(實測 19 位數),超過 JavaScript 的安全整數,所以**存成數字字串**(netops-ingest 原樣寫進 UInt64)。
 """
 
 from __future__ import annotations
@@ -22,11 +26,15 @@ TRAFFIC_FIELDS = (
     "inIf", "outIf", "sport", "dport", "natDport", "proto", "action", "bytes", "sent", "recv", "packets", "start",
     "elapsed", "category", "srcCountry", "dstCountry", "endReason", "appRisk", "appCategory", "appSubcat", "appTech",
     "srcHost", "dstHost",
+    # CQ9 例外(見檔頭)
+    "seqno", "sessionId",
 )
 THREAT_FIELDS = (
     "time", "subtype", "src", "dst", "natSrc", "natDst", "rule", "srcUser", "app", "fromZone", "toZone",
     "sport", "dport", "natDport", "proto", "action", "url", "name", "category", "severity", "direction",
     "srcCountry", "dstCountry", "repeat", "thrCategory", "filedigest", "filetype",
+    # CQ9 例外(見檔頭)
+    "seqno", "sessionId",
 )
 DECRYPTION_FIELDS = (
     "time", "src", "dst", "rule", "app", "dport", "action", "error", "errIndex", "status", "tls", "proxyType",
@@ -39,7 +47,10 @@ GLOBALPROTECT_FIELDS = (
 USERID_FIELDS = ("time", "subtype", "ip", "user", "dataSourceType", "dataSource", "repeat")
 
 # 舊版 palog.js NUMERIC 與 paevents.js 的 numeric(repeat)
-NUMERIC = {"bytes", "sent", "recv", "packets", "elapsed", "sport", "dport", "natDport", "appRisk", "repeat"}
+NUMERIC = {"bytes", "sent", "recv", "packets", "elapsed", "sport", "dport", "natDport", "appRisk", "repeat", "sessionId"}
+# 64 位元無號整數,存成數字字串(見檔頭);不合法時不寫這個 key(ClickHouse 端預設 0)
+UINT64_TEXT = {"seqno"}
+_UINT64_MAX = 2**64 - 1
 
 
 def _host(url: str) -> str:
@@ -141,6 +152,17 @@ def _num(v: Any) -> int:
     return int(s) if s.isdigit() and len(s) <= 18 else 0
 
 
+def _uint64_text(v: Any) -> str | None:
+    """seqno:十進位非負整數且 ≤ 2^64-1 → 去掉前導 0 的字串;其他回 None。"""
+    if isinstance(v, bool):
+        return None
+    s = str(v).strip() if isinstance(v, (str, int)) else ""
+    if not s.isascii() or not s.isdigit() or len(s) > 20:
+        return None
+    n = int(s)
+    return str(n) if n <= _UINT64_MAX else None
+
+
 def normalize(log_type: str, raw: Any) -> dict[str, Any] | None:
     """轉送來的一筆 → 只含已知欄位的紀錄;不是物件或沒有任何已知欄位時回 None(呼叫端計為畸形)。"""
     if not isinstance(raw, dict):
@@ -152,6 +174,10 @@ def normalize(log_type: str, raw: Any) -> dict[str, Any] | None:
             continue
         if k in NUMERIC:
             out[k] = _num(raw[k])
+        elif k in UINT64_TEXT:
+            u = _uint64_text(raw[k])
+            if u is not None:
+                out[k] = u
         else:
             v = _clean(raw[k], LONG_FIELDS.get(k, DEFAULT_MAX_LEN))
             if v:

@@ -16,7 +16,8 @@
 | R0 | PA 即時監控前置:設備帳號、Log Forwarding、網路、容量量測 | 未開始(PA-LIVE-PLAN §5、§11) |
 | R1 | PA 即時監控(唯讀):`netops-pa`、`netops-redis`、即時監控頁 | 未開始(D19、D21、D24) |
 | R2 | 封鎖 IP(DAG 動態標籤) | 未排程(D22) |
-| ~~後續~~ | ~~服務寫入資料庫~~ | 取消(D20) |
+| C0–C6 | PA log 高吞吐架構(ClickHouse + Parquet 冷歸檔 + PA 精準查詢) | **規劃中,待核准**(提案 D27–D33,[PA-LOG-CLICKHOUSE-GUIDE.md](PA-LOG-CLICKHOUSE-GUIDE.md)) |
+| ~~後續~~ | ~~服務寫入資料庫~~ | 取消(D20;C0–C6 是另一個提案,核准後才部分推翻 D20) |
 | ~~後續~~ | ~~接入 AI 中控台~~ | 取消(D17 → D23) |
 
 ---
@@ -178,3 +179,60 @@ D13:骨架直接留用;AI 不在這次範圍,不做串流驗證(D7、D17)。
 5. 測試區驗收後上正式區;上線一週觀察 Redis 用量並檢討保留時間。
 
 **完成條件**:即時監控頁在兩區可用;收集器停止時畫面明確顯示;Redis 用量在上限內;文件、架構資料與甘特圖更新。
+
+---
+
+> 以下 C0–C6 為 2026-11-10 新增的**提案**(ARCHITECTURE §3.1 D27–D33),**規劃中,待需求方核准**;架構、DDL、範例程式與待決策項目(CQ1–CQ14)見 [PA-LOG-CLICKHOUSE-GUIDE.md](PA-LOG-CLICKHOUSE-GUIDE.md)。核准前不寫正式程式、不改主機與 PA-560。順序以甘特圖為準;C4 與 C5 可平行。
+
+## C0 核准(規劃中,待核准)
+
+1. 需求方審查手冊與 D27–D33,逐項決定 CQ1–CQ14(手冊 §12)。
+2. 決定後改 ARCHITECTURE(提案改定案)、AGENT §7.2(原始 log 與資料庫規則)、PA-LIVE-PLAN §4(新增 Redis 鍵)。
+
+**完成條件**:CQ1–CQ14 都有結論並寫回文件;甘特圖排入 C1–C6。
+
+## C1 POC 與容量實測(規劃中,待核准)
+
+1. 測試區起 `netops-clickhouse`(記憶體上限 1.5 GB、TTL 3 天)。
+2. 從 FTP 匯入**一整天** TRAFFIC,量壓縮後大小、匯入時間、Parquet 每天大小。
+3. 跑總覽、Top N、明細、冷查詢的代表查詢,記錄回應時間與記憶體;確認 `IPv6` 的 skip index 與 Parquet 讀回條件、低記憶體設定名稱。
+
+**前置**:CQ1、CQ2;需求方同意測試區新增容器。**完成條件**:手冊 §4 的估算換成實測值;主機 2 測試區其他服務沒有受影響。
+
+## C2 寫入管線(規劃中,待核准)
+
+1. `netops-ingest`:consumer group 讀 `netops:pa:log:{type}`、每 3–5 秒批次寫入、成功才 ACK、啟動時偵測缺口、心跳。
+2. DDL 與 migration(依 `GW_ENV` 套 TTL)、三個 ClickHouse 帳號、機密腳本(使用者執行)、Compose、CI。
+3. 依 CQ9 調整轉送欄位(網通改 Custom Log Format)。
+
+**前置**:C1;CQ4、CQ9。**完成條件**:測試區連續 3 天每小時筆數和 Redis 接收計數差 < 0.5%;重啟不漏、重複有修正;Redis 記憶體在上限內。
+
+## C3 查詢切換(規劃中,待核准)
+
+1. `netops-api` 新增 `infra/clickhouse`(唯讀帳號、`query_params`)。
+2. 流量總覽、安全事件、Top N 改查每小時彙總 + Redis 快取;Log 明細 ≤ 30 天改查 ClickHouse(工作模式,D6)。
+3. FTP 每日對帳(每小時筆數)與補漏;API.md、OpenAPI、Gherkin。
+
+**前置**:C2;CQ10、CQ11。**完成條件**:與 FTP 摘要數字誤差 < 0.5%;一天範圍明細 < 10 秒;並行對帳 2 週無未處理缺口。
+
+## C4 冷歸檔(規劃中,待核准)
+
+1. 每天 02:30 匯出前一天 Parquet(本機暫存 → NAS `giga-netops/{env}/pa-archive/YYYY/`)、SHA-256、manifest、重試到 D+25。
+2. ClickHouse 唯讀掛載歸檔目錄,冷查詢(工作模式,最多 7 天)。
+
+**前置**:C2;**CQ3(NAS 空間;現有分享只剩 18 GB)**、CQ12、CQ14;NAS 目錄與標記檔。**完成條件**:連續 7 天歸檔成功、雜湊核對通過;`file()` 查得到 7 天前資料;拔掉 NAS 時寫入不受影響、恢復後補歸檔。
+
+## C5 PA 精準查詢(規劃中,待核准)
+
+1. `netops-pa` 查詢執行者(視窗 ≤ 15 分鐘、`nlogs` ≤ 500、逾時 60 秒、全域鎖)。
+2. `netops-api` 送出 / 結果 API(冷卻、429)、權限 `netops.pa-query.read`、按鈕節點 `netops.pa-live.query`;即時監控頁加按鈕;Session Browser。
+
+**前置**:C3;CQ5、**CQ6(網通開 XML API Log 權限並離峰試查)**、CQ7。**完成條件**:上限無法繞過;同時第 2 個請求回 429;執行時管理平面 CPU 在網通門檻內;結果與 PA Monitor 一致。
+
+## C6 正式區上線(規劃中,待核准)
+
+1. 主機 3 依 CQ2 的資源部署;確認舊系統 port 不受影響。
+2. 上線一週觀察記憶體、磁碟、歸檔;依 CQ10 降級 FTP。
+3. 其他 repo 文件與架構資料(手冊 §10.5,跨 repo 先取得同意)。
+
+**完成條件**:正式區可用;`npm run arch:check` 通過;文件與甘特圖更新。

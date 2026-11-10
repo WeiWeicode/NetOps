@@ -2,6 +2,11 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。
 
+## 2026-11-10 PA log 高吞吐架構提案(ClickHouse,待核准)
+- 工作項目:C0–C6(規劃中)
+- 內容:依需求方 2026-11-10 需求撰寫企劃與開發手冊 `docs/PA-LOG-CLICKHOUSE-GUIDE.md`:Syslog 即時串流 → Redis Stream(沿用)→ ClickHouse 30 天 → NAS Parquet 冷歸檔;PA SDK 只做精準查詢。容量以實測(約 1,000 萬筆 / 天)重算,主機與 NAS 資源以唯讀指令查詢;和 D20、D21、D22、D26 衝突處列為待決策 CQ1–CQ14。ARCHITECTURE 新增 §3.1 D27–D33(提案)、Q6;IMPL-PLAN 新增 C0–C6(規劃中)。只改文件,不改程式。
+- 檔案:`docs/PA-LOG-CLICKHOUSE-GUIDE.md`、`docs/ARCHITECTURE.md`、`docs/IMPL-PLAN.md`
+
 ## 2026-11-09 R1 測試區收集器開關與 R1 安全取捨定案
 - 工作項目:R1
 - 內容:需求方 2026-11-09 決定:測試區要有按鈕停用 / 開啟收集器(輪詢「手動開關」);R1-1~R1-4 接受;viewer 可以匯出 Log 明細(HANDOFF j)。記為 ARCHITECTURE D26。做法:環境變數仍是總開關,按鈕只切換暫停 / 繼續(Redis `netops:pa:control`,PA-LIVE-PLAN §4);接收暫停時丟棄並計數,不關 port。IMPL-PLAN D2 加「正式區發佈 A1、R1 路由草稿」「正式區 PA 管理介面換公司 CA 憑證」。

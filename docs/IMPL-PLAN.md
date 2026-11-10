@@ -127,6 +127,7 @@ D13:骨架直接留用;AI 不在這次範圍,不做串流驗證(D7、D17)。
 1. 使用者在測試區驗收。
 2. 正式區部署,發佈路由;負責人在 GigaItApp 指派 `netops-admin`、`netops-viewer`(D15)。部署前**確認正式區 FTP 目錄**:測試區 `FTP_LOG_DIR=/my-data` 寫在 CI `deploy-api-test`(TRAFFIC 不在 FTP 根目錄);正式區的 `FTP_LOG_DIR`(與 `FTP_ROOT`、`FTP_AD_DIR`、各類型目錄)要對照舊版 IIS 實際使用的值,由負責人確認後寫進正式區的 `netops.env` 或部署設定,不要沿用預設值 `/`。
    - **正式區發佈 A1、R1 路由草稿**:`netops-api` 啟動時只註冊為草稿,沒發佈前畫面顯示「功能尚未啟用(路由未發佈)」(測試區 2026-11-09 驗收 §3.1、§4.4)。要發佈的:`netops.ai.*`、`kb/semantic-search`、`kb/vector-*`、`kb/ip-learning*`、`pa-live/*`(串流 `pa-live/stream` 逾時 60000 ms;`pa-live/collector-control` 在正式區回 403,可以不發佈)。
+   - **API Key 改用專用帳號**:目前 API Key 由管理員帳號 `netops` 產生,這個帳號也能登入 Web UI 並 Commit(2026-11-10 確認;角色 `netops` 的 XML API 只開 Operational Requests、Log)。正式區前請網通另建只開 XML API(Operational Requests、Log)、不開 Web UI / CLI 的帳號,用它重新產生 API Key,再用 `deploy/host2-set-pa-secrets.sh`(主機 3 對應腳本)更新機密並以 `NETOPS_PA_RECREATE=1` 重建 `netops-pa`。
    - **正式區 PA-560 管理介面要換成公司 CA 簽發的憑證**:正式區不能用 `PA_TLS_INSECURE`(`netops-pa` 啟動會失敗);測試區目前用出廠自簽憑證 + `PA_TLS_INSECURE=1`。換好後以 `PA_CA_FILE` 指定公司 CA(PA-FORWARDING-SPEC 附錄 F)。
    - **正式區開好接收後,請網通對 Syslog Server Profile 再 Commit 一次**:PA-560 連 Syslog TCP 失敗後(System log `syslog connection failed … error: 110`)不會自動重試,接收若晚於 PA-560 的 Commit 開好,TRAFFIC 會一直進不來(2026-11-10 測試區實測;PA-FORWARDING-SPEC E 節、附錄 F.3 第 7 步)。核對:即時監控的 TRAFFIC 排行與即時 log 有資料。
    - 角色節點:`rbac-prod` 套用 `gateway-rbac.yaml` 後,`netops.pa-live.manage`(測試區收集器開關)也會出現在正式區的 `netops-admin`;正式區 API 回 403、畫面不顯示按鈕,不影響使用。
@@ -202,8 +203,9 @@ D13:骨架直接留用;AI 不在這次範圍,不做串流驗證(D7、D17)。
 | E2 | 需求方 → **IT / NAS 管理者** | E1 的答案不夠長時,申請 NetOps 歸檔空間:一年約 150–370 GB(原始 log Parquet 至少 1 年);現有 `docker-folder` 只剩 18 GB | C4 | CQ3、CQ12 |
 | E3 | 需求方 → **網通** | PA-560 的 Syslog Custom Log Format(TRAFFIC)與 HTTP Payload(威脅類)**加 `$seqno`、`$sessionid`**,然後 Commit;改完回報實際變數名稱(PAN-OS 12.1.7-h3) | C2 | CQ9 |
 | E4 | 需求方 → **網通** | NetOps API Key 的管理角色**加 XML API「Log」權限**;先在離峰手動試查 3–5 次(單一 IP、15 分鐘、500 筆),看 `show system resources` 的管理平面 CPU,給一個可接受的門檻 | C5 | CQ6 |
+|  |  | **E4 結果(2026-11-10 完成)**:需求方在 PA-560 Admin Role `netops` 的 XML API 加開 Log(其他維持只有 Operational Requests)並 Commit。上班時段 15:40 從主機 2 `netops-pa` 容器試查 3 次(TRAFFIC、單一 IP `10.10.130.124`、15 分鐘、`nlogs` 500):每次 1.5 秒、109–117 筆,管理平面 CPU 查詢前後與查詢中都在 3.0–6.2%,沒有上升。**門檻**:維持 C5 的上限(15 分鐘、500 筆、逾時 60 秒、全域一次一個);送出前取樣管理平面 CPU,**超過 50% 不送、回 429**;較大範圍(1–24 小時)在 C5 開發時再實測,實測前不放寬 |  |  |
 | E5 | 需求方 → **IT**(主機 3) | 正式區上線前確認主機 3 資源:WSL `ext4.vhdx` 在哪個磁碟、剩餘空間(要 40 GB);記憶體不夠時能否把 WSL 加到約 10 GB(要重啟 WSL,舊系統一起中斷,要排時間)或改放其他主機 | C6(C1 實測後再確認數字) | CQ2 |
-| E6 | 需求方 | 同意 C1 在主機 2 測試區新增 `netops-clickhouse` 容器(記憶體上限 1.5 GB、TTL 3 天) | C1 | CQ2 |
+| E6 | 需求方 | 同意 C1 在主機 2 測試區新增 `netops-clickhouse` 容器(記憶體上限 1.5 GB、TTL 3 天)——**2026-11-10 同意,C1 已完成(!62)** | C1 | CQ2 |
 
 **E6 已同意(2026-11-10)**。C1 實測後的建議數字(`docs/test-reports/2026-11-10-clickhouse-c1.md` §8):**E2** 原始 log Parquet 一年約 80–122 GB,申請 **150 GB / 年**(只歸檔每小時彙總約 0.1 GB / 年);**E5** 主機 3 vhdx 所在磁碟預留 **20 GB**、ClickHouse 容器上限 **2 GB**,不必先加大 WSL。FTP `/my-data` 目前只看得到 25 天(2026-10-16 起,`2026_10_19` 缺檔),E1 仍要 FTP 管理者確認保留規則。
 
@@ -244,7 +246,7 @@ D13:骨架直接留用;AI 不在這次範圍,不做串流驗證(D7、D17)。
 
 ## C5 PA 精準查詢(已核准)
 
-1. `netops-pa` 查詢執行者(視窗 ≤ 15 分鐘、`nlogs` ≤ 500、逾時 60 秒、全域鎖)。
+1. `netops-pa` 查詢執行者(視窗 ≤ 15 分鐘、`nlogs` ≤ 500、逾時 60 秒、全域鎖;送出前管理平面 CPU > 50% 不送,E4 結果)。
 2. `netops-api` 送出 / 結果 API(冷卻、429)、權限 `netops.pa-query.read`、按鈕節點 `netops.pa-live.query`,**只給 `netops-admin`**(CQ7);即時監控頁加按鈕;Session Browser。
 
 **前置**:C3;**E4(網通開 Log 權限並離峰試查,給管理平面 CPU 門檻)**。**負責人**:Claude 寫;網通改角色並觀察;需求方驗收。**完成條件**:上限無法繞過;同時第 2 個請求回 429;viewer 呼叫回 403;執行時管理平面 CPU 在網通門檻內;結果與 PA Monitor 一致。

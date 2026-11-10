@@ -2,6 +2,14 @@
 
 > 接手時先讀 `AGENT.md`,再讀 `docs/ARCHITECTURE.md`、`docs/IMPL-PLAN.md`。
 
+## 2026-11-10 C1 ClickHouse POC 與容量實測(`feature/clickhouse-c1-poc`)
+
+- **結果**:報告 `docs/test-reports/2026-11-10-clickhouse-c1.md`。一天 TRAFFIC(2026-11-09,FTP 6.55 GB、1,043 萬筆)匯入 228 秒;ClickHouse 205 MiB / 天(20.6 bytes / 筆)、Parquet 200 MB / 天;彙總查詢 7–119 ms、一天明細 30–284 ms、NAS 冷查詢 0.1–1.3 秒;記憶體最高 479 MiB。手冊 §4 已換成實測值,IMPL-PLAN C0 寫入 E2(申請 150 GB / 年)、E5(磁碟 20 GB、容器 2 GB)建議。
+- **進 develop 的內容**:`netops-clickhouse`(`clickhouse/clickhouse-server:26.3.62.3`,1536m、uid 101、只在 `netops-internal`)、`deploy/clickhouse/`(低記憶體設定、`default` 只限容器本機、查詢設定檔、DDL、`apply-schema.sh` 依部署區套 TTL)、`deploy/host2-set-clickhouse-secrets.sh`(三個帳號)、CI `deploy-api-test` 起容器與建表、POC 工具 `deploy/clickhouse/poc/`。
+- **合併前**:需求方在主機 2 WSL 執行 `sudo sh deploy/host2-set-clickhouse-secrets.sh`(沒跑時 CI 在 ClickHouse 步驟停下:前面的服務已更新,但冒煙測試、前端發佈與 RBAC 不會執行,補跑腳本後重跑 pipeline)。
+- **TRAFFIC Syslog 從 2026-11-10 13:45 起沒有進來**(`netops-pa` 重啟後 PA-560 沒重連,error 110):請網通對 `netops-syslog` 再 Commit。
+- **下一步**:C2 等 E3(`$seqno`、`$sessionid`);C2 建議見報告 §9。POC 容器與資料已刪除,合併後的測試區 ClickHouse 是空的。
+
 ## 2026-11-10 R1 PA 即時監控收尾(測試區完成)
 
 **接手方式**:新討論串說「從 `NetOps/docs/HANDOFF.md`「2026-11-10 R1 收尾」接手」,用主討論串協調模式。子任務已全部結束;工作分支與 worktree 已清理,只留 `develop`、`main` 與未合併 MR 的分支。

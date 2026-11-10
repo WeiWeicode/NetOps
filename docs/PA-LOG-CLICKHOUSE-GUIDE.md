@@ -4,6 +4,7 @@
 > 本文件依需求方 2026-11-10 的需求撰寫,並和**已上線的 R1 即時監控**(`netops-pa` + `netops-redis`)核對。和現況或既有決策衝突的地方都列在 §12「待需求方決策」,**沒有替需求方決定**。
 > 決策寫在 [ARCHITECTURE.md](ARCHITECTURE.md) §3.1 D27–D33,工作項目寫在 [IMPL-PLAN.md](IMPL-PLAN.md) C0–C6(都已核准)。**時程以 NexusPlan 甘特圖為準**,本文件不列日期。
 > 文件裡的 DDL、設定與程式碼都是**範例,實作時調整**;語法出處見附錄 A。
+> **C1 實測(2026-11-10)**:§4 已換成實測值;實際使用的設定與 DDL 在 `deploy/clickhouse/`(和本文範例的差異見 §10.2 末段),報告 `docs/test-reports/2026-11-10-clickhouse-c1.md`。
 
 ---
 
@@ -89,35 +90,38 @@
 
 ## 4. 容量與資源估算(實測數字)
 
+> **2026-11-10 C1 實測後更新**(報告 `docs/test-reports/2026-11-10-clickhouse-c1.md`):主機 2 測試區以 26.3 LTS、容器 1.5 GB 匯入 FTP 一整天(2026-11-09)TRAFFIC。原本的估算留在「原估」欄對照。
+
 ### 4.1 log 量
 
 | 來源 | 數字 | 出處 |
 | --- | --- | --- |
-| FTP TRAFFIC | 4.6–6.8 GB / 天,約 790–1,130 萬筆 / 天,平均 90–130 筆 / 秒 | PA-LIVE-PLAN §5(2026-11-04) |
+| FTP TRAFFIC(C1 實測) | 2026-11-09:160 個 CSV、**6.55 GB、1,043 萬筆**;平均 121 筆 / 秒,尖峰 08:00–09:00 約 195 筆 / 秒、夜間約 83 筆 / 秒 | C1 報告 §2 |
+| FTP TRAFFIC(25 天清單) | 每檔 65,535 筆;每天 110–266 個檔 → **720 萬–1,743 萬筆 / 天,平均約 1,140 萬**;FTP 上只看得到 2026-10-16 起約 25 天(合計約 181 GB) | C1 報告 §3.3 |
 | Syslog TRAFFIC | 2026-11-10 09:54 約 107 筆 / 秒;10:34 Stream 有 281,897 筆(09:53 起約 41 分鐘)≈ 115 筆 / 秒 | 驗收筆記、附錄 B |
-| 威脅、URL、資料過濾等(HTTP) | 合計約 10–25 萬筆 / 天(資料過濾波動大) | PA-LIVE-PLAN §5;驗收報告 §3.2 |
+| 威脅、URL、資料過濾等(HTTP) | 合計約 10–25 萬筆 / 天(資料過濾波動大);C1 未匯入 | PA-LIVE-PLAN §5;驗收報告 §3.2 |
 
-**設計值**:TRAFFIC **1,000 萬筆 / 天**,上限 **1,130 萬**;容量再乘 1.5 倍緩衝。上午量測可能高於 24 小時平均,C1 要量一整天。
+**設計值**:TRAFFIC **平均 1,140 萬筆 / 天、尖峰 1,743 萬筆 / 天**。
 
 ### 4.2 ClickHouse(本機 30 天)
 
-| 項目 | 估算 | 說明 |
+| 項目 | 實測 / 換算 | 原估 |
 | --- | --- | --- |
-| 30 天筆數 | 約 3.0–3.4 億筆 | 1,000–1,130 萬 × 30 |
-| 每筆壓縮後 | 約 30–80 bytes | 只存 §7 的 36 個欄位(FTP CSV 有 100 多欄);IP 用 `IPv6`、列舉用 `LowCardinality`、數字用 `T64` / `DoubleDelta` + ZSTD。**未實測**,C1 用一天真實資料量 `system.parts` |
-| TRAFFIC 30 天 | **約 9–27 GB** | 需求估 5–10 GB 偏低 |
-| 威脅等 30 天 | 約 0.3–1 GB | 量小 |
-| 每小時彙總(MV) | 約 1–3 GB / 年 | 依 §7.3 的維度 |
-| 合併暫存、系統 log 表 | 約資料量 × 0.5 | 背景合併要暫時多一份;`query_log` 等要設 TTL(§10.2) |
-| **磁碟規劃** | **40 GB** | |
+| 每筆壓縮後(§7 的 36 欄 + skip index) | **20.6 bytes**(一天 205 MiB,壓縮比 5.8;CSV 的約 1/32) | 30–80 bytes |
+| TRAFFIC 30 天 | 平均 **7.0 GB**、尖峰持續 10.8 GB | 9–27 GB |
+| 威脅等 90 天 | 未實測,仍估 0.3–1 GB | 同左 |
+| 每小時彙總(MV) | 每天約 250 KiB(App 70 KiB + 來源 180 KiB)→ 一年約 0.1 GB | 1–3 GB / 年 |
+| 合併暫存、系統 log 表 | 資料量 × 0.5;`query_log`、`part_log` 3 天 TTL,其他系統 log 表關閉 | 同左 |
+| **磁碟規劃** | **20 GB**(含 1.5 倍緩衝) | 40 GB |
 
 ### 4.3 Parquet(NAS)
 
-| 項目 | 估算 |
-| --- | --- |
-| 每天 | 約 0.4–1.0 GB(ZSTD 壓縮,和 ClickHouse 壓縮率相近;C1 實測) |
-| 一年 | 約 150–370 GB |
-| 現有 NAS 分享 `//10.10.130.31/docker-folder` | 總共 **30 GB,已用 13 GB,剩 18 GB**(主機 2、3 看到同一個分享)→ **只放得下約 18–45 天** |
+| 項目 | 實測 / 換算 | 原估 |
+| --- | --- | --- |
+| 每天 | **200 MB**(19.2 bytes / 筆,ZSTD,IP 轉文字;IP 二進位版大小相同);平均日約 218 MB、尖峰日 334 MB | 0.4–1.0 GB |
+| 一年 | 平均 **80 GB**、尖峰持續 122 GB → 申請 **150 GB / 年**(E2) | 150–370 GB |
+| 只歸檔每小時彙總(CQ3 B) | 約 0.1 GB / 年 | — |
+| 現有 NAS 分享 `//10.10.130.31/docker-folder` | 總共 **30 GB,已用 13 GB,剩 18 GB**(主機 2、3 看到同一個分享)→ 只放得下約 **54–80 天** | 18–45 天 |
 
 ### 4.4 主機資源(2026-11-10 10:34 唯讀查詢,附錄 B)
 
@@ -129,25 +133,25 @@
 | WSL 磁碟(虛擬) | 1007 GB,剩 931 GB | 1007 GB,剩 936 GB |
 | **實體磁碟** | `ext4.vhdx` 在 C 碟,已 28.3 GB;**C 碟只剩 36 GB** | C 碟剩 71 GB、D 碟剩 66 GB;`ext4.vhdx` 位置**沒查到** |
 | 已跑的容器 | Gateway、測試區各系統、NetOps 4 個(Redis 212 MB) | Gateway、正式區各系統、**舊系統約 25 個容器**(open-webui 854 MB 等) |
-| `netops-redis` 實測 | 211.7 MB(TRAFFIC Stream 28 萬筆 + 其他類型) | 未部署 |
+| `netops-redis` 實測 | 211.7 MB(TRAFFIC Stream 28 萬筆 + 其他類型);C1 期間 328–333 MB | 未部署 |
 
 > WSL 裡 `df` 看到的 931 GB 是虛擬磁碟上限,真正的限制是 vhdx 所在 Windows 磁碟的剩餘空間。
 
 ### 4.5 ClickHouse 需要的資源
 
-| 資源 | 最低(小量、調低快取) | 建議 |
+| 資源 | C1 實測(主機 2,容器 1.5 GB) | 正式區建議 |
 | --- | --- | --- |
-| 記憶體 | 容器上限 2 GB(`max_server_memory_usage` 約 1.5 GB) | 4 GB(30 天彙總查詢、Parquet 匯出、背景合併同時進行) |
-| CPU | 2 核 | 2–4 核;寫入量很小(每 3–5 秒一批),主要花在查詢與合併 |
-| 磁碟 | 30 GB | 40 GB(§4.2) |
+| 記憶體 | 伺服器上限 1,152 MiB(容器 × 0.75);閒置 74 MiB;匯入期間最高 479 MiB;最大單一操作:Parquet 匯出 407–433 MiB、INSERT 198 MiB、查詢 ≤ 150 MiB | 容器 **2 GB**(伺服器 1.5 GB) |
+| CPU | 匯入 45,700 筆 / 秒(遠高於 Syslog 的 80–200 筆 / 秒);查詢 `max_threads=2` | 2 核 |
+| 磁碟 | 3 天約 0.6–1.0 GB | 20 GB(§4.2) |
 
 ### 4.6 結論:放不放得下
 
 | 部署區 | 結論 |
 | --- | --- |
-| 主機 2 測試區 | **30 天全量放不下**:記憶體只剩約 3.2 GB(和 Gateway 測試區共用),C 碟只剩 36 GB。只能做**功能驗證**:ClickHouse 記憶體上限 1.5 GB、TTL 改 2–3 天(約 1–3 GB 磁碟) |
-| 主機 3 正式區 | **記憶體勉強**:可用約 4.2 GB,給 ClickHouse 2 GB 後只剩約 2 GB,舊系統不能受影響(工作區 AGENT §5)。**磁碟要先查 vhdx 在哪個碟**(C / D 都剩 66–71 GB,放 40 GB 後偏緊)。建議先加大 WSL 記憶體(實體 16 GB,`.wslconfig` 設 `memory=10GB` 要重啟 WSL,會中斷所有容器),或改放其他主機 |
-| NAS 冷歸檔 | **現有分享放不下一年**;要申請新分享 / 擴充配額,或只歸檔彙總(決策 CQ3) |
+| 主機 2 測試區 | **功能驗證可以**:容器 1.5 GB、TTL 3 天(約 1 GB 磁碟);C1 匯入期間 WSL available 最低 2.5 GB,其他服務沒有受影響 |
+| 主機 3 正式區 | **放得下**:可用約 4.2 GB,給 ClickHouse 2 GB、`netops-ingest` 256 MB 後約剩 1.9 GB,舊系統不能受影響(工作區 AGENT §5);**不必先加大 WSL**,上線一週若 available 長期低於 1.5 GB 再排。磁碟要先查 vhdx 在哪個碟,預留 20 GB(E5) |
+| NAS 冷歸檔 | **現有分享放不下一年**(只夠 54–80 天);要申請約 150 GB / 年,或只歸檔彙總(決策 CQ3、E1 / E2) |
 | `netops-redis` | 放得下:當寫入緩衝不增加記憶體(沿用既有 Stream)。實測 1 小時 TRAFFIC 約 250–300 MB(PA-LIVE-PLAN §5 估 150–250 MB,偏低),仍在 2 GB 內;新增的快取鍵都有 TTL |
 
 決策選項見 §12 CQ2。
@@ -474,6 +478,7 @@ CREATE TABLE IF NOT EXISTS netops.pa_traffic_logs
     dst_host       String CODEC(ZSTD(3)),
     source         LowCardinality(String),  -- 'syslog' | 'ftp'
 
+    INDEX idx_dst   dst   TYPE bloom_filter(0.01) GRANULARITY 1,  -- C1 實測加入
     INDEX idx_dport dport TYPE set(256)  GRANULARITY 4,
     INDEX idx_app   app   TYPE set(512)  GRANULARITY 4
 )
@@ -491,7 +496,7 @@ SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1,
 | --- | --- | --- |
 | 分割區 | 每天(`toYYYYMMDD`) | 30 個分割區,數量合理;TTL 整個分割區刪除(`ttl_only_drop_parts`),不做逐列刪除;補漏可整天 `REPLACE PARTITION`(§11.3) |
 | 排序鍵 | `(小時, src, event_time)` | 查詢幾乎都有時間範圍;「某個來源 IP」最常查。`dst` 查詢靠時間裁切後掃描,一天約 1,000 萬筆 × 16 bytes,秒級內 |
-| `dst` 索引 | 先不加 | `bloom_filter` 是否支援 `IPv6` 型別要在 C1 確認;`dst` 查詢慢再評估 projection(會多一份資料) |
+| `dst` 索引 | `bloom_filter(0.01) GRANULARITY 1` | C1 實測 `IPv6` 支援 `bloom_filter`:少見的目的 IP 讀取量降 97%(73 ms vs 228 ms),常見 IP 沒效果;索引一天約 400 KiB(`deploy/clickhouse/schema.sql`) |
 | IP 型別 | `IPv6`(IPv4 對應成 `::ffff:`) | 一欄同時存 IPv4 / IPv6;查詢用 `toIPv6('10.10.112.20')`(IPv4 字串會轉成對應的 IPv6);顯示時去掉 `::ffff:` 前綴 |
 | 時區 | `Asia/Taipei` | PA 的 `$receive_time` 是設備本地時間、沒有時區;寫入端轉成 Unix 秒,API 輸出 ISO 8601 含時區(AGENT §8) |
 | 引擎 | `MergeTree`(不用 `ReplacingMergeTree`) | 物化檢視只看到 insert,`Replacing` 的去重不會反映到彙總;重複改在寫入端與補漏流程處理 |
@@ -631,7 +636,7 @@ export async function trafficDetail(ch: ClickHouseClient, q: { from: Date; to: D
 }
 ```
 
-- 現有明細查詢的 IP 萬用字元(`10.10.*`)改成 CIDR 或前綴,用 `isIPAddressInRange(IPv6NumToString(src), '::ffff:10.10.0.0/112')` 之類的寫法;**C1 確認寫法與效能**,不沿用正規表示式(B2 修過 ReDoS)。
+- 現有明細查詢的 IP 萬用字元(`10.10.*`)改成 CIDR 或前綴:**應用程式把 CIDR 換成起訖位址,用排序鍵範圍 `src BETWEEN toIPv6({from:String}) AND toIPv6({to:String})`**(C1 實測一天 63 ms;`isIPAddressInRange(toString(src), '::ffff:10.10.112.0/120')` 266 ms,慢 4 倍)。不沿用正規表示式(B2 修過 ReDoS)。
 - `netops-api` 用**唯讀帳號**(`readonly=2` + `<constraints>` 固定 `max_execution_time`、`max_memory_usage` 上限),寫入與歸檔用另外的帳號(§10.2)。
 
 ---
@@ -1106,6 +1111,8 @@ volumes:
 
 各設定名稱在實作時對照所選版本的文件(附錄 A),版本間有改名。
 
+> **C1 實作(2026-11-10)與上面範例的差異**:映像固定 `clickhouse/clickhouse-server:26.3.62.3`;以 uid 101 執行、`cap_drop: ALL`、唯讀根目錄;`users.d` 只讀第一層的 `*.xml`(範例的 `users.d/secrets/` 子目錄不會被讀),所以機密帳號檔掛成單一檔 `users.d/zz-netops-users.xml`(`create_host_path: false`,檔案不存在時啟動失敗);容器 1536m 時伺服器上限 1,152 MiB;`background_pool_size` 調小時 `<merge_tree>` 的 `number_of_free_entries_in_pool_to_*` 也要調到 ≤ 8,否則啟動失敗;冷查詢帳號要 `GRANT CREATE TEMPORARY TABLE ON *.*` 和 `GRANT READ ON FILE`(分兩行)。實際設定在 `deploy/clickhouse/`,名稱已在 26.3 核對(C1 報告 §5)。
+
 > `query_log` 用 `replace="1"` 自訂 engine:第一次啟動前就要放好這份設定。之後改 engine 或升級時,ClickHouse 會把舊表改名保留(例如 `query_log_0`),升級步驟要確認並刪掉,否則佔磁碟。
 
 ### 10.3 測試區 / 正式區隔離
@@ -1117,7 +1124,7 @@ volumes:
 | PA 精準查詢 | 預設關閉,需求方手動開(比照 D26) | 開 |
 | 資料來源 | 同一台 PA-560 的轉送(HTTP Server Profile 可列兩台;Syslog 是否兩區都轉送依 PA-FORWARDING-SPEC) | 同左 |
 
-TTL 用環境變數不能直接改 DDL;做法是 migration 腳本依 `GW_ENV` 套 `ALTER TABLE ... MODIFY TTL`,或兩區各一份 DDL。C1 定案。
+TTL 用環境變數不能直接改 DDL。**C1 定案**:`deploy/clickhouse/schema.sql` 用佔位符,`deploy/clickhouse/apply-schema.sh <test|prod>` 代入 TTL 建表,已存在的表 TTL 不同時以 `MODIFY TTL`(`materialize_ttl_after_modify=0`,只改中繼資料)調整;CI 每次部署執行。
 
 ### 10.4 權限代碼(對齊 ARCHITECTURE §5)
 

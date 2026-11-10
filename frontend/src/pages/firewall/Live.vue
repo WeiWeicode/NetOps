@@ -234,6 +234,8 @@ const logColumns = computed<Column[]>(() => {
     { key: 'severity', label: '嚴重度', width: '84px' },
     { key: 'src', label: '來源', mono: true },
     { key: 'dst', label: '目的', mono: true },
+    // PA 的 HTTP Payload 要加 sport 變數才有值;沒有或為 0 顯示「—」
+    { key: 'sport', label: '來源 Port', width: '84px', align: 'right', hideSm: true },
     // URL 過濾的 threatid 固定是 9999(名稱欄只會是「9999(9999)」),改顯示 URL 類別(驗收 2026-11-10 §4.4-4)
     logType.value === 'url' ? { key: 'category', label: 'URL 類別' } : { key: 'name', label: '名稱' },
     { key: 'url', label: 'URL / 檔名', hideSm: true },
@@ -436,6 +438,7 @@ function refresh() {
           <template #cell-receivedAt="{ row }">{{ clock(row.receivedAt) }}</template>
           <template #cell-action="{ row }"><span :class="BAD.test(String(row.action ?? '')) ? 'c-danger strong' : ''">{{ row.action ?? '—' }}</span></template>
           <template #cell-severity="{ row }"><span :class="BAD.test(String(row.severity ?? '')) ? 'c-danger strong' : ''">{{ row.severity ?? '—' }}</span></template>
+          <template #cell-sport="{ row }">{{ typeof row.sport === 'number' && row.sport > 0 ? row.sport : '—' }}</template>
           <template #cell-bytes="{ row }">{{ typeof row.bytes === 'number' ? fmtSize(row.bytes) : '—' }}</template>
           <template #cell-url="{ row }"><span class="ellipsis url">{{ row.url ?? '—' }}</span></template>
         </GTable>

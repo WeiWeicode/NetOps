@@ -163,4 +163,27 @@ describe('即時監控頁(掛載)', () => {
     expect(headers()).toContain('URL 類別');
     w.unmount();
   });
+
+  it('威脅 log 有「來源 Port」欄:有值顯示 Port,缺值或 0 顯示「—」;TRAFFIC 不變', async () => {
+    api.logs.mockResolvedValue({
+      type: 'threat',
+      items: [
+        { id: '1-0', type: 'threat', receivedAt: '2026-11-10T01:00:00Z', src: '10.0.0.1', dst: '8.8.8.8', sport: 12822, dport: 443 },
+        { id: '2-0', type: 'threat', receivedAt: '2026-11-10T01:00:01Z', src: '10.0.0.2', dst: '8.8.4.4', dport: 443 },
+        { id: '3-0', type: 'threat', receivedAt: '2026-11-10T01:00:02Z', src: '10.0.0.3', dst: '1.1.1.1', sport: 0 },
+      ],
+      nextBefore: null, scanned: 3, truncated: false, earliest: null, retentionSec: 172800,
+    });
+    const w = await mountLive(snapshot(collector()));
+    const log = () => card(w, '即時 log');
+    expect(log().findAll('th').map((th) => th.text())).not.toContain('來源 Port');
+    await log().findAll('button').find((b) => b.text() === '威脅')!.trigger('click');
+    await flushPromises();
+    const heads = log().findAll('th').map((th) => th.text());
+    const idx = heads.indexOf('來源 Port');
+    expect(idx).toBeGreaterThanOrEqual(0);
+    const cells = log().findAll('tbody tr').map((tr) => tr.findAll('td')[idx]?.text());
+    expect(cells).toEqual(['12822', '—', '—']);
+    w.unmount();
+  });
 });

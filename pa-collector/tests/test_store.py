@@ -109,6 +109,10 @@ def test_normalize_drops_unknown_fields_and_controls():
     rec = normalize("traffic", {"src": "10.0.0.1\n", "evil": "x", "bytes": "-5", "sport": "12a", "app": "a\tb", "url": "x"})
     assert rec == {"src": "10.0.0.1", "bytes": 0, "sport": 0, "app": "a b"}
     assert normalize("traffic", {"evil": 1}) is None
+    # 威脅 / URL / Data / WildFire 共用欄位白名單:來源 Port、目的 NAT Port 保留並轉數字,非數字變 0
+    for t in ("threat", "url", "data", "wildfire"):
+        assert normalize(t, {"sport": "12822", "dport": "443", "natDport": "20077"}) == {"sport": 12822, "dport": 443, "natDport": 20077}
+        assert normalize(t, {"sport": "x1", "natDport": ""}) == {"sport": 0, "natDport": 0}
     assert normalize("traffic", ["not", "object"]) is None
     long = normalize("threat", {"url": "a" * 2000, "name": "n" * 500})
     assert len(long["url"]) == 512 and len(long["name"]) == 200

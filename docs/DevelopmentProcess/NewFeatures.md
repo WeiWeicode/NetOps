@@ -2,6 +2,11 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。
 
+## 2026-11-10 R1:威脅類即時 log 帶出來源 Port
+- 工作項目:R1(需求方 2026-11-10 決定補;細節見 BackendCorrection / FrontendCorrection 同日紀錄)
+- 內容:威脅、URL、資料過濾、WildFire 的即時 log 新增來源 Port(`sport`)與目的 NAT Port(`natDport`)欄位,即時監控威脅表格顯示「來源 Port」。需求方須在 PA 的 HTTP Payload Format 加這兩個變數。
+- 檔案:`pa-collector/netops_pa/records.py`、`frontend/src/pages/firewall/Live.vue`、`docs/PA-FORWARDING-SPEC.md`
+
 ## 2026-11-10 PA log 高吞吐架構提案(ClickHouse,待核准)
 - 工作項目:C0–C6(規劃中)
 - 內容:依需求方 2026-11-10 需求撰寫企劃與開發手冊 `docs/PA-LOG-CLICKHOUSE-GUIDE.md`:Syslog 即時串流 → Redis Stream(沿用)→ ClickHouse 30 天 → NAS Parquet 冷歸檔;PA SDK 只做精準查詢。容量以實測(約 1,000 萬筆 / 天)重算,主機與 NAS 資源以唯讀指令查詢;和 D20、D21、D22、D26 衝突處列為待決策 CQ1–CQ14。ARCHITECTURE 新增 §3.1 D27–D33(提案)、Q6;IMPL-PLAN 新增 C0–C6(規劃中)。只改文件,不改程式。

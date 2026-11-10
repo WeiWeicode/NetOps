@@ -1,7 +1,7 @@
 # NetOps 架構與決策
 
 > 目標架構與設計決策。工作項目見 [IMPL-PLAN.md](IMPL-PLAN.md),目錄見 [PROJECT-MAP.md](PROJECT-MAP.md),現況、過渡期與未來目標的流程見 [FLOW-ARCHITECTURE.md](FLOW-ARCHITECTURE.md)。與 Gateway `docs/` 不一致時以 Gateway 為準,先指出差異。
-> **狀態:D1 已上測試區;2026-11-04 重新規劃 PA 即時監控與 AI 搬移(D19–D24,細節見 [PA-LIVE-PLAN.md](PA-LIVE-PLAN.md));2026-11-10 提出 ClickHouse 高吞吐架構(D27–D33,§3.1,提案待核准,見 [PA-LOG-CLICKHOUSE-GUIDE.md](PA-LOG-CLICKHOUSE-GUIDE.md))**(API 介面見 [API.md](API.md),行為規格見 `docs/Gherkin/`);舊版程式未改動,現況見 [README.md](../README.md)。
+> **狀態:D1 已上測試區;2026-11-04 重新規劃 PA 即時監控與 AI 搬移(D19–D24,細節見 [PA-LIVE-PLAN.md](PA-LIVE-PLAN.md));2026-11-10 核准 ClickHouse 高吞吐架構(D27–D33,§3.1,見 [PA-LOG-CLICKHOUSE-GUIDE.md](PA-LOG-CLICKHOUSE-GUIDE.md))**(API 介面見 [API.md](API.md),行為規格見 `docs/Gherkin/`);舊版程式未改動,現況見 [README.md](../README.md)。
 
 ---
 
@@ -14,7 +14,7 @@
 | 後端 | Express 5 + JavaScript,39 支 API | Fastify 5 + TypeScript 介面層;核心 JS 先沿用 |
 | 登入 | AD + 自簽 JWT(localStorage)、入口網同步碼 | BFF 單一入口,`X-Internal-Token` |
 | 權限 | `.env` 工號 / 部門清單 | Gateway RBAC,GigaItApp 設定 |
-| 資料庫 | 只為登入與跳轉查 `LOS`、`GscSystem`、`PortalSolar` | **不寫入資料庫**(D20) |
+| 資料庫 | 只為登入與跳轉查 `LOS`、`GscSystem`、`PortalSolar` | **不寫入關聯式資料庫**(D20);PA TRAFFIC 與威脅類 log 寫 NetOps 自有的 ClickHouse(D27,2026-11-10 核准) |
 | 資料 | `uploads/` 下 JSON、TSV.GZ、Markdown | 歷史:同格式,放 `/srv/giga-netops/{env}`,只經 `infra/store` 存取;即時:Redis(D19) |
 | AI | 直連 vLLM、Qdrant | 搬進 `netops-api`,直接呼叫 AI 主機(D23) |
 
@@ -65,31 +65,31 @@ flowchart LR
 | D13 | B0 直接做最小骨架並部署到測試區,不做串流驗證(D7) | 部署、上游、路由與 API Key 之後都用得到,先打通可以提早發現問題 |
 | D14 | 切換時全部複製舊版資料(摘要、統計、其他 log、AD 事件、知識庫、狀態檔)再核對,不重新分析 | 速度快,也保留 FTP 上已不存在的歷史;知識庫本來就不可重建 |
 | D15 | 初始成員上線時由負責人在 GigaItApp 重新指派,不沿用舊版 `.env` 名單 | 順便清理舊名單;舊版「清單空白就開放全部」的情況不會帶過來 |
-| D16 | 檔案資料不自動清除;保留期限另外決定(原併入資料庫階段,已取消,D20)。Redis 的 2 天保留見 D21 | 只有手動刪除;PA TRAFFIC 摘要與統計估計約 26 MB / 天(150 檔),主機 2、3 WSL 磁碟各約 930 GB 可用 |
+| D16 | 檔案資料不自動清除;保留期限另外決定(原併入資料庫階段,已取消,D20)。Redis 的 2 天保留見 D21;ClickHouse 以 TTL 自動刪除(D27,不適用本條) | 只有手動刪除;PA TRAFFIC 摘要與統計估計約 26 MB / 天(150 檔),主機 2、3 WSL 磁碟各約 930 GB 可用 |
 | D17 | ~~這次不改寫 AI 功能,未來由 AI 中控台提供~~(2026-11-02 決定,**2026-11-04 取消 AI 中控台**,由 D23 取代) | — |
 | D18 | 切換後舊版 IIS 留著提供 AI,**直到 A1(AI 搬移)完成**(2026-11-04 改;原為直到 AI 中控台接入);選單放一般連結到舊版,使用者另行登入。知識庫以新版為準,舊版關閉寫入與自動學習;舊版繼續同步 FTP。切換時在 `main` 打標籤保留舊版程式 | 切換不必等 AI 搬完;代價是過渡期 FTP 同步兩份、舊版 AI 參考的知識庫會落後 |
 | D19 | **PA 即時監控**(2026-11-04):新增 Python 服務 `netops-pa`(官方 SDK pan-os-python),每 10–15 秒輪詢設備狀態,並接收 PA-560 轉送的 log(HTTP :51293、Syslog :51294);資料寫入 NetOps 自己的 `netops-redis`;新選單「即時監控」 | 與系統、網通開會決定;SDK 只有 Python 版 |
-| D20 | **不寫入資料庫**(2026-11-04):即時資料用 Redis,歷史用 FTP 事後查詢(沿用現有同步、摘要與明細查詢);會議圖上的 Mongo / Time-Series 不做 | 不增加資料庫維運;歷史查詢已有 FTP |
-| D21 | **原始 log 存進 Redis**(2026-11-04,使用者決定,取代 AGENT §7.2「原始 log 不存本機」):TRAFFIC 每分鐘統計 1 天、明細 1 小時;其他類型明細與統計 2 天;`maxmemory` 2 GB、開 RDB 不開 AOF。TRAFFIC 用 Syslog 轉送,其他類型用 HTTP。欄位沿用舊版功能已在用的欄位;上線後觀察用量再調整 | 實測 TRAFFIC 每天約 1,000 萬筆(4.6–6.8 GB),2 天明細放不下主機 WSL 記憶體(PA-LIVE-PLAN §5);超過保留期間回 FTP |
-| D22 | **第一版只讀**:不寫入防火牆。封鎖 IP(DAG 動態標籤,免 Commit)排在 R2 | 寫入防火牆要另定權限、稽核、白名單與解除流程 |
+| D20 | **不寫入資料庫**(2026-11-04):即時資料用 Redis,歷史用 FTP 事後查詢(沿用現有同步、摘要與明細查詢);會議圖上的 Mongo / Time-Series 不做。**2026-11-10 由 D27、D29、D33 修改**:PA TRAFFIC 與威脅類 log 寫 NetOps 自有的 ClickHouse;歷史查詢改查 ClickHouse,FTP 降為補漏與對帳;其他資料(摘要、知識庫等)仍不寫資料庫 | 不增加資料庫維運;歷史查詢已有 FTP |
+| D21 | **原始 log 存進 Redis**(2026-11-04,使用者決定,取代 AGENT §7.2「原始 log 不存本機」):TRAFFIC 每分鐘統計 1 天、明細 1 小時;其他類型明細與統計 2 天;`maxmemory` 2 GB、開 RDB 不開 AOF。TRAFFIC 用 Syslog 轉送,其他類型用 HTTP。欄位沿用舊版功能已在用的欄位;上線後觀察用量再調整。**2026-11-10 由 D28 修改**:Stream 兼作 ClickHouse 寫入緩衝(保留時間不變,TRAFFIC 明細仍 1 小時);超過保留期間改查 ClickHouse。**由 D28 例外**:轉送欄位加 `seqno`、`sessionid` | 實測 TRAFFIC 每天約 1,000 萬筆(4.6–6.8 GB),2 天明細放不下主機 WSL 記憶體(PA-LIVE-PLAN §5);超過保留期間回 FTP |
+| D22 | **第一版只讀**:不寫入防火牆。封鎖 IP(DAG 動態標籤,免 Commit)排在 R2。**2026-11-10 由 D31 修改**:API 角色加 XML API「Log」權限(查 log 仍是唯讀,不寫防火牆) | 寫入防火牆要另定權限、稽核、白名單與解除流程 |
 | D23 | **AI 搬進 `netops-api`**(2026-11-04):舊版 AI 分析、問答、翻譯、整理筆記、語意搜尋、向量同步、外部 IP 自動學習都搬;直接呼叫 AI 主機 `10.10.130.46`(`:8080` 模型 `Qwen3.6-35B-A3B-FP8`、`:8081` embedding),`.45` 配置相同作為備用。**翻譯與整理筆記後來決定不搬**(2026-11-09,見 D25) | 取消 AI 中控台,沿用原本專案的 AI 功能;搬完後可停用舊版 IIS |
 | D24 | `netops-pa` **不註冊為 Gateway 上游**:瀏覽器與 BFF 只連 `netops-api`,由它讀 Redis | 權限、稽核、監控都維持一個入口 |
 | D25 | **A1 的權限、開關與送給模型的資料**(2026-11-06,需求方決定):① AI 只用一個權限 `netops.ai.use`(admin、viewer),不拆 PA / AD;它的實際範圍是 PA + AD + 知識庫的彙整,所以 AI 按鈕一併綁定三個讀取權限。② 向量同步(`VECTOR_SYNC`)與每天 03:00 的外部 IP 自動學習(`IPLEARN_HOUR`)**等舊版 IIS 停用後才開**:測試區一直關,正式區在 A1 上線、舊版停用時切換(步驟見 [AI-FEATURE-INVENTORY.md](AI-FEATURE-INVENTORY.md) §4),預設值維持關閉。③ **AGENT.md §7.4 的例外**:問答送給模型的彙整含最多 15 筆範例紀錄(含來源使用者帳號)與 AD 事件訊息前 400 字,照舊版;模型在公司內部 AI 主機。④ 哪些 AI 功能不搬由需求方依 [AI-FEATURE-INVENTORY.md](AI-FEATURE-INVENTORY.md) 決定(「功能不用全部搬」)。⑤ **2026-11-09 決定**:翻譯與整理筆記(請 AI 記錄)**不搬**(D23 所列這兩項取消;管理者在知識庫頁自己寫筆記);外部 IP 自動學習照現在做法(直接寫入、標「自動學習」,不加「待確認」),時機依 ②;其餘(分析、問答 PA / AD、語意搜尋、向量同步、服務狀態)照搬 | ① 簡化授權;② 舊版仍同步同一個 Qdrant collection,兩邊同步會互刪;③ 範例紀錄是判斷「卡在哪一段」的依據,且資料不出公司內網;⑤ 整理筆記會讓外部可控文字直接進知識庫,翻譯不是網通判讀必要的功能 |
-| D26 | **R1 的安全取捨與測試區收集器開關**(2026-11-09,需求方決定):① 接受 R1-1~R1-4:Syslog 接收端點在設定 mTLS 前只靠 Windows 防火牆限制來源(WSL portproxy 後容器看不到 PA-560 真實 IP);`netops-redis` 不設密碼 / ACL,只靠 Compose 內部網路隔離;容器與機密檔共用 uid 1000;正式區沒有接收端點憑證時接受明文接收(`PA_RECEIVE_PLAINTEXT=1`)。② **viewer 可以匯出 Log 明細**(HANDOFF 待決定 j),維持現狀(匯出設 `x-audit-level: meta`)。③ **測試區收集器手動開關**(需求方原話「在測試區我想要有按鈕可以停用或開啟」;輪詢「手動開關」,不是測完自動關):環境變數 `PA_POLL_ENABLED` / `PA_RECEIVE_ENABLED` 仍是總開關(決定能不能開);畫面按鈕只切換執行中的暫停 / 繼續,狀態存在 Redis `netops:pa:control`(PA-LIVE-PLAN §4),`netops-api` 經 `infra/redis` 的具名函式寫入(這是 `netops-api` 對 Redis 唯一的寫入)。權限 `netops.pa-realtime.write`,按鈕 `netops.pa-live.manage` 只給 `netops-admin`;正式區 API 回 403、`netops-pa` 不讀這個鍵。接收暫停時端點照開、log 丟棄並計數(不關 port) | ① 都在公司內網、單一主機,風險已知;② 匯出內容與 viewer 能查詢的相同;③ 測試區輪詢會增加 PA-560 管理平面負擔,需求方要能自己隨時停,不用改主機設定重新部署;接收暫停不關 port,PA-560 端不會累積重送、繼續時立即恢復 |
+| D26 | **R1 的安全取捨與測試區收集器開關**(2026-11-09,需求方決定):① 接受 R1-1~R1-4:Syslog 接收端點在設定 mTLS 前只靠 Windows 防火牆限制來源(WSL portproxy 後容器看不到 PA-560 真實 IP);`netops-redis` 不設密碼 / ACL,只靠 Compose 內部網路隔離;容器與機密檔共用 uid 1000;正式區沒有接收端點憑證時接受明文接收(`PA_RECEIVE_PLAINTEXT=1`)。② **viewer 可以匯出 Log 明細**(HANDOFF 待決定 j),維持現狀(匯出設 `x-audit-level: meta`)。③ **測試區收集器手動開關**(需求方原話「在測試區我想要有按鈕可以停用或開啟」;輪詢「手動開關」,不是測完自動關):環境變數 `PA_POLL_ENABLED` / `PA_RECEIVE_ENABLED` 仍是總開關(決定能不能開);畫面按鈕只切換執行中的暫停 / 繼續,狀態存在 Redis `netops:pa:control`(PA-LIVE-PLAN §4),`netops-api` 經 `infra/redis` 的具名函式寫入(這是 `netops-api` 對 Redis 唯一的寫入)。權限 `netops.pa-realtime.write`,按鈕 `netops.pa-live.manage` 只給 `netops-admin`;正式區 API 回 403、`netops-pa` 不讀這個鍵。接收暫停時端點照開、log 丟棄並計數(不關 port)。**2026-11-10 由 D32 修改**:「`netops-api` 對 Redis 唯一的寫入」擴大為開關、儀表板快取、PA 查詢冷卻與工作三類 | ① 都在公司內網、單一主機,風險已知;② 匯出內容與 viewer 能查詢的相同;③ 測試區輪詢會增加 PA-560 管理平面負擔,需求方要能自己隨時停,不用改主機設定重新部署;接收暫停不關 port,PA-560 端不會累積重送、繼續時立即恢復 |
 
-### 3.1 提案:PA log 高吞吐架構(ClickHouse,2026-11-10,**提案,待需求方核准**)
+### 3.1 PA log 高吞吐架構(ClickHouse,**2026-11-10 已核准**)
 
-> 以下 D27–D33 **尚未生效**;核准前 D20、D21、D26 與 AGENT §7.2 照舊。細節、容量估算與待決策項目(CQ1–CQ14)見 [PA-LOG-CLICKHOUSE-GUIDE.md](PA-LOG-CLICKHOUSE-GUIDE.md)。核准後把狀態改成「定案」並註明日期與選項。
+> 需求方 2026-11-10「全部照建議」:D27–D33 與待決策 CQ1–CQ14 全部照 [PA-LOG-CLICKHOUSE-GUIDE.md](PA-LOG-CLICKHOUSE-GUIDE.md) §12 的建議核准(手冊 §12「決定」欄)。被修改的既有決策(D16、D20、D21、D22、D26)原文保留,加註「由 D2x 修改」。有外部前置條件的項目(CQ2 正式區資源、CQ3、CQ6、CQ9)要先完成才能開工對應階段(IMPL-PLAN C0–C6)。
 
-| # | 決策(提案) | 取代 / 修改 | 理由 | 狀態 |
+| # | 決策 | 取代 / 修改 | 理由 | 狀態 |
 | --- | --- | --- | --- | --- |
-| D27 | **引入 NetOps 自有的 ClickHouse**(`netops-clickhouse`,只在 Compose 內部網路):PA TRAFFIC 與威脅類(threat、url、data、wildfire)原始 log 保留 30 天,每小時彙總 13 個月(手冊 §7) | **推翻 D20 的「不寫入資料庫」**(只限這個 ClickHouse;SQL Server、Gateway 資料庫照舊不用);修改 AGENT §7.2「原始 log 不進資料庫」;§4.3 原「資料庫階段」的方向不採用 | FTP 整天掃描太慢;TRAFFIC 實測約 1,000 萬筆 / 天,SQL Server 2012 Standard 不適合;已有 Syslog 即時串流可直接寫入 | 提案(CQ1) |
-| D28 | **寫入走 Redis Stream**:新服務 `netops-ingest`(TS,與 `netops-api` 同映像不同進入點)以 consumer group 讀現有 `netops:pa:log:{type}`,每 3–5 秒批次寫 ClickHouse,成功才 ACK;不另開 Stream | 修改 D21:Redis Stream 多一個「寫入緩衝」角色(保留時間不變);D9 的單一容器限制只套用 `netops-api` | 接收與寫入解耦,ClickHouse 停機有約 1 小時緩衝;不增加 Redis 記憶體 | 提案(CQ4、CQ13) |
-| D29 | **查詢分工**:總覽、趨勢、Top N、威脅統計、30 天內明細查 ClickHouse(+ Redis 快取 30–60 秒);最近 1 小時與設備狀態仍查 Redis;PA-560 只做 Session Browser、HA / 介面狀態與單一 IP ≤ 15 分鐘、≤ 500 筆的精準 log 查詢 | 修改 D20「歷史用 FTP 事後查詢」 | PA 管理平面不能撈大量歷史;ClickHouse 秒級查詢 | 提案(CQ10) |
-| D30 | **冷資料 Parquet 歸檔**:每天凌晨匯出前一天到 NAS `giga-netops/{env}/pa-archive/YYYY/`,先寫本機暫存再搬、記 SHA-256 與 manifest;> 30 天以 ClickHouse `file()` 唯讀查詢(工作模式) | 新增;D16「檔案資料不自動清除」不適用於 ClickHouse(TTL 自動刪) | 本機只放熱資料;NAS 瞬斷不影響寫入 | 提案(CQ3、CQ12、CQ14;**現有 NAS 分享只剩 18 GB,放不下一年**) |
-| D31 | **PA log 精準查詢**:由 `netops-pa`(Python,pan-python `xapi.log`)執行,`netops-api` 只送出工作;全域同時 1 個、每人冷卻 60 秒、全域間隔 10 秒、逾時 60 秒,忙碌回 429;測試區預設關閉 | 修改 D22:API Key 角色要加 XML API「Log」權限(仍唯讀,不寫防火牆) | 保護 PA-560 管理平面;API Key 只放在一個容器 | 提案(CQ5、CQ6、CQ7) |
-| D32 | **`netops-api` 寫 Redis 的範圍**擴大為:測試區開關(既有)、儀表板快取 `netops:cache:*`、PA 查詢冷卻與工作 `netops:paq:*`;都只經 `infra/redis`、都有 TTL | 修改 D26「`netops-api` 對 Redis 唯一的寫入是開關」 | 快取與限流需要共用狀態 | 提案(CQ11) |
-| D33 | **FTP 降級為補漏與對帳**:每天以 FTP 逐列計數對帳每小時筆數,差異 > 0.5% 的時段從 FTP 匯入補齊;過渡期 FTP 摘要與明細並行 2 週後切換 | 修改 D20(FTP 不再是歷史查詢的主要來源);D18 舊版 IIS 同步 FTP 不受影響 | Syslog 不是無遺失管道(PA 連線失敗不重試、速率上限丟棄) | 提案(CQ10) |
+| D27 | **引入 NetOps 自有的 ClickHouse**(`netops-clickhouse`,只在 Compose 內部網路),**範圍限 TRAFFIC 與威脅類**(threat、url、data、wildfire)。保留(CQ12):原始 TRAFFIC 30 天、威脅類 90 天、每小時彙總 13 個月、來源 IP 彙總 90 天。部署(CQ2):**測試區 TTL 2–3 天只驗功能,正式區 30 天**;正式區上線前看實測,記憶體不夠就加大主機 3 WSL 或換主機(手冊 §4.6、§7) | **推翻 D20 的「不寫入資料庫」**(只限這個 ClickHouse;SQL Server、Gateway 資料庫照舊不用);修改 AGENT §7.2「原始 log 不進資料庫」;§4.3 原「資料庫階段」的方向不採用 | FTP 整天掃描太慢;TRAFFIC 實測約 1,000 萬筆 / 天,SQL Server 2012 Standard 不適合;已有 Syslog 即時串流可直接寫入 | 已核准(2026-11-10)(CQ1、CQ2、CQ12);**前置**:正式區資源(主機 3 記憶體 / 磁碟,C6 前確認) |
+| D28 | **寫入走 Redis Stream**:新服務 `netops-ingest`(TS,與 `netops-api` 同映像不同進入點,CQ4)以 consumer group 讀現有 `netops:pa:log:{type}`,每 3–5 秒批次寫 ClickHouse,成功才 ACK;不另開 Stream;TRAFFIC Stream 維持 1 小時(CQ13)。**先不過濾雜訊**,查詢時排除,一個月後看雜訊佔比(CQ8)。**轉送格式加 `$seqno`、`$sessionid`**(CQ9,AGENT §7.2「欄位不新增」的例外),供補漏去重 | 修改 D21:Redis Stream 多一個「寫入緩衝」角色(保留時間不變)、轉送欄位加兩個;D9 的單一容器限制只套用 `netops-api` | 接收與寫入解耦,ClickHouse 停機有約 1 小時緩衝;不增加 Redis 記憶體 | 已核准(2026-11-10)(CQ4、CQ8、CQ9、CQ13);**前置**:網通改 Custom Log Format 加 `$seqno`、`$sessionid` 並 Commit(CQ9) |
+| D29 | **查詢分工**:總覽、趨勢、Top N、威脅統計、30 天內明細查 ClickHouse(+ Redis 快取 30–60 秒);最近 1 小時與設備狀態仍查 Redis;PA-560 只做 Session Browser、HA / 介面狀態與單一 IP ≤ 15 分鐘、≤ 500 筆的精準 log 查詢 | 修改 D20「歷史用 FTP 事後查詢」 | PA 管理平面不能撈大量歷史;ClickHouse 秒級查詢 | 已核准(2026-11-10)(CQ10) |
+| D30 | **冷資料 Parquet 歸檔**:每天凌晨匯出前一天到 NAS `/mnt/nas-docker/giga-netops/{env}/pa-archive/YYYY/`(CQ14),先寫本機暫存再搬、記 SHA-256 與 manifest;> 30 天以 ClickHouse `file()` 唯讀查詢(工作模式)。**歸檔範圍依 CQ3**:先問 FTP 10.10.130.66 本身保留多久,保留夠長就只歸檔每小時彙總,不夠就申請 NAS 空間後歸檔原始 log(Parquet 至少 1 年,CQ12) | 新增;D16「檔案資料不自動清除」不適用於 ClickHouse(TTL 自動刪) | 本機只放熱資料;NAS 瞬斷不影響寫入 | 已核准(2026-11-10)(CQ3、CQ12、CQ14);**待 FTP 保留期限**:CQ3 的分支要等 FTP 10.10.130.66 保留期限的答案,現有 NAS 分享只剩 18 GB |
+| D31 | **PA log 精準查詢**:由 `netops-pa`(Python,pan-python `xapi.log`)執行,`netops-api` 只送出工作;全域同時 1 個、每人冷卻 60 秒、全域間隔 10 秒、逾時 60 秒,忙碌回 429;測試區預設關閉。**只給 `netops-admin`**(CQ7:`netops-viewer` 排除 `netops.pa-query.read`) | 修改 D22:API Key 角色要加 XML API「Log」權限(仍唯讀,不寫防火牆) | 保護 PA-560 管理平面;API Key 只放在一個容器 | 已核准(2026-11-10)(CQ5、CQ6、CQ7);**前置**:網通在 API 角色加 XML API「Log」權限並先在離峰試查(CQ6) |
+| D32 | **`netops-api` 寫 Redis 的範圍**擴大為:測試區開關(既有)、儀表板快取 `netops:cache:*`、PA 查詢冷卻與工作 `netops:paq:*`;都只經 `infra/redis`、都有 TTL | 修改 D26「`netops-api` 對 Redis 唯一的寫入是開關」 | 快取與限流需要共用狀態 | 已核准(2026-11-10)(CQ11) |
+| D33 | **FTP 降級為補漏與對帳**:每天以 FTP 逐列計數對帳每小時筆數,差異 > 0.5% 的時段從 FTP 匯入補齊;過渡期 FTP 摘要與明細並行 2 週後切換 | 修改 D20(FTP 不再是歷史查詢的主要來源);D18 舊版 IIS 同步 FTP 不受影響 | Syslog 不是無遺失管道(PA 連線失敗不重試、速率上限丟棄) | 已核准(2026-11-10)(CQ10:並行對帳 2 週後切換) |
 
 ---
 
@@ -112,6 +112,8 @@ flowchart LR
 設備快照、2 天內的 log 與每分鐘統計放 `netops-redis`,鍵設計與容量估算見 [PA-LIVE-PLAN.md](PA-LIVE-PLAN.md) §4、§5。`netops-api` 只經 `infra/redis` 的具名函式讀取。
 
 ### 4.3 ~~未來:服務直接寫入資料庫~~(2026-11-04 取消,D20)
+
+> 2026-11-10:PA log 改寫 ClickHouse(D27),下面的 `giganexus_gw` / SQL Server 方向仍不採用。資料表與保留見 [PA-LOG-CLICKHOUSE-GUIDE.md](PA-LOG-CLICKHOUSE-GUIDE.md) §7。
 
 以下是原規劃,保留供參考。**不再排程**;「檔案只經 `infra/store` 存取」的邊界照常遵守:
 
@@ -142,6 +144,7 @@ netops.ping.read                         連線驗證 API(B0,GET /api/netops/pin
 netops.app.access                        應用
 ├─ netops.group.firewall                 防火牆 PA-560
 │  ├─ netops.pa-live.read                即時監控     → netops.pa-realtime.read(草案,D19,未實作)
+│  │  └─ netops.pa-live.query (button)   向 PA-560 查詢 → netops.pa-query.read(D31,C5;只給 netops-admin)
 │  ├─ netops.pa-dashboard.read           流量總覽     → netops.pa.read
 │  │  └─ netops.pa-dashboard.ai (button)  AI 分析      → netops.ai.use(A1)
 │  ├─ netops.pa-events.read              安全事件     → netops.pa.read
@@ -165,7 +168,7 @@ netops.app.access                        應用
 | 角色 | 內容 |
 | --- | --- |
 | `netops-admin` | 全部 |
-| `netops-viewer` | 全部 `.read` 與 `netops.ai.use`(A1,2026-11-05 決定);不含 `netops.ftp.write`、`netops.kb.write` |
+| `netops-viewer` | 全部 `.read` 與 `netops.ai.use`(A1,2026-11-05 決定);不含 `netops.ftp.write`、`netops.kb.write`;**例外:不含 `netops.pa-query.read`**(D31,CQ7,2026-11-10) |
 
 新權限預設沒有人擁有,成員由系統負責人上線時指派(D15);不比照舊版「清單空白就開放全部在職員工」。
 
@@ -197,4 +200,4 @@ netops.app.access                        應用
 | Q3 | 知識庫備份到 NAS 的位置與帳號 | D1 比照附件服務 `docker-backup` |
 | Q4 | 資料庫階段的各項決定(§4.3) | 已取消(D20,2026-11-04) |
 | Q5 | PA 即時監控與 AI 搬移的開工前事項 | 見 PA-LIVE-PLAN §11(P1–P6) |
-| Q6 | PA log 高吞吐架構(ClickHouse)提案 D27–D33 是否核准 | **待需求方**;決策項目 CQ1–CQ14 見 [PA-LOG-CLICKHOUSE-GUIDE.md](PA-LOG-CLICKHOUSE-GUIDE.md) §12 |
+| Q6 | PA log 高吞吐架構(ClickHouse)D27–D33 是否核准 | **已核准(2026-11-10,全部照建議)**;外部前置事項見 IMPL-PLAN C0 |

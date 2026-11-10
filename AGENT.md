@@ -2,7 +2,7 @@
 
 > 本文件是 AI 程式助手(Claude、Gemini 等)在本專案中的行為準則,所有 AI 協作開發必須遵守。
 > Gateway 的規格(`../giga-api-gateway-bff/docs/`)是上位規範;本文件與之不一致時,**先指出差異,不要自行決定以哪一邊為準**。
-> 本專案的設計決策(D1–D24)以 **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** 為準,工作項目(D0–D2、S0、A1、R0–R2)見 **[docs/IMPL-PLAN.md](docs/IMPL-PLAN.md)**;跨專案規則見 `../giga-api-gateway-bff/AGENT.md` **§10 多專案工作區**。
+> 本專案的設計決策(D1–D33)以 **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** 為準,工作項目(D0–D2、S0、A1、R0–R2、C0–C6)見 **[docs/IMPL-PLAN.md](docs/IMPL-PLAN.md)**;跨專案規則見 `../giga-api-gateway-bff/AGENT.md` **§10 多專案工作區**。
 
 ---
 
@@ -86,13 +86,13 @@
 
 | 項目 | 內容 |
 | --- | --- |
-| 做什麼 | 資訊網通管理系統:PA-560 防火牆 log(流量總覽、安全事件、明細查詢、**即時監控**)、AD 事件記錄、網通知識庫、AI 分析與問答。2026-11-04 取消 AI 中控台:**AI 搬進新版**(A1,D23);PA 即時監控用 pan-os-python + Redis(R1,D19);不寫資料庫(D20)。細節見 `docs/PA-LIVE-PLAN.md` |
+| 做什麼 | 資訊網通管理系統:PA-560 防火牆 log(流量總覽、安全事件、明細查詢、**即時監控**)、AD 事件記錄、網通知識庫、AI 分析與問答。2026-11-04 取消 AI 中控台:**AI 搬進新版**(A1,D23);PA 即時監控用 pan-os-python + Redis(R1,D19);不寫關聯式資料庫(D20)。**2026-11-10 核准 PA log 寫 ClickHouse**(C0–C6,D27–D33):TRAFFIC 與威脅類原始 log 存 NetOps 自有的 `netops-clickhouse`,冷資料歸檔 NAS。細節見 `docs/PA-LIVE-PLAN.md`、`docs/PA-LOG-CLICKHOUSE-GUIDE.md` |
 | 狀態 | **D1 已上測試區**(`backend/`、`frontend/` 經 Gateway);舊版根目錄 `server/`、`src/` 仍在 IIS `/NetOps` 運作。進度看 `docs/HANDOFF.md` |
 | 系統代碼 / SPA 子路徑 | `netops` / `/netops/` |
 | 服務代碼 / port | `netops-api` / **51292**(Gateway BACKEND-GUIDE §3.3 登記中,不可自行換 port) |
 | API | 對外 `/api/netops/*`,後端 `/v1/*` |
 | 登入 | **後端不實作登入**,只信任 Gateway 的 `X-Internal-Token`;前端用 `@giganexus/web-kit`,未登入導向入口網 `/login`(§7.1) |
-| 資料 | 歷史存檔案,經 `infra/store` 存取;即時資料存 `netops-redis`(TRAFFIC 明細 1 小時 / 統計 1 天,其他 2 天);**不寫入資料庫**(§7.2、ARCHITECTURE D20、D21) |
+| 資料 | 摘要、統計、知識庫存檔案,經 `infra/store` 存取;即時資料存 `netops-redis`(TRAFFIC 明細 1 小時 / 統計 1 天,其他 2 天);PA TRAFFIC 與威脅類原始 log 存 `netops-clickhouse`(TRAFFIC 30 天、威脅類 90 天),只經 `infra/clickhouse` 存取;**其他資料不寫入資料庫**(§7.2、ARCHITECTURE D20、D21、D27) |
 | 外部相依 | FTP `10.10.130.66`(log 來源,唯讀);AI 主機 `10.10.130.46`(`:8080` 模型 `Qwen3.6-35B-A3B-FP8`、`:8081` embedding;`10.10.130.45` 配置相同作為備用)、Qdrant;PA-560 管理介面(R1,SDK 唯讀) |
 | 負責人 | 佳緯 |
 | 工作區 | 與 `../giga-api-gateway-bff/`(上位規範、SDK、web-kit、路由表)、`../GigaItApp/`(權限設定、畫面範本)、`../giga-observe/`(監控)同層 |
@@ -110,7 +110,7 @@
 ## 2. 簡單優先
 
 - 用最少的程式碼解決當前問題,不寫「未來可能用到」的程式碼。
-- **不寫入資料庫**(D20):只保留 `infra/store`、`infra/redis` 邊界,不寫資料庫實作、不做通用 ORM 或多後端切換框架。
+- **不寫入關聯式資料庫**(D20):只保留 `infra/store`、`infra/redis`、`infra/clickhouse` 邊界,不做通用 ORM 或多後端切換框架。唯一的例外是 PA log 的 ClickHouse(D27,2026-11-10 核准):只寫 TRAFFIC 與威脅類,SQL 直接寫在 `infra/clickhouse`,不加 ORM。
 - 新增套件前先說明理由(Gateway `docs/TECH-STACK.md` 已列的優先)。
 
 ## 3. 外科手術式修改
@@ -166,8 +166,13 @@
 - **核心邏輯不直接讀寫資料檔**:一律經 `backend/src/infra/store/` 的具名函式(例如 `saveSummary`、`listSummaries`),不在 `modules/` 內組資料目錄路徑。
 - API 回應不暴露實體路徑、檔案結構或 Redis 鍵,換儲存時 API 不變。
 - 匯入流程與資料寫入分開:解析、彙總是純函式,寫入只呼叫 store。
-- **原始 log 不存本機檔案、不進資料庫**,只存摘要與統計。例外:PA 即時 log 存進 `netops-redis`,**TRAFFIC 明細 1 小時、統計 1 天;其他類型 2 天**(使用者 2026-11-04 決定,ARCHITECTURE D21);保留時間或範圍要改,先由使用者決定。
-- **不寫入資料庫**(D20):即時用 Redis,歷史用 FTP。要重新引入資料庫,先由使用者決定並改 ARCHITECTURE。
+- **原始 log 不存本機檔案、不進資料庫**,只存摘要與統計。例外(保留時間或範圍要改,先由需求方決定):
+  - PA 即時 log 存進 `netops-redis`,**TRAFFIC 明細 1 小時、統計 1 天;其他類型 2 天**(2026-11-04 決定,ARCHITECTURE D21)。
+  - **PA TRAFFIC 與威脅類(threat、url、data、wildfire)原始 log 存進 `netops-clickhouse`**:原始 TRAFFIC 30 天、威脅類 90 天、每小時彙總 13 個月、來源 IP 彙總 90 天;測試區 TTL 2–3 天只驗功能(需求方 2026-11-10 核准,ARCHITECTURE D27、手冊 `docs/PA-LOG-CLICKHOUSE-GUIDE.md` §12 CQ1、CQ2、CQ12)。decryption、globalprotect、userid 不進 ClickHouse。
+  - **冷資料 Parquet 歸檔**到 NAS `/mnt/nas-docker/giga-netops/{env}/pa-archive/YYYY/`,只經 `netops-ingest` 寫入(D30);歸檔原始 log 還是只歸檔彙總,依 FTP 保留期限決定(CQ3,待確認)。
+- **不寫入關聯式資料庫**(D20):即時用 Redis,PA log 歷史用 ClickHouse(D27、D29),FTP 降為補漏與對帳(D33)。要再引入其他資料庫或擴大 ClickHouse 的範圍,先由需求方決定並改 ARCHITECTURE。
+- **轉送欄位例外**:PA log 欄位沿用舊版已在用的欄位,不新增;**例外是 `seqno`、`sessionid`**(補漏去重用,2026-11-10 核准,D28 / CQ9)。
+- ClickHouse 只經 `infra/clickhouse` 的具名函式存取:查詢條件一律用 `query_params`,表名只用程式內常數;`netops-api` 用唯讀帳號,寫入與歸檔用 `netops-ingest` 的帳號(手冊 §10.2)。
 - Redis 只經 `infra/redis` 的具名函式讀取,模組不自行組鍵;`netops-pa` 寫入的鍵格式見 `docs/PA-LIVE-PLAN.md` §4。
 
 ### 7.3 長時間工作(D6)
@@ -246,9 +251,10 @@
 
 | 文件 | 路徑 | 說明 |
 | --- | --- | --- |
-| 架構與決策 | `docs/ARCHITECTURE.md` | 目標架構、決策 D1–D24、權限草案、待確認事項 |
+| 架構與決策 | `docs/ARCHITECTURE.md` | 目標架構、決策 D1–D33、權限草案、待確認事項 |
 | 流程架構 | `docs/FLOW-ARCHITECTURE.md` | 資料與 AI 流程:現況、過渡期、未來目標 |
-| 實作計畫 | `docs/IMPL-PLAN.md` | D0–D2、S0、A1、R0–R2 工作項目與完成條件 |
+| 實作計畫 | `docs/IMPL-PLAN.md` | D0–D2、S0、A1、R0–R2、C0–C6 工作項目與完成條件 |
+| PA log 高吞吐架構 | `docs/PA-LOG-CLICKHOUSE-GUIDE.md` | ClickHouse、Parquet 冷歸檔、PA 精準查詢(2026-11-10 核准) |
 | PA 即時監控與 AI 搬移 | `docs/PA-LIVE-PLAN.md` | pan-os-python、Redis、串流、AI 主機(2026-11-04 規劃) |
 | 專案地圖 | `docs/PROJECT-MAP.md` | 目錄與職責、已知差異 |
 | 交接 | `docs/HANDOFF.md` | 目前進度與下一步 |

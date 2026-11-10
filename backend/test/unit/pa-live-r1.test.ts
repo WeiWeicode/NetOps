@@ -10,7 +10,7 @@ import type { AddressInfo } from 'node:net';
 import { after, before, beforeEach, describe, it } from 'node:test';
 import { createPaLiveRedis, minuteBucket } from '../../src/infra/redis/index.js';
 import { deriveStatus, matchLog, summarizeError } from '../../src/modules/pa-live/service.js';
-import { parseCursor } from '../../src/modules/pa-live/live-routes.js';
+import { LIVE_MAX_PER_USER, parseCursor } from '../../src/modules/pa-live/live-routes.js';
 import { FakeRedis } from '../fixtures/fake-redis.js';
 import { createTestApp, waitFor, type TestApp } from '../helpers.js';
 
@@ -265,7 +265,7 @@ describe('PA 即時監控串流(SSE)', () => {
     redis.setHeartbeat(hbOk());
     t = await createTestApp({
       paLiveRedis: createPaLiveRedis(redis),
-      liveStream: { pollMs: 30, snapshotMs: 1000, heartbeatMs: 50, maxMs: 1500, maxStreams: 3, maxPerUser: 2 },
+      liveStream: { pollMs: 30, snapshotMs: 1000, heartbeatMs: 50, maxMs: 1500, maxStreams: 5 },
     });
     await t.app.listen({ port: 0, host: '127.0.0.1' });
     port = (t.app.server.address() as AddressInfo).port;
@@ -309,17 +309,21 @@ describe('PA 即時監控串流(SSE)', () => {
     c.abort();
   });
 
-  it('每人上限回 429(不回 5xx);斷線後釋放名額;最長時間到結束', async () => {
+  it('每人上限 3 條(預設值,2026-11-10 需求方決定),第 4 條回 429(不回 5xx);斷線後釋放名額;最長時間到結束', async () => {
+    assert.equal(LIVE_MAX_PER_USER, 3);
     const a = connect(port, '/v1/pa-live/stream', auth);
     const b = connect(port, '/v1/pa-live/stream', auth);
-    await a.response;
-    await b.response;
+    const third = connect(port, '/v1/pa-live/stream', auth);
+    assert.equal((await a.response).status, 200);
+    assert.equal((await b.response).status, 200);
+    assert.equal((await third.response).status, 200);
     const c = connect(port, '/v1/pa-live/stream', auth);
     const res = await c.response;
     assert.equal(res.status, 429);
     await res.ended;
     assert.match(res.body(), /NETOPS_STREAM_BUSY/);
     a.abort();
+    third.abort();
     await waitFor(async () => {
       const d = connect(port, '/v1/pa-live/stream', auth);
       const r = await d.response;

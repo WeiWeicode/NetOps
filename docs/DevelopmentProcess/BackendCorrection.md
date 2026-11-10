@@ -2,6 +2,12 @@
 
 > `backend/`、`deploy/` 的修改;新紀錄加在最上方,格式見 `AGENT.md` §11。
 
+## 2026-11-10 R1:即時監控串流每人上限 2 → 3
+- 工作項目:R1(需求方 2026-11-10 決定「提高到每人 3 條」;驗收報告 `docs/test-reports/2026-11-10-pa-live-uat.md` §3.1 項目 4、§4.4-2)
+- 內容:`GET /v1/pa-live/stream` 每人(工號)同時串流上限由 2 改為 3(`LIVE_MAX_PER_USER`),同一人多個分頁或多台裝置不再互相擠掉;全系統上限 20 不變。串流驗證(`stream-test`,§3.1)每人 2 條、AI 串流每人 2 個 / 全系統 6 個都不變。OpenAPI 說明與 `x-gherkin`、`docs/API.md` §3.2 與錯誤代碼表、Gherkin 同步;`x-gherkin` 來源行號依新位置更新。
+- 檔案:`backend/src/modules/pa-live/live-routes.ts`、`backend/test/unit/pa-live-r1.test.ts`、`docs/API.md`、`docs/Gherkin/pa-live/realtime.feature`
+- 驗證:`npm run typecheck`、`npm test`(192 通過;測試改用預設值,3 條成功、第 4 條 429)、`npm run build`;`check-scenarios.mjs` 90 / 90
+
 ## 2026-11-09 R1:測試區收集器開關、CI 冒煙測試不再產生 401
 - 工作項目:R1(需求方 2026-11-09 決定「在測試區我想要有按鈕可以停用或開啟」;驗收報告 `docs/test-reports/2026-11-09-a1-r1-uat.md` §4.5;ARCHITECTURE D26)
 - 內容:① `infra/redis` 新增 `collectorControl()`、`setCollectorControl()`(鍵 `netops:pa:control`,PA-LIVE-PLAN §4;`netops-api` 對 Redis 唯一的寫入)。② `PUT /v1/pa-live/collector-control`(`netops.pa-realtime.write`、`x-audit-level: body`;內容 `pollPaused` / `receivePaused` 至少一個;記錄「姓名(工號)」與時間,日誌記工號與要求);正式區(`GW_ENV=prod`)回 403 `NETOPS_PA_CONTROL_DISABLED`、`snapshot` 不讀控制鍵。③ `snapshot` 回 `control`;收集器狀態加 `poll.paused`、`receive.paused`、`counters.paused` 與 `state: paused`(有開的部分都暫停),暫停中的舊輪詢錯誤不算 `degraded`。④ `netops-pa`:`control.py` 每次輪詢前讀(暫停時不查 PA-560、清掉介面計數與舊錯誤)、每 5 秒(心跳)讀一次接收狀態(暫停時丟棄並計數 `paused`,HTTP 仍回 200);讀取失敗沿用上一次;正式區不讀;心跳加 `pollPaused`、`receivePaused`。⑤ `gateway-rbac.yaml` 新增按鈕 `netops.pa-live.manage`(→ `netops.pa-realtime.write`),只放進 `netops-admin`。⑥ CI `deploy-api-test` 的冒煙測試原本不帶 Token 打 `/v1/ping` 確認 401,每次部署都在 giga-observe 留一筆 401(驗收 §4.5 的來源);改打 `/healthz`(監控忽略),401 由單元測試涵蓋。

@@ -37,6 +37,8 @@ const READ_PER_TICK = 500;
 const SEND_PER_TICK = 200;
 /** Last-Event-ID 比現在早超過這個時間就不接續(從最新開始,在 open 標示 gap):重連只補斷線期間,不用來撈舊明細 */
 const RESUME_MAX_MS = 5 * 60_000;
+/** 每人(工號)同時串流上限:2026-11-10 需求方決定由 2 改為 3(同一人多個分頁、多台裝置);全系統上限 20 不變 */
+export const LIVE_MAX_PER_USER = 3;
 
 const ipPattern = '^[0-9A-Fa-f:.]{2,45}$';
 const typeSchema = { type: 'string', enum: [...LOG_TYPES], description: 'log 類型' } as const;
@@ -70,7 +72,7 @@ const paLiveLiveRoutes: FastifyPluginAsync<{ live: PaLiveService; stream?: LiveS
   const snapshotMs = opts.snapshotMs ?? 10_000;
   const maxMs = opts.maxMs ?? 5 * 60_000;
   const maxStreams = opts.maxStreams ?? 20;
-  const maxPerUser = opts.maxPerUser ?? 2;
+  const maxPerUser = opts.maxPerUser ?? LIVE_MAX_PER_USER;
   const active = new Map<PassThrough, { owner: string; stop: () => void }>();
   const countOf = (owner: string) => [...active.values()].filter((a) => a.owner === owner).length;
   app.addHook('preClose', async () => {
@@ -309,7 +311,7 @@ const paLiveLiveRoutes: FastifyPluginAsync<{ live: PaLiveService; stream?: LiveS
         description:
           'Server-Sent Events:連線後立即送 open;每 10 秒 snapshot(同 GET /snapshot);有新 log 時送 logs(types 指定的類型,預設 traffic,threat;可依 ip、port、action 篩選;每次最多 200 筆,跟不上時跳到最新並帶 skipped);每 15 秒 heartbeat。' +
           'logs 事件的 id 為各類型的游標,斷線後瀏覽器以 Last-Event-ID 重連時接續(超過保留時間的已不存在)。單一連線最長 5 分鐘後由伺服器結束,瀏覽器 5 秒後自動重連(BFF 重新檢查登入與權限)。' +
-          '每人同時 2 條、全系統 20 條,超過回 429 NETOPS_STREAM_BUSY。原始明細,稽核記錄查詢條件。',
+          '每人同時 3 條、全系統 20 條,超過回 429 NETOPS_STREAM_BUSY。原始明細,稽核記錄查詢條件。',
         tags: ['PA 即時監控'],
         'x-permission': PERMISSION,
         'x-audit-level': 'meta',
@@ -332,7 +334,7 @@ const paLiveLiveRoutes: FastifyPluginAsync<{ live: PaLiveService; stream?: LiveS
           '  那麼 只收到游標之後的 log',
           '',
           '場景: 連線數超過上限',
-          '  假如 同一使用者已有 2 條串流',
+          '  假如 同一使用者已有 3 條串流',
           '  當 再連線 GET /api/netops/pa-live/stream',
           '  那麼 回應 429 NETOPS_STREAM_BUSY',
         ].join('\n'),

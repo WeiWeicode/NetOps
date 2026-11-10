@@ -1,7 +1,7 @@
 # PA-560 設定規格(給網通):唯讀 API 帳號、HTTP 與 Syslog Log 轉送
 
 > 給負責 PA-560 的網通同仁照著設定。對應 NetOps [PA-LIVE-PLAN.md](PA-LIVE-PLAN.md) §3.1、§4、§9 與 IMPL-PLAN R0。
-> **PAN-OS 版本:12.1.7-h3**(2026-11-09 連線檢查實測,G3)。本文的欄位以 PAN-OS 10.x / 11.x 的畫面與欄位名稱撰寫;12.1 的欄位尚未逐項核對,目前已知的差異是 **B.4 Decryption**(見該節)。設定時以設備畫面上「可選欄位清單」為準,表格裡標「版本」的欄位可能不存在,**不存在就整個 `"key":"$變數"` 拿掉**,其他照設。
+> **PAN-OS 版本:12.1.7-h3**(2026-11-09 連線檢查實測,G3)。本文的欄位以 PAN-OS 10.x / 11.x 的畫面與欄位名稱撰寫;**12.1.7-h3 已於 2026-11-10 在設備上逐項核對**(紀錄見 [test-reports/2026-11-10-pa560-forwarding.md](test-reports/2026-11-10-pa560-forwarding.md)):B、C 節的變數除 B.4 `status` 改為 `$decryption_status` 外全部存在;另 B.1 Username / Password 在 12.1 為必填(見該節)。設定時以設備畫面上「可選欄位清單」為準,表格裡標「版本」的欄位可能不存在,**不存在就整個 `"key":"$變數"` 拿掉**,其他照設。
 > 設定完成後請回覆 **G 節的清單**(管理 IP、PAN-OS 版本、憑證、送 log 的來源 IP、傳輸方式等)。
 
 ---
@@ -66,7 +66,7 @@
 | Port | `51293` |
 | TLS Version | 1.2 以上(HTTPS 時) |
 | HTTP Method | `POST` |
-| Username / Password | 留空(用下面的自訂標頭驗證) |
+| Username / Password | 留空(用下面的自訂標頭驗證)。**PAN-OS 12.1 為必填**:填無意義的假值(不要用真實帳密,PA 會以 HTTP Basic 明文送出);NetOps 接收端不看 `Authorization`,只驗 `X-NetOps-Token` |
 
 ### B.2 Payload Format(每一種類型各設一筆)
 
@@ -90,7 +90,7 @@
 | User-ID | `/v1/logs/userid` | B.6 |
 | Traffic | **不設**(TRAFFIC 走 Syslog,見 C) | — |
 
-> **Escaping**:Payload Format 若有 Escaping 選項,Escaped Characters 設 `"\`、Escape Character 設 `\`,讓 URL 或錯誤訊息裡的雙引號不破壞 JSON。沒有這個選項的版本照設即可;少數含雙引號的 log 會被 NetOps 判為格式錯誤而略過(會計數,不影響其他 log)。
+> **Escaping**:PAN-OS 12.1 的 HTTP Payload Format **沒有** Escaping 選項(Syslog 的 Custom Log Format 有)。Payload Format 若有 Escaping 選項,Escaped Characters 設 `"\`、Escape Character 設 `\`,讓 URL 或錯誤訊息裡的雙引號不破壞 JSON。沒有這個選項的版本照設即可;少數含雙引號的 log 會被 NetOps 判為格式錯誤而略過(會計數,不影響其他 log)。
 > 設完可按 **Send Test Log**:NetOps 收到會回 `200`。回 `401` 表示 Token 不符;連不上表示網路或 Windows 防火牆未放行。
 
 ### B.3 THREAT(威脅、URL、資料過濾、WildFire 共用)
@@ -124,17 +124,17 @@
 
 ### B.4 Decryption(PAN-OS 10.0 以後)
 
-> **PAN-OS 12.1 差異(待網通在設備上確認)**:Palo Alto 文件說明 12.1(部分頁面寫 12.1.2 起)的 Decryption log 把欄位分成用戶端(client)與伺服器端(server)兩側,欄位名稱加上 client / server 前綴,並新增解密狀態、排除原因、憑證撤銷檢查等欄位。下面的 `$tls_version`、`$error`、`$sni` 等變數在 12.1.7-h3 可能已改名。請在 Custom Log Format 的欄位清單對照:**有同名變數就照設;改名的話用 client 側(例如 TLS 版本、SNI 取用戶端那一側)替換,並把實際變數名稱回覆需求方**;沒有對應的就拿掉。NetOps 收到時欄位可缺少,不影響其他欄位。
+> **PAN-OS 12.1.7-h3 實測(2026-11-10)**:欄位清單沒有 `$status`,改用 `$decryption_status`(上面的 JSON 已改);`$error`、`$err_index`、`$tls_version`、`$proxy_type`、`$policy_name`、`$sni` 仍存在,照設(另有 `c_tls_version`、`s_tls_cipher` 等 client / server 前綴欄位,本規格不使用)。以下為原本的說明:Palo Alto 文件說明 12.1(部分頁面寫 12.1.2 起)的 Decryption log 把欄位分成用戶端(client)與伺服器端(server)兩側,欄位名稱加上 client / server 前綴,並新增解密狀態、排除原因、憑證撤銷檢查等欄位。下面的 `$tls_version`、`$error`、`$sni` 等變數在 12.1.7-h3 可能已改名。請在 Custom Log Format 的欄位清單對照:**有同名變數就照設;改名的話用 client 側(例如 TLS 版本、SNI 取用戶端那一側)替換,並把實際變數名稱回覆需求方**;沒有對應的就拿掉。NetOps 收到時欄位可缺少,不影響其他欄位。
 
 ```json
-{"time":"$receive_time","src":"$src","dst":"$dst","rule":"$rule","app":"$app","dport":"$dport","action":"$action","error":"$error","errIndex":"$err_index","status":"$status","tls":"$tls_version","proxyType":"$proxy_type","policy":"$policy_name","sni":"$sni","repeat":"$repeatcnt"}
+{"time":"$receive_time","src":"$src","dst":"$dst","rule":"$rule","app":"$app","dport":"$dport","action":"$action","error":"$error","errIndex":"$err_index","status":"$decryption_status","tls":"$tls_version","proxyType":"$proxy_type","policy":"$policy_name","sni":"$sni","repeat":"$repeatcnt"}
 ```
 
 | key | PAN-OS 變數 | 舊版 CSV 欄位 | 備註 |
 | --- | --- | --- | --- |
 | `error` | `$error` | Error | |
 | `errIndex` | `$err_index` | err_index | 版本:欄位名稱請對照畫面 |
-| `status` | `$status` | Decryption Status | 版本:部分版本沒有,沒有就拿掉 |
+| `status` | `$decryption_status` | Decryption Status | 12.1 實測名稱;舊版為 `$status`,兩者都沒有就拿掉 |
 | `tls` | `$tls_version` | Client TLS Version / tls_version | |
 | `proxyType` | `$proxy_type` | proxy_type | |
 | `policy` | `$policy_name` | policy_name | |
@@ -382,15 +382,15 @@ netsh interface portproxy show v4tov4
 
 ## G. 請網通回覆的資訊(R0)
 
-| # | 項目 | 用在 | 狀態(2026-11-09) |
+| # | 項目 | 用在 | 狀態(2026-11-10) |
 | --- | --- | --- | --- |
 | G1 | 唯讀 API Key(A 節) | SDK 輪詢 | **已取得**(需求方以 `deploy/host2-set-pa-secrets.sh` 寫入主機,AI 不經手) |
 | G2 | PA-560 管理介面 IP(或 DNS 名稱) | `PA_HOST` | **10.10.115.35**(`:443`) |
-| G3 | PAN-OS 版本(Dashboard 或 `show system info` 的 sw-version) | 核對 B、C 節標「版本」的欄位;連線檢查也會印出 | **12.1.7-h3**(2026-11-09 在開發機 10.10.112.13 跑連線檢查取得);B.4 Decryption 欄位名稱待對照設備 |
+| G3 | PAN-OS 版本(Dashboard 或 `show system info` 的 sw-version) | 核對 B、C 節標「版本」的欄位;連線檢查也會印出 | **12.1.7-h3**(2026-11-09 在開發機 10.10.112.13 跑連線檢查取得);B、C 節變數 2026-11-10 已對照設備(B.4 `status` → `$decryption_status`) |
 | G4 | 管理介面憑證:是否自簽、SAN 內有哪些名稱 / IP、簽發的 CA 憑證 | `PA_CA_FILE`;決定是否需暫用 `PA_TLS_INSECURE`(只限測試區) | **出廠自簽**:CN 與 SAN 都只有 `DNS:044109003916`(序號),沒有 IP SAN。測試區暫用 `PA_TLS_INSECURE=1`;**正式區要請網通換成公司 CA 簽發、SAN 含 `10.10.115.35`(或公司 DNS 名稱)的憑證**,並提供 CA 憑證 |
 | G5 | 管理介面 Permitted IP Addresses 已加入 `10.10.130.124`(與正式區 `.122`)、網路放行到管理介面 `:443` | 輪詢 | 待回覆 |
-| G6 | PA-560 送 log 的**來源 IP**(管理介面或 service route 指定的介面) | 主機 Windows 防火牆規則(附錄 F.2) | 待回覆 |
-| G7 | HTTP 用 HTTPS 或 HTTP;Syslog 用 SSL 或 TCP;PA-560 是否信任公司內部 CA(信任才能用 HTTPS / SSL) | 接收端點憑證(F.6) | 待回覆 |
+| G6 | PA-560 送 log 的**來源 IP**(管理介面或 service route 指定的介面) | 主機 Windows 防火牆規則(附錄 F.2) | **10.10.115.35**(管理介面;2026-11-10 主機 2 抓封包確認,51293、51294 都是這個來源) |
+| G7 | HTTP 用 HTTPS 或 HTTP;Syslog 用 SSL 或 TCP;PA-560 是否信任公司內部 CA(信任才能用 HTTPS / SSL) | 接收端點憑證(F.6) | 測試區:**HTTP、TCP 明文**(需求方同意);內部 CA 信任未確認 |
 | G8 | Syslog SSL 能否設定**用戶端憑證**,能的話提供簽發的 CA 憑證 | Syslog 唯一能驗證來源的方式(F.4.1) | 待回覆 |
-| G9 | B、C、D 節設定完成(先只加正式區;測試時再加測試區 `10.10.130.124`) | 接收 | 待設定 |
+| G9 | B、C、D 節設定完成(先只加正式區;測試時再加測試區 `10.10.130.124`) | 接收 | **測試區已設定並 Commit**(2026-11-10,只有 `netops-test` 10.10.130.124;正式區未加) |
 | G10 | 開 TRAFFIC 前後的管理平面 CPU 與 log 轉送佇列觀察(E4) | 負載 | 設定後 |

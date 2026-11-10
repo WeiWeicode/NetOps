@@ -1,7 +1,9 @@
 # NetOps Pipeline(Runner:主機 2 WSL shell executor,tag windows-runner;與 Gateway 同一台主機;IMPL-PLAN B0)
-#   check            所有分支:netops-api、netops-web(frontend/)型別檢查、單元測試、建置;netops-pa(pa-collector/)ruff 與 pytest
+#   check            所有分支:netops-api、netops-web(frontend/)型別檢查、單元測試、建置;netops-pa(pa-collector/)ruff 與 pytest;
+#                    netops-ingest 整合測試(check:ingest-int:一次性 Redis + ClickHouse 容器,只在 backend/ 或 deploy/clickhouse/ 有變更時)
 #   deploy-api-test  develop:在主機 2 建置並更新 netops-api(加入 Gateway 網路;啟動後自動註冊路由草稿)與知識庫 NAS 備份 netops-kb-backup;
-#                    PA 即時監控 netops-redis、netops-pa(R1;netops-pa 沒變更時不重建,deploy/ci-netops-pa.sh);PA log ClickHouse netops-clickhouse 與建表(C1)
+#                    PA 即時監控 netops-redis、netops-pa(R1;netops-pa 沒變更時不重建,deploy/ci-netops-pa.sh);PA log ClickHouse netops-clickhouse 與建表(C1);
+#                    寫入管線 netops-ingest(C2)
 #   deploy-web-test  develop:建置 SPA 並發佈到 Gateway 的 gw_www(Nginx /netops/;IMPL-PLAN D1,同 GigaItApp、giga-Portal)
 #   rbac-test        develop:以已部署的 Gateway 映像套用 deploy/gateway-rbac.yaml(netops.* 畫面權限、netops-admin / netops-viewer 角色;不指派成員)
 # 舊版 IIS 程式(根目錄 server/、src/)不在 Pipeline 內,切換前 main 維持舊版(ARCHITECTURE D12),本檔沒有 main 的工作(正式區屬 D2)。
@@ -49,6 +51,51 @@ check:pa-collector:
     # --pull:同 deploy-api-test(主機上的基底映像可能被其他專案覆寫)
     - docker build --pull --target test -t "netops-pa-test:$CI_COMMIT_SHORT_SHA" pa-collector
     - docker image rm "netops-pa-test:$CI_COMMIT_SHORT_SHA" >/dev/null 2>&1 || true
+
+# netops-ingest 整合測試(C2):一次性的 Redis 7.4 與 ClickHouse(同 Compose 的映像、設定、schema、migrations、netops_writer 帳號),
+#   只發佈到 127.0.0.1 的隨機 port,跑完刪除(after_script)。帳號密碼是這個 job 臨時產生的,不用主機機密
+check:ingest-int:
+  <<: *runner
+  stage: check
+  rules:
+    - changes: [backend/**/*, deploy/clickhouse/**/*, deploy/host2-set-clickhouse-secrets.sh, .gitlab-ci.yml]
+  variables:
+    CH_IMAGE: clickhouse/clickhouse-server:26.3.62.3
+  script:
+    - export GITLAB_NPM_TOKEN="$(cat "$NPM_TOKEN_FILE")"
+    - N="netops-int-$CI_JOB_ID"; T="$(mktemp -d)"; echo "$T" > .int-tmp; mkdir "$T/s"
+    - NETOPS_SECRETS_DIR="$T/s" sh deploy/host2-set-clickhouse-secrets.sh >/dev/null
+    # 容器內 uid 101 要讀得到帳號檔(一次性密碼;主機上的正式檔是 101:101 / 400)
+    - chmod 644 "$T/s/clickhouse/netops-users.xml"
+    - D="$PWD/deploy/clickhouse"
+    - >-
+      docker run -d --name "$N-ch" --user 101:101 --memory 1536m --memory-swap 1536m --tmpfs /tmp
+      -e CLICKHOUSE_SKIP_USER_SETUP=1 -p 127.0.0.1::8123
+      -v "$D/config.d/low-memory.xml:/etc/clickhouse-server/config.d/zz-netops-low-memory.xml:ro"
+      -v "$D/users.d/default.xml:/etc/clickhouse-server/users.d/zz-netops-default.xml:ro"
+      -v "$D/users.d/profiles.xml:/etc/clickhouse-server/users.d/zz-netops-profiles.xml:ro"
+      -v "$T/s/clickhouse/netops-users.xml:/etc/clickhouse-server/users.d/zz-netops-users.xml:ro"
+      "$CH_IMAGE" >/dev/null
+    - docker run -d --name "$N-redis" -p 127.0.0.1::6379 redis:7.4-alpine >/dev/null
+    - for i in $(seq 1 60); do docker exec "$N-ch" wget -qO- http://127.0.0.1:8123/ping >/dev/null 2>&1 && break; sleep 1; done
+    - sh deploy/clickhouse/apply-schema.sh test "$N-ch"
+    # migrations 可重複執行
+    - sh deploy/clickhouse/apply-schema.sh test "$N-ch" >/dev/null
+    - export INT_CLICKHOUSE_URL="http://127.0.0.1:$(docker port "$N-ch" 8123/tcp | head -n 1 | sed 's/.*://')"
+    - export INT_REDIS_URL="redis://127.0.0.1:$(docker port "$N-redis" 6379/tcp | head -n 1 | sed 's/.*://')/0"
+    - export INT_CLICKHOUSE_PASSWORD_FILE="$T/s/ch_writer_password"
+    - (cd backend && npm ci --no-audit --no-fund && npm run test:int)
+    # 重複修正(dedupe-day.sh):不帶去重的同一列寫兩次 → 修正後原始表與每小時彙總都是 1
+    - Q="INSERT INTO netops.pa_traffic_logs (event_time, received_at, src, app, src_host, source) VALUES ('2026-11-08 08:00:00', '2026-11-08 00:00:00.123', '::ffff:10.1.1.1', 'dup-test', 'dup-test', 'syslog')"
+    - docker exec "$N-ch" clickhouse-client --insert_deduplicate=0 --query "$Q"
+    - docker exec "$N-ch" clickhouse-client --insert_deduplicate=0 --query "$Q"
+    - sh deploy/clickhouse/dedupe-day.sh "$N-ch" 2026-11-08
+    - R="$(docker exec "$N-ch" clickhouse-client --query "SELECT count() FROM netops.pa_traffic_logs WHERE app = 'dup-test'") $(docker exec "$N-ch" clickhouse-client --query "SELECT sum(sessions) FROM netops.pa_traffic_hourly_app WHERE app = 'dup-test'")"
+    - test "$R" = "1 1" || { echo "FAIL dedupe-day.sh:原始表 / 彙總 = $R(應為 1 1)" >&2; exit 1; }
+    - echo "OK   dedupe-day.sh"
+  after_script:
+    - docker rm -f "netops-int-$CI_JOB_ID-ch" "netops-int-$CI_JOB_ID-redis" >/dev/null 2>&1 || true
+    - if [ -s .int-tmp ]; then rm -rf "$(cat .int-tmp)"; fi
 
 deploy-api-test:
   <<: *runner
@@ -106,6 +153,17 @@ deploy-api-test:
     - sh deploy/clickhouse/apply-schema.sh test "$($C ps -q netops-clickhouse)"
     - $C exec -T netops-clickhouse clickhouse-client --query "SELECT value FROM system.server_settings WHERE name = 'max_server_memory_usage'" | awk '$1 > 0 && $1 <= 1288490188 {ok=1} END {exit !ok}' || { echo "FAIL netops-clickhouse 記憶體上限不符(應 ≤ 1.2 GB)" >&2; exit 1; }
     - echo "OK   netops-clickhouse"
+    # PA log 寫入管線(C2):netops-ingest(netops-api 同映像)。重建時未 ACK 的批次留在 Redis 待處理清單,啟動後先補(去重 token 相同,不重複)
+    - test -f "$NETOPS_SECRETS_DIR/ch_writer_password" || { echo "缺少 ch_writer_password(先在主機 2 執行 deploy/host2-set-clickhouse-secrets.sh)" >&2; exit 1; }
+    - $C up -d --wait --force-recreate netops-ingest
+    # 心跳要是這一版、狀態 ok(啟動檢查 ClickHouse 帳密與 consumer group 都過了才會寫心跳),最多等 60 秒
+    - |
+      for i in $(seq 1 30); do
+        HB="$($C exec -T netops-redis redis-cli hmget netops:ingest:heartbeat release state | paste -sd ' ' -)"
+        case "$HB" in "$CI_COMMIT_SHORT_SHA ok"*) echo "OK   netops-ingest($HB)"; break ;; esac
+        [ "$i" = 30 ] && { echo "FAIL netops-ingest 心跳不是這一版或狀態異常:$HB" >&2; $C logs --tail 20 netops-ingest >&2; exit 1; }
+        sleep 2
+      done
     # 冒煙測試:健康檢查(/healthz、/readyz 不進 giga-observe 監控)。
     #   原本另打一次不帶內部 Token 的 /v1/ping 確認回 401,但每次部署都在 giga-observe 留一筆 401(2026-11-09 驗收 §4.5),
     #   改由單元測試涵蓋(backend/test/unit/app.test.ts「缺少 Token 回 401 NETOPS_INTERNAL_TOKEN_INVALID」)

@@ -99,6 +99,9 @@ flowchart TB
 | `netops:pa:top:{type}:{dim}:{yyyyMMddHHmm}` | Sorted Set | 每分鐘排行(來源 IP、目的 IP、App、Rule、威脅名稱);每分鐘只留前 N 名(例如 200) | 同上 |
 | `netops:pa:heartbeat` | Hash | 收集器 / 接收端點最後成功時間、最後錯誤;總開關 `pollEnabled` / `receiveEnabled`、實際暫停狀態 `pollPaused` / `receivePaused`、計數(含暫停期間丟棄的 `paused`) | 無 |
 | `netops:pa:control` | Hash | **測試區手動開關**(2026-11-09,ARCHITECTURE D26):`pollPaused`、`receivePaused`(`"1"` 暫停,`"0"` 或沒有 = 繼續)、`updatedAt`(ISO)、`updatedBy`(「姓名(工號)」)。**`netops-api` 寫入**(`PUT /pa-live/collector-control`,經 `infra/redis` `setCollectorControl`)、`netops-pa` 只讀:輪詢每次查 PA-560 前讀,接收每 5 秒(心跳時)讀;讀取失敗沿用上一次的狀態。正式區(`GW_ENV=prod`)兩邊都不用 | 無(Redis 資料遺失時回到「繼續」) |
+| `netops:pa:log:{type}` consumer group `ch-writer` | Stream group | **C2(2026-11-10)**:`netops-ingest` 讀 traffic、threat、url、data、wildfire 寫進 ClickHouse,成功才 `XACK`(consumer `ingest-1`)。group 從 `0` 建立;Stream 過期被重建時自動重建 group | 跟 Stream |
+| `netops:ingest:heartbeat` | Hash | `netops-ingest` 狀態:`updatedAt`、`startedAt`、`release`、`state`(`starting` / `ok` / `clickhouse-failing`)、各類型 `read:` `inserted:` `malformed:` `trimmed:` `rejected:` `badTime:` `batches:` 計數、`lastAcked:` `lagMs:`、缺口 `gapFrom:` `gapTo:` `gapMissed:`、`lastError*`。整個換新,每 10 秒 | 無 |
+| `netops:ingest:gaps` | List(JSON) | 偵測到的缺口(Stream 被修剪、沒寫進 ClickHouse 的區間:`type`、`from`、`to`、`missed`、`detectedAt`),最新在前、最多 200 筆;C3 的 FTP 補漏讀這裡 | 無(長度上限) |
 
 **log 欄位**:沿用舊版功能已在用的欄位,不新增。
 

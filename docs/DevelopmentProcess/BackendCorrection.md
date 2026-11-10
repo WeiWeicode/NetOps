@@ -2,6 +2,12 @@
 
 > `backend/`、`deploy/` 的修改;新紀錄加在最上方,格式見 `AGENT.md` §11。
 
+## 2026-11-10 C2:寫入管線 netops-ingest
+- 工作項目:C2(ARCHITECTURE D28;手冊 §6、§10;C1 報告 §9 的建議)
+- 內容:新服務 `netops-ingest`(netops-api 同映像,進入點 `dist/src/ingest/main.js`):consumer group `ch-writer` 讀 traffic、threat、url、data、wildfire 五個 Stream,每 5 秒(`INGEST_BATCH_SECONDS` 3–5)或任一類型滿 5,000 筆批次寫 ClickHouse(`netops_writer`),成功才 `XACK`;重啟先把待處理清單單獨成批補寫,去重 token(類型 + 第一、最後 ID + 筆數)與當機前相同,ClickHouse 略過已寫過的批次(物化檢視也不重算);ClickHouse 暫時性錯誤不 ACK、退避 1–60 秒重試,資料錯誤對半拆批只丟壞列;壞 JSON、已修剪的待處理條目計數後 ACK;不過濾雜訊(CQ8)。缺口偵測(啟動與每 10 秒):待處理已被修剪、或還沒讀就被修剪(`entries-added − entries-read − length` > 0)時寫 `netops:ingest:gaps`。心跳 `netops:ingest:heartbeat`。`infra/clickhouse/`(HTTP 介面 + fetch,不加套件)、`infra/redis/ingest.ts`。DDL:`migrations/001-c2-threat-columns.sql`(`pa_threat_logs` 加 `session_id`、`sport`、`nat_dport`),`apply-schema.sh` 每次依序執行 migrations(可重複執行)。Compose:`netops-ingest`(256m、唯讀根目錄、`cap_drop: ALL`、healthcheck 看 `/tmp/netops-ingest.alive`、secret `ch_writer_password`);ClickHouse 改放獨立 internal 網路 `netops-ch`(C1 資安審查 L3)。CI:`check:ingest-int`(一次性 Redis + ClickHouse 整合測試、`dedupe-day.sh` 測試)、`deploy-api-test` 起 `netops-ingest` 並確認心跳是這一版且 `ok`。驗收工具 `deploy/clickhouse/verify-ingest.sh`(只讀)、重複修正 `deploy/clickhouse/dedupe-day.sh`。
+- 檔案:`backend/src/ingest/**`、`backend/src/infra/{clickhouse/index.ts,redis/ingest.ts}`、`backend/test/{unit/ingest.test.ts,integration/ingest.int.test.ts,fixtures/fake-ingest.ts}`、`backend/package.json`(`test:int`)、`deploy/docker-compose.yml`、`deploy/clickhouse/{apply-schema.sh,schema.sql,migrations/,verify-ingest.sh,dedupe-day.sh}`、`.gitlab-ci.yml`、`docs/{IMPL-PLAN,PA-LIVE-PLAN,PA-LOG-CLICKHOUSE-GUIDE,PROJECT-MAP,HANDOFF}.md`
+- 驗證:見 MR(typecheck、單元測試、CI 整合測試)
+
 ## 2026-11-10 C2:收集器保留 seqno、sessionId
 - 工作項目:C2(CQ9 核准;E3 網通已在 PA-560 的 Syslog 與 HTTP Payload 加 `"seqno":"$seqno","sessionId":"$sessionid"`)
 - 內容:`records.py` 的 `TRAFFIC_FIELDS`、`THREAT_FIELDS`(threat、url、data、wildfire 共用)加 `seqno`、`sessionId`(AGENT §7.2「不新增欄位」的例外,註解寫明)。`seqno` 是 64 位元(實測 19 位數)超過 JavaScript 安全整數,存成去掉前導 0 的數字字串(≤ 2^64-1,不合法就不寫這個 key);`sessionId` 加進 `NUMERIC`。decryption、globalprotect、userid 不收。**改了 `pa-collector/`,合併後 CI 會重建 `netops-pa`,TRAFFIC Syslog 會斷線,要請網通對 `netops-syslog` 再 Commit**。

@@ -18,6 +18,12 @@ ch() { docker exec -i "$CONTAINER" clickhouse-client "$@"; }
 sed -e "s/{{TTL_TRAFFIC}}/$T_TRAFFIC/" -e "s/{{TTL_THREAT}}/$T_THREAT/" \
     -e "s/{{TTL_HOURLY_APP}}/$T_APP/" -e "s/{{TTL_HOURLY_SRC}}/$T_SRC/" "$DIR/schema.sql" | ch --multiquery
 
+# 已建立的表改欄位(C2 起):migrations/*.sql 依檔名順序每次執行,每個檔都要可重複執行(ADD COLUMN IF NOT EXISTS 等)
+for m in "$DIR"/migrations/*.sql; do
+  [ -f "$m" ] || continue
+  ch --multiquery < "$m" || { echo "migration 失敗:$(basename "$m")" >&2; exit 1; }
+done
+
 # 已存在的表:TTL 和部署區設定不同時才改(只改中繼資料,既有資料不重算:materialize_ttl_after_modify=0)
 #   engine_full 裡的 TTL 寫成 toIntervalDay(3) / toIntervalMonth(13)
 modify() { # 表名 時間欄 "N DAY|N MONTH"

@@ -2,6 +2,13 @@
 
 > 接手時先讀 `AGENT.md`,再讀 `docs/ARCHITECTURE.md`、`docs/IMPL-PLAN.md`。
 
+## 2026-11-10 C2 寫入管線(`feature/clickhouse-c2-collector` → `feature/clickhouse-c2-ingest`)
+
+- **內容**:收集器 TRAFFIC 與威脅類保留 `seqno`(字串)、`sessionId`;`netops-ingest`(`backend/src/ingest/`,netops-api 同映像)讀 `netops:pa:log:{traffic,threat,url,data,wildfire}`(group `ch-writer`)每 5 秒批次寫 ClickHouse,成功才 ACK,重啟先補待處理(token 相同不重複),心跳 `netops:ingest:heartbeat`、缺口 `netops:ingest:gaps`;migration 001(`pa_threat_logs` 加 `session_id`、`sport`、`nat_dport`);ClickHouse 改放 `netops-ch` 網路;CI `check:ingest-int`(一次性 Redis + ClickHouse 整合測試與 `dedupe-day.sh` 測試)、`deploy-api-test` 起 `netops-ingest` 並確認心跳。
+- **合併順序**:collector 先、ingest 後。**collector 合併後 CI 會重建 `netops-pa`,TRAFFIC Syslog 斷線,請網通對 `netops-syslog` 再 Commit**。ingest 不動 `pa-collector/`,不會再重建 `netops-pa`。不需要新機密。
+- **驗收**:主機 2 `sh deploy/clickhouse/verify-ingest.sh`(只讀);報告草稿 `docs/test-reports/2026-11-10-clickhouse-c2.md`,連續 3 天的結果待補。
+- **下一步**:C3(`netops-api` 加入 `netops-ch`、`infra/clickhouse` 唯讀查詢、FTP 對帳讀 `netops:ingest:gaps`)。
+
 ## 2026-11-10 C1 ClickHouse POC 與容量實測(`feature/clickhouse-c1-poc`)
 
 - **結果**:報告 `docs/test-reports/2026-11-10-clickhouse-c1.md`。一天 TRAFFIC(2026-11-09,FTP 6.55 GB、1,043 萬筆)匯入 228 秒;ClickHouse 205 MiB / 天(20.6 bytes / 筆)、Parquet 200 MB / 天;彙總查詢 7–119 ms、一天明細 30–284 ms、NAS 冷查詢 0.1–1.3 秒;記憶體最高 479 MiB。手冊 §4 已換成實測值,IMPL-PLAN C0 寫入 E2(申請 150 GB / 年)、E5(磁碟 20 GB、容器 2 GB)建議。

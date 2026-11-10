@@ -1,6 +1,6 @@
 # 專案地圖 — NetOps
 
-> **最後更新:2026-11-10**(CI:`deploy/ci-netops-pa.sh`,netops-pa 沒變更時不重建;C1 ClickHouse POC:`deploy/clickhouse/`、`netops-clickhouse`、`deploy/host2-set-clickhouse-secrets.sh`、POC 工具 `deploy/clickhouse/poc/`;R1 驗收修正:即時監控排行切換與 log 暫停鈕改用 `GCard` 的 `#actions` 插槽,前端新增掛載測試(`@vue/test-utils`、`happy-dom`)與插槽名稱檢查;串流 401 先經 web-kit 換發;串流每人上限 3。2026-11-09:R1 測試區收集器開關:`netops:pa:control` 由 `netops-api` `infra/redis` 寫、`pa-collector/netops_pa/control.py` 讀,API `PUT /v1/pa-live/collector-control`、按鈕 `netops.pa-live.manage`;即時監控頁首輪詢 / 接收狀態、429 與路由未發佈的提示;CI 冒煙測試不再打 `/v1/ping`。2026-11-05:S0 串流驗證:`modules/pa-live/` SSE 驗證路由、`backend/scripts/sse-probe.mjs`,不改 Gateway;D1 驗收修正:測試區 `FTP_LOG_DIR=/my-data` 寫進 CI、`netops-kb-backup` healthcheck、FTP 清單不列系統資料夾、AD FTP 清單改手動;2026-11-04:D1 完成並上測試區,有未驗項目:CI 發佈前端 SPA 與套用畫面權限、`deploy/gateway-rbac.yaml`、知識庫 NAS 備份 `deploy/kb-backup/`、監控 Key;驗收報告 `docs/test-reports/2026-11-04-d1-uat.md`。2026-11-03:F1、B2 完成;舊版程式未改動)。
+> **最後更新:2026-11-10**(C2 寫入管線:`backend/src/ingest/`(netops-ingest,netops-api 同映像不同進入點)、`backend/src/infra/clickhouse/`、`backend/src/infra/redis/ingest.ts`、`deploy/clickhouse/migrations/`、`verify-ingest.sh`、`dedupe-day.sh`、CI `check:ingest-int`;收集器 `seqno`、`sessionId`;CI:`deploy/ci-netops-pa.sh`,netops-pa 沒變更時不重建;C1 ClickHouse POC:`deploy/clickhouse/`、`netops-clickhouse`、`deploy/host2-set-clickhouse-secrets.sh`、POC 工具 `deploy/clickhouse/poc/`;R1 驗收修正:即時監控排行切換與 log 暫停鈕改用 `GCard` 的 `#actions` 插槽,前端新增掛載測試(`@vue/test-utils`、`happy-dom`)與插槽名稱檢查;串流 401 先經 web-kit 換發;串流每人上限 3。2026-11-09:R1 測試區收集器開關:`netops:pa:control` 由 `netops-api` `infra/redis` 寫、`pa-collector/netops_pa/control.py` 讀,API `PUT /v1/pa-live/collector-control`、按鈕 `netops.pa-live.manage`;即時監控頁首輪詢 / 接收狀態、429 與路由未發佈的提示;CI 冒煙測試不再打 `/v1/ping`。2026-11-05:S0 串流驗證:`modules/pa-live/` SSE 驗證路由、`backend/scripts/sse-probe.mjs`,不改 Gateway;D1 驗收修正:測試區 `FTP_LOG_DIR=/my-data` 寫進 CI、`netops-kb-backup` healthcheck、FTP 清單不列系統資料夾、AD FTP 清單改手動;2026-11-04:D1 完成並上測試區,有未驗項目:CI 發佈前端 SPA 與套用畫面權限、`deploy/gateway-rbac.yaml`、知識庫 NAS 備份 `deploy/kb-backup/`、監控 Key;驗收報告 `docs/test-reports/2026-11-04-d1-uat.md`。2026-11-03:F1、B2 完成;舊版程式未改動)。
 > 開發新功能後,在同一個變更內更新本文件(`AGENT.md` §9)。只寫結構與職責,細節連到 `docs/`。
 
 資訊網通管理系統:PA-560 防火牆 log、AD 事件與網通知識庫;AI 問答只留在舊版(ARCHITECTURE D17)。目標是接入 GigaNexus Gateway(`/netops/`、`netops-api` :51292),目前部署於 IIS `/NetOps`。
@@ -37,6 +37,9 @@ NetOps/
 │  │  ├─ config.ts          服務設定:資料目錄、FTP(*_FILE 機密)、明細查詢上限;test / prod 缺少時啟動失敗
 │  │  ├─ errors.ts、openapi.ts、print-openapi.ts
 │  │  ├─ infra/store/       資料存取邊界(D8):模組只呼叫具名函式;/readyz 檢查資料目錄
+│  │  ├─ infra/clickhouse/  netops-clickhouse 存取(C2 起;HTTP 介面 + fetch,表名只用常數):C2 只有 netops-ingest 的寫入
+│  │  ├─ infra/redis/       netops-redis:index.ts(即時監控讀取、收集器開關)、ingest.ts(consumer group ch-writer、心跳、缺口清單)
+│  │  ├─ ingest/            netops-ingest 進入點 main.ts(dist/src/ingest/main.js)、writer.ts(批次寫入、成功才 ACK、重啟補待處理)、rows.ts(JSON → 列)、config.ts
 │  │  ├─ infra/jobs/        長時間工作(D6):本人才能查、數量與時間上限、程序重啟後失效
 │  │  ├─ infra/ftp/         FTP 唯讀(列目錄、串流下載);連線上限 FTP_MAX_CONNECTIONS
 │  │  ├─ shared/            時間轉換(核心本地時間 ↔ ISO 8601)、共用 schema、匯出 CSV
@@ -50,7 +53,8 @@ NetOps/
 │  │     ├─ kb/             core/notes.js(舊版 kb.js 的格式與匯整)、service.ts、routes.ts
 │  │     └─ ftp/            routes.ts(PA)、ad-routes.ts(AD;清單為工作模式)
 │  ├─ scripts/sse-probe.mjs S0 驗證腳本:經 Gateway 連 SSE,記錄事件到達時間、斷線與重連(Cookie 由執行者放環境變數)
-│  ├─ test/unit/            app、config、jobs、store、ftp、pa / ad(與舊版結果比對)、pa-live(SSE,真實 HTTP 連線);test/fixtures 假 log、假 AD 匯出檔、假 FTP
+│  ├─ test/unit/            app、config、jobs、store、ftp、pa / ad(與舊版結果比對)、pa-live(SSE,真實 HTTP 連線)、ingest;test/fixtures 假 log、假 AD 匯出檔、假 FTP、假 Stream / ClickHouse
+│  ├─ test/integration/     ingest.int.test.ts:真 Redis + ClickHouse(CI check:ingest-int 起一次性容器;npm run test:int)
 │  └─ Dockerfile、.npmrc(@giganexus/* 取自 GitLab npm Registry)
 ├─ frontend/                netops-web(Vue 3 + TypeScript,base /netops/;F1 完成,框架由入口網複製,docs/UI-GUIDE.md)
 │  ├─ src/
@@ -66,10 +70,10 @@ NetOps/
 │  ├─ test/                 vitest:選單、守衛、應用層守衛、風格、工作輪詢、狀態輪詢、各頁純函式、網址條件、連結;即時監控頁掛載測試(happy-dom)、插槽名稱檢查
 │  └─ Dockerfile、publish.sh SPA 映像:一次性容器發佈到 gw_www/netops(symlink 原子切換、保留 5 版、可回滾;D1)
 └─ deploy/
-   ├─ docker-compose.yml    netops-api 加入 Gateway 網路,不對主機發佈 port;netops-clickhouse(C1,只在內部網路);netops-kb-backup(知識庫 NAS 備份,healthcheck 看 LAST_RESULT);spa-netops(profile publish)
+   ├─ docker-compose.yml    netops-api 加入 Gateway 網路,不對主機發佈 port;netops-clickhouse(C1;C2 起只在 netops-ch 網路);netops-ingest(C2,寫入管線);netops-kb-backup(知識庫 NAS 備份,healthcheck 看 LAST_RESULT);spa-netops(profile publish)
    ├─ gateway-rbac.yaml     netops.* 應用 / 選單 / 按鈕、netops-admin、netops-viewer(不指派成員,D15);apply-gateway-rbac.sh 套用(檢查只動 netops 範圍)
    ├─ kb-backup/            每天把 knowledge/ 打包到 NAS docker-folder/giga-netops/<區>,保留 30 份(ARCHITECTURE Q3)
-   ├─ clickhouse/           netops-clickhouse(C1):config.d/low-memory.xml、users.d/(default 只限本機、查詢設定檔)、schema.sql、apply-schema.sh(依部署區套 TTL,CI 執行)
+   ├─ clickhouse/           netops-clickhouse(C1):config.d/low-memory.xml、users.d/(default 只限本機、查詢設定檔)、schema.sql、migrations/(C2 起,可重複執行)、apply-schema.sh(依部署區套 TTL 與 migrations,CI 執行)、verify-ingest.sh(C2 驗收核對,只讀)、dedupe-day.sh(重複修正)
    │                        poc/:C1 實測工具(主機 2 執行):ftp-cat.mjs(在 netops-api 容器內唯讀串流 FTP)、import-day.sh / .sql(匯入一天)、bench.sh(容量與查詢)
    ├─ ci-netops-pa.sh       CI 判斷 netops-pa 要不要重建(pa-collector/、compose 段、netops.env 都沒變就不重建,避免 PA-560 Syslog 斷線)
    ├─ host2-set-clickhouse-secrets.sh  ClickHouse 帳號 netops_writer / reader / cold 的隨機密碼與帳號檔(只含雜湊;使用者執行)
@@ -124,6 +128,7 @@ NetOps/
 | 新版 API、權限代碼 | `docs/API.md`(介面定稿)、`backend/src/modules/*/routes.ts`、`backend/src/openapi.ts` |
 | PA 即時監控(R1)與測試區收集器開關 | 收集器 `pa-collector/netops_pa/`(開關 `control.py`、鍵 `keys.py`);API `backend/src/modules/pa-live/{live-routes,service}.ts`、Redis `backend/src/infra/redis/`;畫面 `frontend/src/pages/firewall/Live.vue`、`frontend/src/composables/paLive.ts`;鍵格式 `docs/PA-LIVE-PLAN.md` §4 |
 | SSE 串流(S0 驗證、R1、A1 問答) | `backend/src/modules/pa-live/routes.ts`、`docs/API.md` §3.1(逾時與標頭條件)、`docs/test-reports/2026-11-05-s0-sse.md` |
+| PA log 寫入 ClickHouse(C2) | `backend/src/ingest/`、`backend/src/infra/{clickhouse,redis/ingest.ts}`、`deploy/clickhouse/`、手冊 `docs/PA-LOG-CLICKHOUSE-GUIDE.md` §6;Redis 鍵 `docs/PA-LIVE-PLAN.md` §4 |
 | 新版部署 | `.gitlab-ci.yml`、`deploy/` |
 | 接入規劃與決策 | `docs/ARCHITECTURE.md`、`docs/IMPL-PLAN.md`、`docs/PA-LIVE-PLAN.md`(PA 即時監控與 AI 搬移) |
 | 資料與 AI 流程(現況、過渡期、未來目標) | `docs/FLOW-ARCHITECTURE.md` |

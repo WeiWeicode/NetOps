@@ -3,7 +3,7 @@
 > 以 Gherkin(繁體中文關鍵字,`# language: zh-TW`)描述 NetOps 新版(接入 Gateway 後)的**目標行為**。寫法沿用員工入口網 `giga-Portal/docs/Gherkin/`。
 > 依據:`backend/src` 各路由的 `x-gherkin`、[API.md](../API.md)、[ARCHITECTURE.md](../ARCHITECTURE.md)(D6、D8、D14–D18、§5)、[UI-GUIDE.md](../UI-GUIDE.md)。舊版 `server/`、`src/` 只作比對,行為不同處標 `@changed`。
 > AI 功能(問答、分析、語意搜尋、向量同步、外部 IP 自動學習)於 A1 搬移(D23,取代 D17),場景在 `ai/ai.feature`、`kb/ai.feature`;翻譯與整理筆記依 2026-11-09 決定不搬(D25)。
-> **最後更新:2026-11-09**(`feature/pa-live-uat-1109`:`pa-live/realtime.feature` 加測試區收集器開關 API、收集器暫停、即時監控畫面場景;`feature/a1-ai-api`:A1 AI 場景 `ai/ai.feature`、`kb/ai.feature`;`feature/s0-sse`:S0 串流驗證場景 `pa-live/stream-test.feature`;`fix/d1-uat-findings`:D1 驗收修正的場景;2026-11-03 依 `develop` e3475f8:B0–B2 全部合併;前端依 `origin/feature/netops-f1-*`)。
+> **最後更新:2026-11-10**(`fix/pa-live-uat-1110`:`pa-live/realtime.feature` 串流每人上限 3、即時監控控制項、介面流量停止更新、URL 類別、串流 401 換發;`feature/pa-live-uat-1109`:`pa-live/realtime.feature` 加測試區收集器開關 API、收集器暫停、即時監控畫面場景;`feature/a1-ai-api`:A1 AI 場景 `ai/ai.feature`、`kb/ai.feature`;`feature/s0-sse`:S0 串流驗證場景 `pa-live/stream-test.feature`;`fix/d1-uat-findings`:D1 驗收修正的場景;2026-11-03 依 `develop` e3475f8:B0–B2 全部合併;前端依 `origin/feature/netops-f1-*`)。
 
 ## 1. 檔案一覽
 

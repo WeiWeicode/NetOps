@@ -6,7 +6,8 @@
  *   - useLiveStream:EventSource 連線、暫停、斷線重連(伺服器每 5 分鐘結束連線,瀏覽器自動重連;429 / 404 拉長重試間隔)
  */
 import { onScopeDispose, ref, shallowRef } from 'vue';
-import { paLive, type CollectorControl, type CollectorStatus, type LiveLog, type LogFilter, type LogType, type PaLiveSnapshot } from '@/api/paLive';
+import { redirectToLogin, refreshSession } from '@/api/gateway';
+import { paLive, type CollectorControl, type CollectorStatus, type InterfacesSnap, type LiveLog, type LogFilter, type LogType, type PaLiveSnapshot } from '@/api/paLive';
 
 export type Tone = 'success' | 'warning' | 'danger' | 'neutral' | 'info';
 
@@ -89,6 +90,20 @@ export function latestSnapTime(metrics: PaLiveSnapshot['metrics'] | null | undef
     if (typeof t === 'string' && !Number.isNaN(Date.parse(t)) && (!best || Date.parse(t) > Date.parse(best))) best = t;
   }
   return best;
+}
+
+/**
+ * 介面流量(驗收 2026-11-10 §4.4-1):輪詢暫停時收集器清掉介面計數(API.md §3.2),畫面不再顯示暫停前最後一輪的值,
+ * 與其他 KPI 一樣顯示「停止更新」;快照過期(null)時也一樣。輪詢沒開又沒有資料時不顯示這張卡片。
+ */
+export function interfaceView(
+  c: CollectorStatus | null | undefined,
+  ifaces: InterfacesSnap | null | undefined,
+): { visible: boolean; items: InterfacesSnap['items']; stale: string } {
+  const visible = !!c?.poll.enabled || !!ifaces?.items.length;
+  if (c?.poll.paused) return { visible, items: [], stale: '輪詢暫停,介面計數已清除' };
+  if (!ifaces?.items.length) return { visible, items: [], stale: '沒有 60 秒內的資料' };
+  return { visible, items: ifaces.items, stale: '' };
 }
 
 export interface ControlButton {
@@ -211,7 +226,9 @@ export const MAX_LOGS = 500;
 
 /**
  * 即時串流:connect(types, filter) 建立連線(會關掉舊的);paused 時仍接收 snapshot,log 先放 pending,恢復時一次加入。
- * EventSource 遇到非 200(例如 401 登入逾時、429 名額滿)會停止重試:改用一般 API 觸發登入檢查,10 秒後再連。
+ * EventSource 遇到非 200(例如 401 登入逾時、429 名額滿)會停止重試:另外探測 HTTP 狀態決定怎麼做。
+ * EventSource 不經 web-kit,不會自己 Refresh(驗收 2026-11-10 §4.4-3):401 時先呼叫 web-kit 的 refreshSession,
+ * 成功立即重連,失敗導向登入;換發後仍 401(連線成功前只換發一次)才照一般錯誤退避。
  */
 export function useLiveStream(onSnapshot: (s: PaLiveSnapshot) => void) {
   const logs = shallowRef<LiveLog[]>([]);
@@ -228,6 +245,8 @@ export function useLiveStream(onSnapshot: (s: PaLiveSnapshot) => void) {
   let args: [LogType[], LogFilter] | null = null;
   /** 連續失敗次數(收到 open 時歸零):決定重試間隔 */
   let failures = 0;
+  /** 這次連線成功前已因 401 換發過 Token(避免換發成功但仍 401 時無限重連) */
+  let authRefreshed = false;
 
   function close() {
     clearTimeout(retry);
@@ -242,6 +261,7 @@ export function useLiveStream(onSnapshot: (s: PaLiveSnapshot) => void) {
     if (reset) {
       // 使用者換類型或篩選:重新開始退避
       failures = 0;
+      authRefreshed = false;
       logs.value = [];
       pending = [];
       skipped.value = 0;
@@ -256,6 +276,7 @@ export function useLiveStream(onSnapshot: (s: PaLiveSnapshot) => void) {
     };
     src.addEventListener('open', () => {
       failures = 0;
+      authRefreshed = false;
       touch();
     });
     src.addEventListener('heartbeat', touch);
@@ -291,12 +312,22 @@ export function useLiveStream(onSnapshot: (s: PaLiveSnapshot) => void) {
       if (es !== src) return;
       connected.value = false;
       if (src.readyState === EventSource.CLOSED) {
-        // 不會自動重連(非 200):用一般 API 檢查登入(401 時 web-kit 會更新 Session 或導向登入);
-        // 另外查 HTTP 狀態決定提示與重試間隔(429 名額滿、404 路由未發佈時拉長間隔)
+        // 不會自動重連(非 200):查 HTTP 狀態決定怎麼做
         streamError.value = '即時串流中斷,檢查原因中…';
-        void paLive.snapshot().then(onSnapshot, () => undefined);
-        void paLive.probeStream(paLive.streamUrl(types, filter)).then(({ status, code }) => {
+        void paLive.probeStream(paLive.streamUrl(types, filter)).then(async ({ status, code }) => {
           if (es !== src) return;
+          if (status === 401 && !authRefreshed) {
+            // 登入逾時(伺服器每 5 分鐘結束連線,重連時 Access Token 可能已過期):先換發再立即重連,換發失敗導向登入
+            authRefreshed = true;
+            streamError.value = '登入逾時,更新登入狀態中…';
+            const ok = await refreshSession();
+            if (es !== src) return;
+            if (ok) connect(types, filter, false);
+            else redirectToLogin();
+            return;
+          }
+          // 其他原因:一般 API 更新設備狀態(web-kit 遇 401 會再換發或導向登入);429 名額滿、404 路由未發佈時拉長間隔
+          void paLive.snapshot().then(onSnapshot, () => undefined);
           const f = streamFailure(status, code, failures++);
           streamError.value = f.message;
           retry = setTimeout(() => args && connect(args[0], args[1], false), f.delayMs);

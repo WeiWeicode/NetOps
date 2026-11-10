@@ -2,6 +2,12 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。範圍:`frontend/`。
 
+## 2026-11-10 R1:即時監控驗收修正(排行切換、log 暫停、介面流量、URL 類別、串流 401)
+- 工作項目:R1(驗收報告 `docs/test-reports/2026-11-10-pa-live-uat.md` §4.1、§4.4-1、§4.4-3、§4.4-4、§7-5)
+- 內容:① `Live.vue` 兩處 `<template #extra>` 改 `#actions`(`GCard` 沒有 `extra` 插槽),即時排行的「類型」下拉、「5 / 15 / 60 分鐘」切換與即時 log 的「暫停 / 繼續」才會顯示。② 介面流量:新增 `interfaceView()`,輪詢暫停時顯示「停止更新(輪詢暫停,介面計數已清除)」,快照過期時顯示「停止更新(沒有 60 秒內的資料)」,不再顯示最後一輪的值、也不會整張卡片消失;輪詢沒開又沒資料才不顯示。③ URL 過濾的即時 log 不顯示「名稱」欄(URL Filtering 的 threatid 固定 9999,只會顯示 `9999(9999)`),改顯示「URL 類別」(`category`,收集器已寫入;只改前端欄位,API 不變)。④ 串流重連 401:`EventSource` 不經 web-kit,登入逾時不會自己換發;探測到 401 時先呼叫 web-kit `refreshSession()`(`api/gateway.ts` 轉出,web-kit 不用改),成功立即重連,失敗 `redirectToLogin()`;連線成功前只換發一次,之後仍 401 照一般錯誤 10 秒起退避;非 401 才呼叫 `snapshot` 更新設備狀態(原本與探測同時送)。⑤ 測試:新增 devDependencies `@vue/test-utils` 2.5.1、`happy-dom` 21.0.4(掛載元件需要 DOM;只用在測試,不進建置);`test/live.mount.test.ts` 掛載即時監控頁(API、EventSource 用假資料)檢查排行切換與暫停鈕真的有渲染、接收未啟用時排行與 log 的說明文字、輪詢暫停的介面流量、URL 類別欄;`test/slots.test.ts` 解析全部 `.vue`,檢查對共用元件用的 `<template #名稱>` 都是該元件宣告的插槽;`test/paLiveStream.test.ts` 測 401 換發、換發失敗導向登入、換發後仍 401 不無限重連、換發等待中換類型不殘留重連、429 不換發,與 `interfaceView`;使用者換類型或篩選時也重設換發旗標。
+- 檔案:`frontend/src/{pages/firewall/Live.vue,composables/paLive.ts,api/gateway.ts}`、`frontend/test/{live.mount,slots,paLiveStream}.test.ts`、`frontend/package.json`、`frontend/package-lock.json`
+- 驗證:`npm run typecheck`、`npm test`(18 檔 115 個通過,原 98)、`npm run build` 通過;把 `#actions` 暫時改回 `#extra` 時掛載測試 2 個、插槽檢查 1 個失敗(列出 `Live.vue:381`、`:414`)
+
 ## 2026-11-09 R1:即時監控驗收修正與測試區收集器開關
 - 工作項目:R1(驗收報告 `docs/test-reports/2026-11-09-a1-r1-uat.md` §4.4、§6-5、§7.4;需求方 2026-11-09 決定)
 - 內容:① 頁首「收集器」區分開顯示輪詢(輪詢中 / 輪詢失敗 / 輪詢暫停 / 輪詢未啟用 / 停止更新)與接收(接收中 / 接收暫停 / 接收未啟用 / 停止更新),並說明設備狀態來自輪詢、排行與即時 log 來自接收端點。② 接收未啟用或暫停時,排行與即時 log 寫「接收端點未啟用,沒有 log 來源」/「接收已暫停…」,不再寫「收集器有在運作,這段期間沒有收到這種 log」。③ 設備狀態上方顯示「設備狀態最後更新」(快照 `time` 最新者)。④ 串流非 200 時用 `fetch` 查狀態碼(立即中斷):429 顯示「串流連線數已達上限,請關閉其他即時監控分頁」並以 30 秒起倍增到 5 分鐘重試,404 `ROUTE_NOT_FOUND` 顯示「功能尚未啟用(路由未發佈)」,其他 10 秒起倍增到 2 分鐘;收到 `open` 歸零。⑤ `describeError` 遇 `ROUTE_NOT_FOUND` 一律顯示「功能尚未啟用(路由未發佈)」(AI、知識庫等全站)。⑥ 測試區開關:有 `UI.paLiveManage` 且 `control.available` 時顯示「輪詢:開啟 / 停用」「接收:開啟 / 停用」;總開關關閉的那一個停用並說明原因;顯示最後操作人與時間。⑦ 假 Gateway:`MOCK_PA_LIVE=poll-only`(測試區現況)、開關 API、`MOCK_PA_LIVE_STREAM=busy|no-route`。

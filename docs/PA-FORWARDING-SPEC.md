@@ -255,6 +255,8 @@
 | E4 | 負載 | 網通觀察 PA-560 管理平面 CPU 與 log 轉送佇列(開 TRAFFIC 前後比較) |
 | E5 | 每秒筆數 | 需求方核對實際每秒筆數,必要時調整 PA-LIVE-PLAN §5 的保留時間(R0 第 5 步) |
 
+> **Syslog TCP 連不上後不會自動重試(2026-11-10 測試區實測)**:PA-560 Commit 時若 NetOps 主機的 Syslog 接收還沒開好(port 沒在聽、防火牆或 portproxy 未設),System log 會出現 `syslog connection failed … error: 110`(連線逾時),之後**不會自己重連**,即使主機接收已經開好,TRAFFIC 也一直進不來。處理:**先把主機接收開好(附錄 F.2、F.3),再請網通對 Syslog Server Profile 重新 Commit 一次**(可只改描述再 Commit);E3 沒有 TRAFFIC 時先查 PA-560 的 System log 有沒有這筆錯誤。
+
 ---
 
 ## 附錄 F. NetOps 主機端設定(需求方在主機執行;Claude 不執行)
@@ -316,6 +318,7 @@ netsh interface portproxy show v4tov4
 4. `sudo docker logs --tail 20 giganexus-netops-test-netops-pa-1`,預期:`接收端點已啟用:HTTP :51293、Syslog :51294;允許來源 172.2x.0.1/32`。
 5. 若日誌出現「拒絕不在允許清單的來源 X」,X 才是實際看到的來源,把 `PA_ALLOWED_SOURCES` 改成 X 再重建。
 6. 請網通把 `10.10.130.124` 加進 HTTP / Syslog Server Profile(B.1、C.1),測完移除,並把 `PA_RECEIVE_ENABLED` 改回 0。
+7. **主機接收開好之後,請網通對 Syslog Server Profile 再 Commit 一次**:PA-560 連 Syslog TCP 失敗後(System log `syslog connection failed … error: 110`)不會自動重試(2026-11-10 測試區實測;E 節)。順序是先做完 F.2、本節 1–5,再 Commit;HTTP 每次送都重新連線,不受影響。
 
 ### F.4 開啟 SDK 輪詢(測試時)
 
@@ -394,3 +397,5 @@ netsh interface portproxy show v4tov4
 | G8 | Syslog SSL 能否設定**用戶端憑證**,能的話提供簽發的 CA 憑證 | Syslog 唯一能驗證來源的方式(F.4.1) | 待回覆 |
 | G9 | B、C、D 節設定完成(先只加正式區;測試時再加測試區 `10.10.130.124`) | 接收 | **測試區已設定並 Commit**(2026-11-10,只有 `netops-test` 10.10.130.124;正式區未加) |
 | G10 | 開 TRAFFIC 前後的管理平面 CPU 與 log 轉送佇列觀察(E4) | 負載 | 設定後 |
+
+**PA-560 Commit 時的提示(2026-11-10 記錄,這次不動 PA-560)**:Commit 會出現「API KeyGen 使用 deprecated algorithm,建議設定 API Key Certificate」。G1 的唯讀 API Key 目前照常可用;**下次換 API Key 時**請網通先設定 API Key Certificate(Device > Setup > Management > API Key Certificate)再產生新 Key,新 Key 以 `deploy/host2-set-pa-secrets.sh`(正式區比照)寫入主機。

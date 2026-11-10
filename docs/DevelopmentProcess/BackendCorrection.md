@@ -2,6 +2,12 @@
 
 > `backend/`、`deploy/` 的修改;新紀錄加在最上方,格式見 `AGENT.md` §11。
 
+## 2026-11-10 R1:提高 TRAFFIC 即時 log 串流上限
+- 工作項目:R1(需求方 2026-11-10 驗收後決定「可以提高上限」;實測 5 分鐘 SSE:Redis 42,005 筆、頁面收 31,960 筆,`dropped` 9,300、`skipped` 2 次)
+- 內容:`live-routes.ts`:檢查間隔 2 秒 → 1 秒;`READ_PER_TICK` 500 → 1500;`SEND_PER_TICK` 200 → 1500(與讀取上限相同,正常不再捨棄);新增 `SEND_CHUNK` 200(大批分成多個 `logs` 事件,只有最後一個帶游標,斷線重連不漏、由瀏覽器依 id 去重);`MAX_PENDING_BYTES` 256 KB → 2 MB(單 tick 最壞約 1.5 MB,舊值會在尖峰誤殺連線)。每人 3 條、全系統 20 條、最長 5 分鐘、心跳 15 秒不變。新增單元測試(1200 筆批次全收、無重複、分段只有最後一段帶 id、Last-Event-ID 重連不重複;超過讀取上限標 `skipped`)。Gherkin 來源行號、`docs/API.md` §3.2、`PA-LIVE-PLAN.md` §8 同步。
+- 檔案:`backend/src/modules/pa-live/live-routes.ts`、`backend/test/unit/pa-live-r1.test.ts`、`docs/Gherkin/pa-live/realtime.feature`、`docs/{API,PA-LIVE-PLAN}.md`
+- 驗證:`npm run typecheck`、`npm test`(194 通過)、`npm run build`;`check-scenarios.mjs` 90 / 90
+
 ## 2026-11-10 R1:威脅類 log 帶出來源 Port
 - 工作項目:R1(需求方 2026-11-10 驗收後決定補;驗收報告 `docs/test-reports/2026-11-10-pa-live-uat.md` §3.6、§7-3)
 - 內容:PA Monitor 威脅詳細檢視有 Source Port、NAT Port,NetOps 沒有:規格 B.3 的 payload 漏了 `sport`、`natDport`,收集器 `THREAT_FIELDS` 也沒有,PA 就算送了也會被丟掉。`THREAT_FIELDS`(threat、url、data、wildfire 共用)加入 `sport`、`natDport`(`NUMERIC` 已含,非數字變 0)。`netops-api` 的 `toLogItem` 直接帶出所有欄位,不需修改;`matchLog` 的 Port 篩選本來就比對 `dport` 與 `sport`,補單元測試。規格 B.3、PA-LIVE-PLAN、API.md 同步。**需求方要在 PA 的 HTTP Payload Format 手動加 `"sport":"$sport","natDport":"$natdport"`(只加變數)並 Commit,部署後才有值**。不改 TRAFFIC 欄位與 `SEND_PER_TICK`。

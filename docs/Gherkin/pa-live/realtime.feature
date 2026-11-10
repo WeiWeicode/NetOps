@@ -11,7 +11,7 @@
 
   Rule: GET /api/netops/pa-live/snapshot
 
-    # 來源: backend/src/modules/pa-live/live-routes.ts:94
+    # 來源: backend/src/modules/pa-live/live-routes.ts:103
     @auto @e2e
     場景: 收集器運作中時回傳設備快照
       假如 收集器心跳在 30 秒內更新且 Session 快照存在
@@ -19,7 +19,7 @@
       那麼 回應 200
       而且 collector.state 為 "ok"、metrics.session.active 為數字
 
-    # 來源: backend/src/modules/pa-live/live-routes.ts:100
+    # 來源: backend/src/modules/pa-live/live-routes.ts:109
     @auto @e2e
     場景: 收集器停止時不顯示舊快照
       假如 收集器心跳超過 30 秒沒有更新
@@ -27,14 +27,14 @@
       那麼 collector.state 為 "stopped"
       而且 metrics 的每個指標都是 null
 
-    # 來源: backend/src/modules/pa-live/live-routes.ts:106
+    # 來源: backend/src/modules/pa-live/live-routes.ts:115
     @auto @e2e
     場景: 收集器未啟用
       假如 收集器的輪詢與接收都關閉
       當 呼叫 GET /api/netops/pa-live/snapshot
       那麼 collector.state 為 "disabled"
 
-    # 來源: backend/src/modules/pa-live/live-routes.ts:111
+    # 來源: backend/src/modules/pa-live/live-routes.ts:120
     @auto
     場景: Redis 連不上
       假如 netops-redis 停止
@@ -43,7 +43,7 @@
 
   Rule: PUT /api/netops/pa-live/collector-control(測試區手動開關,2026-11-09 需求方決定)
 
-    # 來源: backend/src/modules/pa-live/live-routes.ts:137
+    # 來源: backend/src/modules/pa-live/live-routes.ts:146
     @auto @e2e
     場景: 測試區暫停輪詢
       假如 部署區為測試區且使用者擁有 netops.pa-realtime.write
@@ -52,27 +52,27 @@
       而且 control.pollPaused 為 true、control.updatedBy 為操作人
       而且 收集器在下一次輪詢前停止查詢 PA-560,心跳 collector.poll.paused 變為 true
 
-    # 來源: backend/src/modules/pa-live/live-routes.ts:144
+    # 來源: backend/src/modules/pa-live/live-routes.ts:153
     @auto @e2e
     場景: 繼續接收
       假如 接收已暫停
       當 呼叫 PUT /api/netops/pa-live/collector-control,內容 {"receivePaused": false}
       那麼 回應 200 且 control.receivePaused 為 false
 
-    # 來源: backend/src/modules/pa-live/live-routes.ts:149
+    # 來源: backend/src/modules/pa-live/live-routes.ts:158
     @auto
     場景: 沒有給任何欄位
       當 呼叫 PUT /api/netops/pa-live/collector-control,內容 {}
       那麼 回應 400 VALIDATION_FAILED
 
-    # 來源: backend/src/modules/pa-live/live-routes.ts:153
+    # 來源: backend/src/modules/pa-live/live-routes.ts:162
     @auto
     場景: 正式區不能切換
       假如 部署區為正式區
       當 呼叫 PUT /api/netops/pa-live/collector-control,內容 {"pollPaused": true}
       那麼 回應 403 且 code 為 "NETOPS_PA_CONTROL_DISABLED"
 
-    # 來源: backend/src/modules/pa-live/live-routes.ts:158
+    # 來源: backend/src/modules/pa-live/live-routes.ts:167
     @e2e
     場景: 檢視者不能切換
       假如 使用者只有 netops.pa-realtime.read
@@ -88,7 +88,7 @@
 
   Rule: GET /api/netops/pa-live/series
 
-    # 來源: backend/src/modules/pa-live/live-routes.ts:201
+    # 來源: backend/src/modules/pa-live/live-routes.ts:210
     @auto @e2e
     場景: 查詢最近 1 小時 CPU 趨勢
       當 呼叫 GET /api/netops/pa-live/series?metric=cpu&minutes=60
@@ -97,14 +97,14 @@
 
   Rule: GET /api/netops/pa-live/top
 
-    # 來源: backend/src/modules/pa-live/live-routes.ts:230
+    # 來源: backend/src/modules/pa-live/live-routes.ts:239
     @auto @e2e
     場景: 查詢最近 15 分鐘 TRAFFIC 排行
       當 呼叫 GET /api/netops/pa-live/top?type=traffic&minutes=15
       那麼 回應 200
       而且 tops.src 依次數由大到小
 
-    # 來源: backend/src/modules/pa-live/live-routes.ts:235
+    # 來源: backend/src/modules/pa-live/live-routes.ts:244
     @auto
     場景: 不支援的期間
       當 呼叫 GET /api/netops/pa-live/top?type=traffic&minutes=30
@@ -112,7 +112,7 @@
 
   Rule: GET /api/netops/pa-live/logs
 
-    # 來源: backend/src/modules/pa-live/live-routes.ts:269
+    # 來源: backend/src/modules/pa-live/live-routes.ts:278
     @auto @e2e
     場景: 查詢最新 TRAFFIC log
       當 呼叫 GET /api/netops/pa-live/logs?type=traffic&limit=50
@@ -120,13 +120,13 @@
       而且 items 依時間由新到舊、最多 50 筆
       而且 earliest 為 Redis 內最早一筆的時間
 
-    # 來源: backend/src/modules/pa-live/live-routes.ts:275
+    # 來源: backend/src/modules/pa-live/live-routes.ts:284
     @auto
     場景: 依 IP 篩選
       當 呼叫 GET /api/netops/pa-live/logs?type=threat&ip=10.1.2.3
       那麼 items 的來源或目的 IP 都是 10.1.2.3
 
-    # 來源: backend/src/modules/pa-live/live-routes.ts:279
+    # 來源: backend/src/modules/pa-live/live-routes.ts:288
     @auto
     場景: Redis 連不上時明確失敗
       假如 netops-redis 停止
@@ -135,7 +135,7 @@
 
   Rule: GET /api/netops/pa-live/stream
 
-    # 來源: backend/src/modules/pa-live/live-routes.ts:320
+    # 來源: backend/src/modules/pa-live/live-routes.ts:329
     @auto @e2e
     場景: 連線後立即收到 open 與 snapshot
       假如 使用者已登入且擁有 netops.pa-realtime.read
@@ -143,21 +143,21 @@
       那麼 回應 200 且 Content-Type 為 text/event-stream
       而且 立即收到 open 與 snapshot 事件
 
-    # 來源: backend/src/modules/pa-live/live-routes.ts:326
+    # 來源: backend/src/modules/pa-live/live-routes.ts:335
     @auto @e2e
     場景: 有新 log 時收到 logs 事件
       假如 已連線 GET /api/netops/pa-live/stream?types=traffic
       當 收集器寫入新的 TRAFFIC log
       那麼 收到 event 為 "logs" 的事件,id 為游標
 
-    # 來源: backend/src/modules/pa-live/live-routes.ts:331
+    # 來源: backend/src/modules/pa-live/live-routes.ts:340
     @auto @e2e
     場景: 斷線後以 Last-Event-ID 接續
       假如 上一次連線最後收到的 id 為 traffic 的游標
       當 以 Last-Event-ID 重新連線
       那麼 只收到游標之後的 log
 
-    # 來源: backend/src/modules/pa-live/live-routes.ts:336
+    # 來源: backend/src/modules/pa-live/live-routes.ts:345
     @auto
     場景: 連線數超過上限
       假如 同一使用者已有 3 條串流

@@ -2,6 +2,11 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。
 
+## 2026-11-10 R1:提高 TRAFFIC 即時 log 串流上限
+- 工作項目:R1(需求方決定提高上限;細節見 BackendCorrection 同日紀錄)
+- 內容:即時串流每秒檢查、每個 tick 最多讀 / 送 1500 筆(原每 2 秒 200 筆),TRAFFIC 約 120 筆/秒時畫面可看到全部。
+- 檔案:`backend/src/modules/pa-live/live-routes.ts`
+
 ## 2026-11-10 R1:威脅類即時 log 帶出來源 Port
 - 工作項目:R1(需求方 2026-11-10 決定補;細節見 BackendCorrection / FrontendCorrection 同日紀錄)
 - 內容:威脅、URL、資料過濾、WildFire 的即時 log 新增來源 Port(`sport`)與目的 NAT Port(`natDport`)欄位,即時監控威脅表格顯示「來源 Port」。需求方須在 PA 的 HTTP Payload Format 加這兩個變數。

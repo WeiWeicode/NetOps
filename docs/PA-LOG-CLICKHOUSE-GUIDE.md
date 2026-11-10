@@ -1,8 +1,8 @@
-# PA-560 防火牆日誌高吞吐架構與開發手冊(ClickHouse 提案)
+# PA-560 防火牆日誌高吞吐架構與開發手冊(ClickHouse)
 
-> **狀態:提案,待需求方核准**(2026-11-10 撰寫)。核准前不寫正式程式、不改主機、不改 PA-560。
+> **狀態:已核准(2026-11-10)**(需求方 2026-11-10「全部照建議」;§12 CQ1–CQ14 都照建議,見「決定」欄)。有外部前置條件的項目(CQ2 正式區資源、CQ3、CQ6、CQ9)完成前,不開工對應階段(IMPL-PLAN C0)。
 > 本文件依需求方 2026-11-10 的需求撰寫,並和**已上線的 R1 即時監控**(`netops-pa` + `netops-redis`)核對。和現況或既有決策衝突的地方都列在 §12「待需求方決策」,**沒有替需求方決定**。
-> 決策草案寫在 [ARCHITECTURE.md](ARCHITECTURE.md) D27–D33(提案),工作項目寫在 [IMPL-PLAN.md](IMPL-PLAN.md) C0–C6(規劃中)。**時程以 NexusPlan 甘特圖為準**,本文件不列日期。
+> 決策寫在 [ARCHITECTURE.md](ARCHITECTURE.md) §3.1 D27–D33,工作項目寫在 [IMPL-PLAN.md](IMPL-PLAN.md) C0–C6(都已核准)。**時程以 NexusPlan 甘特圖為準**,本文件不列日期。
 > 文件裡的 DDL、設定與程式碼都是**範例,實作時調整**;語法出處見附錄 A。
 
 ---
@@ -534,11 +534,11 @@ CREATE TABLE IF NOT EXISTS netops.pa_threat_logs
 ENGINE = MergeTree
 PARTITION BY toYYYYMMDD(event_time)
 ORDER BY (log_type, toStartOfHour(event_time), src, event_time)
-TTL event_time + INTERVAL 30 DAY DELETE
+TTL event_time + INTERVAL 90 DAY DELETE  -- CQ12:威脅類 90 天
 SETTINGS ttl_only_drop_parts = 1, non_replicated_deduplication_window = 1000;
 ```
 
-威脅類量小(約 10–25 萬筆 / 天),保留可以比 30 天長(決策 CQ12)。
+威脅類量小(約 10–25 萬筆 / 天),保留 90 天(CQ12 已核准;90 天約 1–3 GB)。
 
 ### 7.3 每小時預聚合(物化檢視,範例)
 
@@ -1126,12 +1126,12 @@ TTL 用環境變數不能直接改 DDL;做法是 migration 腳本依 `GW_ENV` �
 | `netops.pa.read` | API | 既有 | 流量總覽、安全事件(資料來源改 ClickHouse,權限不變) |
 | `netops.pa-log.read` | API | 既有 | Log 明細查詢(≤ 30 天查 ClickHouse、> 30 天查 Parquet);**不新增 `netops.log.read`**(和這個重複) |
 | `netops.pa-realtime.read` | API | 既有 | 即時監控(Redis) |
-| `netops.pa-query.read` | API | **新增(草案)** | PA 精準查詢與 Session Browser(送出、查結果) |
-| `netops.pa-live.query` | 按鈕節點 | **新增(草案)** | 即時監控頁的「向 PA-560 查詢」按鈕,`includes: [netops.pa-query.read]` |
+| `netops.pa-query.read` | API | **新增(CQ7 核准,只給 `netops-admin`)** | PA 精準查詢與 Session Browser(送出、查結果) |
+| `netops.pa-live.query` | 按鈕節點 | **新增(只給 `netops-admin`)** | 即時監控頁的「向 PA-560 查詢」按鈕,`includes: [netops.pa-query.read]` |
 | `netops.ftp.write` | API | 既有 | 手動觸發 FTP 補漏匯入(沿用「FTP Log 檔案」管理權限) |
 
 - 命名檢查:`netops.pa-query` 在 ARCHITECTURE §5、API.md、`deploy/gateway-rbac.yaml` 都沒有出現,不重複;需求原文的 `netops.pa-live.query` 用在**畫面按鈕節點**(`netops.pa-live.*` 是現有即時監控頁的節點命名),API 權限另取名,符合「節點 → `includes` API 權限」的規則。
-- `netops-viewer` 的規則是「全部 `.read`」,所以預設會拿到 `netops.pa-query.read`。要不要只給 admin 是決策 CQ7。
+- `netops-viewer` 的規則是「全部 `.read`」;**CQ7 決定只給 `netops-admin`**,所以 `gateway-rbac.yaml` 的 `netops-viewer` 要明確排除 `netops.pa-query.read`(ARCHITECTURE §5 已註記例外)。
 
 ### 10.5 要同步更新的其他 repo(只列清單,本 MR 不改)
 
@@ -1186,24 +1186,26 @@ TTL 用環境變數不能直接改 DDL;做法是 migration 腳本依 `GW_ENV` �
 
 ---
 
-## 12. 待需求方決策
+## 12. 待需求方決策(2026-11-10 已決定)
 
-| # | 決策 | 選項(影響 / 成本) | 建議 |
-| --- | --- | --- | --- |
-| **CQ1** | 是否引入 ClickHouse(推翻 D20、修改 AGENT §7.2) | A 引入,原始 log 30 天(本提案)/ B 不引入,改善 FTP 掃描(例如匯入時順便建每小時索引檔;痛點只減輕)/ C 引入但只存彙總、不存原始 log(省空間;明細仍要掃 FTP) | **A**,範圍限 TRAFFIC 與威脅類 |
-| **CQ2** | ClickHouse 放哪裡 | A 兩區都 30 天(主機 2 放不下)/ **B 測試區 TTL 2–3 天只驗功能、正式區 30 天** / C 加大主機 3 WSL 記憶體到約 10 GB(要重啟 WSL,舊系統一起中斷)/ D 另一台主機或 VM(要 IT 提供) | **B**;正式區上線前再看實測,記憶體不足就 C 或 D |
-| **CQ3** | 冷歸檔的 NAS 空間 | A 申請新分享或擴充配額(一年約 150–370 GB)/ B 只歸檔每小時彙總(很小),原始 log 依賴 FTP 主機保留 / C 縮短冷保留(例如 90 天,約 36–90 GB) | 先問 **FTP 10.10.130.66 本身保留多久**;若 FTP 保留夠長選 B,否則 A |
-| **CQ4** | ClickHouse 寫入放哪個元件 | A `netops-pa`(Python)直接寫:少一個容器;ClickHouse 慢會拖住即時接收的佇列,`netops-pa` 要再加 `clickhouse-connect` / **B 新服務 `netops-ingest`(TS,和 `netops-api` 同映像不同進入點)讀 Redis Stream**:接收與寫入解耦、ClickHouse 停機有 1 小時緩衝,團隊熟 TS;多一個容器 / C 放 `netops-api` 背景工作:不加容器;歸檔與補漏的負載會影響 API 回應(D9) | **B** |
-| **CQ5** | PA log 精準查詢放哪裡 | **A `netops-pa`(Python,pan-python `xapi.log`)**:API Key、憑證設定已在這裡,不用把 Key 多給一個容器 / B `netops-api`(TS 直接打 XML API):少一次 Redis 轉手;API Key 要多給 `netops-api` | **A** |
-| **CQ6** | PA API 角色加 XML API「Log」權限 | 同意 / 不同意(模組四的 log 查詢不做,只做 Session Browser 等 op 查詢) | 同意,網通先離峰試查評估管理平面 |
-| **CQ7** | PA 精準查詢給誰 | A 照「viewer 有全部 `.read`」,viewer 也能查 / B 只給 `netops-admin`(`netops-viewer` 角色排除 `netops.pa-query.read`) | **B**,先控制 PA-560 負擔 |
-| **CQ8** | 雜訊過濾 | A 不過濾、查詢時排除 / B 寫入前丟棄 / C PA-560 端不轉送(§6.3) | **A**,一個月後看雜訊佔比 |
-| **CQ9** | Syslog / HTTP 轉送格式加 `$seqno`、`$sessionid` | 加:補漏可逐筆去重;要網通改 Custom Log Format 並 Commit,`records.py` 欄位要加(違反「不新增欄位」,要例外)/ 不加:補漏改整段刪除重寫 | **加** |
-| **CQ10** | FTP 的角色 | A 維持 / B 降級補漏 / C 取代(§11.1) | **B**,並行對帳 2 週後切換 |
-| **CQ11** | `netops-api` 寫 Redis 的範圍(修改 D26 的「唯一寫入」) | 同意快取、PA 查詢冷卻與工作三類 / 不同意(快取改在程序內記憶體,查詢工作改走 `netops-ingest`) | 同意,鍵都有 TTL,只經 `infra/redis` |
-| **CQ12** | 保留期限 | 原始 TRAFFIC 30 天(需求)/ 威脅類 30 或 90 天 / 每小時彙總 13 個月 / 來源 IP 彙總 90 天 / Parquet 冷保留 N 年 | 依稽核需求;建議威脅 90 天、Parquet 至少 1 年(要先解決 CQ3) |
-| **CQ13** | TRAFFIC Redis Stream 保留(寫入緩衝能撐多久,D21) | 維持 1 小時(ClickHouse 停超過約 55 分鐘就要 FTP 補)/ 延長到 2 小時(Redis 多約 250–300 MB) | 維持 1 小時,靠對帳補漏 |
-| **CQ14** | 歸檔目錄 | 需求原文 `/mnt/nas-docker/netops-archive/YYYY/` / `/mnt/nas-docker/giga-netops/{env}/pa-archive/YYYY/` | 後者(兩區隔離、和知識庫備份同一處) |
+> 需求方 2026-11-10「全部照建議」。「決定」欄是核准內容;有前置條件的寫在同一欄。
+
+| # | 決策 | 選項(影響 / 成本) | 建議 | 決定 |
+| --- | --- | --- | --- | --- |
+| **CQ1** | 是否引入 ClickHouse(推翻 D20、修改 AGENT §7.2) | A 引入,原始 log 30 天(本提案)/ B 不引入,改善 FTP 掃描(例如匯入時順便建每小時索引檔;痛點只減輕)/ C 引入但只存彙總、不存原始 log(省空間;明細仍要掃 FTP) | **A**,範圍限 TRAFFIC 與威脅類 | ✅ 引入 ClickHouse,範圍限 TRAFFIC 與威脅類(D27) |
+| **CQ2** | ClickHouse 放哪裡 | A 兩區都 30 天(主機 2 放不下)/ **B 測試區 TTL 2–3 天只驗功能、正式區 30 天** / C 加大主機 3 WSL 記憶體到約 10 GB(要重啟 WSL,舊系統一起中斷)/ D 另一台主機或 VM(要 IT 提供) | **B**;正式區上線前再看實測,記憶體不足就 C 或 D | ✅ B:測試區 TTL 2–3 天只驗功能、正式區 30 天;正式區上線前看實測,不夠就加大 WSL 或換主機。**前置:IT 確認主機 3 資源(C6 前)** |
+| **CQ3** | 冷歸檔的 NAS 空間 | A 申請新分享或擴充配額(一年約 150–370 GB)/ B 只歸檔每小時彙總(很小),原始 log 依賴 FTP 主機保留 / C 縮短冷保留(例如 90 天,約 36–90 GB) | 先問 **FTP 10.10.130.66 本身保留多久**;若 FTP 保留夠長選 B,否則 A | ✅ 先問 FTP 保留期限:夠長只歸檔每小時彙總,不夠就申請 NAS 空間。**狀態:待 FTP 保留期限** |
+| **CQ4** | ClickHouse 寫入放哪個元件 | A `netops-pa`(Python)直接寫:少一個容器;ClickHouse 慢會拖住即時接收的佇列,`netops-pa` 要再加 `clickhouse-connect` / **B 新服務 `netops-ingest`(TS,和 `netops-api` 同映像不同進入點)讀 Redis Stream**:接收與寫入解耦、ClickHouse 停機有 1 小時緩衝,團隊熟 TS;多一個容器 / C 放 `netops-api` 背景工作:不加容器;歸檔與補漏的負載會影響 API 回應(D9) | **B** | ✅ B:`netops-ingest`(D28) |
+| **CQ5** | PA log 精準查詢放哪裡 | **A `netops-pa`(Python,pan-python `xapi.log`)**:API Key、憑證設定已在這裡,不用把 Key 多給一個容器 / B `netops-api`(TS 直接打 XML API):少一次 Redis 轉手;API Key 要多給 `netops-api` | **A** | ✅ A:`netops-pa`(D31) |
+| **CQ6** | PA API 角色加 XML API「Log」權限 | 同意 / 不同意(模組四的 log 查詢不做,只做 Session Browser 等 op 查詢) | 同意,網通先離峰試查評估管理平面 | ✅ 同意。**前置:網通加 Log 權限並離峰試查(C5 前)** |
+| **CQ7** | PA 精準查詢給誰 | A 照「viewer 有全部 `.read`」,viewer 也能查 / B 只給 `netops-admin`(`netops-viewer` 角色排除 `netops.pa-query.read`) | **B**,先控制 PA-560 負擔 | ✅ B:只給 `netops-admin` |
+| **CQ8** | 雜訊過濾 | A 不過濾、查詢時排除 / B 寫入前丟棄 / C PA-560 端不轉送(§6.3) | **A**,一個月後看雜訊佔比 | ✅ A:不過濾,查詢時排除;一個月後看雜訊佔比 |
+| **CQ9** | Syslog / HTTP 轉送格式加 `$seqno`、`$sessionid` | 加:補漏可逐筆去重;要網通改 Custom Log Format 並 Commit,`records.py` 欄位要加(違反「不新增欄位」,要例外)/ 不加:補漏改整段刪除重寫 | **加** | ✅ 加(「不新增欄位」的例外)。**前置:網通改 Custom Log Format 並 Commit(C2 前)** |
+| **CQ10** | FTP 的角色 | A 維持 / B 降級補漏 / C 取代(§11.1) | **B**,並行對帳 2 週後切換 | ✅ B:降級補漏,並行對帳 2 週後切換(D33) |
+| **CQ11** | `netops-api` 寫 Redis 的範圍(修改 D26 的「唯一寫入」) | 同意快取、PA 查詢冷卻與工作三類 / 不同意(快取改在程序內記憶體,查詢工作改走 `netops-ingest`) | 同意,鍵都有 TTL,只經 `infra/redis` | ✅ 同意三類寫入(D32) |
+| **CQ12** | 保留期限 | 原始 TRAFFIC 30 天(需求)/ 威脅類 30 或 90 天 / 每小時彙總 13 個月 / 來源 IP 彙總 90 天 / Parquet 冷保留 N 年 | 依稽核需求;建議威脅 90 天、Parquet 至少 1 年(要先解決 CQ3) | ✅ TRAFFIC 30 天、威脅類 90 天、每小時彙總 13 個月、來源 IP 彙總 90 天、Parquet 至少 1 年(Parquet 要先解決 CQ3) |
+| **CQ13** | TRAFFIC Redis Stream 保留(寫入緩衝能撐多久,D21) | 維持 1 小時(ClickHouse 停超過約 55 分鐘就要 FTP 補)/ 延長到 2 小時(Redis 多約 250–300 MB) | 維持 1 小時,靠對帳補漏 | ✅ 維持 1 小時 |
+| **CQ14** | 歸檔目錄 | 需求原文 `/mnt/nas-docker/netops-archive/YYYY/` / `/mnt/nas-docker/giga-netops/{env}/pa-archive/YYYY/` | 後者(兩區隔離、和知識庫備份同一處) | ✅ `/mnt/nas-docker/giga-netops/{env}/pa-archive/YYYY/` |
 
 ---
 
@@ -1230,7 +1232,7 @@ TTL 用環境變數不能直接改 DDL;做法是 migration 腳本依 `GW_ENV` �
 
 | 階段 | 內容 | 前置條件 | 完成條件 | 誰做 |
 | --- | --- | --- | --- | --- |
-| **C0 核准** | 本手冊與 ARCHITECTURE D27–D33 提案審查;決定 CQ1–CQ14 | 本 MR | 決策寫回 ARCHITECTURE(狀態改「定案」)、AGENT §7.2 修改 | 需求方 |
+| **C0 核准與外部前置** | 2026-11-10 已核准、決策已寫回;剩外部事項 E1–E6(FTP 保留期限、NAS 空間、網通改轉送格式與 Log 權限、主機 3 資源、C1 同意) | — | E1–E6 都有結果(IMPL-PLAN C0) | 需求方、網通、IT |
 | **C1 POC 與容量實測** | 測試區起 ClickHouse(1.5 GB、TTL 3 天);從 FTP 匯入**一整天** TRAFFIC 量壓縮後大小、匯入時間;跑總覽與明細的代表查詢量回應時間與記憶體;確認 `bloom_filter` / `IPv6`、Parquet 讀回條件、設定名稱 | CQ1、CQ2 | §4 的估算換成實測值(每筆 bytes、30 天容量、Parquet 每天大小、查詢秒數);主機 2 記憶體沒有不足 | Claude;需求方同意在測試區新增容器 |
 | **C2 寫入管線** | `netops-ingest`(consumer group、批次寫入、缺口偵測、心跳)、DDL 與 migration、帳號與機密腳本、Compose、CI | C1;CQ4、CQ9(欄位) | 測試區連續 3 天:ClickHouse 每小時筆數和 Redis 接收計數差 < 0.5%;寫入服務重啟不漏、不重複(或重複有修正);Redis 記憶體在上限內 | Claude 寫;需求方執行機密腳本、合併 |
 | **C3 查詢切換** | `netops-api` `infra/clickhouse`;流量總覽、安全事件、Top N 改查彙總表 + Redis 快取;明細查詢 ≤ 30 天改查 ClickHouse(工作模式);API.md、OpenAPI、Gherkin | C2;CQ10、CQ11 | 同一時段 ClickHouse 與 FTP 摘要數字一致(誤差 < 0.5%);明細查詢一天範圍 < 10 秒;FTP 對帳 2 週無未處理缺口 | Claude;需求方驗收 |

@@ -2,6 +2,11 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。
 
+## 2026-11-10 PA log 高吞吐架構決策核准(ClickHouse,CQ1–CQ14)
+- 工作項目:C0–C6
+- 內容:需求方 2026-11-10 核准 !52 手冊 §12 的 14 項決策(原話「全部照建議」)。ARCHITECTURE §3.1 D27–D33 改為已核准,寫明前置條件(CQ2 正式區資源、CQ3 待 FTP 保留期限、CQ6 網通開 Log 權限、CQ9 網通改轉送格式);D16、D20、D21、D22、D26 原文保留並加註「由 D2x 修改」;§5 加按鈕 `netops.pa-live.query`、viewer 排除 `netops.pa-query.read`;Q6 結案。AGENT §0、§2、§7.2 改寫「不寫資料庫」「原始 log 不存本機」「欄位不新增」並列出例外與依據。IMPL-PLAN C0 改為外部前置事項 E1–E6(誰、做什麼),C1–C6 改為已核准並列前置與負責人。手冊 §12 加「決定」欄,威脅類 TTL 改 90 天(CQ12),權限表註明只給 admin(CQ7)。只改文件。
+- 檔案:`AGENT.md`、`docs/ARCHITECTURE.md`、`docs/IMPL-PLAN.md`、`docs/PA-LOG-CLICKHOUSE-GUIDE.md`
+
 ## 2026-11-10 R1:提高 TRAFFIC 即時 log 串流上限
 - 工作項目:R1(需求方決定提高上限;細節見 BackendCorrection 同日紀錄)
 - 內容:即時串流每秒檢查、每個 tick 最多讀 / 送 1500 筆(原每 2 秒 200 筆),TRAFFIC 約 120 筆/秒時畫面可看到全部。

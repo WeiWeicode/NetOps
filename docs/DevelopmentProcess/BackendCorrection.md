@@ -2,6 +2,12 @@
 
 > `backend/`、`deploy/` 的修改;新紀錄加在最上方,格式見 `AGENT.md` §11。
 
+## 2026-11-10 CI:netops-pa 沒有變更時部署不重建
+- 工作項目:R1(需求方 2026-11-10 同意;pipeline 783 只改文件也在 13:45 重建 `netops-pa`,PA-560 Syslog TRAFFIC 斷線且不會自動重連)
+- 內容:`deploy-api-test` 原本每次 `build` + `up --force-recreate netops-pa`,映像標籤是 commit 短 SHA,每次都重建。新增 `deploy/ci-netops-pa.sh` 判斷:正在執行的 `netops-pa` healthy、映像標籤的 commit 到 HEAD 之間 `pa-collector/` 沒變、用原標籤算的 `docker compose config --hash netops-pa` 等於容器的 `com.docker.compose.config-hash`(Compose 的 `netops-pa` 段與 `netops.env` 沒變),容器用的映像就是標籤現在指的映像,而且沒設 `NETOPS_PA_RECREATE=1` 時就 keep;判斷出錯一律重建;`netops-redis` 被重建時 `netops-pa` 也重建:不 build、不 up,沿用原容器;否則照舊先建置、再 `--force-recreate`,日誌印 `WARN netops-pa 已重建,TRAFFIC Syslog 可能需要網通重新 Commit netops-syslog`。`deploy-api-test` 改完整 clone(`GIT_DEPTH: "0"`),淺層 clone 找不到原 commit 時一律重建。其他服務與冒煙測試不變。HANDOFF、PA-FORWARDING-SPEC F.3、`host2-set-pa-secrets.sh` 的提示補「只有 netops-pa 重建時才需要重新 Commit」與 `NETOPS_PA_RECREATE=1`。
+- 檔案:`deploy/ci-netops-pa.sh`、`.gitlab-ci.yml`、`deploy/host2-set-pa-secrets.sh`、`docs/{HANDOFF,PA-FORWARDING-SPEC}.md`
+- 驗證:主機 2 dry run(只跑 ps / inspect / config / git,沒有 build、up):`config --hash` 與執行中容器的標籤一致;只改文件 → keep、只改 backend → keep、改 pa-collector → rebuild、`PA_POLL_SECONDS` 改 → rebuild、compose 的 netops-pa 段改 → rebuild、`NETOPS_PA_RECREATE=1` → rebuild、淺層 clone → rebuild;測試區 `netops-pa` 沒有被重啟(StartedAt 不變)
+
 ## 2026-11-10 C1:測試區新增 netops-clickhouse 與 POC 實測工具
 - 工作項目:C1(需求方 2026-11-10 同意 E6)
 - 內容:Compose 新增 `netops-clickhouse`(`clickhouse/clickhouse-server:26.3.62.3`;`mem_limit` / `memswap_limit` 1536m、`cpus` 2、uid 101、`cap_drop: ALL`、唯讀根目錄、只在 `netops-internal`、不開 port、healthcheck `/ping`;帳號檔以 `create_host_path: false` 掛載,不存在就啟動失敗)。`deploy/clickhouse/`:`config.d/low-memory.xml`(伺服器記憶體 = 容器 × 0.75、快取調小、背景池 4 與對應的 `merge_tree` 門檻、只留 `query_log` / `part_log` 3 天、log 只輸出 stdout)、`users.d/default.xml`(default 只限 127.0.0.1 / ::1)、`users.d/profiles.xml`(default / writer / reader / cold 設定檔,reader、cold 以 constraints 固定上限)、`schema.sql`(手冊 §7 DDL,`dst` 加 bloom_filter)、`apply-schema.sh`(依部署區代入 TTL,已存在的表 `MODIFY TTL`)。`deploy/host2-set-clickhouse-secrets.sh`:三個帳號的隨機密碼與帳號檔(只含 SHA-256 雜湊),使用者執行。CI `deploy-api-test`:檢查帳號檔、`up -d --wait netops-clickhouse`、`apply-schema.sh test`、確認伺服器記憶體上限。POC 工具 `deploy/clickhouse/poc/`(FTP 唯讀串流匯入一天、容量與查詢實測)。

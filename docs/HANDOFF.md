@@ -28,7 +28,7 @@
 
 - `/srv/giganexus/deploy/netops.env`:`PA_POLL_ENABLED=1`、`PA_RECEIVE_ENABLED=1`、`PA_HOST=10.10.115.35`、`PA_ALLOWED_SOURCES=172.26.0.1`、`PA_TLS_INSECURE=1`(備份 `.bak-20261109`、`.bak-20261110`)。收集器保持開啟(需求方 2026-11-10 決定);要暫停用即時監控頁的「輪詢 / 接收」按鈕(`netops-admin`)。
 - 接收路徑:PA-560 → `10.10.130.124:51293/51294`(Windows portproxy → WSL)→ `netops-pa`;容器看到的來源是 Docker 閘道 `172.26.0.1`。
-- PA-560 Syslog TCP 斷線(error 110)後**不會自動重連**:主機 2 重開機、`netops-pa` 長時間停機後 TRAFFIC 沒進來,請網通對 `netops-syslog` 再 Commit 一次。
+- PA-560 Syslog TCP 斷線(error 110)後**不會自動重連**:主機 2 重開機、`netops-pa` 長時間停機後 TRAFFIC 沒進來,請網通對 `netops-syslog` 再 Commit 一次。**只有 `netops-pa` 重建(或重啟)時才需要**:CI 在 `pa-collector/`、Compose 的 `netops-pa` 段與 `netops.env` 都沒變時不重建 `netops-pa`(`deploy/ci-netops-pa.sh`;`netops-redis` 被重建時 `netops-pa` 也會一起重建);有重建時 `deploy-api-test` 日誌會印 `WARN netops-pa 已重建…`,看到才請網通 Commit。機密或憑證檔換了要重建時,手動執行 pipeline 並帶變數 `NETOPS_PA_RECREATE=1`。
 
 ### 下一步(依序)
 

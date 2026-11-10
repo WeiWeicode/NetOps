@@ -1,6 +1,6 @@
 # 專案地圖 — NetOps
 
-> **最後更新:2026-11-09**(R1 測試區收集器開關:`netops:pa:control` 由 `netops-api` `infra/redis` 寫、`pa-collector/netops_pa/control.py` 讀,API `PUT /v1/pa-live/collector-control`、按鈕 `netops.pa-live.manage`;即時監控頁首輪詢 / 接收狀態、429 與路由未發佈的提示;CI 冒煙測試不再打 `/v1/ping`。2026-11-05:S0 串流驗證:`modules/pa-live/` SSE 驗證路由、`backend/scripts/sse-probe.mjs`,不改 Gateway;D1 驗收修正:測試區 `FTP_LOG_DIR=/my-data` 寫進 CI、`netops-kb-backup` healthcheck、FTP 清單不列系統資料夾、AD FTP 清單改手動;2026-11-04:D1 完成並上測試區,有未驗項目:CI 發佈前端 SPA 與套用畫面權限、`deploy/gateway-rbac.yaml`、知識庫 NAS 備份 `deploy/kb-backup/`、監控 Key;驗收報告 `docs/test-reports/2026-11-04-d1-uat.md`。2026-11-03:F1、B2 完成;舊版程式未改動)。
+> **最後更新:2026-11-10**(R1 驗收修正:即時監控排行切換與 log 暫停鈕改用 `GCard` 的 `#actions` 插槽,前端新增掛載測試(`@vue/test-utils`、`happy-dom`)與插槽名稱檢查;串流 401 先經 web-kit 換發;串流每人上限 3。2026-11-09:R1 測試區收集器開關:`netops:pa:control` 由 `netops-api` `infra/redis` 寫、`pa-collector/netops_pa/control.py` 讀,API `PUT /v1/pa-live/collector-control`、按鈕 `netops.pa-live.manage`;即時監控頁首輪詢 / 接收狀態、429 與路由未發佈的提示;CI 冒煙測試不再打 `/v1/ping`。2026-11-05:S0 串流驗證:`modules/pa-live/` SSE 驗證路由、`backend/scripts/sse-probe.mjs`,不改 Gateway;D1 驗收修正:測試區 `FTP_LOG_DIR=/my-data` 寫進 CI、`netops-kb-backup` healthcheck、FTP 清單不列系統資料夾、AD FTP 清單改手動;2026-11-04:D1 完成並上測試區,有未驗項目:CI 發佈前端 SPA 與套用畫面權限、`deploy/gateway-rbac.yaml`、知識庫 NAS 備份 `deploy/kb-backup/`、監控 Key;驗收報告 `docs/test-reports/2026-11-04-d1-uat.md`。2026-11-03:F1、B2 完成;舊版程式未改動)。
 > 開發新功能後,在同一個變更內更新本文件(`AGENT.md` §9)。只寫結構與職責,細節連到 `docs/`。
 
 資訊網通管理系統:PA-560 防火牆 log、AD 事件與網通知識庫;AI 問答只留在舊版(ARCHITECTURE D17)。目標是接入 GigaNexus Gateway(`/netops/`、`netops-api` :51292),目前部署於 IIS `/NetOps`。
@@ -63,7 +63,7 @@ NetOps/
 │  │  ├─ config/links.ts    舊版 NetOps(AI 問答、AI 分析、知識庫 AI 功能)與 Veeam 連結(D11、D17、D18)
 │  │  └─ pages/             firewall/(流量總覽、安全事件、明細查詢、FTP Log 檔案)、ad/(事件總覽、明細查詢、FTP Log 檔案)、knowledge/;Forbidden、NotFound、Unavailable
 │  ├─ mock/                 本機假 Gateway(gateway.ts;MOCK=admin|viewer|noapp|anon,只在 dev,不進建置)與各模組假 API(ftp、pa、paEvents、paLog、ad、kb)
-│  ├─ test/                 vitest:選單、守衛、應用層守衛、風格、工作輪詢、狀態輪詢、各頁純函式、網址條件、連結
+│  ├─ test/                 vitest:選單、守衛、應用層守衛、風格、工作輪詢、狀態輪詢、各頁純函式、網址條件、連結;即時監控頁掛載測試(happy-dom)、插槽名稱檢查
 │  └─ Dockerfile、publish.sh SPA 映像:一次性容器發佈到 gw_www/netops(symlink 原子切換、保留 5 版、可回滾;D1)
 └─ deploy/
    ├─ docker-compose.yml    netops-api 加入 Gateway 網路,不對主機發佈 port;netops-kb-backup(知識庫 NAS 備份,healthcheck 看 LAST_RESULT);spa-netops(profile publish)

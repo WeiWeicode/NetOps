@@ -14,7 +14,7 @@ import { fmtNum, fmtShort, fmtSize, fmtTime } from '@/api/format';
 import { LOG_TYPES, paLive, type LiveLog, type LogType, type PaLiveSnapshot, type PaLiveTop } from '@/api/paLive';
 import type { Column } from '@/ui/components/GTable.vue';
 import TopList from '@/components/TopList.vue';
-import { collectorBadges, collectorView, controlView, fmtBps, latestSnapTime, logSource, parseFilter, useLiveStream } from '@/composables/paLive';
+import { collectorBadges, collectorView, controlView, fmtBps, interfaceView, latestSnapTime, logSource, parseFilter, useLiveStream } from '@/composables/paLive';
 import { usePolling } from '@/composables/usePolling';
 
 // ---------- 設備狀態(串流的 snapshot 事件;串流連不上時退回每 10 秒輪詢) ----------
@@ -28,6 +28,8 @@ const badges = computed(() => (snapError.value ? [] : collectorBadges(c.value)))
 // 排行與即時 log 來自接收端點(與設備狀態的輪詢分開說明)
 const source = computed(() => logSource(snapError.value ? null : c.value));
 const snapTime = computed(() => latestSnapTime(m.value));
+// 介面流量:輪詢暫停或快照過期時顯示「停止更新」,不顯示暫停前最後一輪的值(驗收 2026-11-10 §4.4-1)
+const ifs = computed(() => interfaceView(snapError.value ? null : c.value, m.value?.interfaces));
 
 // ---------- 測試區暫停 / 繼續(正式區 control.available 為 false,不顯示) ----------
 const ctl = computed(() => controlView(snapError.value ? null : c.value, snap.value?.control, can(UI.paLiveManage)));
@@ -232,7 +234,8 @@ const logColumns = computed<Column[]>(() => {
     { key: 'severity', label: '嚴重度', width: '84px' },
     { key: 'src', label: '來源', mono: true },
     { key: 'dst', label: '目的', mono: true },
-    { key: 'name', label: '名稱' },
+    // URL 過濾的 threatid 固定是 9999(名稱欄只會是「9999(9999)」),改顯示 URL 類別(驗收 2026-11-10 §4.4-4)
+    logType.value === 'url' ? { key: 'category', label: 'URL 類別' } : { key: 'name', label: '名稱' },
     { key: 'url', label: 'URL / 檔名', hideSm: true },
   ];
 });
@@ -363,9 +366,10 @@ function refresh() {
       </GCard>
     </div>
 
-    <GCard v-if="m?.interfaces?.items.length" title="介面流量" icon="gateway" padding="sm">
-      <ul class="ifs">
-        <li v-for="i in m.interfaces.items" :key="i.name">
+    <GCard v-if="ifs.visible" title="介面流量" icon="gateway" padding="sm">
+      <p v-if="!ifs.items.length" class="small muted"><strong>停止更新</strong>({{ ifs.stale }})</p>
+      <ul v-else class="ifs">
+        <li v-for="i in ifs.items" :key="i.name">
           <span class="mono">{{ i.name }}</span>
           <span class="muted small">↓ {{ fmtBps(i.rxBps) }} · ↑ {{ fmtBps(i.txBps) }}</span>
         </li>
@@ -374,7 +378,7 @@ function refresh() {
 
     <!-- 即時排行 -->
     <GCard title="即時排行" icon="trending-up">
-      <template #extra>
+      <template #actions>
         <div class="row">
           <GSelect v-model="topType" :options="LOG_TYPES.map((t) => ({ label: t.label, value: t.value }))" size="sm" />
           <GSegmented v-model="topMinutesStr" size="sm" :options="TOP_MINUTES" />
@@ -407,7 +411,7 @@ function refresh() {
 
     <!-- 即時 log -->
     <GCard title="即時 log" icon="radio">
-      <template #extra>
+      <template #actions>
         <GButton size="sm" :icon="stream.paused.value ? 'play' : 'pause'" @click="stream.setPaused(!stream.paused.value)">{{ stream.paused.value ? '繼續' : '暫停' }}</GButton>
       </template>
       <div class="stack" style="--gap: 10px">

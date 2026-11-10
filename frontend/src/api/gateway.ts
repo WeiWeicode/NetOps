@@ -7,7 +7,7 @@
 import { ApiError, http as kit, readCookie, redirectToLogin, refreshSession, useAuth, type Me, type RequestOptions } from '@giganexus/web-kit';
 import { hasIcon } from '@/ui/icons';
 
-export { ApiError, loadMe, logout, useAuth } from '@giganexus/web-kit';
+export { ApiError, loadMe, logout, redirectToLogin, refreshSession, useAuth } from '@giganexus/web-kit';
 
 const auth = useAuth();
 export const can = (code: string): boolean => auth.can(code);

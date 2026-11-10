@@ -26,6 +26,8 @@ export interface LiveStreamOptions {
 }
 
 const PERMISSION = 'netops.pa-realtime.read';
+/** 測試區手動開關(寫入;只給 netops-admin,deploy/gateway-rbac.yaml netops.pa-live.manage) */
+const WRITE_PERMISSION = 'netops.pa-realtime.write';
 const ROUTE_TIMEOUT_MS = 60_000;
 const RETRY_MS = 5_000;
 const MAX_PENDING_BYTES = 256 * 1024;
@@ -113,6 +115,75 @@ const paLiveLiveRoutes: FastifyPluginAsync<{ live: PaLiveService; stream?: LiveS
       },
     },
     async () => live.snapshot(),
+  );
+
+  app.put<{ Body: { pollPaused?: boolean; receivePaused?: boolean } }>(
+    '/v1/pa-live/collector-control',
+    {
+      schema: {
+        operationId: 'netops.pa-live.collector-control',
+        summary: '即時監控:測試區暫停 / 繼續收集器',
+        description:
+          '測試區手動開關(2026-11-09 需求方決定):pollPaused 暫停 / 繼續 SDK 輪詢 PA-560,receivePaused 暫停 / 繼續 HTTP 與 Syslog 接收(暫停期間收到的 log 丟棄並計數 paused)。至少給一個欄位;只寫要求的狀態,' +
+          '收集器在下一次輪詢前(輪詢)或 5 秒內(接收)套用,實際狀態看 snapshot 的 collector.poll.paused / receive.paused。主機設定的總開關(PA_POLL_ENABLED / PA_RECEIVE_ENABLED)關閉時,寫入照樣成功但不會生效(畫面停用該按鈕)。' +
+          '只有測試區可用,正式區回 403 NETOPS_PA_CONTROL_DISABLED。回應為 control(要求的狀態、最後操作人與時間)。',
+        tags: ['PA 即時監控'],
+        'x-permission': WRITE_PERMISSION,
+        // 稽核記錄操作人與要求內容(本文只有兩個布林值)
+        'x-audit-level': 'body',
+        'x-gherkin': [
+          '場景: 測試區暫停輪詢',
+          '  假如 部署區為測試區且使用者擁有 netops.pa-realtime.write',
+          '  當 呼叫 PUT /api/netops/pa-live/collector-control,內容 {"pollPaused": true}',
+          '  那麼 回應 200',
+          '  而且 control.pollPaused 為 true、control.updatedBy 為操作人',
+          '  而且 收集器在下一次輪詢前停止查詢 PA-560,心跳 collector.poll.paused 變為 true',
+          '',
+          '場景: 繼續接收',
+          '  假如 接收已暫停',
+          '  當 呼叫 PUT /api/netops/pa-live/collector-control,內容 {"receivePaused": false}',
+          '  那麼 回應 200 且 control.receivePaused 為 false',
+          '',
+          '場景: 沒有給任何欄位',
+          '  當 呼叫 PUT /api/netops/pa-live/collector-control,內容 {}',
+          '  那麼 回應 400 VALIDATION_FAILED',
+          '',
+          '場景: 正式區不能切換',
+          '  假如 部署區為正式區',
+          '  當 呼叫 PUT /api/netops/pa-live/collector-control,內容 {"pollPaused": true}',
+          '  那麼 回應 403 且 code 為 "NETOPS_PA_CONTROL_DISABLED"',
+          '',
+          '場景: 檢視者不能切換',
+          '  假如 使用者只有 netops.pa-realtime.read',
+          '  當 呼叫 PUT /api/netops/pa-live/collector-control',
+          '  那麼 回應 403',
+          '',
+          '場景: Redis 連不上',
+          '  假如 netops-redis 停止',
+          '  當 呼叫 PUT /api/netops/pa-live/collector-control,內容 {"pollPaused": true}',
+          '  那麼 回應 424 NETOPS_REDIS_UNAVAILABLE',
+        ].join('\n'),
+        body: {
+          type: 'object',
+          additionalProperties: false,
+          // 至少一個欄位(Fastify 會先移除未知欄位,所以不用 minProperties)
+          anyOf: [{ required: ['pollPaused'] }, { required: ['receivePaused'] }],
+          properties: {
+            pollPaused: { type: 'boolean', description: 'true 暫停 SDK 輪詢、false 繼續' },
+            receivePaused: { type: 'boolean', description: 'true 暫停 HTTP / Syslog 接收、false 繼續' },
+          },
+        },
+        response: { 200: looseObject('control:{ available, pollPaused, receivePaused, updatedAt, updatedBy }') },
+      },
+    },
+    async (req) => {
+      const emp = req.identity?.emp || req.identity?.sub || 'unknown';
+      const name = req.identity?.name;
+      const control = await live.setControl(req.body, name ? `${name}(${emp})` : emp);
+      // 操作紀錄(BFF 另有稽核);只記工號與要求的狀態
+      req.log.info({ emp, change: req.body }, '測試區收集器開關已切換');
+      return control;
+    },
   );
 
   app.get<{ Querystring: { metric: Metric; minutes?: number } }>(

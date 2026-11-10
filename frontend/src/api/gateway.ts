@@ -114,6 +114,8 @@ export async function download(path: ApiPath, query: Query | undefined, fallback
 /** 錯誤訊息附 requestId 前 12 碼,方便回報時查日誌(AGENT.md §5);欄位錯誤(details)一併列出 */
 export function describeError(e: unknown): string {
   if (e instanceof ApiError) {
+    // Gateway 找不到路由:netops-api 已註冊、但路由草稿還沒在 GigaItApp「服務與路由」發佈(2026-11-09 驗收 §4.4)
+    if (e.code === 'ROUTE_NOT_FOUND') return `功能尚未啟用(路由未發佈)${e.requestId ? `(requestId ${e.requestId.slice(0, 12)})` : ''}`;
     const fields = Array.isArray(e.details)
       ? (e.details as { field?: string; message?: string }[])
           .map((d) => [d.field, d.message].filter(Boolean).join(':'))

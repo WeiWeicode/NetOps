@@ -16,6 +16,7 @@ import threading
 import time
 from typing import Any
 
+from .control import Control
 from .status import Status, ThrottledLog
 from .store import RedisStore
 
@@ -54,9 +55,11 @@ class RateLimiter:
 
 
 class Pipeline:
-    def __init__(self, store: RedisStore, status: Status, queue_size: int, max_rate: int) -> None:
+    def __init__(self, store: RedisStore, status: Status, queue_size: int, max_rate: int, control: Control | None = None) -> None:
         self.store = store
         self.status = status
+        # 測試區手動開關;接收的暫停狀態在每次心跳前讀(HEARTBEAT_SECONDS)
+        self.control = control
         self.q: queue.Queue[tuple[str, dict[str, Any], float]] = queue.Queue(maxsize=queue_size)
         self.limiters = {"http": RateLimiter(max_rate), "syslog": RateLimiter(max_rate)}
         self.caps = {"http": queue_size, "syslog": int(queue_size * SYSLOG_QUEUE_SHARE)}
@@ -68,6 +71,10 @@ class Pipeline:
     def submit(self, log_type: str, records: list[dict[str, Any]], source: str) -> int:
         """放進佇列;回傳接受的筆數(其餘因速率或佇列滿被丟棄)。source:http / syslog。"""
         if not records:
+            return 0
+        # 接收暫停(測試區手動開關):丟棄並計數 paused,回呼叫端 0 筆(HTTP 仍回 200,避免 PA 重送)
+        if self.control and self.control.receive_paused:
+            self.status.add("paused", len(records))
             return 0
         limiter = self.limiters[source]
         allowed = limiter.take(len(records))
@@ -131,6 +138,11 @@ class Pipeline:
             return 0
 
     def heartbeat(self) -> None:
+        if self.control:
+            self.control.refresh()
+            # 總開關關閉時沒有接收端點,不標示暫停
+            enabled = self.status.get("receiveEnabled") == "1"
+            self.status.set(receivePaused="1" if enabled and self.control.receive_paused else "0")
         try:
             self.store.write_heartbeat(self.status.snapshot())
             # 心跳寫得進去就代表 Redis 已恢復(只輪詢、沒有 log 時也要清掉錯誤)

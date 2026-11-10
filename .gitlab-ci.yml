@@ -85,10 +85,11 @@ deploy-api-test:
     - $C exec -T netops-redis redis-cli config get save | grep -q '3600 1' || { echo "FAIL netops-redis RDB save 設定不符" >&2; exit 1; }
     - $C exec -T netops-redis redis-cli config get maxmemory | tail -n 1 | grep -q '^[1-9]' || { echo "FAIL netops-redis 沒有 maxmemory" >&2; exit 1; }
     - echo "OK   netops-redis / netops-pa"
-    # 冒煙測試:健康檢查;無內部 Token → 401
+    # 冒煙測試:健康檢查(/healthz、/readyz 不進 giga-observe 監控)。
+    #   原本另打一次不帶內部 Token 的 /v1/ping 確認回 401,但每次部署都在 giga-observe 留一筆 401(2026-11-09 驗收 §4.5),
+    #   改由單元測試涵蓋(backend/test/unit/app.test.ts「缺少 Token 回 401 NETOPS_INTERNAL_TOKEN_INVALID」)
+    - $C exec -T netops-api wget -qO- http://127.0.0.1:51292/healthz
     - $C exec -T netops-api wget -qO- http://127.0.0.1:51292/readyz
-    - '$C exec -T netops-api node -e "fetch(\"http://127.0.0.1:51292/v1/ping\").then((r) => process.exit(r.status === 401 ? 0 : 1))" || { echo "FAIL /v1/ping 無內部 Token 不是 401" >&2; exit 1; }'
-    - echo "OK   /v1/ping 無內部 Token → 401"
     # 自動註冊在背景執行(SDK 失敗時重試 1、2、4、8、16 秒,另加連線逾時);最多等 90 秒看最終結果,重試用完仍失敗時 job 失敗
     # 訊息取自 @giganexus/backend-sdk 0.3:成功「API 已註冊…」,最終失敗「…Gateway 路由未更新」
     - |

@@ -31,6 +31,8 @@ export const SYSTEM_CODE = 'netops';
 export const PERMISSIONS = [
   { code: 'netops.ping.read', name: 'NetOps 連線驗證:查詢' },
   { code: 'netops.pa-realtime.read', name: 'NetOps PA 即時監控:查詢' },
+  // 測試區手動開關(暫停 / 繼續收集器;只給 netops-admin)
+  { code: 'netops.pa-realtime.write', name: 'NetOps PA 即時監控:測試區暫停 / 繼續收集器' },
   { code: 'netops.pa.read', name: 'NetOps PA 防火牆:查詢' },
   { code: 'netops.pa-log.read', name: 'NetOps PA Log 明細:查詢' },
   { code: 'netops.ftp.read', name: 'NetOps FTP Log 檔案:查詢' },

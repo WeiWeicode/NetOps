@@ -58,3 +58,8 @@ def top(log_type: str, dim: str, bucket: str) -> str:
 
 
 HEARTBEAT = f"{PREFIX}:heartbeat"
+
+# 測試區手動開關(2026-11-09 需求方決定;PA-LIVE-PLAN §4):netops-api 寫入(netops.pa-realtime.write)、netops-pa 只讀。
+# Hash 欄位 pollPaused / receivePaused("1" 暫停、"0" 或沒有 = 繼續)、updatedAt、updatedBy。不設 TTL;
+# 正式區(GW_ENV=prod)netops-pa 不讀這個鍵,netops-api 也不允許寫入。
+CONTROL = f"{PREFIX}:control"

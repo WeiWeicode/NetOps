@@ -2,7 +2,8 @@
  * PA 即時監控核心(R1,PA-LIVE-PLAN §3.3、§8):讀 netops-redis(infra/redis),不依賴 Fastify。
  * 失敗要明確(AGENT.md §5):
  *   - 收集器心跳超過 STALE_SEC 沒更新 → state "stopped";快照過期(60 秒 TTL)→ 該指標為 null,畫面顯示「停止更新」,不顯示舊快照
- *   - 收集器兩個開關都關 → state "disabled"(測試區預設,畫面顯示「未啟用」)
+ *   - 收集器兩個開關都關 → state "disabled"(總開關 PA_POLL_ENABLED / PA_RECEIVE_ENABLED,畫面顯示「未啟用」)
+ *   - 有開的部分都被測試區手動開關暫停 → state "paused"(2026-11-09 需求方決定;netops:pa:control,PA-LIVE-PLAN §4)
  *   - Redis 連不上 → status / snapshot 回 state "unavailable"(200);其他查詢回 424 NETOPS_REDIS_UNAVAILABLE。
  *     不用 5xx:BFF 斷路器把上游 5xx 計為失敗,頁面輪詢會讓整個 netops-api 被短路(S0 報告 §3.6 第 4 條同理)。
  *   - 收集器寫在心跳的錯誤原文可能含內部位址,回給畫面前只留分類(summarizeError),原文看收集器日誌
@@ -31,7 +32,7 @@ export const TOP_MINUTES = [5, 15, 60] as const;
 export const LOG_SCAN_MAX = 5000;
 const LOG_SCAN_CHUNK = 500;
 
-export type CollectorState = 'ok' | 'degraded' | 'disabled' | 'stopped' | 'not-running' | 'unavailable';
+export type CollectorState = 'ok' | 'degraded' | 'disabled' | 'paused' | 'stopped' | 'not-running' | 'unavailable';
 
 export interface CollectorStatus {
   state: CollectorState;
@@ -39,16 +40,27 @@ export interface CollectorStatus {
   message: string;
   updatedAt: string | null;
   version: string | null;
-  poll: { enabled: boolean; lastOkAt: string | null; error: string | null; errorAt: string | null };
-  receive: { enabled: boolean; tls: boolean; httpLastAt: string | null; syslogLastAt: string | null };
+  /** enabled = 總開關(環境變數);paused = 測試區手動開關的實際狀態(收集器回報) */
+  poll: { enabled: boolean; paused: boolean; lastOkAt: string | null; error: string | null; errorAt: string | null };
+  receive: { enabled: boolean; paused: boolean; tls: boolean; httpLastAt: string | null; syslogLastAt: string | null };
   redis: { error: string | null; errorAt: string | null };
-  counters: Record<'received' | 'dropped' | 'rejected' | 'malformed' | 'redisFailed', number>;
+  counters: Record<'received' | 'dropped' | 'rejected' | 'malformed' | 'redisFailed' | 'paused', number>;
+}
+
+/** 測試區手動開關(要求的狀態;available = 這個部署區可以切換,正式區為 false) */
+export interface ControlView {
+  available: boolean;
+  pollPaused: boolean;
+  receivePaused: boolean;
+  updatedAt: string | null;
+  updatedBy: string | null;
 }
 
 const MESSAGES: Record<CollectorState, string> = {
   ok: '收集器運作中',
   degraded: '收集器運作中,但有錯誤(見錯誤訊息);相關資料可能停止更新',
-  disabled: '收集器未啟用(輪詢與接收都關閉;測試區只在測試時開啟)',
+  disabled: '收集器未啟用(主機設定的輪詢與接收都關閉)',
+  paused: '收集器已暫停(測試區手動開關):資料停止更新',
   stopped: '收集器停止更新:資料不是即時的',
   'not-running': '收集器沒有啟動過(Redis 沒有心跳)',
   unavailable: '無法連線即時資料庫(Redis):資料停止更新',
@@ -87,17 +99,21 @@ export function deriveStatus(hb: Record<string, string> | null, nowMs: number): 
     message: MESSAGES[state],
     updatedAt: s(hb?.updatedAt),
     version: s(hb?.version),
-    poll: { enabled: hb?.pollEnabled === '1', lastOkAt: s(hb?.pollOkAt), error: summarizeError(hb?.pollError), errorAt: s(hb?.pollErrorAt) },
-    receive: { enabled: hb?.receiveEnabled === '1', tls: hb?.receiveTls === '1', httpLastAt: s(hb?.httpOkAt), syslogLastAt: s(hb?.syslogOkAt) },
+    poll: { enabled: hb?.pollEnabled === '1', paused: hb?.pollEnabled === '1' && hb?.pollPaused === '1', lastOkAt: s(hb?.pollOkAt), error: summarizeError(hb?.pollError), errorAt: s(hb?.pollErrorAt) },
+    receive: { enabled: hb?.receiveEnabled === '1', paused: hb?.receiveEnabled === '1' && hb?.receivePaused === '1', tls: hb?.receiveTls === '1', httpLastAt: s(hb?.httpOkAt), syslogLastAt: s(hb?.syslogOkAt) },
     redis: { error: summarizeError(hb?.redisError), errorAt: s(hb?.redisErrorAt) },
-    counters: { received: n(hb?.received), dropped: n(hb?.dropped), rejected: n(hb?.rejected), malformed: n(hb?.malformed), redisFailed: n(hb?.redisFailed) },
+    counters: { received: n(hb?.received), dropped: n(hb?.dropped), rejected: n(hb?.rejected), malformed: n(hb?.malformed), redisFailed: n(hb?.redisFailed), paused: n(hb?.paused) },
   });
   if (!hb) return base('not-running');
   const updated = Date.parse(hb.updatedAt ?? '');
   if (!Number.isFinite(updated) || nowMs - updated > STALE_SEC * 1000) return base('stopped');
   const st = base('ok');
   if (!st.poll.enabled && !st.receive.enabled) return base('disabled');
-  if ((st.poll.enabled && st.poll.error) || st.redis.error) return { ...st, state: 'degraded', message: MESSAGES.degraded };
+  const pollActive = st.poll.enabled && !st.poll.paused;
+  // Redis 寫入錯誤優先於暫停:暫停期間心跳仍會寫,錯誤要讓畫面看得到
+  if (st.redis.error) return { ...st, state: 'degraded', message: MESSAGES.degraded };
+  if (!pollActive && !(st.receive.enabled && !st.receive.paused)) return base('paused');
+  if (pollActive && st.poll.error) return { ...st, state: 'degraded', message: MESSAGES.degraded };
   return st;
 }
 
@@ -151,8 +167,14 @@ export function bucketsOf(minutes: number, nowMs: number): string[] {
 
 type Log = { warn: (obj: object, msg: string) => void };
 
-export function createPaLiveService(redis: PaLiveRedis | null, opts: { now?: () => number; log?: Log } = {}) {
+/**
+ * opts.controlAllowed:這個部署區能不能用測試區手動開關(app.ts 依 GW_ENV:正式區 false)。
+ * 正式區不讀也不寫 netops:pa:control,收集器在正式區也不讀(pa-collector/netops_pa/control.py)。
+ */
+export function createPaLiveService(redis: PaLiveRedis | null, opts: { now?: () => number; log?: Log; controlAllowed?: boolean } = {}) {
   const now = opts.now ?? Date.now;
+  const controlAllowed = opts.controlAllowed ?? false;
+  const noControl: ControlView = { available: false, pollPaused: false, receivePaused: false, updatedAt: null, updatedBy: null };
   const r = () => {
     if (!redis) throw new AppError(424, 'NETOPS_PA_LIVE_DISABLED', '即時監控未設定(REDIS_URL)');
     return redis;
@@ -179,23 +201,37 @@ export function createPaLiveService(redis: PaLiveRedis | null, opts: { now?: () 
     }
   }
 
-  /** 收集器狀態 + 各指標最新快照(過期為 null)。Redis 連不上時 metrics 全為 null、state 為 unavailable */
+  /**
+   * 收集器狀態 + 各指標最新快照(過期為 null)+ 測試區手動開關。Redis 連不上時 metrics 全為 null、state 為 unavailable、
+   * control 只有 available(要求的狀態讀不到;畫面停用按鈕)
+   */
   async function snapshot() {
     const collector = await status();
     const metrics = Object.fromEntries(METRICS.map((m) => [m, null])) as Record<Metric, Record<string, unknown> | null>;
+    let control: ControlView = { ...noControl, available: controlAllowed };
     if (collector.state !== 'unavailable') {
       try {
-        const values = await Promise.all(METRICS.map((m) => redis!.snapshot(m)));
+        const [values, ctl] = await Promise.all([Promise.all(METRICS.map((m) => redis!.snapshot(m))), controlAllowed ? redis!.collectorControl() : null]);
         METRICS.forEach((m, i) => (metrics[m] = values[i] ?? null));
+        if (ctl) control = { available: true, ...ctl };
       } catch (err) {
         if (!isRedisError(err)) throw err;
         markUnavailable(true, err);
-        return { collector: unavailableStatus(), metrics };
+        return { collector: unavailableStatus(), metrics, control };
       }
     }
     // 收集器停止時快照可能還沒過期(最多 60 秒):不當成即時資料
     if (collector.state === 'stopped') for (const m of METRICS) metrics[m] = null;
-    return { collector, metrics };
+    return { collector, metrics, control };
+  }
+
+  /**
+   * 切換測試區手動開關(PUT /v1/pa-live/collector-control):只寫要求的狀態,收集器在下一次輪詢前(輪詢)或 5 秒內(接收)套用,
+   * 實際狀態由心跳回報。正式區回 403 NETOPS_PA_CONTROL_DISABLED;總開關關閉時寫入也不會生效(畫面停用按鈕)。
+   */
+  async function setControl(change: { pollPaused?: boolean; receivePaused?: boolean }, by: string): Promise<ControlView> {
+    if (!controlAllowed) throw new AppError(403, 'NETOPS_PA_CONTROL_DISABLED', '只有測試區可以切換收集器的輪詢與接收');
+    return { available: true, ...(await guard(() => r().setCollectorControl(change, by))) };
   }
 
   /** 趨勢:最近 minutes 分鐘,點數超過 maxPoints 時平均抽樣 */
@@ -283,7 +319,7 @@ export function createPaLiveService(redis: PaLiveRedis | null, opts: { now?: () 
     });
   }
 
-  return { status, snapshot, series, top, logs, redis, log: opts.log };
+  return { status, snapshot, setControl, series, top, logs, redis, log: opts.log };
 }
 
 export type PaLiveService = ReturnType<typeof createPaLiveService>;

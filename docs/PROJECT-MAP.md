@@ -1,6 +1,6 @@
 # 專案地圖 — NetOps
 
-> **最後更新:2026-11-05**(S0 串流驗證:`modules/pa-live/` SSE 驗證路由、`backend/scripts/sse-probe.mjs`,不改 Gateway;D1 驗收修正:測試區 `FTP_LOG_DIR=/my-data` 寫進 CI、`netops-kb-backup` healthcheck、FTP 清單不列系統資料夾、AD FTP 清單改手動;2026-11-04:D1 完成並上測試區,有未驗項目:CI 發佈前端 SPA 與套用畫面權限、`deploy/gateway-rbac.yaml`、知識庫 NAS 備份 `deploy/kb-backup/`、監控 Key;驗收報告 `docs/test-reports/2026-11-04-d1-uat.md`。2026-11-03:F1、B2 完成;舊版程式未改動)。
+> **最後更新:2026-11-09**(R1 測試區收集器開關:`netops:pa:control` 由 `netops-api` `infra/redis` 寫、`pa-collector/netops_pa/control.py` 讀,API `PUT /v1/pa-live/collector-control`、按鈕 `netops.pa-live.manage`;即時監控頁首輪詢 / 接收狀態、429 與路由未發佈的提示;CI 冒煙測試不再打 `/v1/ping`。2026-11-05:S0 串流驗證:`modules/pa-live/` SSE 驗證路由、`backend/scripts/sse-probe.mjs`,不改 Gateway;D1 驗收修正:測試區 `FTP_LOG_DIR=/my-data` 寫進 CI、`netops-kb-backup` healthcheck、FTP 清單不列系統資料夾、AD FTP 清單改手動;2026-11-04:D1 完成並上測試區,有未驗項目:CI 發佈前端 SPA 與套用畫面權限、`deploy/gateway-rbac.yaml`、知識庫 NAS 備份 `deploy/kb-backup/`、監控 Key;驗收報告 `docs/test-reports/2026-11-04-d1-uat.md`。2026-11-03:F1、B2 完成;舊版程式未改動)。
 > 開發新功能後,在同一個變更內更新本文件(`AGENT.md` §9)。只寫結構與職責,細節連到 `docs/`。
 
 資訊網通管理系統:PA-560 防火牆 log、AD 事件與網通知識庫;AI 問答只留在舊版(ARCHITECTURE D17)。目標是接入 GigaNexus Gateway(`/netops/`、`netops-api` :51292),目前部署於 IIS `/NetOps`。
@@ -118,6 +118,7 @@ NetOps/
 | 舊版連結(AI、Veeam) | `frontend/src/config/links.ts`(舊版網址待使用者確認) |
 | 新版權限代碼(前端) | `frontend/src/api/perms.ts`(ARCHITECTURE §5) |
 | 新版 API、權限代碼 | `docs/API.md`(介面定稿)、`backend/src/modules/*/routes.ts`、`backend/src/openapi.ts` |
+| PA 即時監控(R1)與測試區收集器開關 | 收集器 `pa-collector/netops_pa/`(開關 `control.py`、鍵 `keys.py`);API `backend/src/modules/pa-live/{live-routes,service}.ts`、Redis `backend/src/infra/redis/`;畫面 `frontend/src/pages/firewall/Live.vue`、`frontend/src/composables/paLive.ts`;鍵格式 `docs/PA-LIVE-PLAN.md` §4 |
 | SSE 串流(S0 驗證、R1、A1 問答) | `backend/src/modules/pa-live/routes.ts`、`docs/API.md` §3.1(逾時與標頭條件)、`docs/test-reports/2026-11-05-s0-sse.md` |
 | 新版部署 | `.gitlab-ci.yml`、`deploy/` |
 | 接入規劃與決策 | `docs/ARCHITECTURE.md`、`docs/IMPL-PLAN.md`、`docs/PA-LIVE-PLAN.md`(PA 即時監控與 AI 搬移) |

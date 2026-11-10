@@ -2,6 +2,11 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。
 
+## 2026-11-09 R1 測試區收集器開關與 R1 安全取捨定案
+- 工作項目:R1
+- 內容:需求方 2026-11-09 決定:測試區要有按鈕停用 / 開啟收集器(輪詢「手動開關」);R1-1~R1-4 接受;viewer 可以匯出 Log 明細(HANDOFF j)。記為 ARCHITECTURE D26。做法:環境變數仍是總開關,按鈕只切換暫停 / 繼續(Redis `netops:pa:control`,PA-LIVE-PLAN §4);接收暫停時丟棄並計數,不關 port。IMPL-PLAN D2 加「正式區發佈 A1、R1 路由草稿」「正式區 PA 管理介面換公司 CA 憑證」。
+- 檔案:`docs/ARCHITECTURE.md` D26、`docs/PA-LIVE-PLAN.md` §4、§8、`docs/PA-FORWARDING-SPEC.md` F.4.0、`docs/IMPL-PLAN.md` D2、`docs/API.md` §2、§3.2、§8、`docs/HANDOFF.md`
+
 ## 2026-11-09 A1 盤點定案:翻譯與整理筆記不搬
 - 工作項目:A1
 - 內容:需求方 2026-11-09 依 `docs/AI-FEATURE-INVENTORY.md` 決定:翻譯(#5)與整理筆記(#6,選項 C)不搬;外部 IP 自動學習(#9)照現在做法(直接寫入、標「自動學習」,不加「待確認」);其餘照建議。盤點文件 §1 與表格標為定案,ARCHITECTURE D25 補 ⑤,IMPL-PLAN A1 第 2、3 步拿掉翻譯與整理筆記。程式在 `fix/a1-core-trim`(核心)、`feature/a1-ai-api`(!35)、`feature/a1-ai-frontend`(!36)拿掉。

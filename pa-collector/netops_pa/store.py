@@ -142,6 +142,12 @@ class RedisStore:
         p.expire(sk, keys.SERIES_RETENTION + 60)
         p.execute()
 
+    # ---------- 測試區手動開關(只讀) ----------
+    def read_control(self) -> dict[str, str]:
+        """netops:pa:control → {欄位: 值};沒有鍵時回空 dict。Redis 失敗時拋出例外(呼叫端保留上一次的狀態)。"""
+        raw = self.r.hgetall(keys.CONTROL)
+        return {(k.decode() if isinstance(k, bytes) else k): (v.decode() if isinstance(v, bytes) else v) for k, v in raw.items()}
+
     # ---------- 心跳 ----------
     def write_heartbeat(self, fields: dict[str, str]) -> None:
         """整個 Hash 換新(清掉已恢復的錯誤欄位)。不設 TTL:收集器停止時 updatedAt 停在最後時間,由 netops-api 判斷。"""

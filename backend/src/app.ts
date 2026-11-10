@@ -58,6 +58,8 @@ export async function buildApp(
     streamTest?: StreamTestOptions;
     paLiveRedis?: PaLiveRedis;
     liveStream?: LiveStreamOptions;
+    /** 測試區手動開關可否使用(預設依 GW_ENV:正式區 false) */
+    paLiveControl?: boolean;
     ai?: { fetch?: typeof fetch; heartbeatMs?: number };
   } = {},
 ): Promise<FastifyInstance> {
@@ -136,7 +138,7 @@ export async function buildApp(
   // PA 即時監控(R1):只讀 netops-redis;Redis 停止時只有即時監控受影響(不影響 /readyz 與其他功能)
   const paLiveRedis = deps.paLiveRedis ?? (config.redisUrl ? connectPaLiveRedis(config.redisUrl, app.log) : null);
   if (paLiveRedis) app.addHook('onClose', async () => paLiveRedis.close());
-  await app.register(paLiveLiveRoutes, { live: createPaLiveService(paLiveRedis, { log: app.log }), stream: deps.liveStream });
+  await app.register(paLiveLiveRoutes, { live: createPaLiveService(paLiveRedis, { log: app.log, controlAllowed: deps.paLiveControl ?? ['dev', 'test'].includes(config.gateway.gwEnv) }), stream: deps.liveStream });
 
   // PA 匯入(背景同步在程序內執行,單一容器,D9)
   const ftp = deps.ftp ?? createFtp(config.ftp);

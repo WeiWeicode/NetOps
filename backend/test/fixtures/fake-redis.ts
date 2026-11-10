@@ -72,6 +72,13 @@ export class FakeRedis implements RedisClient {
     const sorted = [...(this.zsets.get(key) ?? new Map()).entries()].sort((a, b) => b[1] - a[1]);
     return sorted.slice(start, stop + 1).flatMap(([m, s]) => [m, String(s)]);
   }
+  async hset(key: string, fields: Record<string, string>) {
+    this.check();
+    const h = this.hashes.get(key) ?? {};
+    const added = Object.keys(fields).filter((k) => !(k in h)).length;
+    this.hashes.set(key, { ...h, ...fields });
+    return added;
+  }
   async quit() {
     return 'OK';
   }

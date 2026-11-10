@@ -21,6 +21,8 @@ export const NETOPS = {
 
 export const UI = {
   paFilesManage: 'netops.pa-files.manage',
+  // 測試區暫停 / 繼續收集器(只給 netops-admin;正式區 API 回 403)
+  paLiveManage: 'netops.pa-live.manage',
   adFilesManage: 'netops.ad-files.manage',
   kbWrite: 'netops.kb-page.write',
   // A1:netops.ai.use 不是 .read,只能由按鈕綁定(deploy/gateway-rbac.yaml)
@@ -32,6 +34,7 @@ export const UI = {
 export const API = {
   ping: 'netops.ping.read',
   paRealtime: 'netops.pa-realtime.read',
+  paRealtimeWrite: 'netops.pa-realtime.write',
   paRead: 'netops.pa.read',
   paLogRead: 'netops.pa-log.read',
   ftpRead: 'netops.ftp.read',

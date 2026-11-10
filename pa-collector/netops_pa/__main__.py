@@ -16,6 +16,7 @@ import time
 
 from . import __version__
 from .config import ConfigError, load_config
+from .control import Control
 from .pipeline import Pipeline
 from .poller import Poller, SdkClient
 from .receiver_http import HttpReceiver
@@ -62,12 +63,16 @@ def main() -> int:
     tls_on = bool(cfg.receive and cfg.receive.tls_cert)
     status = Status(__version__, cfg.gw_env, cfg.poll is not None, cfg.receive is not None, receiveTls="1" if tls_on else "0")
     store = RedisStore(connect(cfg.redis_url), cfg.top_n)
-    pipeline = Pipeline(store, status, cfg.queue_size, cfg.receive.max_rate if cfg.receive else 1000)
+    # 測試區手動開關:只有 test(與本機 dev)讀,正式區不讀(control.py;allowlist)
+    control = Control(store.read_control, enabled=cfg.gw_env in ("dev", "test"))
+    # 啟動時先讀一次:接收端點開 port 前就套用暫停狀態
+    control.refresh()
+    pipeline = Pipeline(store, status, cfg.queue_size, cfg.receive.max_rate if cfg.receive else 1000, control)
     pipeline.start()
 
     poller = None
     if cfg.poll:
-        poller = Poller(SdkClient(cfg.poll), store.write_snapshot, status, cfg.poll.interval)
+        poller = Poller(SdkClient(cfg.poll), store.write_snapshot, status, cfg.poll.interval, control.poll_paused)
         poller.start()
         log.info("SDK 輪詢已啟用:每 %d 秒(PA %s:%d)", cfg.poll.interval, cfg.poll.host, cfg.poll.port)
     else:

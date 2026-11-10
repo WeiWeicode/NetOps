@@ -2,6 +2,12 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。範圍:`frontend/`。
 
+## 2026-11-10 R1:即時 log 串流上限提高,前端不修改
+- 工作項目:R1(對應 BackendCorrection 同日紀錄)
+- 內容:評估 `composables/paLive.ts` 的 `mergeLogs`(最多 500 筆、依 `type:id` 去重)與 `Live.vue`:每個 `logs` 事件(最多 200 筆)只更新一次 `shallowRef`,每秒 100+ 筆不需改動;未修改任何前端檔案。
+- 檔案:無
+- 驗證:合併部署後在測試區頁面實測是否卡頓(見 MR 重驗步驟)
+
 ## 2026-11-10 R1:威脅類即時 log 新增「來源 Port」欄
 - 工作項目:R1(驗收報告 `docs/test-reports/2026-11-10-pa-live-uat.md` §3.6、§7-3)
 - 內容:`Live.vue` 威脅、URL 過濾、資料過濾、WildFire 的即時 log 表格在「目的」後新增「來源 Port」欄(手機寬度隱藏,同「規則」欄做法);缺值或 0 顯示「—」(PA 的 HTTP Payload 還沒加 `sport` 變數時)。TRAFFIC 欄位不變。

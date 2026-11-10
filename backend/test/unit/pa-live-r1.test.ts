@@ -10,7 +10,7 @@ import type { AddressInfo } from 'node:net';
 import { after, before, beforeEach, describe, it } from 'node:test';
 import { createPaLiveRedis, minuteBucket } from '../../src/infra/redis/index.js';
 import { deriveStatus, matchLog, summarizeError } from '../../src/modules/pa-live/service.js';
-import { LIVE_MAX_PER_USER, parseCursor } from '../../src/modules/pa-live/live-routes.js';
+import { LIVE_MAX_PER_USER, parseCursor, READ_PER_TICK, SEND_CHUNK, SEND_PER_TICK } from '../../src/modules/pa-live/live-routes.js';
 import { FakeRedis } from '../fixtures/fake-redis.js';
 import { createTestApp, waitFor, type TestApp } from '../helpers.js';
 
@@ -365,6 +365,51 @@ describe('PA 即時監控串流(SSE)', () => {
     assert.deepEqual(c.events[0]!.data!.gap, ['url']);
     await new Promise((r) => setTimeout(r, 200));
     assert.ok(!c.events.some((e) => e.event === 'logs'), '不送舊明細');
+    c.abort();
+  });
+
+  it('TRAFFIC 約 120 筆/秒的批次(一個 tick):全部送出、不捨棄不略過;大批分段,只有最後一段帶游標;Last-Event-ID 重連不重複(2026-11-10 提高上限)', async () => {
+    // 舊上限:每次最多 200 筆(約 107–117 筆/秒 × 2 秒 = 234 筆就開始捨棄);新上限 1500,1200 筆(約 10 秒的量)也不應捨棄
+    assert.ok(SEND_PER_TICK >= 1200 && READ_PER_TICK >= 1200 && SEND_CHUNK <= 200);
+    const c = connect(port, '/v1/pa-live/stream?types=traffic', { ...auth, 'x-internal-token': await t.token('S000010') });
+    await waitFor(() => c.events.some((e) => e.event === 'snapshot'), 2000);
+    for (let i = 0; i < 1200; i++) redis.addLog('traffic', { src: `10.1.${i >> 8}.${i & 255}`, n: i });
+    await waitFor(() => c.events.filter((e) => e.event === 'logs').reduce((n, e) => n + (e.data!.items as unknown[]).length, 0) >= 1200, 4000);
+    const logs = c.events.filter((e) => e.event === 'logs');
+    const items = logs.flatMap((e) => e.data!.items as { id: string; n: number }[]);
+    assert.equal(items.length, 1200);
+    assert.equal(new Set(items.map((x) => x.id)).size, 1200, '沒有重複');
+    assert.deepEqual(
+      items.map((x) => x.n),
+      Array.from({ length: 1200 }, (_, i) => i),
+      '由舊到新、沒有漏',
+    );
+    assert.ok(logs.every((e) => (e.data!.items as unknown[]).length <= SEND_CHUNK), '每段不超過 SEND_CHUNK');
+    assert.ok(logs.every((e) => e.data!.dropped === 0 && (e.data!.skipped as unknown[]).length === 0), 'dropped / skipped 都是 0');
+    assert.equal(logs.filter((e) => e.id).length, 1, '只有最後一段帶游標');
+    assert.equal(logs[logs.length - 1]!.id !== undefined, true);
+    const lastId = logs[logs.length - 1]!.id!;
+    c.abort();
+
+    // 以最後游標重連:只收到之後的新 log,沒有重複
+    redis.addLog('traffic', { src: 'after', n: 9999 });
+    const r = connect(port, '/v1/pa-live/stream?types=traffic', { ...auth, 'x-internal-token': await t.token('S000010'), 'last-event-id': lastId });
+    await waitFor(() => r.events.some((e) => e.event === 'logs'), 2000);
+    assert.deepEqual(
+      r.events.filter((e) => e.event === 'logs').flatMap((e) => (e.data!.items as { n: number }[]).map((x) => x.n)),
+      [9999],
+    );
+    r.abort();
+  });
+
+  it('一次超過每次讀取上限(跟不上):跳到最新並標 skipped,最多送出 READ_PER_TICK 筆', async () => {
+    const c = connect(port, '/v1/pa-live/stream?types=traffic', { ...auth, 'x-internal-token': await t.token('S000011') });
+    await waitFor(() => c.events.some((e) => e.event === 'snapshot'), 2000);
+    for (let i = 0; i < READ_PER_TICK + 300; i++) redis.addLog('traffic', { src: '10.2.0.1', n: i });
+    await waitFor(() => c.events.some((e) => e.event === 'logs' && (e.data!.skipped as string[]).includes('traffic')), 4000);
+    await new Promise((r) => setTimeout(r, 200));
+    const total = c.events.filter((e) => e.event === 'logs').reduce((n, e) => n + (e.data!.items as unknown[]).length, 0);
+    assert.equal(total, READ_PER_TICK);
     c.abort();
   });
 

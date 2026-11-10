@@ -15,7 +15,7 @@ import { matchLog, TOP_MINUTES, toLogItem, type LogFilter, type PaLiveService } 
 export interface LiveStreamOptions {
   /** 心跳間隔(預設 15 秒,必須小於 60 秒) */
   heartbeatMs?: number;
-  /** 檢查新 log 的間隔(預設 2 秒) */
+  /** 檢查新 log 的間隔(預設 1 秒;2026-11-10 由 2 秒縮短,TRAFFIC 約 120 筆/秒時每次約 120 筆,不再整批爆量) */
   pollMs?: number;
   /** 送設備快照的間隔(預設 10 秒,同收集器輪詢) */
   snapshotMs?: number;
@@ -30,11 +30,20 @@ const PERMISSION = 'netops.pa-realtime.read';
 const WRITE_PERMISSION = 'netops.pa-realtime.write';
 const ROUTE_TIMEOUT_MS = 60_000;
 const RETRY_MS = 5_000;
-const MAX_PENDING_BYTES = 256 * 1024;
-/** 每次檢查每種類型最多讀幾筆;超過表示跟不上(例如 TRAFFIC 尖峰),直接跳到最新並標示 skipped */
-const READ_PER_TICK = 500;
-/** 每個 logs 事件最多送幾筆(篩選後) */
-const SEND_PER_TICK = 200;
+/**
+ * 慢消費者門檻:單一連線待送出的位元組超過就中斷。2026-11-10 由 256 KB 提高到 2 MB:一次最多讀 READ_PER_TICK 筆(每筆約 0.7–1 KB),
+ * 最壞情況一個 tick 就寫入約 1.5 MB,256 KB 會在尖峰時誤殺正常的連線。最壞全系統 20 條 × 2 MB = 40 MB。
+ */
+const MAX_PENDING_BYTES = 2 * 1024 * 1024;
+/**
+ * 每次檢查每種類型最多讀幾筆;超過表示跟不上(例如 TRAFFIC 尖峰),直接跳到最新並標示 skipped。
+ * 2026-11-10:500 → 1500。測試區 TRAFFIC 平均約 107–140 筆/秒,tick 縮短為 1 秒後平常每次約 120 筆,1500 約為平均的 10 倍(尖峰餘裕)。
+ */
+export const READ_PER_TICK = 1500;
+/** 每個 tick 最多送幾筆(篩選後);與 READ_PER_TICK 相同,正常情況不再捨棄(dropped 保留給相容,通常為 0) */
+export const SEND_PER_TICK = READ_PER_TICK;
+/** 一個 logs 事件最多幾筆:大批分成多個事件,避免單一事件過大(瀏覽器每個事件解析一次,表格每個事件更新一次) */
+export const SEND_CHUNK = 200;
 /** Last-Event-ID 比現在早超過這個時間就不接續(從最新開始,在 open 標示 gap):重連只補斷線期間,不用來撈舊明細 */
 const RESUME_MAX_MS = 5 * 60_000;
 /** 每人(工號)同時串流上限:2026-11-10 需求方決定由 2 改為 3(同一人多個分頁、多台裝置);全系統上限 20 不變 */
@@ -68,7 +77,7 @@ const formatCursor = (c: Partial<Record<LogType, string>>) =>
 
 const paLiveLiveRoutes: FastifyPluginAsync<{ live: PaLiveService; stream?: LiveStreamOptions }> = async (app, { live, stream: opts = {} }) => {
   const heartbeatMs = opts.heartbeatMs ?? 15_000;
-  const pollMs = opts.pollMs ?? 2_000;
+  const pollMs = opts.pollMs ?? 1_000;
   const snapshotMs = opts.snapshotMs ?? 10_000;
   const maxMs = opts.maxMs ?? 5 * 60_000;
   const maxStreams = opts.maxStreams ?? 20;
@@ -309,7 +318,7 @@ const paLiveLiveRoutes: FastifyPluginAsync<{ live: PaLiveService; stream?: LiveS
         operationId: 'netops.pa-live.stream',
         summary: '即時監控串流(SSE)',
         description:
-          'Server-Sent Events:連線後立即送 open;每 10 秒 snapshot(同 GET /snapshot);有新 log 時送 logs(types 指定的類型,預設 traffic,threat;可依 ip、port、action 篩選;每次最多 200 筆,跟不上時跳到最新並帶 skipped);每 15 秒 heartbeat。' +
+          'Server-Sent Events:連線後立即送 open;每 10 秒 snapshot(同 GET /snapshot);有新 log 時每秒檢查一次並送 logs(types 指定的類型,預設 traffic,threat;可依 ip、port、action 篩選;每個類型每秒最多讀 1500 筆,一個 logs 事件最多 200 筆、較多時分成數個事件,只有最後一個帶 id;跟不上時跳到最新並帶 skipped);每 15 秒 heartbeat。' +
           'logs 事件的 id 為各類型的游標,斷線後瀏覽器以 Last-Event-ID 重連時接續(超過保留時間的已不存在)。單一連線最長 5 分鐘後由伺服器結束,瀏覽器 5 秒後自動重連(BFF 重新檢查登入與權限)。' +
           '每人同時 3 條、全系統 20 條,超過回 429 NETOPS_STREAM_BUSY。原始明細,稽核記錄查詢條件。',
         tags: ['PA 即時監控'],
@@ -419,7 +428,17 @@ const paLiveLiveRoutes: FastifyPluginAsync<{ live: PaLiveService; stream?: LiveS
           }
           if (items.length || skipped.length) {
             items.sort((a, b) => (a.receivedAt < b.receivedAt ? -1 : 1));
-            send('logs', { items: items.slice(-SEND_PER_TICK), dropped: Math.max(0, items.length - SEND_PER_TICK), skipped }, formatCursor(cursor));
+            const sendItems = items.slice(-SEND_PER_TICK);
+            const dropped = Math.max(0, items.length - SEND_PER_TICK);
+            // 分段送出;只有最後一段帶游標(id):中途斷線時 Last-Event-ID 停在上一個 tick,重連會重送這一批(瀏覽器依 id 去重),不會漏
+            for (let i = 0; i < sendItems.length || i === 0; i += SEND_CHUNK) {
+              const last = i + SEND_CHUNK >= sendItems.length;
+              send(
+                'logs',
+                { items: sendItems.slice(i, i + SEND_CHUNK), dropped: i === 0 ? dropped : 0, skipped: i === 0 ? skipped : [] },
+                last ? formatCursor(cursor) : undefined,
+              );
+            }
           }
         } finally {
           busy = false;

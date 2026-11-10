@@ -12,9 +12,9 @@
 | D1 | 測試區部署 | 完成(有未驗項目) |
 | D2 | 驗收與切換 | 未開始 |
 | S0 | 串流驗證(SSE 經 Nginx / BFF) | 完成(2026-11-05,不改 Gateway;ARCHITECTURE D7) |
-| A1 | AI 搬進 `netops-api`、停用舊版 IIS | 未開始(D23、D18) |
-| R0 | PA 即時監控前置:設備帳號、Log Forwarding、網路、容量量測 | 未開始(PA-LIVE-PLAN §5、§11) |
-| R1 | PA 即時監控(唯讀):`netops-pa`、`netops-redis`、即時監控頁 | 未開始(D19、D21、D24) |
+| A1 | AI 搬進 `netops-api`、停用舊版 IIS | 測試區完成(2026-11-09);正式區上線與停用 IIS 併入 D2(D23、D18、D25) |
+| R0 | PA 即時監控前置:設備帳號、Log Forwarding、網路、容量量測 | 完成(2026-11-10) |
+| R1 | PA 即時監控(唯讀):`netops-pa`、`netops-redis`、即時監控頁 | **測試區完成(2026-11-10)**;正式區上線併入 D2(D19、D21、D24、D26) |
 | R2 | 封鎖 IP(DAG 動態標籤) | 未排程(D22) |
 | C0–C6 | PA log 高吞吐架構(ClickHouse + Parquet 冷歸檔 + PA 精準查詢) | **已核准(2026-11-10)**,C0 外部前置事項進行中(D27–D33,[PA-LOG-CLICKHOUSE-GUIDE.md](PA-LOG-CLICKHOUSE-GUIDE.md)) |
 | ~~後續~~ | ~~服務寫入資料庫~~ | 取消(D20;PA log 改寫 ClickHouse 見 C0–C6,D27) |
@@ -160,6 +160,8 @@ D13:骨架直接留用;AI 不在這次範圍,不做串流驗證(D7、D17)。
 
 **完成條件**:新版 AI 功能與舊版一致並通過驗收;舊版 IIS 停用;文件、架構資料與甘特圖更新。
 
+**狀態:測試區完成(2026-11-09)**。!34–!36 合併,翻譯與整理筆記不搬(D25);測試區驗收見 `docs/test-reports/2026-11-09-a1-r1-uat.md`(!44、!45、!47)。主機 3 容器到 AI 主機(`.46` / `.45` 的 8080、8081、6333)與 5 個 RDAP 登記處已實測可連(2026-11-09)。剩下:正式區發佈路由(D2 第 2 步)、舊版 IIS 停用(D2 第 5 步)。
+
 ## R0 即時監控前置
 
 1. 網通提供 PA-560 管理 IP、PAN-OS 版本,建立唯讀管理角色與 API Key、HTTP 與 Syslog Server Profile(P1、P2)。
@@ -170,6 +172,8 @@ D13:骨架直接留用;AI 不在這次範圍,不做串流驗證(D7、D17)。
 
 **完成條件**:P1–P7 定案(P3–P7 已於 2026-11-04 定案);網路放行;轉送量核對寫回 PA-LIVE-PLAN §5。
 
+**狀態:完成(2026-11-10)**。PA-560 `10.10.115.35`(PAN-OS 12.1.7-h3)唯讀 API Key、HTTP Server Profile `netops-http`(51293)、Syslog `netops-syslog`(51294,TRAFFIC)、Log Forwarding Profile `netops-forward` 套用 155 條規則(`docs/test-reports/2026-11-10-pa560-forwarding.md`,!49);主機 2 portproxy 51293 / 51294 與防火牆只放行 `10.10.115.35`。實測 TRAFFIC 約 107–117 筆/秒,已寫回 PA-LIVE-PLAN §5。
+
 ## R1 即時監控(唯讀)
 
 1. `pa-collector/`:SDK 輪詢寫快照與心跳;HTTP(其他類型)與 Syslog(TRAFFIC)接收,寫 Stream 與每分鐘統計;依 D21 修剪(TRAFFIC 明細 1 小時、統計 1 天;其他 2 天)。
@@ -179,6 +183,8 @@ D13:骨架直接留用;AI 不在這次範圍,不做串流驗證(D7、D17)。
 5. 測試區驗收後上正式區;上線一週觀察 Redis 用量並檢討保留時間。
 
 **完成條件**:即時監控頁在兩區可用;收集器停止時畫面明確顯示;Redis 用量在上限內;文件、架構資料與甘特圖更新。
+
+**狀態:測試區完成(2026-11-10)**。!37–!40、!46、!48、!51、!56、!57 合併並部署測試區;驗收報告 `docs/test-reports/2026-11-09-a1-r1-uat.md`、`2026-11-10-pa-live-uat.md`(!50、!59)全部項目通過:輪詢、HTTP 與 Syslog 接收、測試區收集器開關(D26)、排行 5 / 15 / 60 分鐘、即時 log 與篩選、暫停、5 分鐘重連以 `Last-Event-ID` 接續、串流每人 3 條上限、Redis `MINID` 修剪(TRAFFIC 1 小時穩態約 291 MB,離 2 GB 上限遠)。已知限制:TRAFFIC 量大時即時 log 依設計捨棄一部分並標示 `dropped` / `skipped`(!57 已提高上限,PA-LIVE-PLAN §8);登出後換發回 403 屬 Gateway web-kit(`docs/test-reports/2026-11-10-refresh-403.md`,未排程)。剩下:正式區上線(D2 第 2 步:發佈 `pa-live/*`、PA-560 換公司 CA 憑證、主機 3 portproxy 與防火牆、接收開好後請網通再 Commit Syslog Profile)與上線一週觀察 Redis 用量;長期保存與查詢改由 C0–C6 處理。
 
 ---
 

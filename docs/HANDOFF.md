@@ -2,6 +2,34 @@
 
 > 接手時先讀 `AGENT.md`,再讀 `docs/ARCHITECTURE.md`、`docs/IMPL-PLAN.md`。
 
+## 2026-11-10 R1 PA 即時監控收尾(測試區完成)
+
+**接手方式**:新討論串說「從 `NetOps/docs/HANDOFF.md`「2026-11-10 R1 收尾」接手」,用主討論串協調模式。子任務已全部結束;工作分支與 worktree 已清理,只留 `develop`、`main` 與未合併 MR 的分支。
+
+### 現況
+
+| 工作 | 狀態 |
+| --- | --- |
+| A1 AI 搬移 | 測試區完成(2026-11-09);正式區併入 D2 |
+| R0 前置 | 完成:PA-560 轉送設定 !49、主機 2 portproxy 與防火牆 |
+| R1 即時監控 | **測試區完成**:驗收 !50、!59 全部通過;修正 !51、!56、!57 已合併(IMPL-PLAN R1 狀態) |
+| C0–C6 ClickHouse | 已核准(CQ1–CQ14「全部照建議」);決策寫回文件 !60(待合併);C0 外部事項 E1–E6 進行中 |
+| D2 正式區 | 未開始;PA 相關步驟已寫在 IMPL-PLAN D2 第 2 步 |
+
+### 測試區目前設定(主機 2)
+
+- `/srv/giganexus/deploy/netops.env`:`PA_POLL_ENABLED=1`、`PA_RECEIVE_ENABLED=1`、`PA_HOST=10.10.115.35`、`PA_ALLOWED_SOURCES=172.26.0.1`、`PA_TLS_INSECURE=1`(備份 `.bak-20261109`、`.bak-20261110`)。收集器保持開啟(需求方 2026-11-10 決定);要暫停用即時監控頁的「輪詢 / 接收」按鈕(`netops-admin`)。
+- 接收路徑:PA-560 → `10.10.130.124:51293/51294`(Windows portproxy → WSL)→ `netops-pa`;容器看到的來源是 Docker 閘道 `172.26.0.1`。
+- PA-560 Syslog TCP 斷線(error 110)後**不會自動重連**:主機 2 重開機、`netops-pa` 長時間停機後 TRAFFIC 沒進來,請網通對 `netops-syslog` 再 Commit 一次。
+
+### 下一步(依序)
+
+1. 需求方合併 !60(ClickHouse 決策寫回文件),再合併本 MR。
+2. C0:需求方向 FTP 管理者 / IT 問 E1、E2、E5,向網通提 E3、E4;E6 同意後派 C1(主機 2 測試區 `netops-clickhouse`,1.5 GB、TTL 3 天)。
+3. D2 正式區:發佈 A1 / R1 路由、PA-560 換公司 CA 憑證、主機 3 portproxy 與防火牆、接收開好後網通再 Commit Syslog Profile;上線一週觀察 Redis 用量。
+4. 待決定:登出後換發 403(Gateway web-kit,`docs/test-reports/2026-11-10-refresh-403.md`),建議延後。
+5. 階段結束更新工作區架構資料與甘特圖 W12。
+
 ## 2026-11-09 驗收修正與測試區收集器開關(`feature/pa-live-uat-1109`)
 
 依驗收報告 `docs/test-reports/2026-11-09-a1-r1-uat.md`(§3.1、§3.7、§4、§6、§7.4、§7.5)與需求方 2026-11-09 的決定(MR 描述有細節):

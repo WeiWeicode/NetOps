@@ -142,6 +142,8 @@ flowchart TB
 
 ---
 
+**轉送後實測(2026-11-10,測試區)**:Syslog TRAFFIC 約 107–117 筆/秒(約 1,000 萬筆 / 天,與上表 FTP 估算一致);Redis 每筆約 700 bytes(含統計鍵),修剪前每小時約 293 MB,TRAFFIC 明細 1 小時穩態約 395 k 筆、約 291 MB;threat / url / data 每小時遠小於 TRAFFIC,2 天累積量未驗。保留時間不需調整(`docs/test-reports/2026-11-10-pa-live-uat.md` §3.3)。
+
 ## 6. AI 搬移(取消 AI 中控台)
 
 | 項目 | 內容 |

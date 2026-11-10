@@ -96,7 +96,7 @@
 ### B.3 THREAT(威脅、URL、資料過濾、WildFire 共用)
 
 ```json
-{"time":"$receive_time","subtype":"$subtype","src":"$src","dst":"$dst","natSrc":"$natsrc","natDst":"$natdst","rule":"$rule","srcUser":"$srcuser","app":"$app","fromZone":"$from","toZone":"$to","sport":"$sport","dport":"$dport","natDport":"$natdport","proto":"$proto","action":"$action","url":"$misc","name":"$threatid","category":"$category","severity":"$severity","direction":"$direction","srcCountry":"$srcloc","dstCountry":"$dstloc","repeat":"$repeatcnt","thrCategory":"$thr_category","filedigest":"$filedigest","filetype":"$filetype"}
+{"time":"$receive_time","subtype":"$subtype","src":"$src","dst":"$dst","natSrc":"$natsrc","natDst":"$natdst","rule":"$rule","srcUser":"$srcuser","app":"$app","fromZone":"$from","toZone":"$to","sport":"$sport","dport":"$dport","natDport":"$natdport","proto":"$proto","action":"$action","url":"$misc","name":"$threatid","category":"$category","severity":"$severity","direction":"$direction","srcCountry":"$srcloc","dstCountry":"$dstloc","repeat":"$repeatcnt","thrCategory":"$thr_category","filedigest":"$filedigest","filetype":"$filetype","seqno":"$seqno","sessionId":"$sessionid"}
 ```
 
 > **2026-11-10 新增 `sport`、`natDport`**:威脅、URL、資料過濾、WildFire 四種共用這份 payload。已設定過的 PA-560 要在 **HTTP Payload Format** 手動加這兩個變數(`"sport":"$sport","natDport":"$natdport"`;**只加變數,不改其他**)並 **Commit**;部署此版本後才會顯示,PA 沒加之前威脅表格的「來源 Port」顯示「—」。
@@ -125,6 +125,9 @@
 | `repeat` | `$repeatcnt` | Repeat Count | |
 | `thrCategory` | `$thr_category` | thr_category | 版本:9.1 以後 |
 | `filedigest` / `filetype` | `$filedigest` / `$filetype` | filedigest / filetype | |
+| `seqno` / `sessionId` | `$seqno` / `$sessionid` | Sequence Number / Session ID | 2026-11-10 新增(CQ9) |
+
+> **2026-11-10 新增 `seqno`、`sessionId`(ClickHouse 決策 CQ9,補漏去重用)**:`"seqno":"$seqno","sessionId":"$sessionid"` 加在最後;已在 PA-560 設定並 Commit(12.1.7-h3 兩個變數都存在),主機 2 抓封包確認有值。收集器在 C2 之前會略過這兩個 key(`records.py` 只保留清單內的欄位)。
 
 ### B.4 Decryption(PAN-OS 10.0 以後)
 
@@ -192,7 +195,7 @@
 只設 **Traffic** 一項(其他類型不要送到這個 profile;送來會被拒收):
 
 ```json
-{"type":"$type","time":"$receive_time","subtype":"$subtype","src":"$src","dst":"$dst","natSrc":"$natsrc","natDst":"$natdst","rule":"$rule","srcUser":"$srcuser","app":"$app","fromZone":"$from","toZone":"$to","inIf":"$inbound_if","outIf":"$outbound_if","sport":"$sport","dport":"$dport","natDport":"$natdport","proto":"$proto","action":"$action","bytes":"$bytes","sent":"$bytes_sent","recv":"$bytes_received","packets":"$packets","start":"$start","elapsed":"$elapsed","category":"$category","srcCountry":"$srcloc","dstCountry":"$dstloc","endReason":"$session_end_reason","appRisk":"$risk_of_app","appCategory":"$category_of_app","appSubcat":"$subcategory_of_app","appTech":"$technology_of_app","srcHost":"$src_host","dstHost":"$dst_host"}
+{"type":"$type","time":"$receive_time","subtype":"$subtype","src":"$src","dst":"$dst","natSrc":"$natsrc","natDst":"$natdst","rule":"$rule","srcUser":"$srcuser","app":"$app","fromZone":"$from","toZone":"$to","inIf":"$inbound_if","outIf":"$outbound_if","sport":"$sport","dport":"$dport","natDport":"$natdport","proto":"$proto","action":"$action","bytes":"$bytes","sent":"$bytes_sent","recv":"$bytes_received","packets":"$packets","start":"$start","elapsed":"$elapsed","category":"$category","srcCountry":"$srcloc","dstCountry":"$dstloc","endReason":"$session_end_reason","appRisk":"$risk_of_app","appCategory":"$category_of_app","appSubcat":"$subcategory_of_app","appTech":"$technology_of_app","srcHost":"$src_host","dstHost":"$dst_host","seqno":"$seqno","sessionId":"$sessionid"}
 ```
 
 **Escaping**(同頁):Escaped Characters 設 `"\`,Escape Character 設 `\`。
@@ -216,6 +219,9 @@
 | `endReason` | `$session_end_reason` | Session End Reason | |
 | `appRisk` / `appCategory` / `appSubcat` / `appTech` | `$risk_of_app` / `$category_of_app` / `$subcategory_of_app` / `$technology_of_app` | Risk / Category / Subcategory / Technology of app | 版本:10.2 以後;舊版沒有就拿掉這 4 個 |
 | `srcHost` / `dstHost` | `$src_host` / `$dst_host` | Source / Destination Hostname | 版本:10.0 以後(Device-ID);沒有就拿掉 |
+| `seqno` / `sessionId` | `$seqno` / `$sessionid` | Sequence Number / Session ID | 2026-11-10 新增(CQ9) |
+
+> **2026-11-10 新增 `seqno`、`sessionId`(ClickHouse 決策 CQ9,補漏去重用)**:`"seqno":"$seqno","sessionId":"$sessionid"` 加在最後;已在 PA-560 設定並 Commit(12.1.7-h3 兩個變數都存在),主機 2 抓封包確認有值。收集器在 C2 之前會略過這兩個 key(`records.py` 只保留清單內的欄位)。
 
 > 一則 log 長度約 0.8–1.5 KB;NetOps 單則上限 16 KB。
 > Syslog 沒有 Token,NetOps 靠**來源 IP**(主機 Windows 防火牆只放行 PA-560)與 SSL 辨識,所以請回覆 PA-560 送 log 的實際來源 IP。

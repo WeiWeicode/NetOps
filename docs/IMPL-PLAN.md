@@ -202,6 +202,7 @@ D13:骨架直接留用;AI 不在這次範圍,不做串流驗證(D7、D17)。
 | E1 | 需求方 → **FTP 管理者 / IT** | 問 FTP `10.10.130.66` 上的 PA log(`/my-data` 等目錄)**保留多久**、會不會自動刪 | C4(決定歸檔原始 log 還是只歸檔彙總) | CQ3 |
 | E2 | 需求方 → **IT / NAS 管理者** | E1 的答案不夠長時,申請 NetOps 歸檔空間:一年約 150–370 GB(原始 log Parquet 至少 1 年);現有 `docker-folder` 只剩 18 GB | C4 | CQ3、CQ12 |
 | E3 | 需求方 → **網通** | PA-560 的 Syslog Custom Log Format(TRAFFIC)與 HTTP Payload(威脅類)**加 `$seqno`、`$sessionid`**,然後 Commit;改完回報實際變數名稱(PAN-OS 12.1.7-h3) | C2 | CQ9 |
+|  |  | **E3 結果(2026-11-10 完成)**:需求方在 PA-560 把 `,"seqno":"$seqno","sessionId":"$sessionid"` 加到 Syslog `netops-syslog` 的 Traffic 格式與 HTTP `netops-http` 的 Threat、URL、Data、Wildfire Payload 並 Commit(變數名稱與文件相同)。主機 2 抓封包:51294 與 51293 都帶到值(例:seqno `7688588907462574142`、sessionId `288580`),TRAFFIC 持續接收。PA-FORWARDING-SPEC B.3、C.2 已更新;Decryption / GlobalProtect / User-ID 沒有加 |  |  |
 | E4 | 需求方 → **網通** | NetOps API Key 的管理角色**加 XML API「Log」權限**;先在離峰手動試查 3–5 次(單一 IP、15 分鐘、500 筆),看 `show system resources` 的管理平面 CPU,給一個可接受的門檻 | C5 | CQ6 |
 |  |  | **E4 結果(2026-11-10 完成)**:需求方在 PA-560 Admin Role `netops` 的 XML API 加開 Log(其他維持只有 Operational Requests)並 Commit。上班時段 15:40 從主機 2 `netops-pa` 容器試查 3 次(TRAFFIC、單一 IP `10.10.130.124`、15 分鐘、`nlogs` 500):每次 1.5 秒、109–117 筆,管理平面 CPU 查詢前後與查詢中都在 3.0–6.2%,沒有上升。**門檻**:維持 C5 的上限(15 分鐘、500 筆、逾時 60 秒、全域一次一個);送出前取樣管理平面 CPU,**超過 50% 不送、回 429**;較大範圍(1–24 小時)在 C5 開發時再實測,實測前不放寬 |  |  |
 | E5 | 需求方 → **IT**(主機 3) | 正式區上線前確認主機 3 資源:WSL `ext4.vhdx` 在哪個磁碟、剩餘空間(要 40 GB);記憶體不夠時能否把 WSL 加到約 10 GB(要重啟 WSL,舊系統一起中斷,要排時間)或改放其他主機 | C6(C1 實測後再確認數字) | CQ2 |

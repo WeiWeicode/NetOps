@@ -85,6 +85,35 @@ export interface Config {
   ai: AiConfig;
   /** PA 即時監控的 netops-redis(R1,只讀);dev 未設定時為 null(即時監控回 424 / unavailable),test / prod 必填 */
   redisUrl: string | null;
+  /** netops-clickhouse 唯讀查詢(C3,帳號 netops_reader);未設定 CLICKHOUSE_URL 時為 null(一律查 FTP) */
+  clickhouse: { url: string; user: string; password: string; timeoutMs: number } | null;
+  /**
+   * PA 查詢來源(C3,手冊 §12 CQ10):ftp = 舊做法(FTP 摘要 / 掃描);clickhouse = 一律查 ClickHouse;
+   * auto = 期間在 ClickHouse 已有資料的範圍內才查 ClickHouse,否則 FTP。總覽預設 auto;明細並行對帳 2 週後才改(預設 ftp)
+   */
+  paSource: { overview: PaSource; detail: PaSource };
+  /** ClickHouse 每小時摘要(總覽排行用):保留 / 補建幾天、每幾分鐘檢查一次(0 = 不建) */
+  chSummary: { days: number; minutes: number };
+}
+
+export const PA_SOURCES = ['ftp', 'clickhouse', 'auto'] as const;
+export type PaSource = (typeof PA_SOURCES)[number];
+
+function paSource(env: NodeJS.ProcessEnv, key: string, fallback: PaSource): PaSource {
+  const raw = str(env, key, fallback).toLowerCase();
+  if (!(PA_SOURCES as readonly string[]).includes(raw)) throw new GatewayEnvError(`${key} 只能是 ${PA_SOURCES.join(' / ')}:${raw}`);
+  return raw as PaSource;
+}
+
+/** CLICKHOUSE_URL 有設定時,密碼(CLICKHOUSE_PASSWORD_FILE)必填;帳號預設 netops_reader(唯讀,手冊 §10.2) */
+function loadClickHouse(env: NodeJS.ProcessEnv, gwEnv: GwEnv): Config['clickhouse'] {
+  const u = url(env, 'CLICKHOUSE_URL');
+  if (!u) return null;
+  const password = readSecret(env, 'CLICKHOUSE_PASSWORD', gwEnv);
+  if (!password) throw new GatewayEnvError('有設定 CLICKHOUSE_URL 時必須設定 CLICKHOUSE_PASSWORD_FILE');
+  const user = str(env, 'CLICKHOUSE_USER', 'netops_reader');
+  if (!/^[\w-]{1,64}$/.test(user)) throw new GatewayEnvError(`CLICKHOUSE_USER 只能是英數、底線與 -:${user}`);
+  return { url: u, user, password, timeoutMs: int(env, 'CLICKHOUSE_TIMEOUT_MS', 30000, 1000, 120000) };
 }
 
 /** 空字串視同未設定(Compose 的 ${X:-} 會傳空字串) */
@@ -252,5 +281,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, cwd?: string): 
     search: { limit: int(env, 'PA_SEARCH_LIMIT', 2000, 1, 10000), seconds: int(env, 'PA_SEARCH_SECONDS', 180, 10, 600) },
     ai: loadAi(env, gateway.gwEnv),
     redisUrl: loadRedisUrl(env, gateway.gwEnv),
+    clickhouse: loadClickHouse(env, gateway.gwEnv),
+    paSource: { overview: paSource(env, 'NETOPS_PA_OVERVIEW_SOURCE', 'auto'), detail: paSource(env, 'NETOPS_PA_DETAIL_SOURCE', 'ftp') },
+    // 正式區 TRAFFIC 保留 30 天(CQ12);測試區 TTL 3 天,多的天數只是查不到
+    chSummary: { days: int(env, 'NETOPS_CH_SUMMARY_DAYS', 30, 1, 92), minutes: int(env, 'NETOPS_CH_SUMMARY_MINUTES', 5, 0, 60) },
   };
 }

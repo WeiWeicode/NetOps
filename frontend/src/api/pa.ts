@@ -18,10 +18,17 @@ export interface TopEntry {
   bytes?: number;
 }
 
+/** 資料來源(C3;docs/API.md §4.1):省略時依後端設定(預設 auto) */
+export type PaSource = 'ftp' | 'clickhouse' | 'auto';
+
 export interface PaOverview {
   from: string;
   to: string;
-  /** 期間內已分析的檔案數;0 表示沒有資料(不是沒有流量) */
+  /** 實際使用的來源 */
+  source: 'ftp' | 'clickhouse';
+  /** source 為 clickhouse 時:排行、疑似掃描只算到這個時間(之後的小時還沒有排行);ftp 時不提供 */
+  topsUntil?: string;
+  /** ftp:期間內已分析的檔案數;clickhouse:有資料的小時數。0 表示沒有資料(不是沒有流量) */
   files: number;
   /** 已分析但摘要讀不到的檔案數;大於 0 表示總覽不完整 */
   missing: number;
@@ -46,9 +53,9 @@ export interface PaOverview {
 export const pa = {
   days: () => http.get<{ days: PaDay[]; import: Omit<ImportStatus, 'running'> }>('/api/netops/pa/days'),
   /** from / to:YYYY-MM-DD(含當天),最長 92 天;top 1–100 */
-  overview: (from: string, to: string, top = 15) => http.get<PaOverview>('/api/netops/pa/overview', { query: { from, to, top } }),
+  overview: (from: string, to: string, top = 15, source?: PaSource) => http.get<PaOverview>('/api/netops/pa/overview', { query: { from, to, top, ...(source ? { source } : {}) } }),
   /** 明細查詢的下拉選項(期間內出現過的值) */
-  options: (from: string, to: string) => http.get<PaOptions>('/api/netops/pa/options', { query: { from, to } }),
+  options: (from: string, to: string, source?: PaSource) => http.get<PaOptions>('/api/netops/pa/options', { query: { from, to, ...(source ? { source } : {}) } }),
 };
 
 export interface PaOptions {

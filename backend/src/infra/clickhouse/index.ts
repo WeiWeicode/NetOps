@@ -1,7 +1,7 @@
 /**
  * netops-clickhouse 存取(ARCHITECTURE D27–D29、AGENT.md §7.2;手冊 docs/PA-LOG-CLICKHOUSE-GUIDE.md §6、§7)。
  * 只經這裡的具名函式存取 ClickHouse:表名只用程式內常數(TABLES),不接受外部字串;查詢條件一律 query_params(C3 起)。
- * C2 只有 netops-ingest 的寫入(帳號 netops_writer);netops-api 的唯讀查詢在 C3 加。
+ * 本檔是 netops-ingest 的寫入(帳號 netops_writer);netops-api 的唯讀查詢在 reader.ts(C3,帳號 netops_reader)。
  *
  * 用 ClickHouse 的 HTTP 介面(:8123)與 Node 內建 fetch,不另加套件:寫入只需要 INSERT … FORMAT JSONEachRow。
  * 帳密放在 X-ClickHouse-User / X-ClickHouse-Key 標頭,不放 URL(避免出現在 log)。錯誤訊息不含密碼與資料內容。
@@ -106,10 +106,29 @@ export interface ClickHouseWriter {
 
 type Fetch = typeof fetch;
 
-export function createClickHouseWriter(cfg: ClickHouseConfig, fetchImpl: Fetch = fetch): ClickHouseWriter {
-  const base = new URL(cfg.url);
+/** CLICKHOUSE_URL 檢查:只接受 http(s)、不可帶帳密(寫入與唯讀查詢共用) */
+export function clickHouseBase(url: string): URL {
+  const base = new URL(url);
   if (base.protocol !== 'http:' && base.protocol !== 'https:') throw new Error('CLICKHOUSE_URL 必須是 http:// 或 https://');
   if (base.username || base.password) throw new Error('CLICKHOUSE_URL 不可帶帳密,請改用 CLICKHOUSE_USER 與 CLICKHOUSE_PASSWORD_FILE');
+  return base;
+}
+
+/** 連線拒絕、DNS、逾時 → ClickHouseError(不帶 URL 以外的細節) */
+export function connectError(e: unknown, timeoutMs: number): ClickHouseError {
+  const name = (e as Error).name === 'TimeoutError' ? `逾時 ${timeoutMs} ms` : (e as Error).name === 'AbortError' ? '已取消' : ((e as { cause?: { code?: string } }).cause?.code ?? (e as Error).name);
+  return new ClickHouseError(`ClickHouse 連線失敗:${name}`, undefined, undefined);
+}
+
+/** 非 2xx 回應 → ClickHouseError:只留第一行並截斷(ClickHouse 的錯誤訊息可能帶一小段資料) */
+export function responseError(res: Response, text: string): ClickHouseError {
+  const code = Number(res.headers.get('x-clickhouse-exception-code') ?? /Code: (\d+)/.exec(text)?.[1]);
+  const first = text.split('\n', 1)[0]?.slice(0, 200) ?? '';
+  return new ClickHouseError(`ClickHouse HTTP ${res.status}:${first}`, Number.isFinite(code) ? code : undefined, res.status);
+}
+
+export function createClickHouseWriter(cfg: ClickHouseConfig, fetchImpl: Fetch = fetch): ClickHouseWriter {
+  const base = clickHouseBase(cfg.url);
   const timeoutMs = cfg.timeoutMs ?? 30_000;
   const headers = { 'X-ClickHouse-User': cfg.user, 'X-ClickHouse-Key': cfg.password };
 
@@ -122,17 +141,11 @@ export function createClickHouseWriter(cfg: ClickHouseConfig, fetchImpl: Fetch =
       // redirect: 'error':轉址時 X-ClickHouse-Key 會被帶到別的主機,一律不跟隨(資安審查 L4)
       res = await fetchImpl(u, { method: 'POST', headers: { ...headers, 'Content-Type': 'text/plain; charset=utf-8' }, body, redirect: 'error', signal: AbortSignal.timeout(timeoutMs) });
     } catch (e) {
-      // 連線拒絕、DNS、逾時:不帶 URL 以外的細節
-      const name = (e as Error).name === 'TimeoutError' ? `逾時 ${timeoutMs} ms` : ((e as { cause?: { code?: string } }).cause?.code ?? (e as Error).name);
-      throw new ClickHouseError(`ClickHouse 連線失敗:${name}`, undefined, undefined);
+      throw connectError(e, timeoutMs);
     }
     const text = await res.text();
-    if (!res.ok) {
-      const code = Number(res.headers.get('x-clickhouse-exception-code') ?? /Code: (\d+)/.exec(text)?.[1]);
-      // 只留第一行、截斷;ClickHouse 的解析錯誤訊息可能帶一小段輸入資料,不寫進心跳以外的地方
-      const first = text.split('\n', 1)[0]?.slice(0, 200) ?? '';
-      throw new ClickHouseError(`ClickHouse HTTP ${res.status}:${first}`, Number.isFinite(code) ? code : undefined, res.status);
-    }
+    // 只留第一行、截斷;ClickHouse 的解析錯誤訊息可能帶一小段輸入資料,不寫進心跳以外的地方
+    if (!res.ok) throw responseError(res, text);
     return text;
   }
 

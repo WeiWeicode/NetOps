@@ -88,6 +88,8 @@ check:ingest-int:
     - export INT_CLICKHOUSE_URL="http://127.0.0.1:$(docker port "$N-ch" 8123/tcp | head -n 1 | sed 's/.*://')"
     - export INT_REDIS_URL="redis://127.0.0.1:$(docker port "$N-redis" 6379/tcp | head -n 1 | sed 's/.*://')/0"
     - export INT_CLICKHOUSE_PASSWORD_FILE="$T/s/ch_writer_password"
+    # C3:netops-api 的唯讀查詢(netops_reader)
+    - export INT_CLICKHOUSE_READER_PASSWORD_FILE="$T/s/ch_reader_password"
     # npm Token 只給 npm ci(測試碼與相依套件的 script 讀不到;資安審查 L5)
     - (cd backend && GITLAB_NPM_TOKEN="$(cat "$NPM_TOKEN_FILE")" npm ci --no-audit --no-fund)
     - (cd backend && npm run test:int) > "$L.test" 2>&1 && R=0 || R=$?; cat "$L.test" >> "$L"; tail -n 120 "$L.test"; rm -f "$L.test"; test "$R" = 0
@@ -126,6 +128,8 @@ deploy-api-test:
   script:
     - test -f "$NETOPS_ENV_FILE" || { echo "缺少 $NETOPS_ENV_FILE(先在主機 2 執行 deploy/host2-set-secrets.sh)" >&2; exit 1; }
     - for f in gw_api_key monitor_api_key ftp_password qdrant_api_key; do test -f "$NETOPS_SECRETS_DIR/$f" || { echo "缺少 netops-api 機密 $f(先在主機 2 執行 deploy/host2-set-secrets.sh)" >&2; exit 1; }; done
+    # C3:netops-api 唯讀查詢 ClickHouse(deploy/host2-set-clickhouse-secrets.sh 已產生)
+    - test -f "$NETOPS_SECRETS_DIR/ch_reader_password" || { echo "缺少 ch_reader_password(先在主機 2 執行 deploy/host2-set-clickhouse-secrets.sh)" >&2; exit 1; }
     - export IMAGE_TAG=$CI_COMMIT_SHORT_SHA RELEASE_SHA=$CI_COMMIT_SHORT_SHA COMPOSE_ENV_FILES="$NETOPS_ENV_FILE"
     - export GITLAB_NPM_TOKEN="$(cat "$NPM_TOKEN_FILE")"
     - C="docker compose -f deploy/docker-compose.yml"

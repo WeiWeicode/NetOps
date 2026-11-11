@@ -18,7 +18,7 @@
 | --- | --- | --- |
 | 收集器 | `ruff check`、`pytest`(pa-collector) | 84 通過 |
 | 後端型別 | `npm run typecheck` | 通過 |
-| 後端單元測試 | `npm test`(含 `test/unit/ingest.test.ts` 38 項:熔斷、未知 400、大小上限、缺口誤報) | 233 通過(2026-11-11) |
+| 後端單元測試 | `npm test`(含 `test/unit/ingest.test.ts` 38 項:熔斷、未知 400、大小上限、缺口誤報) | 234 通過(2026-11-11) |
 | 整合測試 | CI `check:ingest-int`:一次性 Redis 7.4 + ClickHouse 26.3(同設定、schema、migrations、`netops_writer`),`npm run test:int`;`dedupe-day.sh` 測試 | 見 MR pipeline |
 
 整合測試涵蓋:JSONEachRow 欄位與型別(`seqno` 64 位元字串、IPv4 → `::ffff:`、台灣時間)、威脅類 migration 欄位、**同一 token 重送原始表與每小時彙總都不重複**、**寫入後 ACK 前當機 → 重啟補待處理清單不重複**、XTRIM 後的缺口偵測與「閒置類型」不誤報、Stream 過期後 group 自動重建、ClickHouse 錯誤代碼分類。

@@ -152,6 +152,9 @@ export function createClickHouseWriter(cfg: ClickHouseConfig, fetchImpl: Fetch =
           // 26.x 的 HTTP 寫入預設走 async insert(伺服器端合併批次),去重 token 不生效、成功回應也不代表已落地;
           // 本服務自己批次,一律同步寫入(2026-11-11 CI 整合測試發現:同一 token 重送被寫了兩次)
           async_insert: '0',
+          // 物化檢視(每小時彙總)也用衍生的 token 去重:26.x 來源表略過重送的區塊時仍會推給物化檢視,
+          // 不開這個彙總會重複計算(目標表要設 non_replicated_deduplication_window,migrations/002)
+          deduplicate_blocks_in_dependent_materialized_views: '1',
         },
         rows.map((r) => JSON.stringify(r)).join('\n'),
       );

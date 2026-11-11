@@ -37,10 +37,11 @@ if [ "$APP" != "$T1" ] || [ "$SRC" != "$T1" ]; then
   echo "重建 $D 的每小時彙總"
   ck "ALTER TABLE netops.pa_traffic_hourly_app DELETE WHERE toDate(hour) = toDate('$D') SETTINGS mutations_sync = 2"
   ck "ALTER TABLE netops.pa_traffic_hourly_src DELETE WHERE toDate(hour) = toDate('$D') SETTINGS mutations_sync = 2"
-  ck "INSERT INTO netops.pa_traffic_hourly_app
+  # 彙總表有去重視窗(migrations/002):重建寫入不帶 token,要關掉去重,否則和上次重建相同的區塊會被略過
+  ck "INSERT INTO netops.pa_traffic_hourly_app SETTINGS insert_deduplicate = 0
       SELECT toStartOfHour(event_time) AS hour, action, app, from_zone, to_zone, count(), sum(bytes), sum(packets)
       FROM netops.pa_traffic_logs WHERE toDate(event_time) = toDate('$D') GROUP BY hour, action, app, from_zone, to_zone"
-  ck "INSERT INTO netops.pa_traffic_hourly_src
+  ck "INSERT INTO netops.pa_traffic_hourly_src SETTINGS insert_deduplicate = 0
       SELECT toStartOfHour(event_time) AS hour, src, action, count(), sum(bytes)
       FROM netops.pa_traffic_logs WHERE toDate(event_time) = toDate('$D') GROUP BY hour, src, action"
   ck "SELECT 'hourly_app', sum(sessions) FROM netops.pa_traffic_hourly_app WHERE toDate(hour) = toDate('$D')

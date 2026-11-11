@@ -16,7 +16,7 @@
 
   Rule: 送出與狀態
 
-    # 來源: backend/src/modules/pa/log-routes.ts:117
+    # 來源: backend/src/modules/pa/log-routes.ts:206
     @auto
     場景: 送出明細查詢
       假如 2026-11-02 08:00–09:00 有已分析的 TRAFFIC 檔案
@@ -25,13 +25,13 @@
       而且 之後 GET /api/netops/pa/log-searches/{id} 的 status 會變成 "done"
       而且 result 為 { from, to, total, limit, files, filesScanned, scanned, seconds, stopReason },不含資料列
 
-    # 來源: backend/src/modules/pa/log-routes.ts:123
+    # 來源: backend/src/modules/pa/log-routes.ts:212
     @auto
     場景: 期間沒有資料
       當 呼叫 POST /api/netops/pa/log-searches 的期間沒有已分析的檔案
       那麼 回應 404,code 為 "NETOPS_PA_NO_DATA"
 
-    # 來源: backend/src/modules/pa/log-routes.ts:236
+    # 來源: backend/src/modules/pa/log-routes.ts:350
     @auto
     場景: 查詢自己的工作
       假如 S112009 已送出明細查詢
@@ -39,7 +39,7 @@
       那麼 回應 200
       而且 執行中時 progress 為 { filesScanned, files, rows, found }
 
-    # 來源: backend/src/modules/pa/log-routes.ts:236
+    # 來源: backend/src/modules/pa/log-routes.ts:350
     @auto @security
     場景: 別人的工作
       假如 S112009 已送出明細查詢
@@ -68,7 +68,7 @@
 
   Rule: 取得結果
 
-    # 來源: backend/src/modules/pa/log-routes.ts:254
+    # 來源: backend/src/modules/pa/log-routes.ts:368
     @auto
     場景: 取第一頁
       假如 明細工作已完成
@@ -77,7 +77,7 @@
       而且 回應含 items、total、page、pageSize
       而且 每筆 items 是欄位物件(順序同舊版 ROW_FIELDS),time 為 ISO 8601 +08:00
 
-    # 來源: backend/src/modules/pa/log-routes.ts:278
+    # 來源: backend/src/modules/pa/log-routes.ts:393
     @auto
     場景: 匯出 CSV
       假如 明細工作已完成
@@ -87,7 +87,7 @@
       而且 內容以 UTF-8 BOM 開頭,第一列為中文欄名(時間、類型、動作、來源 IP…)
       而且 檔名為 "PA_log_{開始}_{結束}.csv"
 
-    # 來源: backend/src/modules/pa/log-routes.ts:287
+    # 來源: backend/src/modules/pa/log-routes.ts:394
     @auto @changed
     場景: 結果不完整時匯出檔名標出來
       # AGENT.md §5:資料不完整要明確標示
@@ -104,14 +104,14 @@
 
   Rule: 取消
 
-    # 來源: backend/src/modules/pa/log-routes.ts:304
+    # 來源: backend/src/modules/pa/log-routes.ts:420
     @auto
     場景: 取消工作
       當 呼叫 DELETE /api/netops/pa/log-searches/{id}
       那麼 回應 204
       而且 再呼叫一次也回 204
 
-    # 來源: backend/src/modules/pa/log-routes.ts:170
+    # 來源: backend/src/modules/pa/log-routes.ts:274
     @auto
     場景: 執行中取消會中斷 FTP 掃描並釋放連線
       假如 明細工作 status 為 "running"
@@ -119,7 +119,7 @@
       那麼 status 變成 "cancelled"
       而且 FTP 傳輸被中斷,之後的匯入與查詢能拿到 FTP 連線
 
-    # 來源: backend/src/modules/pa/log-routes.ts:310
+    # 來源: backend/src/modules/pa/log-routes.ts:417
     @auto @changed
     場景: 取消已完成的工作會丟棄結果
       # 結果最多 PA_SEARCH_LIMIT 筆 × 28 欄,取消即釋放記憶體(資安審查建議)
@@ -128,7 +128,7 @@
       那麼 回應 204
       而且 之後查詢這個 id 回 404 "NETOPS_JOB_NOT_FOUND"
 
-    # 來源: backend/src/modules/pa/log-routes.ts:310
+    # 來源: backend/src/modules/pa/log-routes.ts:417
     @auto @security
     場景: 別人取消不影響我的工作
       假如 S112009 的明細工作已完成
@@ -138,7 +138,7 @@
 
   Rule: 輸入驗證與上限
 
-    # 來源: backend/src/modules/pa/log-routes.ts:158
+    # 來源: backend/src/modules/pa/log-routes.ts:253
     @auto
     場景大綱: 輸入錯誤回 400
       當 呼叫 POST /api/netops/pa/log-searches 帶 <內容>
@@ -152,7 +152,7 @@
         | port 為 "443;rm"                             |
         | limit 超過 PA_SEARCH_LIMIT                   |
 
-    # 來源: backend/src/modules/pa/log-routes.ts:86
+    # 來源: backend/src/modules/pa/log-routes.ts:98
     @auto @security @changed
     場景: IP 萬用字元過多會被拒絕
       # 資安審查 High(ReDoS):核心 ipMatcher 把每個 * 轉成 .*,大量 * 會讓比對時間指數成長、卡住整個服務;
@@ -161,7 +161,7 @@
       那麼 回應 400,code 為 "VALIDATION_FAILED"
       而且 IP 條件只能用 IP / CIDR 字元,"*" 最多 4 個
 
-    # 來源: backend/src/modules/pa/log-routes.ts:88
+    # 來源: backend/src/modules/pa/log-routes.ts:100
     @auto @changed
     場景: 連續的萬用字元視為一個
       當 分別送出 src 為 "10.10.*.5" 與 "10.10.***.5" 的明細查詢
@@ -189,9 +189,48 @@
       當 再送出一個並完成
       那麼 最舊的一個查詢回 404 "NETOPS_JOB_NOT_FOUND",其他人的結果不受影響
 
-    # 來源: backend/src/modules/pa/log-routes.ts:175
+    # 來源: backend/src/modules/pa/log-routes.ts:279
     @untested
     場景: 等不到 FTP 連線超過掃描秒數時回部分結果
       假如 匯入佔用唯一的 FTP 連線,明細查詢一直在排隊
       當 超過掃描秒數(PA_SEARCH_SECONDS)
       那麼 明細工作 status 為 "done",stopReason 為 "timeout",結果為已找到的部分
+
+  # ───── C3 查詢切換(ClickHouse;docs/API.md §4.3、ARCHITECTURE D6、D29、手冊 §12 CQ10)─────
+
+  # 來源: backend/src/modules/pa/log-routes.ts:216
+  @C3 @auto
+  場景: 明細查 ClickHouse
+    假如 2026-11-12 08:00–09:00 在 ClickHouse 範圍內
+    當 呼叫 POST /api/netops/pa/log-searches 帶 from、to、src 與 source "clickhouse"
+    那麼 回應 202
+    而且 完成後 result.source 為 "clickhouse",資料列與 FTP 來源欄位相同
+    而且 資料列依時間由舊到新;超過 limit 時 stopReason 為 "limit"
+
+  # 來源: backend/src/modules/pa/log-routes.ts:222
+  @C3 @auto
+  場景: ClickHouse 明細超過 30 天
+    當 呼叫 POST /api/netops/pa/log-searches 帶 source "clickhouse" 且期間 31 天
+    那麼 回應 400 VALIDATION_FAILED
+
+  # 來源: backend/src/config.ts:285
+  @C3 @auto
+  場景: 並行對帳期間明細預設仍查 FTP
+    # CQ10:FTP 與 ClickHouse 並行對帳 2 週沒有未處理缺口後,需求方把 NETOPS_PA_DETAIL_SOURCE 改成 auto
+    假如 NETOPS_PA_DETAIL_SOURCE 未設定(預設 ftp)
+    當 呼叫 POST /api/netops/pa/log-searches 沒有帶 source
+    那麼 查詢走 FTP 掃描,result.source 為 "ftp"
+
+  # 來源: backend/src/modules/pa/log-routes.ts:138
+  @C3 @auto
+  場景: ClickHouse 無法使用
+    假如 ClickHouse 連不上
+    當 呼叫 POST /api/netops/pa/log-searches 帶 source "clickhouse"
+    那麼 回應 503 NETOPS_CLICKHOUSE_UNAVAILABLE
+    但是 source 為 "auto" 時改走 FTP 掃描
+
+  # 來源: backend/src/modules/pa/log-routes.ts:138
+  @C3 @auto
+  場景: ClickHouse 期間沒有資料
+    當 呼叫 POST /api/netops/pa/log-searches 帶 source "clickhouse",期間 ClickHouse 沒有 log
+    那麼 回應 404 NETOPS_PA_NO_DATA

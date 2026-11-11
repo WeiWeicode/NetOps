@@ -15,10 +15,18 @@ import { cancelQuietly } from '../ftp/ad-routes.js';
 import { buildFilter, buildPrefilter, ROW_FIELDS } from './core/palog.js';
 import { scanFiles } from './core/scan.js';
 import type { TrafficImporter } from './importer.js';
+import { ClickHouseError } from '../../infra/clickhouse/index.js';
+import { pickSource, unavailable, type ChOverviewDeps } from './ch-overview.js';
+import { SOURCE } from './routes.js';
+import { taipeiTimeMs } from '../../shared/time.js';
 
 const KIND = 'pa-log-search';
 /** 查詢期間上限(天):明細要從 FTP 重讀原始 log */
 export const SEARCH_MAX_DAYS = 31;
+/** ClickHouse 明細的期間上限(天;D29:30 天內查 ClickHouse,TRAFFIC 保留 30 天) */
+export const CH_SEARCH_MAX_DAYS = 30;
+/** ClickHouse 明細的執行秒數上限(netops_reader 的 constraints 上限 50) */
+const CH_SEARCH_SECONDS = 50;
 
 /** 匯出欄名(同舊版畫面 FIELD_LABELS) */
 const FIELD_LABELS: Record<string, string> = {
@@ -47,10 +55,14 @@ interface SearchBody {
   country?: string;
   q?: string;
   limit?: number;
+  /** C3:ftp / clickhouse / auto;省略時依設定 NETOPS_PA_DETAIL_SOURCE */
+  source?: string;
 }
 
 /** 工作結果(rows 只在伺服器端保留,狀態查詢不回傳) */
 interface SearchResult {
+  /** C3:實際來源 */
+  source: 'ftp' | 'clickhouse';
   from: string;
   to: string;
   total: number;
@@ -90,17 +102,94 @@ const ipCond = (v?: string) => (v ? v.replace(/\*+/g, '*') : v);
 const text = (max: number) => ({ type: 'string', maxLength: max });
 const ID = { type: 'object', required: ['id'], properties: { id: { type: 'string', format: 'uuid' } } } as const;
 
-const logRoutes: FastifyPluginAsync<{ ftp: Ftp; traffic: TrafficImporter; parallel: number; limit: number; seconds: number }> = async (app, { ftp, traffic, parallel, limit, seconds }) => {
+const logRoutes: FastifyPluginAsync<{ ftp: Ftp; traffic: TrafficImporter; parallel: number; limit: number; seconds: number; ch: ChOverviewDeps }> = async (
+  app,
+  { ftp, traffic, parallel, limit, seconds, ch },
+) => {
+  const onError = (kind: string, err: unknown) => app.log.error({ err, kind }, '工作執行發生非預期錯誤');
   // 明細查詢專用:同時只執行 1 個(其餘排隊),FTP 連線至少留給匯入輪流使用;每人保留 5 筆結果(資料列佔記憶體)
-  const jobs = new JobRunner({ concurrency: 1, maxRetainedPerOwner: 5 }, (kind, err) => app.log.error({ err, kind }, '工作執行發生非預期錯誤'));
-  app.addHook('onClose', async () => jobs.close());
+  const ftpJobs = new JobRunner({ concurrency: 1, maxRetainedPerOwner: 5 }, onError);
+  // ClickHouse 明細(C3):不佔 FTP 連線,另一個佇列,同時 2 個
+  // 每人同時 1 個、全部保留 30 份(查詢可佔滿 ClickHouse 50 秒;結果佔記憶體;資安審查 M2、L2)
+  const chJobs = new JobRunner({ concurrency: 2, maxActivePerOwner: 1, maxRetained: 30, maxRetainedPerOwner: 5 }, onError);
+  app.addHook('onClose', async () => {
+    ftpJobs.close();
+    chJobs.close();
+  });
+  /** 工作在哪個佇列(id 是 UUID,兩邊不會重複);都找不到時由 FTP 佇列回 404 NETOPS_JOB_NOT_FOUND */
+  const jobsOf = (id: string, owner: string): JobRunner => {
+    try {
+      chJobs.get(id, owner, KIND);
+      return chJobs;
+    } catch {
+      return ftpJobs;
+    }
+  };
   /** 狀態查詢:結果只回摘要,資料列走 /rows 分頁(回應不會太大) */
   const view = (id: string, owner: string) => {
-    const job = jobs.get<SearchResult>(id, owner, KIND);
+    const job = jobsOf(id, owner).get<SearchResult>(id, owner, KIND);
     if (!job.result) return job;
     const { rows: _rows, ...summary } = job.result;
     return { ...job, result: summary };
   };
+  /**
+   * ClickHouse 明細(C3):先查每小時彙總確認有資料(沒有回 404),再送出工作。
+   * ClickHouse 連不上:來源 auto 時回 null(呼叫端改走 FTP),指定 clickhouse 時 503
+   */
+  async function submitClickHouse(identity: Parameters<typeof ownerOf>[0], b: SearchBody, from: string, to: string, fromMs: number, toMs: number, max: number) {
+    const reader = ch.reader!;
+    const explicit = (b.source ?? ch.mode) === 'clickhouse';
+    let n: number;
+    try {
+      n = await reader.trafficCount(fromMs, toMs);
+    } catch (err) {
+      if (!(err instanceof ClickHouseError)) throw err;
+      const info = { code: err.code, status: err.status };
+      if (explicit) throw unavailable(info);
+      app.log.warn(info, 'ClickHouse 查詢失敗,明細改用 FTP 來源');
+      return null;
+    }
+    if (!n) {
+      // auto:ClickHouse 沒有這段時間的資料時改走 FTP(FTP 可能有);指定 clickhouse 才回 404(程式碼審查 #1)
+      if (!explicit) return null;
+      throw new AppError(404, 'NETOPS_PA_NO_DATA', '這段時間 ClickHouse 沒有 log');
+    }
+    const filter = { fromMs, toMs, src: b.src, dst: b.dst, ip: b.ip, port: b.port, proto: b.proto, app: b.app, rule: b.rule, action: b.action, fromZone: b.fromZone, toZone: b.toZone, user: b.user, country: b.country, q: b.q };
+    const secs = Math.min(seconds, CH_SEARCH_SECONDS);
+    return chJobs.submit<SearchResult>(
+      KIND,
+      ownerOf(identity),
+      async ({ signal, progress }) => {
+        progress({ found: 0 });
+        const t0 = Date.now();
+        let r: Awaited<ReturnType<typeof reader.searchTraffic>>;
+        try {
+          r = await reader.searchTraffic(filter, max, secs, signal);
+        } catch (err) {
+          if (signal.aborted || !(err instanceof ClickHouseError)) throw err;
+          // 159 TIMEOUT_EXCEEDED:超過秒數上限;其他:連線或查詢失敗。原文只寫日誌(只記代碼)
+          app.log.warn({ code: err.code, status: err.status }, 'ClickHouse 明細查詢失敗');
+          if (err.code === 159) throw new AppError(503, 'NETOPS_CLICKHOUSE_UNAVAILABLE', `查詢超過 ${secs} 秒,請縮短期間或加上條件`);
+          throw unavailable();
+        }
+        return {
+          source: 'clickhouse' as const,
+          from: logTimeOut(from),
+          to: logTimeOut(to),
+          total: r.rows.length,
+          limit: max,
+          files: 0,
+          filesScanned: 0,
+          scanned: r.scanned,
+          seconds: Math.round((Date.now() - t0) / 100) / 10,
+          stopReason: r.more ? ('limit' as const) : ('' as const),
+          rows: r.rows.map((rec) => FIELDS.map((k) => rec[k] ?? '')),
+        };
+      },
+      { timeoutMs: (secs + 30) * 1000 },
+    );
+  }
+
   const rowOut = (r: (string | number)[]) => Object.fromEntries(FIELDS.map((k, i) => [k, i === TIME_INDEX ? logTimeOut(String(r[i])) : r[i]]));
 
   app.post<{ Body: SearchBody }>(
@@ -109,7 +198,7 @@ const logRoutes: FastifyPluginAsync<{ ftp: Ftp; traffic: TrafficImporter; parall
       schema: {
         operationId: 'netops.pa-log.search',
         summary: 'PA Log 明細查詢(送出工作)',
-        description: `依時間挑出已分析的 log 檔,從 FTP 串流逐列篩選(IP 支援完全相同、萬用字元與 CIDR,並比對 NAT 位址);回 202 與工作狀態,完成後分頁取結果或匯出 CSV。找到上限筆數(預設 ${limit})或超過 ${seconds} 秒就停止,stopReason 標出原因。期間最長 ${SEARCH_MAX_DAYS} 天;期間內沒有已分析的檔案回 404 NETOPS_PA_NO_DATA。`,
+        description: `依時間篩選 PA TRAFFIC log(IP 支援完全相同、萬用字元與 CIDR,並比對 NAT 位址);回 202 與工作狀態,完成後分頁取結果或匯出 CSV。來源 source:ftp(挑出已分析的 log 檔,從 FTP 串流逐列篩選,找到上限筆數(預設 ${limit})或超過 ${seconds} 秒就停止)、clickhouse(C3,期間最長 ${CH_SEARCH_MAX_DAYS} 天,依時間由舊到新取前 limit 筆)、auto(期間開始在 ClickHouse 範圍內、且不超過 ${CH_SEARCH_MAX_DAYS} 天才用 ClickHouse);省略時依設定(預設 ftp,並行對帳 2 週後才改)。stopReason 標出停止原因。期間最長 ${SEARCH_MAX_DAYS} 天;期間內沒有資料回 404 NETOPS_PA_NO_DATA;指定 clickhouse 而無法使用回 503 NETOPS_CLICKHOUSE_UNAVAILABLE。`,
         tags: ['PA Log 明細'],
         'x-permission': 'netops.pa-log.read',
         'x-audit-level': 'meta',
@@ -123,6 +212,16 @@ const logRoutes: FastifyPluginAsync<{ ftp: Ftp; traffic: TrafficImporter; parall
           '場景: 期間沒有資料',
           '  當 呼叫 POST /api/netops/pa/log-searches 的期間沒有已分析的檔案',
           '  那麼 回應 404 NETOPS_PA_NO_DATA',
+          '',
+          '場景: 明細查 ClickHouse',
+          '  假如 2026-11-12 08:00–09:00 在 ClickHouse 範圍內',
+          '  當 呼叫 POST /api/netops/pa/log-searches 帶 from、to、src 與 source "clickhouse"',
+          '  那麼 回應 202',
+          '  而且 完成後 result.source 為 "clickhouse",資料列與 FTP 來源欄位相同',
+          '',
+          '場景: ClickHouse 明細超過 30 天',
+          '  當 呼叫 POST /api/netops/pa/log-searches 帶 source "clickhouse" 且期間 31 天',
+          '  那麼 回應 400 VALIDATION_FAILED',
         ].join('\n'),
         body: {
           type: 'object',
@@ -145,6 +244,7 @@ const logRoutes: FastifyPluginAsync<{ ftp: Ftp; traffic: TrafficImporter; parall
             country: text(100),
             q: text(200),
             limit: { type: 'integer', minimum: 1, maximum: limit },
+            source: SOURCE,
           },
         },
         response: ACCEPTED,
@@ -156,11 +256,24 @@ const logRoutes: FastifyPluginAsync<{ ftp: Ftp; traffic: TrafficImporter; parall
       const to = timeIn(b.to, 'to');
       if (to < from) throw validation('to', '結束時間不可早於開始時間');
       if (Date.parse(b.to) - Date.parse(b.from) > SEARCH_MAX_DAYS * 86400_000) throw validation('to', `查詢期間最長 ${SEARCH_MAX_DAYS} 天`);
+      const max = Math.min(b.limit ?? limit, limit);
+      // C3:ClickHouse 來源(期間 ≤ 30 天);FTP 版的 to 含該分鐘(buildFilter:to + ':59'),這裡同樣算到該分鐘結束
+      const fromMs = taipeiTimeMs(from);
+      const toMs = taipeiTimeMs(to) + 60_000;
+      const tooLong = toMs - fromMs > CH_SEARCH_MAX_DAYS * 86400_000 + 60_000;
+      if (b.source === 'clickhouse' && tooLong) throw validation('to', `ClickHouse 明細查詢期間最長 ${CH_SEARCH_MAX_DAYS} 天`);
+      // 只有關鍵字 q、沒有其他條件:用不到排序鍵,會掃完整段期間;ClickHouse 只接受 1 天內(資安審查 M2)
+      const qOnly = Boolean(b.q?.trim()) && !['src', 'dst', 'ip', 'port', 'proto', 'app', 'rule', 'action', 'fromZone', 'toZone', 'user', 'country'].some((k) => String(b[k as keyof SearchBody] ?? '').trim());
+      const qTooLong = qOnly && toMs - fromMs > 86400_000 + 60_000;
+      if (b.source === 'clickhouse' && qTooLong) throw validation('q', '只用關鍵字查詢 ClickHouse 時期間最長 1 天,請加上 IP、Port 等條件或縮短期間');
+      if (!tooLong && !qTooLong && pickSource(ch, b.source, fromMs) === 'clickhouse') {
+        const job = await submitClickHouse(req.identity, b, from, to, fromMs, toMs, max);
+        if (job) return reply.status(202).send(job);
+      }
       const files = traffic.filesInRange(from, to);
       if (!files.length) throw new AppError(404, 'NETOPS_PA_NO_DATA', '這段時間沒有已分析的 log 檔,請先到「FTP Log 檔案」同步');
-      const max = Math.min(b.limit ?? limit, limit);
       const filter = buildFilter({ ...b, from, to });
-      const job = jobs.submit<SearchResult>(
+      const job = ftpJobs.submit<SearchResult>(
         KIND,
         ownerOf(req.identity),
         async ({ signal, progress }) => {
@@ -205,6 +318,7 @@ const logRoutes: FastifyPluginAsync<{ ftp: Ftp; traffic: TrafficImporter; parall
           rows.sort((x, y) => String(x[TIME_INDEX]).localeCompare(String(y[TIME_INDEX])));
           const kept = rows.slice(0, max);
           return {
+            source: 'ftp' as const,
             from: logTimeOut(from),
             to: logTimeOut(to),
             total: kept.length,
@@ -258,7 +372,8 @@ const logRoutes: FastifyPluginAsync<{ ftp: Ftp; traffic: TrafficImporter; parall
       },
     },
     async (req) => {
-      const r = jobs.result<SearchResult>(req.params.id, ownerOf(req.identity), KIND);
+      const owner = ownerOf(req.identity);
+      const r = jobsOf(req.params.id, owner).result<SearchResult>(req.params.id, owner, KIND);
       const page = req.query.page ?? 1;
       const pageSize = req.query.pageSize ?? 50;
       return { items: r.rows.slice((page - 1) * pageSize, page * pageSize).map(rowOut), total: r.rows.length, page, pageSize };
@@ -281,7 +396,8 @@ const logRoutes: FastifyPluginAsync<{ ftp: Ftp; traffic: TrafficImporter; parall
       },
     },
     async (req, reply) => {
-      const r = jobs.result<SearchResult>(req.params.id, ownerOf(req.identity), KIND);
+      const owner = ownerOf(req.identity);
+      const r = jobsOf(req.params.id, owner).result<SearchResult>(req.params.id, owner, KIND);
       const rows = r.rows.map((row) => row.map((v, i) => (i === TIME_INDEX ? logTimeOut(String(v)) : v)));
       // 掃描逾時的結果不完整,檔名標出來(AGENT.md §5)
       const name = `PA_log_${r.from.slice(0, 16).replace(/\D/g, '')}_${r.to.slice(0, 16).replace(/\D/g, '')}${r.stopReason === 'timeout' ? '_不完整' : ''}.csv`;
@@ -308,7 +424,8 @@ const logRoutes: FastifyPluginAsync<{ ftp: Ftp; traffic: TrafficImporter; parall
     },
     async (req, reply) => {
       // 已完成的工作:取消即丟棄結果,釋放記憶體(資料列最多 PA_SEARCH_LIMIT 筆 × 28 欄)
-      cancelQuietly(() => jobs.cancel(req.params.id, ownerOf(req.identity), KIND, { discard: true }));
+      const owner = ownerOf(req.identity);
+      cancelQuietly(() => jobsOf(req.params.id, owner).cancel(req.params.id, owner, KIND, { discard: true }));
       return reply.status(204).send();
     },
   );

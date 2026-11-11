@@ -17,6 +17,10 @@
 | R1 | PA 即時監控(唯讀):`netops-pa`、`netops-redis`、即時監控頁 | **測試區完成(2026-11-10)**;正式區上線併入 D2(D19、D21、D24、D26) |
 | R2 | 封鎖 IP(DAG 動態標籤) | 未排程(D22) |
 | C0–C6 | PA log 高吞吐架構(ClickHouse + Parquet 冷歸檔 + PA 精準查詢) | **已核准(2026-11-10)**,C0 外部前置事項進行中;**C1 實測完成、MR 待合併**(D27–D33,[PA-LOG-CLICKHOUSE-GUIDE.md](PA-LOG-CLICKHOUSE-GUIDE.md)) |
+| V-a | 熱力圖資料層:長期彙總(5 分鐘 / 每小時 / 每天)、熱力圖 API、時段明細熱 / 冷路由 | **規劃(2026-11-11,待審)**;前置 C3,冷路由前置 C4(D34、D35) |
+| V-b | 儀表板與熱力圖畫面:V-b1 Claude 元件介面與 API,V-b2 Gemini 頁面與動畫 | **規劃(2026-11-11,待審)**;前置 V-a(D40、D41) |
+| V-c | 偵測規則引擎:PA 規則 1–7、冷卻、白名單、網段設定頁、告警頁 | **規劃(2026-11-11,待審)**;前置 C3;上線前需求方提供網段清單(D37、D38、D39) |
+| V-d | AD:AD 事件進 ClickHouse、AD 指標與圖表、規則 8–9 | **延後**(V4,D36) |
 | ~~後續~~ | ~~服務寫入資料庫~~ | 取消(D20;PA log 改寫 ClickHouse 見 C0–C6,D27) |
 | ~~後續~~ | ~~接入 AI 中控台~~ | 取消(D17 → D23) |
 
@@ -263,3 +267,59 @@ D13:骨架直接留用;AI 不在這次範圍,不做串流驗證(D7、D17)。
 3. 其他 repo 文件與架構資料(手冊 §10.5,跨 repo 先取得同意)。
 
 **前置**:C2–C5 測試區驗收;**E5(主機 3 資源)**。**負責人**:Claude;需求方部署與合併;IT 處理主機資源。**完成條件**:正式區可用;`npm run arch:check` 通過;文件與甘特圖更新。
+
+---
+
+> 以下 V-a–V-d 為 2026-11-11 新增(需求方 2026-11-11 提出,V1–V10 已決定;**本規劃待需求方審**)。決策見 ARCHITECTURE §3.2 D34–D41,設計(DDL、API、規則、元件介面、資源估算、待決 X1–X16)見 [VIZ-RULES-DESIGN.md](VIZ-RULES-DESIGN.md),Gemini 的工作範圍與驗收見 [HANDOFF-GEMINI-VIZ.md](HANDOFF-GEMINI-VIZ.md)。順序以甘特圖為準;V-a 之後 V-b 與 V-c 可平行。
+
+**負責人**:**Claude** 寫資料層、API、規則引擎、前端邏輯層(`api/`、`composables/`、路由、權限)、ECharts 基底與元件介面、測試、文件;**Gemini** 做頁面組裝、元件畫面、動畫、元件測試與測試報告(工作區 AGENT §7;禁止事項照 AGENT「AI 分工」);**需求方**審核、提供網段清單與白名單、合併 MR、驗收、調規則門檻;**網通**確認 App-ID 名稱(X12)。
+
+## V-a 熱力圖資料層
+
+1. DDL:`pa_heat_5m` / `_1h` / `_1d`(AggregatingMergeTree)與 6 個物化檢視;TTL 佔位符(正式區 1 年 / 5 年 / 5 年,測試區 3 天)加進 `apply-schema.sh`;`migrations/003`:`pa_traffic_hourly_src` 加 `bytes_sent`、`bytes_recv` 並改 MV(VIZ-RULES-DESIGN §3)。
+2. 回填:上線時從原始表回填彙總表與 `_src` 新欄位;C3 的 FTP 補漏與 `dedupe-day.sh` 加入熱力圖表的重建(§3.6)。
+3. `GET /api/netops/pa/heatmap`:三粒度、三指標(`ad` 回 409 預留)、分級、`coverage`(`null` 和 0 分開)、Redis 快取(§4.2)。
+4. `GET /api/netops/pa/slice` 熱路由:1 天上限、Top 10、≤ 200 列、30 秒內同步、超過轉 `pa-slice` 工作、同人同條件重用(§4.3)。
+5. 冷路由(**前置 C4**,且 CQ3 決定歸檔原始 log,待決 X1):`netops_cold` 帳號 `file()` 讀 `archive/YYYY/…`、全系統 1 個冷查詢(Redis 鎖,和 C4 冷明細、歸檔匯出共用)、429 + `Retry-After`、檔案不存在 404。
+6. API.md、OpenAPI(`x-permission`、`x-gherkin`、`x-timeout-ms: 40000`)、Gherkin、PA-LIVE-PLAN §4 鍵表、PROJECT-MAP。
+
+**前置**:C3(`infra/clickhouse`、查詢切換);第 5 步另需 C4。**負責人**:Claude;需求方審核與合併。**完成條件**:CI 整合測試證明三張彙總表的總數與原始表一致、重送不重複;測試區日視圖今天的格子和流量總覽數字誤差 < 0.5%;熱路由一天範圍 < 10 秒;冷路由(C4 後)30 秒內同步、超過轉工作、第 2 個冷查詢回 429;`security-auditor`(Log 明細、對外 API)與 `code-reviewer` 審查完成。
+
+## V-b 儀表板與熱力圖畫面
+
+### V-b1 元件介面、ECharts 基底與儀表板 API(Claude)
+
+1. `GET /api/netops/pa/insight/traffic`、`/insight/threat`(最長 90 天、國家轉 ISO2、內網 / 伺服器依網段設定、快取)(§4.4)。
+2. 前端邏輯層:`api/heatmap.ts`、`slice.ts`、`insight.ts`;composables `useHeatmap`、`useSlice`、`useInsight`、`useChartPick`、`useLivePaQuery`(C5 前回 `canQuery = false`)、`useReducedMotion`;路由 `firewall/heatmap`、`firewall/insight`(空頁)、`api/perms.ts`、`gateway-rbac.yaml` 節點 `netops.pa-heatmap.read`、`netops.pa-insight.read`(§4.8)。
+3. 套件 `echarts`(按需引入、動態載入)、`ui/charts/echarts.ts`(主題 token)、`GEChart.vue`、世界地圖 GeoJSON 與國家對照、`ui/charts/viz-types.ts`(全部元件的 props / 事件 / 資料型別)、tokens 名稱(§6)。
+4. 本機假資料產生器(5 年每天、31 天每小時、1 天每 5 分鐘)給 Gemini 與元件測試用;HANDOFF-GEMINI-VIZ §2 的「開工前交付」全部到位後通知 Gemini 開工。
+
+**前置**:V-a 第 3、4 步(API 可用或假資料可用)。**負責人**:Claude。**完成條件**:`vue-tsc`、`npm test` 通過;composables 單元測試涵蓋 202 轉輪詢、429 倒數、`null` 與 0、權限;`vite build` 實測 ECharts chunk 大小寫進 MR;儀表板 API 數字和既有流量總覽一致。
+
+### V-b2 頁面組裝與動畫(Gemini)
+
+1. 元件畫面:`GHeatmap`、`GDrawer`、`GSourceBadge`、各圖表元件(`GTrendDualAxis`、`GSankey`、`GTopBars`、`GAppShare`、`GAllowDeny`、`GSeverityCards`、`GThreatTimeline`、`GWorldMap`、`GTopCompare`),照 `viz-types.ts` 的介面。
+2. 頁面:活動熱力圖、分析儀表板(流量 / 威脅兩個 Tab,AD Tab 預留停用)、時段明細抽屜(`components/SliceDrawer.vue`)。
+3. 動畫:熱力圖 stagger 進場、hover 放大 1.25 + 毛玻璃 tooltip、桑基 / 趨勢流光、Critical / High 呼吸光暈、KPI count-up、冷資料過場;全部支援 `prefers-reduced-motion`(HANDOFF-GEMINI-VIZ §5)。
+4. 元件測試與測試報告(`docs/test-reports/YYYY-MM-DD-viz-*.md`)。
+
+**前置**:V-b1。**負責人**:Gemini;Claude 審查(只改邏輯層的需求寫進 MR 說明交給 Claude);需求方驗收。**完成條件**:HANDOFF-GEMINI-VIZ §8 驗收清單全部通過(四種風格組合 × 1440 / 375 px、reduced-motion、鍵盤操作、`null` / 冷資料 / 429 狀態);沒有修改禁止範圍的檔案;測試報告已提交。
+
+## V-c 偵測規則引擎
+
+1. DDL `detect_alerts`(TTL 正式區建議 1 年,X3);`netops_writer` 加 `INSERT ON netops.detect_alerts`;`netops-ingest` 掛 reader 密碼檔與資料目錄(唯讀)(機密腳本由需求方執行)。
+2. `netops-ingest` `modules/detect`:排程(每分鐘一輪)、水位與回補、資料新鮮度、規則 1–7、冷卻與抑制計數、IP / App 白名單、IT 網段排除、規則狀態(VIZ-RULES-DESIGN §5)。
+3. `netops-api`:`infra/store` 的偵測設定(版本、歷史、`If-Match`)與告警處理狀態;API `/alerts*`、`/detect/*`;權限 `netops.alert.read|write`、`netops.detect.read|write`;`gateway-rbac.yaml` 新目錄 `netops.group.detect` 與節點(§4.8)。
+4. 前端邏輯層(Claude):`api/alerts.ts`、`api/detect.ts`、`useAlerts`、`useAlertBadge`(選單徽章)、`useDetectConfig`、路由 `detect/alerts`、`detect/settings`;頁面畫面(告警頁、偵測設定頁、側欄徽章樣式)由 **Gemini** 依 HANDOFF-GEMINI-VIZ 做。
+5. 測試區開規則一週,需求方看告警量與誤報後調門檻;API.md、OpenAPI、Gherkin、AGENT §0 / §7.2(告警表,X2)、PA-LIVE-PLAN §4、PROJECT-MAP。
+
+**前置**:C3;需求方審核本規劃(X2、X3、X7、X10);**上線前需求方提供網段清單與初始白名單(X11)**、網通確認 App-ID 名稱(X12)。**負責人**:Claude(後端、邏輯層);Gemini(告警頁、設定頁畫面);需求方提供網段、驗收、調門檻。**完成條件**:規則 1–7 各有「剛好超過 / 剛好沒超過」的測試;冷卻 30 分鐘內同主體不重複告警;白名單與 IT 網段排除生效;ClickHouse 停機後恢復會回補(≤ 60 分鐘);viewer 改設定與處理告警回 403;測試區一週規則狀態都是 `ok`、`netops-ingest` 記憶體在上限內;`security-auditor` 審查完成。
+
+## V-d AD(延後)
+
+1. 另開規劃並取得需求方核准:AD 事件進 ClickHouse(AGENT §7.2 例外;表結構、保留期限、來源先 FTP 批次、即時轉送再議)、規則 9 的「管理員群組」來源與「上班時間」定義(X16)。
+2. `ad_heat_*` 彙總與 `GET /api/netops/ad/heatmap`、`/ad/slice`、`/ad/insight`(`netops.ad.read` / `netops.ad-log.read`);熱力圖「AD 異常」指標開放。
+3. 儀表板 AD 視角:4624 / 4625 / 4740 時序、失敗來源電腦 / 帳號 Top 10(Claude 介面 + Gemini 畫面)。
+4. 規則 8 `AD_BRUTE_FORCE_SPRAY`、規則 9 `AD_ACCOUNT_LOCKOUT_OR_PRIV`。
+
+**前置**:V-a–V-c 完成;需求方核准 AD 進 ClickHouse。**負責人**:Claude、Gemini;需求方核准與驗收。**完成條件**:另開規劃時定義。

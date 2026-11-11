@@ -23,3 +23,6 @@ publish/
 uploads/
 # S0 驗證腳本的事件紀錄(backend/scripts/sse-probe.mjs --log)
 sse-probe*.jsonl
+
+# CodeGraph 本機索引
+.codegraph/

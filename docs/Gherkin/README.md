@@ -25,13 +25,14 @@
 | `ui/navigation.feature` | 應用層守衛(`/?denied=netops`)、選單依權限、403、一般連結 | UI-GUIDE §5;FRONTEND-GUIDE §7.4 | F1 |
 | `ui/requests.feature` | CSRF、不存 Token、下載、工作輪詢與取消、資料不完整提示、DOMPurify | FRONTEND-GUIDE §6;API.md §1 | F1 |
 | `ui/ai.feature` | AI 問答、AI 分析、知識庫 AI 功能的畫面:SSE 串流(CSRF)、按鈕權限、資料不完整提示、不連舊版 | API.md §10;D23 | A1 |
+| `ftp/pa-recon.feature` | C3 FTP 與 ClickHouse 每日對帳、補漏 | API.md §5.3;D33 | C3 |
 | `check-scenarios.mjs` | 比對 `x-gherkin` 與本目錄場景的腳本(§5) | — | — |
 
 ## 2. 標籤
 
 | 標籤 | 意義 | 如何驗證 |
 | --- | --- | --- |
-| `@B0` `@B1` `@B2` `@F1` `@S0` `@A1` | 所屬工作項目(IMPL-PLAN) | — |
+| `@B0` `@B1` `@B2` `@F1` `@S0` `@A1` `@C3` | 所屬工作項目(IMPL-PLAN) | — |
 | `@auto` | 已有自動化測試涵蓋(測試名稱不一定與場景相同,§4 列對照) | `backend/`:`npm test`;`frontend/`:`npm test` |
 | `@manual` | 以瀏覽器或主控台操作驗證 | 修正紀錄或 MR 寫明步驟 |
 | `@e2e` | 要經 Gateway(BFF 檢查登入與 `x-permission`)才能驗證 | 測試區瀏覽器 |

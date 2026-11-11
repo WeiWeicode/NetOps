@@ -1,7 +1,7 @@
 # NetOps API
 
 > `netops-api` 的對外介面:前端(F1)照本文件串接。決策見 [ARCHITECTURE.md](ARCHITECTURE.md),工作項目見 [IMPL-PLAN.md](IMPL-PLAN.md)。
-> **狀態:B1 定稿;C3 `feature/clickhouse-c3-query` 加 §4.1、§4.2 的 `source`(ClickHouse),`feature/clickhouse-c3-detail` 加 §4.3 的 `source`;B2-pa 已實作 §4.1、§5.1;B2-ad 已實作 §4.2、§5.2、§6;B2-kb 已實作 §7;B2-logs 已實作 §4.3(B2 全部完成);A1(AI 搬移)第 2 批 `feature/a1-ai-api` 實作 §10**。各模組在 B2 分批實作,「批次」欄是預定交付的 MR;實作與本文件不同時,以 MR 描述的「API 變更」為準並同步更新本文件。
+> **狀態:B1 定稿;C3 `feature/clickhouse-c3-query` 加 §4.1、§4.2 的 `source`(ClickHouse),`feature/clickhouse-c3-detail` 加 §4.3 的 `source`,`feature/clickhouse-c3-reconcile` 加 §5.3 對帳與補漏;B2-pa 已實作 §4.1、§5.1;B2-ad 已實作 §4.2、§5.2、§6;B2-kb 已實作 §7;B2-logs 已實作 §4.3(B2 全部完成);A1(AI 搬移)第 2 批 `feature/a1-ai-api` 實作 §10**。各模組在 B2 分批實作,「批次」欄是預定交付的 MR;實作與本文件不同時,以 MR 描述的「API 變更」為準並同步更新本文件。
 > 欄位的完整定義以服務的 `/openapi.json` 為準(上架時匯入 Gateway);本文件寫路徑、權限、請求與回應格式。
 
 ---
@@ -337,6 +337,38 @@ FTP 唯讀(AGENT.md §7.4):「刪除分析結果」只刪本系統的摘要,不�
 
 **`POST /ftp/pa/result-deletions`**:`{ "paths": ["/PA-560_traffic_….csv"] }`(1–500 筆)→ `{ "deleted": 1 }`。之後同步會重新分析。
 
+### 5.3 FTP 與 ClickHouse 對帳、補漏(C3)— 批次 `feature/clickhouse-c3-reconcile`
+
+ARCHITECTURE D33、手冊 `PA-LOG-CLICKHOUSE-GUIDE.md` §11、§12 CQ10:FTP 降為對帳與補漏的來源;並行對帳 2 週沒有未處理缺口後,需求方把明細來源 `NETOPS_PA_DETAIL_SOURCE` 改成 `auto`(§4.3)。
+
+| 方法 | 路徑 | 權限 | 說明 |
+| --- | --- | --- | --- |
+| GET | `/api/netops/pa/reconciliations?from&to` | `netops.ftp.read` | 已存的每日對帳結果(新的在前,期間最長 92 天) |
+| POST | `/api/netops/pa/reconciliations` | `netops.ftp.write` | 立即對帳一天 `{ day: "YYYY-MM-DD" }`,回結果 |
+| POST | `/api/netops/pa/backfills` | `netops.ftp.write` | 補漏 `{ day, hours? }`:先重新對帳,把缺口小時交給 `netops-ingest`,回 202 + 工作 |
+| GET | `/api/netops/pa/backfills/{id}` | `netops.ftp.read` | 補漏工作狀態(保留 7 天) |
+
+- **對帳**:每小時比 FTP 摘要的筆數(已分析的 FTP 檔的每小時統計,不另外讀 FTP)與 ClickHouse 每小時彙總的筆數。差異 = (FTP − ClickHouse) / FTP;> 0.5% 為 `gap`、< −0.5% 為 `excess`(可能重複)、FTP 沒有該小時為 `ftp-missing`、其他 `ok`。ClickHouse 開始收資料之前的小時不比。
+- 一天的 `status`:`ok`、`gap`(有缺口)、`pending`(FTP 前一天的匯出檔還沒同步分析完:要有涵蓋到隔天的已分析檔案、沒有在分析中;不判斷缺口)、`not-covered`(ClickHouse 這天沒有資料)。
+- 每天台灣時間 `NETOPS_RECON_HOUR`(預設 6,-1 = 不自動)自動對帳前 3 天並存檔;有缺口時服務日誌記 warn。FTP 檔要先同步分析(測試區 `FTP_SYNC_MINUTES` 預設 0,需求方在「FTP Log 檔案」手動同步或設定自動同步)。
+- **補漏**:`netops-ingest` 一次做一個工作,逐小時查 ClickHouse 已有的 seqno,從 FTP 逐列讀涵蓋該小時的 TRAFFIC CSV,**只補寫 seqno 不在 ClickHouse 的列**(`source = 'ftp'`;不刪除、不覆蓋既有資料;沒有 seqno 的列無法去重,略過並計數)。每小時彙總由物化檢視自動補上,總覽的每小時摘要偵測到筆數變了會重建。佇列最多 10 個工作。
+- `hours`(選填):只補其中幾個缺口小時(ISO 8601 含時區);不是缺口的小時忽略。
+
+```jsonc
+// GET /pa/reconciliations?from=2026-11-12
+{ "threshold": 0.005,
+  "days": [ { "day": "2026-11-12", "checkedAt": "2026-11-13T06:00:02.120Z", "status": "gap", "ftpFiles": 158, "gaps": 1, "excess": 0,
+              "hours": [ { "hour": "2026-11-12T01:00:00+08:00", "ftp": 351200, "ch": 348000, "diff": 0.009112, "status": "gap" } ],
+              "backfills": ["…"] } ] }
+
+// POST /pa/backfills → 202;GET /pa/backfills/{id}
+{ "id": "…", "day": "2026-11-12", "hours": [ { "hour": "2026-11-12T01:00:00+08:00", "files": 7 } ], "state": "done",
+  "createdBy": "S112009", "createdAt": "…", "startedAt": "…", "finishedAt": "…",
+  "read": 351200, "skipped": 348000, "inserted": 3200, "noSeqno": 0, "error": null }
+```
+
+錯誤:ClickHouse 無法使用或未設定 503 `NETOPS_CLICKHOUSE_UNAVAILABLE`;FTP 還沒分析完 409 `NETOPS_RECON_PENDING`;沒有缺口 409 `NETOPS_BACKFILL_NOTHING`;佇列已滿 409 `NETOPS_BACKFILL_BUSY`;工作不存在 404 `NETOPS_BACKFILL_NOT_FOUND`;Redis 讀寫失敗 424 `NETOPS_REDIS_UNAVAILABLE`。工作 `state` 為 `failed` 時 `error` 只有分類過的訊息。
+
 ### 5.2 AD
 
 | 方法 | 路徑 | 權限 | 舊版 |
@@ -514,6 +546,10 @@ AI 相關(語意搜尋、向量同步、外部 IP 自動學習)見 §10.2(A1)。
 | 422 | `NETOPS_EXPORT_TOO_LARGE` | 匯出筆數超過上限 |
 | 502 | `NETOPS_FTP_UNAVAILABLE` | FTP 連線或讀取失敗。訊息為「動作 + FTP 路徑:原因」,原因只有分類(連線逾時、拒絕連線、找不到主機、連線中斷、TLS 憑證驗證失敗、帳號或密碼錯誤(FTP 530)、檔案或目錄不存在,或沒有權限(FTP 550)…),不含 FTP 主機、port 與原始錯誤;原始錯誤只寫服務日誌。匯入狀態的 `lastSyncError`、檔案的 `error`、工作的 `error.message` 同樣規則 |
 | 503 | `NETOPS_FTP_NOT_CONFIGURED` | 未設定 FTP(只會在 dev) |
+| 409 | `NETOPS_RECON_PENDING` | 這一天的 FTP 檔還沒同步分析完,不能補漏(§5.3) |
+| 409 | `NETOPS_BACKFILL_NOTHING` | 這一天沒有需要補漏的小時(§5.3) |
+| 409 | `NETOPS_BACKFILL_BUSY` | 補漏佇列已滿(§5.3) |
+| 404 | `NETOPS_BACKFILL_NOT_FOUND` | 補漏工作不存在或已超過 7 天(§5.3) |
 | 503 | `NETOPS_CLICKHOUSE_UNAVAILABLE` | 指定 `source=clickhouse` 而 ClickHouse 連不上、查詢失敗或未設定(C3,§4.1);只影響用到 ClickHouse 的 API。原始錯誤只寫服務日誌 |
 | 403 | `NETOPS_PA_CONTROL_DISABLED` | 正式區不能切換收集器的輪詢與接收(§3.2 `collector-control`,只有測試區可用) |
 | 424 | `NETOPS_REDIS_UNAVAILABLE` | 即時監控讀不到 `netops-redis`(§3.2;`snapshot` 例外,回 200 `state: unavailable`)。不用 5xx:避免累積 BFF 斷路器失敗。原始錯誤只寫服務日誌 |

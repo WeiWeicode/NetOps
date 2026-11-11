@@ -10,6 +10,9 @@ import { createClickHouseWriter } from '../infra/clickhouse/index.js';
 import { connectIngestRedis, INGEST_TYPES, type IngestRedis } from '../infra/redis/ingest.js';
 import { loadIngestConfig, type IngestConfig } from './config.js';
 import { COUNTERS, sleep, Writer } from './writer.js';
+import { createFtp } from '../infra/ftp/index.js';
+import { connectBackfillQueue } from '../infra/redis/backfill.js';
+import { backfillLoop } from './backfill.js';
 
 export const HEARTBEAT_MS = 10_000;
 /** 健康檢查:主迴圈每次推進都更新(Compose healthcheck 看 2 分鐘內有沒有更新) */
@@ -112,6 +115,11 @@ async function main(): Promise<void> {
   touch();
   void beat();
 
+  // FTP 補漏(C3):有設定 FTP 才執行;和寫入主迴圈並行,一次一個工作
+  const backfillQueue = cfg.ftp ? connectBackfillQueue(cfg.redisUrl) : null;
+  const backfill = backfillQueue && cfg.ftp ? backfillLoop({ ch, ftp: createFtp(cfg.ftp), queue: backfillQueue, log, signal: stop.signal }) : Promise.resolve();
+  log('info', cfg.ftp ? 'FTP 補漏已啟用' : '沒有設定 FTP_HOST,不執行 FTP 補漏');
+
   // 主迴圈:Redis 錯誤(連線中斷)時退避後重來;重來會先補待處理清單
   for (let attempt = 0; !stop.signal.aborted; ) {
     const before = writer.status.aliveAt;
@@ -127,6 +135,8 @@ async function main(): Promise<void> {
   }
 
   clearInterval(timer);
+  await backfill;
+  await backfillQueue?.close();
   await beat();
   await redis.quit();
   log('info', 'netops-ingest 已停止', { counts: writer.status.counts });

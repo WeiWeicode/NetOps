@@ -125,5 +125,13 @@ export class FakeClickHouse implements ClickHouseWriter {
     this.tokens.add(`${table}|${token}`);
     this.tables[table].push(...rows);
   }
+  async insertJson(table: TableKey, lines: readonly string[], token: string) {
+    await this.insert(table, lines.map((l) => JSON.parse(l) as Record<string, unknown>), token);
+  }
   async ping() {}
+  /** FTP 補漏(C3):已寫入的 TRAFFIC seqno(event_time 是台灣時間字串) */
+  async trafficSeqnos(fromMs: number, toMs: number) {
+    const ms = (t: string) => Date.parse(`${t.replace(' ', 'T')}+08:00`);
+    return new Set(this.tables.traffic.filter((r) => ms(String(r.event_time)) >= fromMs && ms(String(r.event_time)) < toMs && String(r.seqno) !== '0').map((r) => String(r.seqno)));
+  }
 }

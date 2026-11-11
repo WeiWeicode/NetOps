@@ -2,6 +2,12 @@
 
 > `backend/`、`deploy/` 的修改;新紀錄加在最上方,格式見 `AGENT.md` §11。
 
+## 2026-11-11 C3 第 3 批:FTP 每日對帳與補漏
+- 工作項目:C3(ARCHITECTURE D33;手冊 §11.2、§11.3、§12 CQ10)
+- 內容:① `modules/pa/reconcile.ts`:每小時比 FTP 摘要筆數(已分析的 FTP 檔,不另外讀 FTP)與 ClickHouse 每小時彙總,> 0.5% 為缺口;FTP 還沒涵蓋到隔天或分析中為 pending;每天 `NETOPS_RECON_HOUR`(預設 6)對帳前 3 天,結果存 `palogs/ch/recon/`(不新增 ClickHouse 表)。② `recon-routes.ts`:`GET/POST /v1/pa/reconciliations`、`POST /v1/pa/backfills`、`GET /v1/pa/backfills/{id}`(`netops.ftp.read` / `netops.ftp.write`,沿用既有權限代碼)。③ `infra/redis/backfill.ts`:補漏佇列 `netops:backfill:*`(7 天 TTL)。④ `ingest/backfill.ts`:`netops-ingest` 逐小時查已有的 seqno(`trafficSeqnos`)、從 FTP 逐列讀 CSV,只補寫缺的列(`source = 'ftp'`,先序列化成 JSON 字串省記憶體,`insertJson`);不刪除既有資料。⑤ Compose:`netops-ingest` 加 FTP 設定、`ftp_password`、只連外的 `ingest-egress` 網路。
+- 檔案:`backend/src/{config.ts,app.ts,infra/clickhouse/index.ts,infra/redis/backfill.ts,infra/store/pa.ts,ingest/{backfill,config,main}.ts,modules/pa/{reconcile,recon-routes}.ts}`、`backend/test/{unit/ch-recon.test.ts,fixtures/fake-ingest.ts,helpers.ts}`、`deploy/docker-compose.yml`、`docs/Gherkin/{check-scenarios.mjs,ftp/pa-recon.feature}`
+- 驗證:`npm run typecheck`、`npm test`(271 通過)
+
 ## 2026-11-11 C3 第 2 批:Log 明細改查 ClickHouse(可切換)
 - 工作項目:C3(ARCHITECTURE D6、D29;手冊 §7.4、§12 CQ10)
 - 內容:`infra/clickhouse/reader.ts` 加 `trafficWhere`(明細條件 → SQL,值一律放參數:IP 完全相同 `toIPv6OrNull`、CIDR 換成 `IPv6CIDRToRange` 的 BETWEEN、萬用字元換 LIKE 並跳脫,不用正規表示式)、`searchTraffic`(依時間由舊到新取 limit+1 筆判斷 `limit`,執行上限 50 秒,工作取消時 `cancel_http_readonly_queries_on_client_close` 讓 ClickHouse 停止查詢)、`trafficCount`。`modules/pa/log-routes.ts`:`source`(設定 `NETOPS_PA_DETAIL_SOURCE`,預設 ftp,並行對帳 2 週後改 auto);ClickHouse 明細另一個工作佇列(同時 2 個,不佔 FTP 連線),結果格式、分頁、匯出、取消與 FTP 相同,`result.source` 標實際來源;期間最長 30 天。

@@ -183,7 +183,7 @@ services:
   #   和 netops-api 同一個映像、不同進入點(CQ4);不是 Gateway 上游、不開 port(D24);**單一容器,不要加 replicas**
   #   狀態:心跳 netops:ingest:heartbeat(計數、落後、最後錯誤)、缺口清單 netops:ingest:gaps(Stream 被修剪、沒寫進去的區間,交給 FTP 補漏)
   #   健康檢查:主迴圈每次推進都更新 /tmp/netops-ingest.alive;2 分鐘沒更新(Redis 斷線等)就 unhealthy
-  #   機密(NETOPS_SECRETS_DIR,uid 1000 可讀;deploy/host2-set-clickhouse-secrets.sh 已產生):ch_writer_password
+  #   機密(NETOPS_SECRETS_DIR,uid 1000 可讀;deploy/host2-set-clickhouse-secrets.sh 已產生):ch_writer_password;C3 起加 ftp_password(netops-api 同一份,FTP 補漏)
   netops-ingest:
     image: ${NETOPS_IMAGE_PREFIX:-giganexus}/netops-api:${IMAGE_TAG:-dev}
     command: ["node", "dist/src/ingest/main.js"]
@@ -213,7 +213,14 @@ services:
       INGEST_BATCH_SECONDS: ${NETOPS_INGEST_BATCH_SECONDS:-5}
       # V8 heap 上限低於容器上限:記憶體吃緊時先 GC / 丟出錯誤,不要整個容器被 OOM kill(資安審查 M1)
       NODE_OPTIONS: --max-old-space-size=160
-    secrets: [ch_writer_password]
+      # FTP 補漏(C3,ARCHITECTURE D33、手冊 §11.3):netops-api 建工作(手動,netops.ftp.write),這裡從 FTP 讀 TRAFFIC CSV,
+      #   只補寫 seqno 不在 ClickHouse 的列;一次一個工作、1 條 FTP 連線(只讀)。FTP_HOST 空白 = 不執行補漏
+      FTP_HOST: ${FTP_HOST:-}
+      FTP_USER: ${FTP_USER:-}
+      FTP_PASSWORD_FILE: /run/secrets/ftp_password
+      FTP_ROOT: ${FTP_ROOT:-}
+      FTP_LOG_DIR: ${FTP_LOG_DIR:-}
+    secrets: [ch_writer_password, ftp_password]
     # 映像的 HEALTHCHECK 是 netops-api 的 /healthz,這裡換掉
     healthcheck:
       test: ["CMD", "node", "-e", "process.exit(Date.now() - require('fs').statSync('/tmp/netops-ingest.alive').mtimeMs < 120000 ? 0 : 1)"]
@@ -221,7 +228,8 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
-    networks: [netops-internal, netops-ch]
+    # ingest-egress(C3):只為了連 FTP 10.10.130.66(補漏);不對主機開 port
+    networks: [netops-internal, netops-ch, ingest-egress]
 
   # PA-560 收集器(R1,Python,PA-LIVE-PLAN §3.1;pa-collector/):SDK 唯讀輪詢 + HTTP / Syslog 接收,只寫 netops-redis。
   #   不是 Gateway 上游(D24),不註冊路由、不接 setupGateway;狀態寫心跳 netops:pa:heartbeat,由 netops-api 呈現
@@ -366,3 +374,5 @@ networks:
     internal: true
   # netops-pa 連 PA-560 與接收轉送用(published port 需要非 internal 網路)
   pa-ingress:
+  # netops-ingest 連 FTP 補漏用(C3;只有 netops-ingest 在這個網路)
+  ingest-egress:

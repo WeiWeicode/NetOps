@@ -9,9 +9,10 @@
  *   INGEST_BATCH_MAX          每種類型一批最多筆數(100–5000,預設 5000;容器 256m,資安審查 M1)
  *   兩次啟動之間不要改批次設定:待處理清單的切法要和當機前相同,去重 token 才對得上
  *   RELEASE_SHA               寫進心跳(哪一版在跑)
+ *   FTP_HOST、FTP_USER、FTP_PASSWORD_FILE、FTP_ROOT…  FTP 補漏(C3;同 netops-api 的設定,只讀)。沒有設定 FTP_HOST 時不執行補漏工作
  */
 import type { GwEnv } from '@giganexus/backend-sdk';
-import { readSecret } from '../config.js';
+import { loadFtp, readSecret, type FtpConfig } from '../config.js';
 
 export interface IngestConfig {
   gwEnv: GwEnv;
@@ -20,6 +21,8 @@ export interface IngestConfig {
   batchMs: number;
   batchMax: number;
   release: string;
+  /** FTP 補漏(C3);null = 不執行補漏 */
+  ftp: FtpConfig | null;
 }
 
 export class IngestConfigError extends Error {}
@@ -57,5 +60,17 @@ export function loadIngestConfig(env: NodeJS.ProcessEnv = process.env): IngestCo
     batchMs: int(env, 'INGEST_BATCH_SECONDS', 5, 3, 5) * 1000,
     batchMax: int(env, 'INGEST_BATCH_MAX', 5000, 100, 5000),
     release: str(env, 'RELEASE_SHA').slice(0, 40) || 'dev',
+    ftp: loadIngestFtp(env, gwEnv),
   };
+}
+
+/** FTP 補漏只在設定 FTP_HOST 時啟用(netops-api 的 loadFtp 在 test / prod 要求必填,這裡改成選填) */
+function loadIngestFtp(env: NodeJS.ProcessEnv, gwEnv: GwEnv): FtpConfig | null {
+  if (!str(env, 'FTP_HOST')) return null;
+  try {
+    // 補漏一次只開 1 條 FTP 連線
+    return loadFtp({ ...env, FTP_MAX_CONNECTIONS: '1', FTP_SYNC_MINUTES: '0' }, gwEnv);
+  } catch (e) {
+    throw new IngestConfigError((e as Error).message);
+  }
 }

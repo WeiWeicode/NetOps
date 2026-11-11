@@ -156,7 +156,7 @@ PA 匯入在背景佇列執行;同步、分析只是送進佇列,畫面輪詢狀
 | GET | `/api/netops/pa/overview?from&to&top&source` | `netops.pa.read` | `GET /palog/summary` |
 | GET | `/api/netops/pa/options?from&to&source` | `netops.pa.read` | `GET /palog/options` |
 
-**資料來源(C3,`source`)**:`ftp`(已分析的 FTP 檔案摘要,舊做法)、`clickhouse`(ClickHouse,ARCHITECTURE D29、D34)、`auto`(期間開始不早於 ClickHouse 最早一小時才用 ClickHouse,否則 FTP)。省略時依設定 `NETOPS_PA_OVERVIEW_SOURCE`(預設 `auto`)。回應的 `source` 是實際使用的來源。
+**資料來源(C3,`source`)**:`ftp`(已分析的 FTP 檔案摘要,舊做法)、`clickhouse`(ClickHouse,ARCHITECTURE D29、D42)、`auto`(期間開始不早於 ClickHouse 最早一小時才用 ClickHouse,否則 FTP)。省略時依設定 `NETOPS_PA_OVERVIEW_SOURCE`(預設 `auto`)。回應的 `source` 是實際使用的來源。
 - `auto` 時 ClickHouse 失敗改用 FTP(服務日誌記 warn);指定 `clickhouse` 而 ClickHouse 無法使用或未設定時回 503 `NETOPS_CLICKHOUSE_UNAVAILABLE`。
 - ClickHouse 來源:`rows`、`allow`、`block`、`bytes`、`hours`、`actions` 來自每小時彙總表(含進行中的小時);`top`、`topBytes`、`scan`、`sent`、`recv`、`subtypes`、`timeMin`、`timeMax` 來自 ClickHouse 每小時摘要(和 FTP 摘要同一份核心邏輯),**只算到 `topsUntil`**(最後一個已結束、已建好摘要的小時的結束時間;背景每 5 分鐘建,小時結束 3 分鐘後才建)。`files` 為有資料的小時數,`missing` 為已結束、有資料但摘要還沒建好(或筆數變了待重建)的小時數;`import` 為摘要建立狀態(`busy` 建立中、`failed` 1 = 上一輪失敗)。
 - 同樣的參數 60 秒內重複查詢走 Redis 快取(CQ11),所以結果最多晚 60 秒。

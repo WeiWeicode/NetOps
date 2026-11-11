@@ -240,7 +240,7 @@ D13:骨架直接留用;AI 不在這次範圍,不做串流驗證(D7、D17)。
 
 **前置**:C2。**負責人**:Claude;需求方驗收。**完成條件**:與 FTP 摘要數字誤差 < 0.5%;一天範圍明細 < 10 秒;並行對帳 2 週無未處理缺口。
 
-**狀態:開發中(2026-11-11)**。第 1 批 `feature/clickhouse-c3-query`:`netops-api` 唯讀查詢(`infra/clickhouse/reader.ts`,帳號 `netops_reader`)、總覽 / 篩選選項 / 安全事件加 `source`(ftp / clickhouse / auto,設定 `NETOPS_PA_OVERVIEW_SOURCE` 預設 auto)、Redis 快取 60 秒;排行改由 ClickHouse 每小時摘要提供(ARCHITECTURE D34;彙總表只涵蓋 App、區域、來源 IP,不新增表)。驗收(誤差、明細秒數)等 C2 觀察完成後做。
+**狀態:開發中(2026-11-11)**。第 1 批 `feature/clickhouse-c3-query`:`netops-api` 唯讀查詢(`infra/clickhouse/reader.ts`,帳號 `netops_reader`)、總覽 / 篩選選項 / 安全事件加 `source`(ftp / clickhouse / auto,設定 `NETOPS_PA_OVERVIEW_SOURCE` 預設 auto)、Redis 快取 60 秒;排行改由 ClickHouse 每小時摘要提供(ARCHITECTURE D42;彙總表只涵蓋 App、區域、來源 IP,不新增表)。驗收(誤差、明細秒數)等 C2 觀察完成後做。
 
 ## C4 冷歸檔(已核准,待 FTP 保留期限)
 

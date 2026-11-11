@@ -108,6 +108,8 @@ export class Writer {
   private readonly opts: WriterOptions;
   /** 正在寫入(還沒 ACK)的批次第一筆 ID:ClickHouse 停太久、待處理條目被修剪時,這批還在記憶體裡,不算缺口 */
   private readonly inFlight: Partial<Record<IngestType, string>> = {};
+  /** 已寫進缺口清單的缺口起點(同一段持續的缺口只寫一次) */
+  private readonly pushedFrom: Partial<Record<IngestType, string>> = {};
 
   constructor(
     private readonly redis: IngestRedis,
@@ -138,7 +140,10 @@ export class Writer {
         continue;
       }
       found.push(g);
-      if (this.status.gaps[t]?.from !== g.from) await this.redis.pushGap({ ...g, detectedAt: new Date(this.now()).toISOString() });
+      if (this.pushedFrom[t] !== g.from) {
+        await this.redis.pushGap({ ...g, detectedAt: new Date(this.now()).toISOString() });
+        this.pushedFrom[t] = g.from;
+      }
       this.status.gaps[t] = g;
     }
     return found;

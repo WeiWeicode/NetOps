@@ -44,6 +44,7 @@ export function heartbeatFields(w: Writer, cfg: Pick<IngestConfig, 'gwEnv' | 're
       f[`gapFrom:${t}`] = g.from;
       f[`gapTo:${t}`] = g.to;
       f[`gapKind:${t}`] = g.kind;
+      if (g.missed !== null) f[`gapMissed:${t}`] = String(g.missed);
     }
   }
   if (s.lastError) {

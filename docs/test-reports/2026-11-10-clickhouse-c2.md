@@ -18,7 +18,7 @@
 | --- | --- | --- |
 | 收集器 | `ruff check`、`pytest`(pa-collector) | 84 通過 |
 | 後端型別 | `npm run typecheck` | 通過 |
-| 後端單元測試 | `npm test`(含 `test/unit/ingest.test.ts` 30 項) | 見 MR |
+| 後端單元測試 | `npm test`(含 `test/unit/ingest.test.ts` 38 項:熔斷、未知 400、大小上限、缺口誤報) | 233 通過(2026-11-11) |
 | 整合測試 | CI `check:ingest-int`:一次性 Redis 7.4 + ClickHouse 26.3(同設定、schema、migrations、`netops_writer`),`npm run test:int`;`dedupe-day.sh` 測試 | 見 MR pipeline |
 
 整合測試涵蓋:JSONEachRow 欄位與型別(`seqno` 64 位元字串、IPv4 → `::ffff:`、台灣時間)、威脅類 migration 欄位、**同一 token 重送原始表與每小時彙總都不重複**、**寫入後 ACK 前當機 → 重啟補待處理清單不重複**、XTRIM 後的缺口偵測與「閒置類型」不誤報、Stream 過期後 group 自動重建、ClickHouse 錯誤代碼分類。
@@ -72,5 +72,6 @@ sh deploy/clickhouse/dedupe-day.sh giganexus-netops-test-netops-clickhouse-1 202
 
 ## 6. 已知事項
 
-- `backend/test/unit/pa-live.test.ts` 的「超過全系統連線上限回 429」在本機全套測試時偶發失敗(單獨跑通過;與本次變更無關,SSE 計時)。
+- `backend/test/unit/pa-live.test.ts` 的「超過全系統連線上限回 429」在本機全套測試時偶發失敗過一次(單獨跑通過;與本次變更無關,SSE 計時)。
+- CI `check:ingest-int` 的輸出另存在主機 2 `/tmp/netops-int-<job id>.log`(保留 3 天)。
 - netops-ingest 第一次啟動時 group 從 `0` 建立:Stream 裡現有的 TRAFFIC(最多 1 小時)與威脅類(最多 2 天)會一起寫進 ClickHouse。

@@ -149,6 +149,9 @@ export function createClickHouseWriter(cfg: ClickHouseConfig, fetchImpl: Fetch =
           input_format_skip_unknown_fields: '0',
           // 等寫入完成才回應(成功才 ACK Redis)
           wait_end_of_query: '1',
+          // 26.x 的 HTTP 寫入預設走 async insert(伺服器端合併批次),去重 token 不生效、成功回應也不代表已落地;
+          // 本服務自己批次,一律同步寫入(2026-11-11 CI 整合測試發現:同一 token 重送被寫了兩次)
+          async_insert: '0',
         },
         rows.map((r) => JSON.stringify(r)).join('\n'),
       );

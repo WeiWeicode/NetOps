@@ -380,10 +380,16 @@ describe('缺口偵測', () => {
     const gaps = await w.checkGaps();
     assert.equal(gaps.length, 1);
     assert.equal(gaps[0]!.kind, 'undelivered-trimmed');
+    assert.equal(gaps[0]!.missed, 2);
     assert.equal(gaps[0]!.to, keep);
-    await w.checkGaps();
-    assert.equal(redis.gaps.length, 1);
     assert.equal(w.status.gaps.traffic?.from, gaps[0]!.from);
+    // 停止期間又遺失 1 筆:同一段缺口(from 相同)只記新增的筆數,缺口清單不重複
+    const keep2 = redis.add('traffic', TRAFFIC, T0 + 4000);
+    redis.add('traffic', TRAFFIC, T0 + 5000);
+    redis.trim('traffic', keep2);
+    const again = await w.checkGaps();
+    assert.equal(again[0]?.missed, 1);
+    assert.equal(redis.gaps.length, 1);
     // 讀過之後缺口不再成立:心跳上的缺口清掉(歷史留在缺口清單)
     await w.cycle(new AbortController().signal);
     assert.equal((await w.checkGaps()).length, 0);
@@ -430,16 +436,28 @@ describe('缺口偵測', () => {
   });
 
   it('類型很久沒有新 log、最後一筆(已讀)被修剪後又來新的:不是缺口', () => {
-    assert.equal(gapFrom('threat', { firstId: '200-0', maxDeletedId: '100-0' }, { lastDelivered: '100-0' }, { count: 0, minId: null }), null);
+    assert.deepEqual(gapFrom('threat', { firstId: '200-0', length: 1, entriesAdded: 6 }, { lastDelivered: '100-0', entriesRead: 5 }, { count: 0, minId: null }, 0), { gap: null, newBase: null });
   });
 
   it('待處理條目被修剪 → pending-trimmed;還沒送達就被修剪 → undelivered-trimmed;剛建立的 group 不是缺口', () => {
-    assert.deepEqual(gapFrom('url', { firstId: '200-0', maxDeletedId: '190-0' }, { lastDelivered: '150-0' }, { count: 1, minId: '150-0' }), { type: 'url', kind: 'pending-trimmed', from: '150-0', to: '200-0' });
-    assert.deepEqual(gapFrom('url', { firstId: '200-0', maxDeletedId: '190-0' }, { lastDelivered: '150-0' }, { count: 0, minId: null }), { type: 'url', kind: 'undelivered-trimmed', from: '150-0', to: '200-0' });
-    assert.equal(gapFrom('url', { firstId: '200-0', maxDeletedId: '190-0' }, { lastDelivered: '0-0' }, { count: 0, minId: null }), null);
-    assert.equal(gapFrom('url', { firstId: null, maxDeletedId: '0-0' }, { lastDelivered: '100-0' }, { count: 0, minId: null }), null);
+    const none = { count: 0, minId: null };
+    assert.deepEqual(gapFrom('url', { firstId: '200-0', length: 3, entriesAdded: 10 }, { lastDelivered: '150-0', entriesRead: 7 }, { count: 1, minId: '150-0' }, 0).gap, { type: 'url', kind: 'pending-trimmed', from: '150-0', to: '200-0', missed: null });
+    assert.deepEqual(gapFrom('url', { firstId: '200-0', length: 3, entriesAdded: 10 }, { lastDelivered: '150-0', entriesRead: 5 }, none, 0), { gap: { type: 'url', kind: 'undelivered-trimmed', from: '150-0', to: '200-0', missed: 2 }, newBase: 2 });
+    assert.equal(gapFrom('url', { firstId: '200-0', length: 3, entriesAdded: 10 }, { lastDelivered: '0-0', entriesRead: 0 }, none, 0).gap, null);
+    assert.equal(gapFrom('url', { firstId: '200-0', length: 3, entriesAdded: null }, { lastDelivered: '100-0', entriesRead: null }, none, 0).gap?.missed, null);
+    assert.equal(gapFrom('url', { firstId: null, length: 0, entriesAdded: 3 }, { lastDelivered: '100-0', entriesRead: 3 }, none, 0).gap, null);
     // Stream 整個被修剪光(空的)、待處理還在
-    assert.equal(gapFrom('url', { firstId: null, maxDeletedId: '120-0' }, { lastDelivered: '120-0' }, { count: 2, minId: '110-0' })?.kind, 'pending-trimmed');
+    assert.equal(gapFrom('url', { firstId: null, length: 0, entriesAdded: 5 }, { lastDelivered: '120-0', entriesRead: 5 }, { count: 2, minId: '110-0' }, 0).gap?.kind, 'pending-trimmed');
+  });
+
+  it('已回報的基準:發生過缺口後差值一直存在,不再重複回報;Stream 重建(計數變小)時基準重設', () => {
+    const none = { count: 0, minId: null };
+    // 之前回報過 2 筆,閒置後已讀的最後一筆被修剪(差值仍是 2)
+    assert.deepEqual(gapFrom('url', { firstId: '300-0', length: 1, entriesAdded: 8 }, { lastDelivered: '250-0', entriesRead: 5 }, none, 2), { gap: null, newBase: null });
+    // 又多漏 1 筆
+    assert.equal(gapFrom('url', { firstId: '300-0', length: 1, entriesAdded: 9 }, { lastDelivered: '250-0', entriesRead: 5 }, none, 2).gap?.missed, 1);
+    // Stream 過期重建:計數比基準小
+    assert.deepEqual(gapFrom('url', { firstId: '300-0', length: 1, entriesAdded: 2 }, { lastDelivered: '250-0', entriesRead: 1 }, none, 7), { gap: null, newBase: 0 });
   });
 
   it('Stream ID 比較不受 2^53 限制', () => {
@@ -457,12 +475,13 @@ describe('心跳欄位', () => {
     const id = redis.add('traffic', TRAFFIC, T0);
     await w.cycle(new AbortController().signal);
     w.status.fail('clickhouse', new Error('Code: 241. Memory limit\nsecond line'));
-    w.status.gaps.url = { type: 'url', kind: 'undelivered-trimmed', from: '1-0', to: '2-0' };
+    w.status.gaps.url = { type: 'url', kind: 'undelivered-trimmed', from: '1-0', to: '2-0', missed: 3 };
     const f = heartbeatFields(w, { gwEnv: 'test', release: 'abc1234' }, '2026-11-10T00:00:00.000Z', T0 + 5000);
     assert.equal(f['inserted:traffic'], '1');
     assert.equal(f['lastAcked:traffic'], id);
     assert.equal(f['lagMs:traffic'], '5000');
     assert.equal(f['gapKind:url'], 'undelivered-trimmed');
+    assert.equal(f['gapMissed:url'], '3');
     assert.equal(f.lastError, 'Code: 241. Memory limit');
     assert.equal(f.state, 'ok');
     for (const v of Object.values(f)) assert.equal(typeof v, 'string');

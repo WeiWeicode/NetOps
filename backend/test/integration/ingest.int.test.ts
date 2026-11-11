@@ -163,10 +163,14 @@ describe('缺口偵測(真 Redis XINFO)', () => {
     await r1.xadd(key, '4000-0', 'd', '{}');
     await r1.xtrim(key, 'MINID', '4000-0');
     const g = await ingest.detectGap('data');
-    assert.deepEqual(g, { type: 'data', kind: 'undelivered-trimmed', from: '1000-0', to: '4000-0' });
+    assert.deepEqual(g, { type: 'data', kind: 'undelivered-trimmed', from: '1000-0', to: '4000-0', missed: 2 });
+    // 同一段缺口不重複回報(基準存在 netops:ingest:gapbase)
+    assert.equal(await ingest.detectGap('data'), null);
+    assert.equal(await r1.hget('netops:ingest:gapbase', 'data'), '2');
+    await r1.hdel('netops:ingest:gapbase', 'data');
     await w.checkGaps();
     const list = await r1.lrange('netops:ingest:gaps', 0, -1);
-    assert.equal(JSON.parse(list[0]!).kind, 'undelivered-trimmed');
+    assert.equal(JSON.parse(list[0]!).missed, 2);
     // 讀過之後不再是缺口;再閒置、已讀的被修剪也不誤報(Redis 7.4 max-deleted-entry-id)
     await runUntilIdle(w);
     assert.equal(await ingest.detectGap('data'), null);

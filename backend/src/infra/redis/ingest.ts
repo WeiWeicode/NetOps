@@ -5,8 +5,9 @@
  *   netops:pa:log:{type}        既有 Stream(netops-pa 寫);新增 consumer group ch-writer(本服務讀 + ACK)
  *   netops:ingest:heartbeat     Hash,本服務狀態(整個換新,不設 TTL;停止時 updatedAt 停在最後時間)
  *   netops:ingest:gaps          List,偵測到的缺口(JSON,最新在前,最多 GAPS_MAX 筆),給 C3 的 FTP 補漏與對帳
+ *   netops:ingest:gapbase       Hash,每種類型已回報過的遺失筆數(缺口判斷的基準,見 gapFrom)
  *
- * 寫入只有上面三項(ch-writer 的讀取位置與 ACK、心跳、缺口清單);不寫 netops-pa 的其他鍵。
+ * 寫入只有上面幾項(ch-writer 的讀取位置與 ACK、心跳、缺口清單與基準);不寫 netops-pa 的其他鍵。
  */
 import { Redis } from 'ioredis';
 
@@ -23,6 +24,8 @@ export const INGEST_KEYS = {
   log: (t: IngestType) => `netops:pa:log:${t}`,
   heartbeat: 'netops:ingest:heartbeat',
   gaps: 'netops:ingest:gaps',
+  /** 每種類型已回報過的遺失筆數(缺口判斷的基準,見 gapFrom) */
+  gapBase: 'netops:ingest:gapbase',
 };
 
 /** Stream 一筆。data 為 null:待處理條目已被 XTRIM 修剪(只會在讀待處理清單時出現) */
@@ -42,6 +45,8 @@ export interface Gap {
   from: string;
   /** 目前 Stream 第一筆的 ID(遺失範圍的上界,不含) */
   to: string;
+  /** 這次新發現的遺失筆數(Redis 算不出時為 null) */
+  missed: number | null;
 }
 
 export interface IngestRedis {
@@ -60,7 +65,7 @@ export interface IngestRedis {
 }
 
 /** 本模組用到的 Redis 指令(測試以真 Redis 或假實作替換) */
-export type IngestRedisClient = Pick<Redis, 'xgroup' | 'xreadgroup' | 'xack' | 'xinfo' | 'xpending' | 'lpush' | 'ltrim' | 'multi' | 'quit'>;
+export type IngestRedisClient = Pick<Redis, 'xgroup' | 'xreadgroup' | 'xack' | 'xinfo' | 'xpending' | 'lpush' | 'ltrim' | 'multi' | 'hget' | 'hset' | 'quit'>;
 
 /** Stream ID 比較(毫秒-序號;用 BigInt,不受 2^53 限制) */
 export function compareId(a: string, b: string): number {
@@ -92,27 +97,37 @@ function parseEntries(rows: [string, string[] | null][]): RawEntry[] {
 /**
  * 缺口判斷(純函式,方便測試):
  * ① 待處理(已送達未 ACK)的最小 ID 比 Stream 第一筆還舊 → 那些條目被修剪了(pending-trimmed);
- * ② group 最後送達的 ID 比「曾被刪除的最大 ID」(XINFO STREAM max-deleted-entry-id,Redis 7+)還舊
- *    → 有還沒送達的條目被修剪(undelivered-trimmed)。
- *    不用 entries-added − entries-read 推算:Redis 不會把被修剪跳過的筆數補進 entries-read,發生過一次缺口後
- *    會永久偏差、之後誤報(程式碼審查 #2)。max-deleted-entry-id 只會增加,已送達的舊條目被修剪時不會超過最後送達的 ID。
- * 剛建立、還沒讀過的 group(0-0)從 0 開始讀,只看①。
+ * ② group 最後送達的 ID 比第一筆還舊,而且「總共加入 − 已送達 − 目前長度」比已回報的基準 base 多 → 有還沒送達就被修剪的
+ *    (undelivered-trimmed)。只看 ID 會誤判:類型閒置時已讀的最後一筆被修剪、之後新加的第一筆本來就比較新。
+ *    Redis 不會把被修剪跳過的筆數補進 entries-read,發生過一次缺口後這個差值會一直存在,所以要扣掉已回報的基準
+ *    (存在 netops:ingest:gapbase,重啟後仍有效;Stream 過期重建時計數歸零,基準跟著重設)。
+ *    XINFO 的 max-deleted-entry-id 只記 XDEL,XTRIM 不更新,不能用(2026-11-11 CI 整合測試確認)。
+ *    Redis 算不出計數(entries-read 為 null)時保守視為缺口。
+ * 回傳 newBase:要寫回的基準(null = 不變)。剛建立、還沒讀過的 group(0-0)從 0 開始讀,只看①。
  */
 export function gapFrom(
   t: IngestType,
-  stream: { firstId: string | null; maxDeletedId: string | null },
-  group: { lastDelivered: string },
+  stream: { firstId: string | null; length: number; entriesAdded: number | null },
+  group: { lastDelivered: string; entriesRead: number | null },
   pending: { count: number; minId: string | null },
-): Gap | null {
+  base: number,
+): { gap: Gap | null; newBase: number | null } {
   const first = stream.firstId;
   if (pending.count > 0 && pending.minId && (!first || compareId(pending.minId, first) < 0)) {
-    return { type: t, kind: 'pending-trimmed', from: pending.minId, to: first ?? '+' };
+    return { gap: { type: t, kind: 'pending-trimmed', from: pending.minId, to: first ?? '+', missed: null }, newBase: null };
   }
   const last = group.lastDelivered;
-  const maxDel = stream.maxDeletedId;
-  if (last === '0-0' || !maxDel || maxDel === '0-0' || compareId(maxDel, last) <= 0) return null;
-  return { type: t, kind: 'undelivered-trimmed', from: last, to: first ?? '+' };
+  if (last === '0-0' || !first || compareId(last, first) >= 0) return { gap: null, newBase: null };
+  if (stream.entriesAdded === null || group.entriesRead === null) return { gap: { type: t, kind: 'undelivered-trimmed', from: last, to: first, missed: null }, newBase: null };
+  const total = stream.entriesAdded - group.entriesRead - stream.length;
+  // 計數比基準小:Stream 被重建過(計數歸零),基準重設
+  const b = total < base ? 0 : base;
+  const missed = total - b;
+  if (missed <= 0) return { gap: null, newBase: b !== base ? b : null };
+  return { gap: { type: t, kind: 'undelivered-trimmed', from: last, to: first, missed }, newBase: total };
 }
+
+const num = (v: unknown): number | null => (v === null || v === undefined || v === '' || !Number.isFinite(Number(v)) ? null : Number(v));
 
 export function createIngestRedis(client: IngestRedisClient, reader: IngestRedisClient = client): IngestRedis {
   async function ensureGroup(t: IngestType): Promise<boolean> {
@@ -179,13 +194,16 @@ export function createIngestRedis(client: IngestRedisClient, reader: IngestRedis
       const g = groups.find((x) => x.name === GROUP);
       if (!g) return null;
       const p = (await client.xpending(INGEST_KEYS.log(t), GROUP)) as [number, string | null, string | null, unknown];
-      const maxDel = info['max-deleted-entry-id'];
-      return gapFrom(
+      const base = Number((await client.hget(INGEST_KEYS.gapBase, t)) ?? 0) || 0;
+      const r = gapFrom(
         t,
-        { firstId: (info['first-entry'] as [string, unknown] | null | undefined)?.[0] ?? null, maxDeletedId: typeof maxDel === 'string' ? maxDel : null },
-        { lastDelivered: String(g['last-delivered-id'] ?? '0-0') },
+        { firstId: (info['first-entry'] as [string, unknown] | null | undefined)?.[0] ?? null, length: Number(info.length ?? 0), entriesAdded: num(info['entries-added']) },
+        { lastDelivered: String(g['last-delivered-id'] ?? '0-0'), entriesRead: num(g['entries-read']) },
         { count: Number(p[0] ?? 0), minId: p[1] ?? null },
+        base,
       );
+      if (r.newBase !== null) await client.hset(INGEST_KEYS.gapBase, t, String(r.newBase));
+      return r.gap;
     },
 
     async pushGap(g) {

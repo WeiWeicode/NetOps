@@ -15,6 +15,7 @@ interface Stream {
 export class FakeIngestRedis implements IngestRedis {
   streams = new Map<IngestType, Stream>(INGEST_TYPES.map((t) => [t, { entries: [], added: 0, maxDeleted: '0-0', group: null }]));
   gaps: (Gap & { detectedAt: string })[] = [];
+  gapBase: Partial<Record<IngestType, number>> = {};
   heartbeat: Record<string, string> = {};
   acked: Partial<Record<IngestType, string[]>> = {};
   /** 下一次 readNew / ack 拋錯(模擬 Redis 斷線) */
@@ -81,12 +82,15 @@ export class FakeIngestRedis implements IngestRedis {
     const s = this.streams.get(t)!;
     if (!s.group) return null;
     const pend = [...s.group.pending].sort(compareId);
-    return gapFrom(
+    const r = gapFrom(
       t,
-      { firstId: s.entries[0]?.id ?? null, maxDeletedId: s.maxDeleted },
-      { lastDelivered: s.group.lastDelivered },
+      { firstId: s.entries[0]?.id ?? null, length: s.entries.length, entriesAdded: s.added },
+      { lastDelivered: s.group.lastDelivered, entriesRead: s.group.read },
       { count: pend.length, minId: pend[0] ?? null },
+      this.gapBase[t] ?? 0,
     );
+    if (r.newBase !== null) this.gapBase[t] = r.newBase;
+    return r.gap;
   }
   async pushGap(g: Gap & { detectedAt: string }) {
     this.gaps.unshift(g);

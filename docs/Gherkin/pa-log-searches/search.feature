@@ -16,7 +16,7 @@
 
   Rule: 送出與狀態
 
-    # 來源: backend/src/modules/pa/log-routes.ts:201
+    # 來源: backend/src/modules/pa/log-routes.ts:206
     @auto
     場景: 送出明細查詢
       假如 2026-11-02 08:00–09:00 有已分析的 TRAFFIC 檔案
@@ -25,13 +25,13 @@
       而且 之後 GET /api/netops/pa/log-searches/{id} 的 status 會變成 "done"
       而且 result 為 { from, to, total, limit, files, filesScanned, scanned, seconds, stopReason },不含資料列
 
-    # 來源: backend/src/modules/pa/log-routes.ts:207
+    # 來源: backend/src/modules/pa/log-routes.ts:212
     @auto
     場景: 期間沒有資料
       當 呼叫 POST /api/netops/pa/log-searches 的期間沒有已分析的檔案
       那麼 回應 404,code 為 "NETOPS_PA_NO_DATA"
 
-    # 來源: backend/src/modules/pa/log-routes.ts:341
+    # 來源: backend/src/modules/pa/log-routes.ts:350
     @auto
     場景: 查詢自己的工作
       假如 S112009 已送出明細查詢
@@ -39,7 +39,7 @@
       那麼 回應 200
       而且 執行中時 progress 為 { filesScanned, files, rows, found }
 
-    # 來源: backend/src/modules/pa/log-routes.ts:341
+    # 來源: backend/src/modules/pa/log-routes.ts:350
     @auto @security
     場景: 別人的工作
       假如 S112009 已送出明細查詢
@@ -68,7 +68,7 @@
 
   Rule: 取得結果
 
-    # 來源: backend/src/modules/pa/log-routes.ts:359
+    # 來源: backend/src/modules/pa/log-routes.ts:368
     @auto
     場景: 取第一頁
       假如 明細工作已完成
@@ -77,7 +77,7 @@
       而且 回應含 items、total、page、pageSize
       而且 每筆 items 是欄位物件(順序同舊版 ROW_FIELDS),time 為 ISO 8601 +08:00
 
-    # 來源: backend/src/modules/pa/log-routes.ts:384
+    # 來源: backend/src/modules/pa/log-routes.ts:393
     @auto
     場景: 匯出 CSV
       假如 明細工作已完成
@@ -104,7 +104,7 @@
 
   Rule: 取消
 
-    # 來源: backend/src/modules/pa/log-routes.ts:411
+    # 來源: backend/src/modules/pa/log-routes.ts:420
     @auto
     場景: 取消工作
       當 呼叫 DELETE /api/netops/pa/log-searches/{id}
@@ -198,7 +198,7 @@
 
   # ───── C3 查詢切換(ClickHouse;docs/API.md §4.3、ARCHITECTURE D6、D29、手冊 §12 CQ10)─────
 
-  # 來源: backend/src/modules/pa/log-routes.ts:211
+  # 來源: backend/src/modules/pa/log-routes.ts:216
   @C3 @auto
   場景: 明細查 ClickHouse
     假如 2026-11-12 08:00–09:00 在 ClickHouse 範圍內
@@ -207,7 +207,7 @@
     而且 完成後 result.source 為 "clickhouse",資料列與 FTP 來源欄位相同
     而且 資料列依時間由舊到新;超過 limit 時 stopReason 為 "limit"
 
-  # 來源: backend/src/modules/pa/log-routes.ts:217
+  # 來源: backend/src/modules/pa/log-routes.ts:222
   @C3 @auto
   場景: ClickHouse 明細超過 30 天
     當 呼叫 POST /api/netops/pa/log-searches 帶 source "clickhouse" 且期間 31 天

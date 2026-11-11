@@ -5,7 +5,7 @@
  *   INT_CLICKHOUSE_PASSWORD_FILE         netops_writer(寫入測試資料)
  *   INT_CLICKHOUSE_READER_PASSWORD_FILE  netops_reader
  * 驗證:SQL 能在真 ClickHouse 執行、IPv4 轉回原格式、時間格式、每小時彙總、原始 log 逐列讀、唯讀帳號不能寫、每小時摘要端到端。
- * 用一個其他測試不會用到的小時(現在 − 50 小時)放測試資料。
+ * 測試資料放在「現在 − 50 小時」那一小時;其他測試可能也寫到同一小時,所以一律和寫入前的基準比較差值。
  */
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -32,8 +32,17 @@ const reader = createClickHouseReader({ url: CH_URL, user: 'netops_reader', pass
 const HOUR = 3600_000;
 const H = Math.floor((Date.now() - 50 * HOUR) / HOUR) * HOUR;
 const N = 30;
+/** 寫入前同一小時已有的資料 */
+const base = { n: 0, deny: 0, bytes: 0, raw: 0, threat: 0, threatWeighted: 0 };
 
 before(async () => {
+  for (const r of await reader.trafficHours(H, H + HOUR)) {
+    base.n += r.n;
+    base.bytes += r.bytes;
+    if (r.action === 'deny') base.deny += r.n;
+  }
+  base.raw = await reader.trafficRecords(H, H + HOUR, () => {});
+  base.threat = await reader.threatRecords('threat', H, H + HOUR, (x) => (base.threatWeighted += Math.max(Number(x.repeat) || 1, 1)));
   const issues = { badTime: false };
   const traffic = Array.from({ length: N }, (_, i) =>
     toTrafficRow(
@@ -52,31 +61,32 @@ before(async () => {
 describe('netops_reader 唯讀查詢', () => {
   it('每小時彙總:筆數與位元組', async () => {
     const r = await reader.trafficHours(H, H + HOUR);
-    assert.equal(r.reduce((s, x) => s + x.n, 0), N);
-    assert.equal(r.find((x) => x.action === 'deny')?.n, 6);
-    assert.equal(r.reduce((s, x) => s + x.bytes, 0), N * 1000);
+    assert.equal(r.reduce((s, x) => s + x.n, 0) - base.n, N);
+    assert.equal((r.find((x) => x.action === 'deny')?.n ?? 0) - base.deny, 6);
+    assert.equal(r.reduce((s, x) => s + x.bytes, 0) - base.bytes, N * 1000);
     assert.ok(r.every((x) => x.hour === H));
   });
 
   it('原始 log 逐列讀出:IPv4 去掉 ::ffff:、空位址為空字串、時間為核心格式、數字欄位為數字', async () => {
     const rows: Record<string, unknown>[] = [];
     const n = await reader.trafficRecords(H, H + HOUR, (r) => rows.push(r));
-    assert.equal(n, N);
-    const r = rows.find((x) => x.time === taipeiText(H))!;
+    assert.equal(n - base.raw, N);
+    const r = rows.find((x) => x.time === taipeiText(H) && x.app === 'c3-int-app')!;
     assert.equal(r.src, '10.77.0.0');
     assert.equal(r.natSrc, '');
     assert.equal(r.bytes, 1000);
     assert.equal(r.sent, 400);
     assert.equal(r.dport, 443);
     const t: Record<string, unknown>[] = [];
-    assert.equal(await reader.threatRecords('threat', H, H + HOUR, (x) => t.push(x)), 5);
-    assert.equal(t[0]!.repeat, 3);
-    assert.equal(t[0]!.src, '203.0.113.9');
+    assert.equal((await reader.threatRecords('threat', H, H + HOUR, (x) => t.push(x))) - base.threat, 5);
+    const mine = t.find((x) => x.name === 'C3 Test(1)')!;
+    assert.equal(mine.repeat, 3);
+    assert.equal(mine.src, '203.0.113.9');
   });
 
   it('威脅類每小時筆數、下拉選項、最早一小時', async () => {
     const c = await reader.threatHourCounts(H, H + HOUR);
-    assert.deepEqual(c.find((x) => x.type === 'threat'), { type: 'threat', hour: H, n: 5 });
+    assert.deepEqual(c.find((x) => x.type === 'threat'), { type: 'threat', hour: H, n: base.threat + 5 });
     const o = await reader.trafficOptions(H, H + HOUR, 200);
     assert.ok(o.apps.includes('c3-int-app'));
     assert.ok(o.zones.includes('LAN') && o.zones.includes('WAN'));
@@ -104,8 +114,8 @@ describe('每小時摘要(真 ClickHouse)', () => {
     assert.equal(b.status().lastError, null);
     const tr = await b.summaries('traffic', H, H + HOUR);
     assert.equal(tr.missing, 0);
-    assert.equal((tr.list[0] as { rows: number }).rows, N);
+    assert.equal((tr.list[0] as { rows: number }).rows, base.raw + N);
     const th = await b.summaries('threat', H, H + HOUR);
-    assert.equal((th.list[0] as { rows: number }).rows, 15); // 5 筆 × Repeat Count 3
+    assert.equal((th.list[0] as { rows: number }).rows, base.threatWeighted + 15); // 5 筆 × Repeat Count 3
   });
 });

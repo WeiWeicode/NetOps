@@ -1,7 +1,7 @@
 # NetOps 架構與決策
 
 > 目標架構與設計決策。工作項目見 [IMPL-PLAN.md](IMPL-PLAN.md),目錄見 [PROJECT-MAP.md](PROJECT-MAP.md),現況、過渡期與未來目標的流程見 [FLOW-ARCHITECTURE.md](FLOW-ARCHITECTURE.md)。與 Gateway `docs/` 不一致時以 Gateway 為準,先指出差異。
-> **狀態:D1 已上測試區;2026-11-04 重新規劃 PA 即時監控與 AI 搬移(D19–D24,細節見 [PA-LIVE-PLAN.md](PA-LIVE-PLAN.md));2026-11-10 核准 ClickHouse 高吞吐架構(D27–D33,§3.1,見 [PA-LOG-CLICKHOUSE-GUIDE.md](PA-LOG-CLICKHOUSE-GUIDE.md));2026-11-11 規劃熱力圖、儀表板與偵測規則引擎(D34–D41,§3.2,見 [VIZ-RULES-DESIGN.md](VIZ-RULES-DESIGN.md),待需求方審)**(API 介面見 [API.md](API.md),行為規格見 `docs/Gherkin/`);舊版程式未改動,現況見 [README.md](../README.md)。
+> **狀態:D1 已上測試區;2026-11-04 重新規劃 PA 即時監控與 AI 搬移(D19–D24,細節見 [PA-LIVE-PLAN.md](PA-LIVE-PLAN.md));2026-11-10 核准 ClickHouse 高吞吐架構(D27–D33,§3.1,見 [PA-LOG-CLICKHOUSE-GUIDE.md](PA-LOG-CLICKHOUSE-GUIDE.md));2026-11-11 規劃熱力圖、儀表板與偵測規則引擎(D34–D41,§3.2,見 [VIZ-RULES-DESIGN.md](VIZ-RULES-DESIGN.md);待決事項已決定,網段清單待提供)**(API 介面見 [API.md](API.md),行為規格見 `docs/Gherkin/`);舊版程式未改動,現況見 [README.md](../README.md)。
 
 ---
 
@@ -91,17 +91,17 @@ flowchart LR
 | D32 | **`netops-api` 寫 Redis 的範圍**擴大為:測試區開關(既有)、儀表板快取 `netops:cache:*`、PA 查詢冷卻與工作 `netops:paq:*`;都只經 `infra/redis`、都有 TTL | 修改 D26「`netops-api` 對 Redis 唯一的寫入是開關」 | 快取與限流需要共用狀態 | 已核准(2026-11-10)(CQ11) |
 | D33 | **FTP 降級為補漏與對帳**:每天以 FTP 逐列計數對帳每小時筆數,差異 > 0.5% 的時段從 FTP 匯入補齊;過渡期 FTP 摘要與明細並行 2 週後切換 | 修改 D20(FTP 不再是歷史查詢的主要來源);D18 舊版 IIS 同步 FTP 不受影響 | Syslog 不是無遺失管道(PA 連線失敗不重試、速率上限丟棄) | 已核准(2026-11-10)(CQ10:並行對帳 2 週後切換) |
 
-### 3.2 熱力圖、儀表板與偵測規則引擎(**2026-11-11 規劃,待需求方審**)
+### 3.2 熱力圖、儀表板與偵測規則引擎(**2026-11-11 規劃,!70 已合併;待決 X1–X16 全部照建議**)
 
-> 需求方 2026-11-11 提出「GitHub 風格熱力圖 + 冷熱資料反查 + 圖表儀表板 + 動畫 + 偵測規則引擎」,並做完 V1–V10 決策;下列決策照 V1–V10 寫成架構,設計細節、DDL、API 與待決事項(X1–X16)見 [VIZ-RULES-DESIGN.md](VIZ-RULES-DESIGN.md),工作項目見 IMPL-PLAN V-a–V-d,給 Gemini 的交接見 [HANDOFF-GEMINI-VIZ.md](HANDOFF-GEMINI-VIZ.md)。前置:C3(查詢切換);冷資料路由另需 C4。
+> 需求方 2026-11-11 提出「GitHub 風格熱力圖 + 冷熱資料反查 + 圖表儀表板 + 動畫 + 偵測規則引擎」,並做完 V1–V10 決策;下列決策照 V1–V10 寫成架構,設計細節、DDL、API 與待決事項(X1–X16,需求方 2026-11-11「全部照建議」,只剩 X11 網段清單待提供)見 [VIZ-RULES-DESIGN.md](VIZ-RULES-DESIGN.md),工作項目見 IMPL-PLAN V-a–V-d,給 Gemini 的交接見 [HANDOFF-GEMINI-VIZ.md](HANDOFF-GEMINI-VIZ.md)。前置:C3(查詢切換);冷資料路由另需 C4。
 
 | # | 決策 | 取代 / 修改 | 理由 | 狀態 |
 | --- | --- | --- | --- | --- |
 | D34 | **熱力圖長期彙總**(V1):新增不分維度的 `pa_heat_5m`(保留 **1 年**)、`pa_heat_1h`、`pa_heat_1d`(保留 **5 年**),每個時間格一列,存總流量、上傳 / 下載、Session、阻擋數、各嚴重度威脅數;tooltip 的 Top 1 IP 以 `topK` 聚合狀態存在同一列(近似值,保留期限內都查得到)。測試區照慣例 TTL 3 天 | **和 CQ12 的差異是需求方 2026-11-11 改的**:CQ12「每小時彙總 13 個月、來源 IP 彙總 90 天」只適用分維度的 `pa_traffic_hourly_app` / `_src`(TTL 不變);熱力圖的不分維度彙總改為 5 年 / 1 年。`_src` 加上傳 / 下載欄位(儀表板用) | 年 / 月 / 日三級熱力圖要跨年查;只存總數,5 年合計 < 100 MB | 規劃(V1) |
-| D35 | **時段明細的熱 / 冷自動路由**(V2、V3):在 ClickHouse 原始表保留期間內(TRAFFIC 29 天、威脅 89 天)查熱表,更早查 NAS Parquet(歸檔目錄維持 CQ14 `/mnt/nas-docker/giga-netops/{env}/pa-archive/YYYY/`,`file()` 只用相對 `user_files` 的路徑);一次最多 **1 天**;**30 秒內同步回應,超過自動轉工作模式**(D6);**全系統同時 1 個冷查詢**,第 2 個回 429(不回 5xx),和 C4 的冷明細查詢、歸檔匯出共用同一把鎖 | 細化 D30 的「> 30 天以 `file()` 查詢(工作模式)」:冷明細限 1 天、先同步等 30 秒 | 熱力圖點一格最多 1 天;保護 NAS 與 ClickHouse 記憶體 | 規劃(V2、V3);**冷資料明細依 CQ3 / E1**(只歸檔彙總時沒有冷明細,VIZ-RULES-DESIGN 待決 X1) |
+| D35 | **時段明細的熱 / 冷自動路由**(V2、V3):在 ClickHouse 原始表保留期間內(TRAFFIC 29 天、威脅 89 天)查熱表,更早查 NAS Parquet(歸檔目錄維持 CQ14 `/mnt/nas-docker/giga-netops/{env}/pa-archive/YYYY/`,`file()` 只用相對 `user_files` 的路徑);一次最多 **1 天**;**30 秒內同步回應,超過自動轉工作模式**(D6);**全系統同時 1 個冷查詢**,第 2 個回 429(不回 5xx),和 C4 的冷明細查詢、歸檔匯出共用同一把鎖 | 細化 D30 的「> 30 天以 `file()` 查詢(工作模式)」:冷明細限 1 天、先同步等 30 秒 | 熱力圖點一格最多 1 天;保護 NAS 與 ClickHouse 記憶體 | 規劃(V2、V3);**X1 決定(2026-11-11):申請 NAS 空間歸檔原始 log(E2)**,冷明細可查 |
 | D36 | **AD 延後**(V4):先完成 PA;熱力圖「AD 異常」指標、AD 視角圖表、規則 8 / 9 列在 V-d,介面先預留(指標列舉、規則清單、告警表的 `subject`)。AD 事件未來也進 ClickHouse(AGENT §7.2 的例外,V-d 另外核准;來源先 FTP 批次,即時轉送再議) | — | 先把 PA 做完;AD 目前沒有可以秒級查詢的儲存 | 規劃(V4);V-d 開工前另開規劃 |
-| D37 | **網段與白名單設定**(V5、V7):內網、伺服器群、IT 管理網段、員工網段、IP 白名單、App 白名單做成設定頁,存 `infra/store`(`detect/config.json`,有版本與歷史),**只有 `netops-admin` 可改**;規則門檻也在同一份設定。規則 2 加 App 白名單 + IP 白名單,**IT 網段預設排除**(公司正式使用 RustDesk 等遠端工具)。初始值由需求方提供,沒提供前相關規則不執行 | — | 網段與門檻會隨網路調整,不寫死在程式 | 規劃(V5、V7);**待需求方提供網段清單** |
-| D38 | **偵測規則引擎與告警**(V6):引擎放 `netops-ingest`(單一實例),每分鐘一輪查 ClickHouse 原始表(規則 1–7,窗 1–15 分鐘),Redis 冷卻 30 分鐘(`netops:detect:*`,都有 TTL)。告警存 ClickHouse **`detect_alerts`**(只新增,正式區建議保留 1 年);處理狀態(確認 / 結案)由 `netops-api` 存 `infra/store`,`netops-api` 仍只用唯讀 ClickHouse 帳號。第一版只存紀錄 + 畫面(告警頁、選單徽章),Email 第二版 | 擴大 D27 的 ClickHouse 範圍(多一張告警表;AGENT §7.2,實作 MR 同步改 AGENT);擴大 D32 的 Redis 範圍(`netops-ingest` 的冷卻鍵) | 告警是時間序列,要依時間 / 規則 / IP 篩選並對照原始 log;不佔 `netops-api` 事件迴圈 | 規劃(V6);ClickHouse 範圍擴大請需求方確認(待決 X2) |
+| D37 | **網段與白名單設定**(V5、V7):內網、伺服器群、IT 管理網段、員工網段、IP 白名單、App 白名單做成設定頁,存 `infra/store`(`detect/config.json`,有版本與歷史),**只有 `netops-admin` 可改**;規則門檻也在同一份設定。規則 2 加 App 白名單 + IP 白名單,**IT 網段預設排除**(公司正式使用 RustDesk 等遠端工具)。初始值由需求方提供,沒提供前相關規則不執行 | — | 網段與門檻會隨網路調整,不寫死在程式 | 規劃(V5、V7);**待需求方提供網段清單與初始白名單**(X11;是否先用 RFC 1918 當內網預設尚未決定) |
+| D38 | **偵測規則引擎與告警**(V6):引擎放 `netops-ingest`(單一實例),每分鐘一輪查 ClickHouse 原始表(規則 1–7,窗 1–15 分鐘),Redis 冷卻 30 分鐘(`netops:detect:*`,都有 TTL)。告警存 ClickHouse **`detect_alerts`**(只新增,正式區保留 **1 年**,X3;測試區 3 天);處理狀態(確認 / 結案)由 `netops-api` 存 `infra/store`,`netops-api` 仍只用唯讀 ClickHouse 帳號。第一版只存紀錄 + 畫面(告警頁、選單徽章),Email 第二版 | 擴大 D27 的 ClickHouse 範圍(多一張告警表;AGENT §7.2,實作 MR 同步改 AGENT);擴大 D32 的 Redis 範圍(`netops-ingest` 的冷卻鍵) | 告警是時間序列,要依時間 / 規則 / IP 篩選並對照原始 log;不佔 `netops-api` 事件迴圈 | 規劃(V6);**X2 同意**告警存 ClickHouse(2026-11-11),AGENT §0 / §7.2 在 V-c 實作 MR 改;X7 有確認 / 結案狀態 |
 | D39 | **權限**(V8):看熱力圖 / 儀表板 / 告警給 `netops-admin`、`netops-viewer`;改規則門檻 / 網段 / 白名單、處理告警只給 `netops-admin`;「查詢該 IP 當下 PA 即時連線」照 CQ7 只給 `netops-admin`(依賴 C5)。新增 API 權限 `netops.alert.read`、`netops.alert.write`、`netops.detect.read`、`netops.detect.write`,畫面節點見 §5;`gateway-rbac.yaml` 在實作 MR 登記,不改 Gateway | — | 和既有「viewer 全部 `.read`、寫入只給 admin」一致 | 規劃(V8) |
 | D40 | **前端引入 ECharts,世界地圖打包**(V9):`echarts` 按需引入、只在儀表板路由載入,顏色從主題 token 讀;世界地圖用 Natural Earth 1:110m 國家層級簡化 GeoJSON 打包進前端,**不連外部 CDN**。熱力圖本身用 CSS Grid 元件(逐格動畫) | 補充 D5(`ui/charts` 原本只有自刻 SVG 圖表) | 桑基圖、地圖、Treemap 自刻成本太高;地端環境不依賴外網 | 規劃(V9) |
 | D41 | **分工**(V10,工作區 AGENT §7):Claude 負責 DDL / MV、API、規則引擎、`api/`、`composables/`、ECharts 基底、熱力圖與圖表元件的**介面**(props、事件、資料型別);**Gemini 負責頁面組裝、元件畫面與動畫**(全部支援 `prefers-reduced-motion`),依 [HANDOFF-GEMINI-VIZ.md](HANDOFF-GEMINI-VIZ.md) | — | 2026-11-11 新分工 | 規劃(V10) |
@@ -192,7 +192,7 @@ netops.app.access                        應用
 | 角色 | 內容 |
 | --- | --- |
 | `netops-admin` | 全部 |
-| `netops-viewer` | 全部 `.read` 與 `netops.ai.use`(A1,2026-11-05 決定);不含 `netops.ftp.write`、`netops.kb.write`、`netops.alert.write`、`netops.detect.write`(D39);**例外:不含 `netops.pa-query.read`**(D31,CQ7,2026-11-10)。`netops.detect.read`(唯讀看偵測設定)是否給 viewer 見 VIZ-RULES-DESIGN 待決 X10 |
+| `netops-viewer` | 全部 `.read` 與 `netops.ai.use`(A1,2026-11-05 決定);不含 `netops.ftp.write`、`netops.kb.write`、`netops.alert.write`、`netops.detect.write`(D39);**例外:不含 `netops.pa-query.read`**(D31,CQ7,2026-11-10)。含 `netops.detect.read`(唯讀看偵測設定,X10,2026-11-11 決定) |
 
 新權限預設沒有人擁有,成員由系統負責人上線時指派(D15);不比照舊版「清單空白就開放全部在職員工」。
 
@@ -225,4 +225,4 @@ netops.app.access                        應用
 | Q4 | 資料庫階段的各項決定(§4.3) | 已取消(D20,2026-11-04) |
 | Q5 | PA 即時監控與 AI 搬移的開工前事項 | 見 PA-LIVE-PLAN §11(P1–P6) |
 | Q6 | PA log 高吞吐架構(ClickHouse)D27–D33 是否核准 | **已核准(2026-11-10,全部照建議)**;外部前置事項見 IMPL-PLAN C0 |
-| Q7 | 熱力圖、儀表板與偵測規則引擎(D34–D41)的設計與待決事項 | 2026-11-11 規劃,待需求方審;待決 X1–X16 見 [VIZ-RULES-DESIGN.md](VIZ-RULES-DESIGN.md) §9(含**待需求方提供網段清單**) |
+| Q7 | 熱力圖、儀表板與偵測規則引擎(D34–D41)的設計與待決事項 | 2026-11-11 規劃合併(!70);X1–X16 需求方「全部照建議」,結果見 [VIZ-RULES-DESIGN.md](VIZ-RULES-DESIGN.md) §9;**只剩 X11 網段清單與初始白名單待提供** |

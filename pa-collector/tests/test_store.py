@@ -118,6 +118,31 @@ def test_normalize_drops_unknown_fields_and_controls():
     assert len(long["url"]) == 512 and len(long["name"]) == 200
 
 
+def test_normalize_seqno_and_session_id():
+    """CQ9 例外:TRAFFIC 與威脅類保留 seqno(數字字串,64 位元)、sessionId(整數);其他類型不收。"""
+    for t in ("traffic", "threat", "url", "data", "wildfire"):
+        rec = normalize(t, {"src": "10.0.0.1", "seqno": "7688588907462574142", "sessionId": "288580"})
+        assert rec == {"src": "10.0.0.1", "seqno": "7688588907462574142", "sessionId": 288580}
+    # 2^64-1 是上限;前導 0 去掉;超過、負數、非數字、全形數字、布林都不寫 seqno
+    assert normalize("traffic", {"seqno": "18446744073709551615"})["seqno"] == "18446744073709551615"
+    assert normalize("traffic", {"seqno": "0042", "src": "a"})["seqno"] == "42"
+    assert normalize("traffic", {"seqno": 123, "src": "a"})["seqno"] == "123"
+    for bad in ("18446744073709551616", "-1", "12a", "", "１２３", True, None, 1.5, "1" * 21):
+        assert "seqno" not in normalize("traffic", {"seqno": bad, "src": "a"})
+    assert normalize("traffic", {"sessionId": "x"}) == {"sessionId": 0}
+    for t in ("decryption", "globalprotect", "userid"):
+        assert normalize(t, {"seqno": "1", "sessionId": "2"}) is None
+
+
+def test_seqno_survives_redis_round_trip(r):
+    """寫進 Stream 的 JSON 裡 seqno 是字串(Node 端 JSON.parse 不會失去精度)。"""
+    store = RedisStore(r, top_n=10)
+    rec = normalize("traffic", {"src": "10.0.0.1", "seqno": "7688588907462574142", "sessionId": "1"})
+    store.write_logs([("traffic", rec, NOW)])
+    ((_id, fields),) = r.xrange(keys.log_stream("traffic"))
+    assert b'"seqno":"7688588907462574142"' in fields[b"d"] and b'"sessionId":1' in fields[b"d"]
+
+
 # ---------- pipeline ----------
 class FailingStore:
     def write_logs(self, batch):

@@ -2,6 +2,12 @@
 
 > `backend/`、`deploy/` 的修改;新紀錄加在最上方,格式見 `AGENT.md` §11。
 
+## 2026-11-10 C2:收集器保留 seqno、sessionId
+- 工作項目:C2(CQ9 核准;E3 網通已在 PA-560 的 Syslog 與 HTTP Payload 加 `"seqno":"$seqno","sessionId":"$sessionid"`)
+- 內容:`records.py` 的 `TRAFFIC_FIELDS`、`THREAT_FIELDS`(threat、url、data、wildfire 共用)加 `seqno`、`sessionId`(AGENT §7.2「不新增欄位」的例外,註解寫明)。`seqno` 是 64 位元(實測 19 位數)超過 JavaScript 安全整數,存成去掉前導 0 的數字字串(≤ 2^64-1,不合法就不寫這個 key);`sessionId` 加進 `NUMERIC`。decryption、globalprotect、userid 不收。**改了 `pa-collector/`,合併後 CI 會重建 `netops-pa`,TRAFFIC Syslog 會斷線,要請網通對 `netops-syslog` 再 Commit**。
+- 檔案:`pa-collector/netops_pa/records.py`、`pa-collector/tests/test_store.py`、`docs/PA-LIVE-PLAN.md`
+- 驗證:`ruff check`、`pytest`(84 通過)
+
 ## 2026-11-10 CI:netops-pa 沒有變更時部署不重建
 - 工作項目:R1(需求方 2026-11-10 同意;pipeline 783 只改文件也在 13:45 重建 `netops-pa`,PA-560 Syslog TRAFFIC 斷線且不會自動重連)
 - 內容:`deploy-api-test` 原本每次 `build` + `up --force-recreate netops-pa`,映像標籤是 commit 短 SHA,每次都重建。新增 `deploy/ci-netops-pa.sh` 判斷:正在執行的 `netops-pa` healthy、映像標籤的 commit 到 HEAD 之間 `pa-collector/` 沒變、用原標籤算的 `docker compose config --hash netops-pa` 等於容器的 `com.docker.compose.config-hash`(Compose 的 `netops-pa` 段與 `netops.env` 沒變),容器用的映像就是標籤現在指的映像,而且沒設 `NETOPS_PA_RECREATE=1` 時就 keep;判斷出錯一律重建;`netops-redis` 被重建時 `netops-pa` 也重建:不 build、不 up,沿用原容器;否則照舊先建置、再 `--force-recreate`,日誌印 `WARN netops-pa 已重建,TRAFFIC Syslog 可能需要網通重新 Commit netops-syslog`。`deploy-api-test` 改完整 clone(`GIT_DEPTH: "0"`),淺層 clone 找不到原 commit 時一律重建。其他服務與冒煙測試不變。HANDOFF、PA-FORWARDING-SPEC F.3、`host2-set-pa-secrets.sh` 的提示補「只有 netops-pa 重建時才需要重新 Commit」與 `NETOPS_PA_RECREATE=1`。

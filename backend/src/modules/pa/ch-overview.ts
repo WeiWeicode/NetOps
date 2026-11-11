@@ -1,5 +1,5 @@
 /**
- * 總覽改查 ClickHouse(C3;ARCHITECTURE D29、D34、手冊 §12 CQ10、CQ11)。回應格式與 FTP 來源相同(docs/API.md §4.1、§4.2),另加:
+ * 總覽改查 ClickHouse(C3;ARCHITECTURE D29、D42、手冊 §12 CQ10、CQ11)。回應格式與 FTP 來源相同(docs/API.md §4.1、§4.2),另加:
  *   source     'clickhouse' | 'ftp'(實際使用的來源)
  *   topsUntil  排行與疑似掃描只算到這個時間(已結束且建好摘要的小時;之後的小時還沒有排行)
  *

@@ -1,7 +1,7 @@
 # NetOps API
 
 > `netops-api` 的對外介面:前端(F1)照本文件串接。決策見 [ARCHITECTURE.md](ARCHITECTURE.md),工作項目見 [IMPL-PLAN.md](IMPL-PLAN.md)。
-> **狀態:B1 定稿;B2-pa 已實作 §4.1、§5.1;B2-ad 已實作 §4.2、§5.2、§6;B2-kb 已實作 §7;B2-logs 已實作 §4.3(B2 全部完成);A1(AI 搬移)第 2 批 `feature/a1-ai-api` 實作 §10**。各模組在 B2 分批實作,「批次」欄是預定交付的 MR;實作與本文件不同時,以 MR 描述的「API 變更」為準並同步更新本文件。
+> **狀態:B1 定稿;C3 `feature/clickhouse-c3-query` 加 §4.1、§4.2 的 `source`(ClickHouse);B2-pa 已實作 §4.1、§5.1;B2-ad 已實作 §4.2、§5.2、§6;B2-kb 已實作 §7;B2-logs 已實作 §4.3(B2 全部完成);A1(AI 搬移)第 2 批 `feature/a1-ai-api` 實作 §10**。各模組在 B2 分批實作,「批次」欄是預定交付的 MR;實作與本文件不同時,以 MR 描述的「API 變更」為準並同步更新本文件。
 > 欄位的完整定義以服務的 `/openapi.json` 為準(上架時匯入 Gateway);本文件寫路徑、權限、請求與回應格式。
 
 ---
@@ -153,8 +153,14 @@ PA 匯入在背景佇列執行;同步、分析只是送進佇列,畫面輪詢狀
 | 方法 | 路徑 | 權限 | 舊版 |
 | --- | --- | --- | --- |
 | GET | `/api/netops/pa/days` | `netops.pa.read` | `GET /palog/days` |
-| GET | `/api/netops/pa/overview?from&to&top` | `netops.pa.read` | `GET /palog/summary` |
-| GET | `/api/netops/pa/options?from&to` | `netops.pa.read` | `GET /palog/options` |
+| GET | `/api/netops/pa/overview?from&to&top&source` | `netops.pa.read` | `GET /palog/summary` |
+| GET | `/api/netops/pa/options?from&to&source` | `netops.pa.read` | `GET /palog/options` |
+
+**資料來源(C3,`source`)**:`ftp`(已分析的 FTP 檔案摘要,舊做法)、`clickhouse`(ClickHouse,ARCHITECTURE D29、D34)、`auto`(期間開始不早於 ClickHouse 最早一小時才用 ClickHouse,否則 FTP)。省略時依設定 `NETOPS_PA_OVERVIEW_SOURCE`(預設 `auto`)。回應的 `source` 是實際使用的來源。
+- `auto` 時 ClickHouse 失敗改用 FTP(服務日誌記 warn);指定 `clickhouse` 而 ClickHouse 無法使用或未設定時回 503 `NETOPS_CLICKHOUSE_UNAVAILABLE`。
+- ClickHouse 來源:`rows`、`allow`、`block`、`bytes`、`hours`、`actions` 來自每小時彙總表(含進行中的小時);`top`、`topBytes`、`scan`、`sent`、`recv`、`subtypes`、`timeMin`、`timeMax` 來自 ClickHouse 每小時摘要(和 FTP 摘要同一份核心邏輯),**只算到 `topsUntil`**(最後一個已結束、已建好摘要的小時的結束時間;背景每 5 分鐘建,小時結束 3 分鐘後才建)。`files` 為有資料的小時數,`missing` 為已結束、有資料但摘要還沒建好(或筆數變了待重建)的小時數;`import` 為摘要建立狀態(`busy` 建立中、`failed` 1 = 上一輪失敗)。
+- 同樣的參數 60 秒內重複查詢走 Redis 快取(CQ11),所以結果最多晚 60 秒。
+- 和 FTP 來源的差異:FTP 每個檔案只留前 300 名再合併,ClickHouse 每小時只留前 300 名再合併(排行尾端的數字可能不同);疑似掃描的不同目的 / Port 數取各小時最大值(同 FTP 取各檔案最大值)。
 
 **`GET /pa/days`**:有資料的日期(依 log 內的資料時間,不是檔名日期),新的在前。
 
@@ -178,7 +184,9 @@ PA 匯入在背景佇列執行;同步、分析只是送進佇列,畫面輪詢狀
   "subtypes": { "end": 3500000, "deny": 100000 },
   "top": { "src": [ { "key": "10.10.1.5", "n": 120000, "bytes": 3456789 } ] /* 其他排行見下 */ },
   "topBytes": { "src": [ { "key": "10.10.1.5", "n": 120000, "bytes": 3456789 } ] },
-  "scan": [ { "src": "1.2.3.4", "n": 5000, "dsts": 300, "ports": 2, "zone": "untrust → trust" } ]
+  "scan": [ { "src": "1.2.3.4", "n": 5000, "dsts": 300, "ports": 2, "zone": "untrust → trust" } ],
+  "source": "clickhouse",                        // C3:實際來源 ftp | clickhouse
+  "topsUntil": "2026-11-12T09:00:00+08:00"       // C3:只有 clickhouse 來源;排行只算到這個時間(不含)
 }
 ```
 
@@ -198,6 +206,8 @@ PA 匯入在背景佇列執行;同步、分析只是送進佇列,畫面輪詢狀
 | GET | `/api/netops/pa-events/overview?type&from&to&top` | `netops.pa.read` | `GET /pa-events/summary` |
 
 `type`:`threat`、`url`、`data`、`wildfire`、`decryption`、`globalprotect`、`userid`(只列出有設定 FTP 目錄的類型)。
+
+**資料來源(C3)**:`overview` 多一個 `source` 參數,規則同 §4.1。`threat`、`url`、`data`、`wildfire` 可查 ClickHouse(全部來自 ClickHouse 每小時摘要,只到 `topsUntil`;`files` 為有摘要的小時數);`decryption`、`globalprotect`、`userid` 不進 ClickHouse,一律 FTP。回應多 `source`、`topsUntil`。
 
 ```jsonc
 // GET /pa-events/types
@@ -499,6 +509,7 @@ AI 相關(語意搜尋、向量同步、外部 IP 自動學習)見 §10.2(A1)。
 | 422 | `NETOPS_EXPORT_TOO_LARGE` | 匯出筆數超過上限 |
 | 502 | `NETOPS_FTP_UNAVAILABLE` | FTP 連線或讀取失敗。訊息為「動作 + FTP 路徑:原因」,原因只有分類(連線逾時、拒絕連線、找不到主機、連線中斷、TLS 憑證驗證失敗、帳號或密碼錯誤(FTP 530)、檔案或目錄不存在,或沒有權限(FTP 550)…),不含 FTP 主機、port 與原始錯誤;原始錯誤只寫服務日誌。匯入狀態的 `lastSyncError`、檔案的 `error`、工作的 `error.message` 同樣規則 |
 | 503 | `NETOPS_FTP_NOT_CONFIGURED` | 未設定 FTP(只會在 dev) |
+| 503 | `NETOPS_CLICKHOUSE_UNAVAILABLE` | 指定 `source=clickhouse` 而 ClickHouse 連不上、查詢失敗或未設定(C3,§4.1);只影響用到 ClickHouse 的 API。原始錯誤只寫服務日誌 |
 | 403 | `NETOPS_PA_CONTROL_DISABLED` | 正式區不能切換收集器的輪詢與接收(§3.2 `collector-control`,只有測試區可用) |
 | 424 | `NETOPS_REDIS_UNAVAILABLE` | 即時監控讀不到 `netops-redis`(§3.2;`snapshot` 例外,回 200 `state: unavailable`)。不用 5xx:避免累積 BFF 斷路器失敗。原始錯誤只寫服務日誌 |
 | 424 | `NETOPS_PA_LIVE_DISABLED` | 未設定 `REDIS_URL`(只會在 dev) |

@@ -3,6 +3,7 @@
  * 類型:threat、url、data、wildfire、decryption、globalprotect、userid(只列出有設定 FTP 目錄的類型)。
  */
 import { http } from './gateway';
+import type { PaSource } from './pa';
 
 export interface PaEventType {
   type: string;
@@ -25,7 +26,11 @@ export interface PaEventOverview {
   label: string;
   from: string;
   to: string;
-  /** 期間內已分析的檔案數 */
+  /** 實際使用的來源(C3:威脅、URL、資料過濾、WildFire 可為 clickhouse;其他類型一律 ftp) */
+  source: 'ftp' | 'clickhouse';
+  /** source 為 clickhouse 時:KPI 與排行只算到這個時間 */
+  topsUntil?: string;
+  /** ftp:期間內已分析的檔案數;clickhouse:有摘要的小時數 */
   files: number;
   /** 已分析、但摘要讀不到的檔案數:大於 0 表示結果不完整 */
   missing: number;
@@ -42,6 +47,6 @@ export interface PaEventOverview {
 export const paEvents = {
   types: () => http.get<{ types: PaEventType[] }>('/api/netops/pa-events/types'),
   /** from / to:YYYY-MM-DD(含當天),最長 92 天 */
-  overview: (type: string, from: string, to: string, top = 15) =>
-    http.get<PaEventOverview>('/api/netops/pa-events/overview', { query: { type, from, to, top } }),
+  overview: (type: string, from: string, to: string, top = 15, source?: PaSource) =>
+    http.get<PaEventOverview>('/api/netops/pa-events/overview', { query: { type, from, to, top, ...(source ? { source } : {}) } }),
 };

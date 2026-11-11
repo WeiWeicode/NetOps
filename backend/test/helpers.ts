@@ -33,6 +33,7 @@ export async function createTestApp({
   liveStream,
   paLiveControl,
   ai,
+  ...extra
 }: {
   ftp?: Ftp;
   env?: Record<string, string>;
@@ -41,6 +42,10 @@ export async function createTestApp({
   liveStream?: LiveStreamOptions;
   paLiveControl?: boolean;
   ai?: { fetch?: typeof fetch; heartbeatMs?: number };
+  /** 其他 buildApp 注入(C3:chReader、cache、chNow) */
+  chReader?: NonNullable<Parameters<typeof buildApp>[1]>['chReader'];
+  cache?: NonNullable<Parameters<typeof buildApp>[1]>['cache'];
+  chNow?: () => number;
 } = {}): Promise<TestApp> {
   const { publicKey, privateKey } = await generateKeyPair('ES256');
   const jwk = { ...(await exportJWK(publicKey)), kid: 'test', alg: 'ES256', use: 'sig' };
@@ -49,7 +54,7 @@ export async function createTestApp({
   const jwksUrl = `http://127.0.0.1:${(jwks.address() as AddressInfo).port}/.well-known/jwks.json`;
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'netops-test-'));
   const config = loadConfig({ GW_ENV: 'dev', SERVICE_CODE: 'netops-api', GW_JWKS_URL: jwksUrl, LOG_LEVEL: 'silent', NETOPS_DATA_DIR: dataDir, FTP_HOST: 'fake-ftp', ...env });
-  const app = await buildApp(config, { ftp, streamTest, paLiveRedis, liveStream, paLiveControl, ai });
+  const app = await buildApp(config, { ftp, streamTest, paLiveRedis, liveStream, paLiveControl, ai, ...extra });
   const tokens = new Map<string, string>();
   const token = async (emp: string) => {
     if (!tokens.has(emp))

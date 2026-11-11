@@ -34,12 +34,18 @@ import { createPaLiveService } from './modules/pa-live/service.js';
 import pingRoutes from './modules/ping/routes.js';
 import { registerAi } from './modules/ai/index.js';
 import { swaggerOptions } from './openapi.js';
+import { createClickHouseReader, type ClickHouseReader } from './infra/clickhouse/reader.js';
+import { connectDashboardCache, createDashboardCache, type DashboardCache } from './infra/redis/cache.js';
+import { createChSummaryBuilder, type ChSummaryBuilder } from './modules/pa/ch-summary.js';
+import type { ChOverviewDeps } from './modules/pa/ch-overview.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
     config: Config;
     store: Store;
     jobs: JobRunner;
+    /** ClickHouse 每小時摘要(C3;沒有設定 ClickHouse 時為 null) */
+    chSummary: ChSummaryBuilder | null;
   }
   interface FastifyRequest {
     identity: GatewayIdentity | null;
@@ -61,6 +67,12 @@ export async function buildApp(
     /** 測試區手動開關可否使用(預設依 GW_ENV:正式區 false) */
     paLiveControl?: boolean;
     ai?: { fetch?: typeof fetch; heartbeatMs?: number };
+    /** ClickHouse 唯讀查詢(C3);測試注入假實作,null = 不使用 */
+    chReader?: ClickHouseReader | null;
+    /** 儀表板快取;測試注入(預設依 REDIS_URL) */
+    cache?: DashboardCache;
+    /** 每小時摘要的「現在」(測試用) */
+    chNow?: () => number;
   } = {},
 ): Promise<FastifyInstance> {
   const app = Fastify({
@@ -155,9 +167,20 @@ export async function buildApp(
     ad.stop();
     await Promise.all([traffic.stop(), events.stop()]);
   });
-  await app.register(paRoutes, { traffic });
+  // ClickHouse 查詢(C3):總覽與安全事件依設定切換來源;每小時摘要在背景建(單一容器,D9)
+  const chReader = deps.chReader !== undefined ? deps.chReader : config.clickhouse ? createClickHouseReader(config.clickhouse) : null;
+  const chBuilder = chReader ? createChSummaryBuilder({ reader: chReader, store: app.store.pa, log: app.log, ...config.chSummary, now: deps.chNow }) : null;
+  app.decorate('chSummary', chBuilder);
+  const cache = deps.cache ?? (config.redisUrl ? connectDashboardCache(config.redisUrl) : createDashboardCache(null));
+  app.addHook('onClose', async () => cache.close());
+  if (chBuilder) {
+    app.addHook('onReady', async () => chBuilder.start());
+    app.addHook('onClose', async () => chBuilder.stop());
+  }
+  const ch: ChOverviewDeps = { reader: chReader, builder: chBuilder, cache, mode: config.paSource.overview, log: app.log };
+  await app.register(paRoutes, { traffic, ch });
   await app.register(logRoutes, { ftp, traffic, parallel: config.ftp?.maxConnections ?? 1, limit: config.search.limit, seconds: config.search.seconds });
-  await app.register(paEventRoutes, { events });
+  await app.register(paEventRoutes, { events, ch });
   await app.register(adRoutes, { ad });
   await app.register(adFtpRoutes, { ad });
   const kb = createKbService(app.store.kb, app.log);

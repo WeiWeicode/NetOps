@@ -6,6 +6,7 @@
  *   palogs/events/index.json          其他類型 log 的分析狀態
  *   palogs/events/{type}/{name}.json.gz  其他類型 log 的摘要(index 內記成 "{type}/{name}")
  *   palogs/iplearn.json               外部 IP 自動學習查過的 IP、網段與分組(A1;同舊版位置)
+ *   palogs/ch/index.json、ch/{kind}/{YYYYMMDDHH}.json.gz   ClickHouse 每小時摘要(C3;新版才有)
  */
 import path from 'node:path';
 import { ensureDir, readGzipJson, readGzipText, readJson, removeFile, safeJoin, writeGzipJson, writeGzipText, writeJson } from './files.js';
@@ -34,7 +35,18 @@ export interface PaStore {
   /** 外部 IP 自動學習的狀態;不存在回 null */
   loadIpLearnState<T>(): T | null;
   saveIpLearnState(state: unknown): void;
+  /**
+   * ClickHouse 每小時摘要(C3):kind 為 traffic 或威脅類類型,hour 為台灣時間 'YYYYMMDDHH'。
+   * 由 ClickHouse 原始 log 算出、格式同 FTP 摘要,總覽的排行用;跟著 ClickHouse 保留期限清除(不適用 D16)
+   */
+  loadChSummaryIndex<T>(): T | null;
+  saveChSummaryIndex(index: unknown): void;
+  saveChSummary(kind: string, hour: string, summary: unknown): void;
+  readChSummary<T>(kind: string, hour: string): T | null;
+  removeChSummary(kind: string, hour: string): void;
 }
+
+const CH_KINDS = ['traffic', 'threat', 'url', 'data', 'wildfire'];
 
 export function createPaStore(root: string, eventTypes: readonly string[]): PaStore {
   const base = path.join(root, 'palogs');
@@ -44,6 +56,12 @@ export function createPaStore(root: string, eventTypes: readonly string[]): PaSt
   for (const d of [sumDir, flowDir, evDir, ...eventTypes.map((t) => path.join(evDir, t))]) ensureDir(d);
   const indexFile = path.join(base, 'index.json');
   const evIndexFile = path.join(evDir, 'index.json');
+  const chDir = path.join(base, 'ch');
+  for (const k of CH_KINDS) ensureDir(path.join(chDir, k));
+  const chFile = (kind: string, hour: string) => {
+    if (!CH_KINDS.includes(kind) || !/^\d{10}$/.test(hour)) throw new Error(`不合法的 ClickHouse 摘要代號:${kind}/${hour}`);
+    return safeJoin(path.join(chDir, kind), `${hour}.json.gz`);
+  };
 
   const loadIdx = <T>(file: string): PaIndex<T> => {
     const idx = readJson<PaIndex<T>>(file) ?? { files: {} };
@@ -72,5 +90,10 @@ export function createPaStore(root: string, eventTypes: readonly string[]): PaSt
     removeEventSummary: (key) => removeFile(eventFile(key)),
     loadIpLearnState: () => readJson(path.join(base, 'iplearn.json')),
     saveIpLearnState: (state) => writeJson(path.join(base, 'iplearn.json'), state),
+    loadChSummaryIndex: () => readJson(path.join(chDir, 'index.json')),
+    saveChSummaryIndex: (index) => writeJson(path.join(chDir, 'index.json'), index),
+    saveChSummary: (kind, hour, summary) => writeGzipJson(chFile(kind, hour), summary),
+    readChSummary: (kind, hour) => readGzipJson(chFile(kind, hour)),
+    removeChSummary: (kind, hour) => removeFile(chFile(kind, hour)),
   };
 }

@@ -53,4 +53,21 @@ export function dayRange(q: { from: string; to?: string }): { from: string; to: 
   return { from, to };
 }
 
+/* ───── ClickHouse(C3):欄位是 DateTime('Asia/Taipei'),參數一律用 Unix 秒,這裡換算台灣時間 ───── */
+
+export const HOUR_MS = 3600_000;
+/** 某天('yyyy/MM/dd',台灣時間)00:00 的 UTC 毫秒 */
+export const taipeiDayStartMs = (day: string): number => Date.parse(`${day.replace(/\//g, '-')}T00:00:00${LOG_OFFSET}`);
+/** UTC 毫秒所在小時的開始(台灣沒有日光節約,和 UTC 整點相同) */
+export const hourStartMs = (ms: number): number => Math.floor(ms / HOUR_MS) * HOUR_MS;
+/** UTC 毫秒 → 台灣時間 'yyyy/MM/dd HH:mm:ss'(核心格式) */
+export function taipeiText(ms: number): string {
+  const d = new Date(ms + OFFSET_MS);
+  return `${d.getUTCFullYear()}/${pad(d.getUTCMonth() + 1)}/${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`;
+}
+/** UTC 毫秒 → 每小時統計的鍵 'yyyy/MM/dd HH'(同 core/palog.js 的 hours) */
+export const taipeiHourKey = (ms: number): string => taipeiText(ms).slice(0, 13);
+/** 'yyyy/MM/dd HH:mm'(timeIn 的結果)→ UTC 毫秒 */
+export const taipeiTimeMs = (t: string): number => Date.parse(`${t.slice(0, 10).replace(/\//g, '-')}T${t.slice(11, 16)}:00${LOG_OFFSET}`);
+
 export const validation = (field: string, message: string) => new AppError(400, 'VALIDATION_FAILED', '參數驗證失敗', [{ field, message }]);

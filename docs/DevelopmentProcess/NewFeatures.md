@@ -2,6 +2,11 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。
 
+## 2026-11-11 C3 查詢切換(第 1 批:總覽與安全事件)
+- 工作項目:C3
+- 內容:流量總覽、篩選選項、安全事件(威脅、URL、資料過濾、WildFire)可查 ClickHouse,API 多 `source`、`topsUntil`,其他欄位不變;ARCHITECTURE 新增 D34(ClickHouse 每小時摘要);API.md §4.1、§4.2、§8;Gherkin `pa/overview.feature`、`pa-events/overview.feature` 加 C3 場景;前端 `api/pa.ts`、`api/paEvents.ts` 加 `source` 參數與型別(畫面不改)。
+- 檔案:`docs/{API,ARCHITECTURE,IMPL-PLAN,PROJECT-MAP}.md`、`docs/Gherkin/`、`frontend/src/api/{pa,paEvents}.ts`
+
 ## 2026-11-10 C1 ClickHouse POC 與容量實測
 - 工作項目:C1
 - 內容:測試區 ClickHouse 容器與資料表(細節見 BackendCorrection 同日紀錄);匯入 FTP 一整天 TRAFFIC 實測容量與查詢,手冊 §4 換成實測值(每筆 20.6 bytes、30 天約 7–11 GB、Parquet 一年 80–122 GB),§7.1 `dst` 加 bloom_filter、§7.4 網段查詢改 `BETWEEN`、§10.2 補實作差異、§10.3 TTL 定案;IMPL-PLAN C0 補 E2 / E5 建議數字、C1 狀態。

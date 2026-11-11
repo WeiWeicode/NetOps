@@ -102,9 +102,9 @@ export function createReconciler({
       }
       for (const [h, v] of Object.entries(s.hours ?? {})) if (h.startsWith(day)) counts.set(h, (counts.get(h) ?? 0) + v.n);
     }
-    // 這一天的 FTP 資料已完整:有分析完的檔案涵蓋到隔天(PA 每天的匯出檔跨日)、沒有讀不到的摘要、沒有在分析中
+    // 這一天的 FTP 資料已完整:隔天也有分析完的檔案(PA 匯出檔依時間接續)、沒有讀不到的摘要、沒有在分析中(程式碼審查 #5)
     const next = nextDay(day);
-    const reachesNext = traffic.filesInRange(next, next).length > 0 || files.some((f) => (f.timeMax ?? '') >= `${day} 23:59`);
+    const reachesNext = traffic.filesInRange(next, next).length > 0;
     return { counts, files: files.length, complete: reachesNext && !missing && !traffic.status().busy };
   }
 
@@ -113,7 +113,7 @@ export function createReconciler({
     const rows = await reader.trafficHours(start, start + 86_400_000);
     const ch = new Map<string, number>();
     for (const r of rows) ch.set(taipeiHourKey(r.hour), (ch.get(taipeiHourKey(r.hour)) ?? 0) + r.n);
-    const earliest = builder.earliest() ?? (rows.length ? Math.min(...rows.map((r) => r.hour)) : null);
+    const earliest = (await reader.earliestTrafficHour()) ?? builder.earliest();
     const ftp = ftpHours(day);
     const prev = store.readRecon<ReconDay>(dayId(day));
     const base = { day, checkedAt: new Date(now()).toISOString(), ftpFiles: ftp.files, backfills: prev?.backfills ?? [] };
@@ -122,7 +122,8 @@ export function createReconciler({
       store.saveRecon(dayId(day), r);
       return r;
     }
-    const hours = compareHours(ftp.counts, ch, taipeiHourKey(Math.max(earliest, start)));
+    // ClickHouse 最早那一小時通常只收到一部分(開始收資料的時間不在整點):從下一小時開始比(程式碼審查 #3)
+    const hours = compareHours(ftp.counts, ch, taipeiHourKey(Math.max(earliest + HOUR_MS, start)));
     const gaps = hours.filter((h) => h.status === 'gap').length;
     const excess = hours.filter((h) => h.status === 'excess').length;
     const r: ReconDay = { ...base, status: !ftp.complete ? 'pending' : gaps ? 'gap' : 'ok', gaps, excess, hours };

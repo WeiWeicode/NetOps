@@ -44,7 +44,7 @@
     那麼 status 為 "pending"
     而且 呼叫 POST /api/netops/pa/backfills 帶 day "2026-11-13" 回應 409 NETOPS_RECON_PENDING
 
-  # 來源: backend/src/modules/pa/reconcile.ts:133
+  # 來源: backend/src/modules/pa/reconcile.ts:134
   @untested
   場景: 每天自動對帳前 3 天
     假如 NETOPS_RECON_HOUR 為 6
@@ -65,7 +65,7 @@
     當 呼叫 POST /api/netops/pa/backfills 的那天沒有缺口
     那麼 回應 409 NETOPS_BACKFILL_NOTHING
 
-  # 來源: backend/src/ingest/backfill.ts:77
+  # 來源: backend/src/ingest/backfill.ts:99
   @auto
   場景: 補漏只寫 ClickHouse 沒有的列
     假如 01 時 ClickHouse 已有 seqno 1–5,FTP 有 seqno 1–8 與 1 筆沒有 seqno
@@ -74,7 +74,7 @@
     而且 再執行一次 inserted 為 0(不重複)
     而且 不刪除 ClickHouse 既有的資料
 
-  # 來源: backend/src/modules/pa/recon-routes.ts:149
+  # 來源: backend/src/modules/pa/recon-routes.ts:152
   @auto
   場景: 查詢補漏工作
     當 呼叫 GET /api/netops/pa/backfills/{id}

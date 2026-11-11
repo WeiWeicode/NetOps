@@ -7,7 +7,7 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import { createBackfillQueue, type BackfillClient, type BackfillQueue } from '../../src/infra/redis/backfill.js';
-import { runBackfill } from '../../src/ingest/backfill.js';
+import { runBackfill, validateJob } from '../../src/ingest/backfill.js';
 import { compareHours } from '../../src/modules/pa/reconcile.js';
 import { createFakeFtp, type FakeFtp } from '../fixtures/fake-ftp.js';
 import { createFakeReader, type FakeReader } from '../fixtures/fake-ch.js';
@@ -19,6 +19,7 @@ import { createTestApp, waitFor, type TestApp } from '../helpers.js';
 function memRedis(): BackfillClient {
   const lists = new Map<string, string[]>();
   const hashes = new Map<string, Record<string, string>>();
+  const sets = new Map<string, Set<string>>();
   return {
     lpush: async (k: string, v: string) => (lists.set(k, [v, ...(lists.get(k) ?? [])]), lists.get(k)!.length),
     rpop: async (k: string) => lists.get(k)?.pop() ?? null,
@@ -26,6 +27,9 @@ function memRedis(): BackfillClient {
     hset: async (k: string, f: Record<string, string>) => (hashes.set(k, { ...(hashes.get(k) ?? {}), ...f }), 1),
     hgetall: async (k: string) => ({ ...(hashes.get(k) ?? {}) }),
     expire: async () => 1,
+    sadd: async (k: string, v: string) => (sets.set(k, new Set([...(sets.get(k) ?? []), v])), 1),
+    srem: async (k: string, v: string) => (sets.get(k)?.delete(v), 1),
+    smembers: async (k: string) => [...(sets.get(k) ?? [])],
     quit: async () => 'OK',
   } as unknown as BackfillClient;
 }
@@ -84,6 +88,37 @@ describe('補漏執行(netops-ingest)', () => {
     const again = (await q.enqueue('2026/11/12', [{ hour: HOUR, files: ['/day.csv'] }], 'S112009'))!;
     await runBackfill((await q.take())!, { ch, ftp, queue: q, log: () => {}, signal: new AbortController().signal });
     assert.equal((await q.get(again.id))!.inserted, 0);
+  });
+
+  it('工作內容驗證:檔案要在 log 目錄、小時對齊且屬於該日期(Redis 內容不完全可信)', () => {
+    const rules = { logDir: '/my-data', pattern: /\.(csv|gz)$/i, now: Date.parse('2026-11-13T00:00:00+08:00') };
+    const job = (hours: { hour: number; files: string[] }[], day = '2026/11/12') => ({ id: 'x', day, hours } as never);
+    assert.equal(validateJob(job([{ hour: HOUR, files: ['/my-data/a.csv'] }]), rules), null);
+    assert.match(validateJob(job([{ hour: HOUR, files: ['/etc/passwd'] }]), rules)!, /log 目錄/);
+    assert.match(validateJob(job([{ hour: HOUR, files: ['/my-data/../x.csv'] }]), rules)!, /log 目錄/);
+    assert.match(validateJob(job([{ hour: HOUR + 1, files: [] }]), rules)!, /小時/);
+    assert.match(validateJob(job([{ hour: HOUR, files: [] }], '2026/11/11'), rules)!, /日期/);
+    assert.match(validateJob(job([{ hour: HOUR - 40 * 86_400_000, files: [] }], '2026/10/03'), rules)!, /小時/);
+  });
+
+  it('FTP 檔沒有 Sequence Number 欄位:工作 failed(不能標成完成)', async () => {
+    const ftp = createFakeFtp();
+    ftp.put('/x.csv', 'Receive Time,Source address\r\n2026/11/12 09:01:00,10.1.1.1\r\n');
+    const q = createBackfillQueue(memRedis());
+    const job = (await q.enqueue('2026/11/12', [{ hour: HOUR, files: ['/x.csv'] }], 'S112009'))!;
+    await runBackfill((await q.take())!, { ch: new FakeClickHouse(), ftp, queue: q, log: () => {}, signal: new AbortController().signal });
+    const r = (await q.get(job.id))!;
+    assert.equal(r.state, 'failed');
+    assert.match(r.error!, /Sequence Number/);
+  });
+
+  it('netops-ingest 重啟時,上次執行中的工作標失敗', async () => {
+    const q = createBackfillQueue(memRedis());
+    const job = (await q.enqueue('2026/11/12', [{ hour: HOUR, files: ['/x.csv'] }], 'S112009'))!;
+    await q.take();
+    assert.deepEqual(await q.failInterrupted('重新啟動'), [job.id]);
+    assert.equal((await q.get(job.id))!.state, 'failed');
+    assert.deepEqual(await q.failInterrupted('重新啟動'), []);
   });
 
   it('FTP 讀取失敗:工作 failed,錯誤只留分類', async () => {

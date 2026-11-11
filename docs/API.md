@@ -348,8 +348,8 @@ ARCHITECTURE D33、手冊 `PA-LOG-CLICKHOUSE-GUIDE.md` §11、§12 CQ10:FTP 降�
 | POST | `/api/netops/pa/backfills` | `netops.ftp.write` | 補漏 `{ day, hours? }`:先重新對帳,把缺口小時交給 `netops-ingest`,回 202 + 工作 |
 | GET | `/api/netops/pa/backfills/{id}` | `netops.ftp.read` | 補漏工作狀態(保留 7 天) |
 
-- **對帳**:每小時比 FTP 摘要的筆數(已分析的 FTP 檔的每小時統計,不另外讀 FTP)與 ClickHouse 每小時彙總的筆數。差異 = (FTP − ClickHouse) / FTP;> 0.5% 為 `gap`、< −0.5% 為 `excess`(可能重複)、FTP 沒有該小時為 `ftp-missing`、其他 `ok`。ClickHouse 開始收資料之前的小時不比。
-- 一天的 `status`:`ok`、`gap`(有缺口)、`pending`(FTP 前一天的匯出檔還沒同步分析完:要有涵蓋到隔天的已分析檔案、沒有在分析中;不判斷缺口)、`not-covered`(ClickHouse 這天沒有資料)。
+- **對帳**:每小時比 FTP 摘要的筆數(已分析的 FTP 檔的每小時統計,不另外讀 FTP)與 ClickHouse 每小時彙總的筆數。差異 = (FTP − ClickHouse) / FTP;> 0.5% 為 `gap`、< −0.5% 為 `excess`(可能重複)、FTP 沒有該小時為 `ftp-missing`、其他 `ok`。ClickHouse 開始收資料之前的小時、以及開始的那一小時(通常只收到一部分)不比。FTP 的筆數是各匯出檔摘要的加總;若 PA 匯出檔時間範圍互相重疊會把 FTP 算多(補漏時依 seqno 去重,補不出列、缺口仍在),此時請人工確認。
+- 一天的 `status`:`ok`、`gap`(有缺口)、`pending`(FTP 這一天的匯出檔還沒同步分析完:隔天也要有已分析的檔案、沒有讀不到的摘要、沒有在分析中;不判斷缺口)、`not-covered`(ClickHouse 這天沒有資料)。
 - 每天台灣時間 `NETOPS_RECON_HOUR`(預設 6,-1 = 不自動)自動對帳前 3 天並存檔;有缺口時服務日誌記 warn。FTP 檔要先同步分析(測試區 `FTP_SYNC_MINUTES` 預設 0,需求方在「FTP Log 檔案」手動同步或設定自動同步)。
 - **補漏**:`netops-ingest` 一次做一個工作,逐小時查 ClickHouse 已有的 seqno,從 FTP 逐列讀涵蓋該小時的 TRAFFIC CSV,**只補寫 seqno 不在 ClickHouse 的列**(`source = 'ftp'`;不刪除、不覆蓋既有資料;沒有 seqno 的列無法去重,略過並計數)。每小時彙總由物化檢視自動補上,總覽的每小時摘要偵測到筆數變了會重建。佇列最多 10 個工作。
 - `hours`(選填):只補其中幾個缺口小時(ISO 8601 含時區);不是缺口的小時忽略。
@@ -367,7 +367,7 @@ ARCHITECTURE D33、手冊 `PA-LOG-CLICKHOUSE-GUIDE.md` §11、§12 CQ10:FTP 降�
   "read": 351200, "skipped": 348000, "inserted": 3200, "noSeqno": 0, "error": null }
 ```
 
-錯誤:ClickHouse 無法使用或未設定 503 `NETOPS_CLICKHOUSE_UNAVAILABLE`;FTP 還沒分析完 409 `NETOPS_RECON_PENDING`;沒有缺口 409 `NETOPS_BACKFILL_NOTHING`;佇列已滿 409 `NETOPS_BACKFILL_BUSY`;工作不存在 404 `NETOPS_BACKFILL_NOT_FOUND`;Redis 讀寫失敗 424 `NETOPS_REDIS_UNAVAILABLE`。工作 `state` 為 `failed` 時 `error` 只有分類過的訊息。
+錯誤:ClickHouse 無法使用或未設定 503 `NETOPS_CLICKHOUSE_UNAVAILABLE`;FTP 還沒分析完、或缺口小時找不到已分析的 FTP 檔 409 `NETOPS_RECON_PENDING`;沒有缺口 409 `NETOPS_BACKFILL_NOTHING`;佇列已滿 409 `NETOPS_BACKFILL_BUSY`;工作不存在 404 `NETOPS_BACKFILL_NOT_FOUND`;Redis 讀寫失敗 424 `NETOPS_REDIS_UNAVAILABLE`。工作 `state` 為 `failed` 時 `error` 只有分類過的訊息:例如 FTP 檔沒有 Sequence Number 欄位(無法去重)、工作內容不合法(`netops-ingest` 執行前再驗:小時對齊且屬於該日期、31 天內、檔案在 `FTP_LOG_DIR` 之下且符合 `FTP_PATTERN`)、一個檔超過 70,000 列待補、`netops-ingest` 停止或重新啟動時中斷(重新送出即可,只補缺的列)。
 
 ### 5.2 AD
 

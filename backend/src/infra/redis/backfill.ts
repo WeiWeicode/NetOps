@@ -3,6 +3,7 @@
  * 鍵只在這裡組(AGENT.md §7.2),兩邊共用同一份程式:
  *   netops:backfill:queue       List,待執行的工作 id(LPUSH 進、RPOP 出;netops-ingest 一次做一個)
  *   netops:backfill:job:{id}    Hash,工作內容與狀態;TTL 7 天
+ *   netops:backfill:running     Set,執行中的工作 id(netops-ingest 重啟時把裡面的工作標失敗,不會一直卡在 running)
  * 工作內容只有小時與 FTP 檔案路徑(FTP 路徑不是機密);狀態欄位只寫筆數與分類過的錯誤訊息,不寫 log 內容。
  */
 import { randomUUID } from 'node:crypto';
@@ -11,6 +12,7 @@ import { Redis } from 'ioredis';
 export const BACKFILL_KEYS = {
   queue: 'netops:backfill:queue',
   job: (id: string) => `netops:backfill:job:${id}`,
+  running: 'netops:backfill:running',
 };
 export const BACKFILL_TTL_SEC = 7 * 86400;
 /** 佇列裡最多幾個工作(超過回 409) */
@@ -45,7 +47,7 @@ export interface BackfillJob {
   error: string | null;
 }
 
-export type BackfillClient = Pick<Redis, 'lpush' | 'rpop' | 'llen' | 'hset' | 'hgetall' | 'expire' | 'quit'>;
+export type BackfillClient = Pick<Redis, 'lpush' | 'rpop' | 'llen' | 'hset' | 'hgetall' | 'expire' | 'sadd' | 'srem' | 'smembers' | 'quit'>;
 
 const ID = /^[0-9a-f-]{36}$/;
 
@@ -82,6 +84,10 @@ export interface BackfillQueue {
   /** 取出下一個工作並標成 running(netops-ingest) */
   take(): Promise<BackfillJob | null>;
   update(id: string, fields: Partial<Pick<BackfillJob, 'state' | 'read' | 'skipped' | 'inserted' | 'noSeqno' | 'error' | 'finishedAt'>>): Promise<void>;
+  /** 工作結束(完成或失敗):移出執行中清單 */
+  finish(id: string): Promise<void>;
+  /** netops-ingest 啟動時:上次執行中(被中斷)的工作標失敗,回傳 id */
+  failInterrupted(message: string): Promise<string[]>;
   close(): Promise<void>;
 }
 
@@ -106,6 +112,7 @@ export function createBackfillQueue(client: BackfillClient): BackfillQueue {
     async take() {
       const id = await client.rpop(BACKFILL_KEYS.queue);
       if (!id || !ID.test(id)) return null;
+      await client.sadd(BACKFILL_KEYS.running, id);
       const job = parse(id, await client.hgetall(BACKFILL_KEYS.job(id)));
       if (!job) return null;
       const startedAt = new Date().toISOString();
@@ -116,6 +123,17 @@ export function createBackfillQueue(client: BackfillClient): BackfillQueue {
       const out: Record<string, string> = {};
       for (const [k, v] of Object.entries(f)) if (v !== undefined) out[k] = v === null ? '' : String(v).slice(0, 200);
       await set(id, out);
+    },
+    async finish(id) {
+      await client.srem(BACKFILL_KEYS.running, id);
+    },
+    async failInterrupted(message) {
+      const ids = (await client.smembers(BACKFILL_KEYS.running)).filter((x) => ID.test(x));
+      for (const id of ids) {
+        await set(id, { state: 'failed', error: message.slice(0, 200), finishedAt: new Date().toISOString() });
+        await client.srem(BACKFILL_KEYS.running, id);
+      }
+      return ids;
     },
     close: async () => {
       await client.quit().catch(() => undefined);

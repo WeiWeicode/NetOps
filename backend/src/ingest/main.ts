@@ -117,7 +117,7 @@ async function main(): Promise<void> {
 
   // FTP 補漏(C3):有設定 FTP 才執行;和寫入主迴圈並行,一次一個工作
   const backfillQueue = cfg.ftp ? connectBackfillQueue(cfg.redisUrl) : null;
-  const backfill = backfillQueue && cfg.ftp ? backfillLoop({ ch, ftp: createFtp(cfg.ftp), queue: backfillQueue, log, signal: stop.signal }) : Promise.resolve();
+  const backfill = backfillQueue && cfg.ftp ? backfillLoop({ ch, ftp: createFtp(cfg.ftp), queue: backfillQueue, log, signal: stop.signal, rules: { logDir: cfg.ftp.logDir, pattern: cfg.ftp.pattern } }) : Promise.resolve();
   log('info', cfg.ftp ? 'FTP 補漏已啟用' : '沒有設定 FTP_HOST,不執行 FTP 補漏');
 
   // 主迴圈:Redis 錯誤(連線中斷)時退避後重來;重來會先補待處理清單

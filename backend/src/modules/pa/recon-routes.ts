@@ -128,6 +128,9 @@ const reconRoutes: FastifyPluginAsync<{ recon: Reconciler | null; queue: Backfil
         const ms = taipeiDayStartMs(h.hour.slice(0, 10)) + Number(h.hour.slice(11, 13)) * 3600_000;
         return { hour: ms, files: r.filesForHour(ms) };
       });
+      // 找不到涵蓋的 FTP 檔就不建工作(否則會「完成」但什麼都沒補)
+      const noFiles = hours.filter((h) => !h.files.length);
+      if (noFiles.length) throw new AppError(409, 'NETOPS_RECON_PENDING', '有缺口的小時找不到已分析的 FTP 檔,請先到「FTP Log 檔案」同步後再補漏');
       const job = await queue.enqueue(day, hours, ownerOf(req.identity)).catch(() => {
         throw redisDown();
       });

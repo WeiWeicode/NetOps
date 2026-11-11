@@ -110,7 +110,8 @@ const logRoutes: FastifyPluginAsync<{ ftp: Ftp; traffic: TrafficImporter; parall
   // 明細查詢專用:同時只執行 1 個(其餘排隊),FTP 連線至少留給匯入輪流使用;每人保留 5 筆結果(資料列佔記憶體)
   const ftpJobs = new JobRunner({ concurrency: 1, maxRetainedPerOwner: 5 }, onError);
   // ClickHouse 明細(C3):不佔 FTP 連線,另一個佇列,同時 2 個
-  const chJobs = new JobRunner({ concurrency: 2, maxRetainedPerOwner: 5 }, onError);
+  // 每人同時 1 個、全部保留 30 份(查詢可佔滿 ClickHouse 50 秒;結果佔記憶體;資安審查 M2、L2)
+  const chJobs = new JobRunner({ concurrency: 2, maxActivePerOwner: 1, maxRetained: 30, maxRetainedPerOwner: 5 }, onError);
   app.addHook('onClose', async () => {
     ftpJobs.close();
     chJobs.close();
@@ -148,7 +149,11 @@ const logRoutes: FastifyPluginAsync<{ ftp: Ftp; traffic: TrafficImporter; parall
       app.log.warn(info, 'ClickHouse 查詢失敗,明細改用 FTP 來源');
       return null;
     }
-    if (!n) throw new AppError(404, 'NETOPS_PA_NO_DATA', '這段時間 ClickHouse 沒有 log');
+    if (!n) {
+      // auto:ClickHouse 沒有這段時間的資料時改走 FTP(FTP 可能有);指定 clickhouse 才回 404(程式碼審查 #1)
+      if (!explicit) return null;
+      throw new AppError(404, 'NETOPS_PA_NO_DATA', '這段時間 ClickHouse 沒有 log');
+    }
     const filter = { fromMs, toMs, src: b.src, dst: b.dst, ip: b.ip, port: b.port, proto: b.proto, app: b.app, rule: b.rule, action: b.action, fromZone: b.fromZone, toZone: b.toZone, user: b.user, country: b.country, q: b.q };
     const secs = Math.min(seconds, CH_SEARCH_SECONDS);
     return chJobs.submit<SearchResult>(
@@ -257,7 +262,11 @@ const logRoutes: FastifyPluginAsync<{ ftp: Ftp; traffic: TrafficImporter; parall
       const toMs = taipeiTimeMs(to) + 60_000;
       const tooLong = toMs - fromMs > CH_SEARCH_MAX_DAYS * 86400_000 + 60_000;
       if (b.source === 'clickhouse' && tooLong) throw validation('to', `ClickHouse 明細查詢期間最長 ${CH_SEARCH_MAX_DAYS} 天`);
-      if (!tooLong && pickSource(ch, b.source, fromMs) === 'clickhouse') {
+      // 只有關鍵字 q、沒有其他條件:用不到排序鍵,會掃完整段期間;ClickHouse 只接受 1 天內(資安審查 M2)
+      const qOnly = Boolean(b.q?.trim()) && !['src', 'dst', 'ip', 'port', 'proto', 'app', 'rule', 'action', 'fromZone', 'toZone', 'user', 'country'].some((k) => String(b[k as keyof SearchBody] ?? '').trim());
+      const qTooLong = qOnly && toMs - fromMs > 86400_000 + 60_000;
+      if (b.source === 'clickhouse' && qTooLong) throw validation('q', '只用關鍵字查詢 ClickHouse 時期間最長 1 天,請加上 IP、Port 等條件或縮短期間');
+      if (!tooLong && !qTooLong && pickSource(ch, b.source, fromMs) === 'clickhouse') {
         const job = await submitClickHouse(req.identity, b, from, to, fromMs, toMs, max);
         if (job) return reply.status(202).send(job);
       }

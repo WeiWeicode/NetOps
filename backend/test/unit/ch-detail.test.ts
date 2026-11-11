@@ -37,6 +37,9 @@ describe('trafficWhere(明細條件 → SQL)', () => {
     // 不合法的 CIDR:同 FTP 版以字首比對
     const bad = trafficWhere({ fromMs: F, toMs: T, src: '10.10/99' });
     assert.match(bad.where[2]!, /startsWith/);
+    // 不合法的 IPv6(只有 16 進位與 :)不送進 toIPv6
+    assert.match(trafficWhere({ fromMs: F, toMs: T, src: '::::/64' }).where[2]!, /startsWith/);
+    assert.ok(!trafficWhere({ fromMs: F, toMs: T, src: ':::' }).where[2]!.includes('toIPv6OrNull'));
   });
 
   it('Port 清單、動作 allow / block、q 比對多個文字欄位', () => {
@@ -107,8 +110,17 @@ describe('明細 API 來源切換', () => {
 
   it('ClickHouse 超過 30 天回 400;期間沒有資料回 404;連不上:指定 503、auto 改走 FTP', async () => {
     assert.equal((await submit({ from: '2026-10-11T00:00:00+08:00', to: '2026-11-11T00:00:00+08:00', source: 'clickhouse' })).statusCode, 400);
+    // 只有關鍵字、超過 1 天:ClickHouse 回 400
+    const q = await submit({ from: '2026-11-09T00:00:00+08:00', to: '2026-11-11T00:00:00+08:00', q: 'fin', source: 'clickhouse' });
+    assert.equal(q.statusCode, 400);
+    assert.equal(q.json().details[0].field, 'q');
     const none = await submit({ from: '2026-11-11T05:00:00+08:00', to: '2026-11-11T06:00:00+08:00', source: 'clickhouse' });
     assert.equal(none.statusCode, 404);
+    assert.match(none.json().message, /ClickHouse/);
+    // auto:ClickHouse 沒有資料改走 FTP(假 FTP 也沒有 → FTP 的 404 訊息)
+    const autoNone = await submit({ from: '2026-11-11T05:00:00+08:00', to: '2026-11-11T06:00:00+08:00', source: 'auto' });
+    assert.equal(autoNone.statusCode, 404);
+    assert.match(autoNone.json().message, /FTP/);
     reader.failing = true;
     try {
       const res = await submit({ ...range, source: 'clickhouse' });

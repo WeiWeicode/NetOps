@@ -231,8 +231,8 @@ PA 匯入在背景佇列執行;同步、分析只是送進佇列,畫面輪詢狀
 
 舊版 `POST /palog/search` 同步等待最長 180 秒,超過路由上限,改成工作模式。查詢依時間挑出已分析的檔案,從 FTP 串流逐列篩選,原始 log 不落地;找到上限筆數或超過掃描秒數就停止。
 
-**資料來源(C3,`source`)**:`ftp`(上述 FTP 掃描)、`clickhouse`(ClickHouse 原始 log,期間最長 30 天,依時間由舊到新取前 `limit` 筆;執行上限 50 秒,同時 2 個,不佔 FTP 連線)、`auto`(期間開始不早於 ClickHouse 最早一小時、且不超過 30 天才用 ClickHouse,否則 FTP;ClickHouse 連不上時改走 FTP)。省略時依設定 `NETOPS_PA_DETAIL_SOURCE`:**預設 `ftp`**,FTP 與 ClickHouse 並行對帳 2 週沒有未處理缺口後由需求方改成 `auto`(CQ10、D33)。
-- ClickHouse 來源:條件語意同 FTP(IP 完全相同 / CIDR / 萬用字元並比對 NAT、Port、動作…);`q` 比對主要文字欄位(IP、Port、類型、協定、規則、使用者、App、區域、動作、URL 類別、國家、結束原因、主機名稱)串起來的字串,不是整列原始 CSV。期間內 ClickHouse 沒有 log 回 404 `NETOPS_PA_NO_DATA`;指定 `clickhouse` 超過 30 天回 400;指定 `clickhouse` 而連不上回 503 `NETOPS_CLICKHOUSE_UNAVAILABLE`;執行中失敗或超過 50 秒時工作 `failed`,`error.code` 為 `NETOPS_CLICKHOUSE_UNAVAILABLE`。
+**資料來源(C3,`source`)**:`ftp`(上述 FTP 掃描)、`clickhouse`(ClickHouse 原始 log,期間最長 30 天,只用關鍵字 `q`、沒有其他條件時最長 1 天(超過回 400,`details` 指出 `q`);依時間由舊到新取前 `limit` 筆;執行上限 50 秒,全系統同時 2 個、每人 1 個,不佔 FTP 連線)、`auto`(期間開始不早於 ClickHouse 最早一小時、且不超過 30 天才用 ClickHouse,否則 FTP;ClickHouse 連不上時改走 FTP)。省略時依設定 `NETOPS_PA_DETAIL_SOURCE`:**預設 `ftp`**,FTP 與 ClickHouse 並行對帳 2 週沒有未處理缺口後由需求方改成 `auto`(CQ10、D33)。
+- ClickHouse 來源:條件語意同 FTP(IP 完全相同 / CIDR / 萬用字元並比對 NAT、Port、動作…);`q` 比對主要文字欄位(IP、Port、類型、協定、規則、使用者、App、區域、動作、URL 類別、國家、結束原因、主機名稱)串起來的字串,不是整列原始 CSV(數字欄位如位元組、Session ID 不在比對範圍)。IP 比對以位址值比較:IPv6 的 CIDR 用真正的範圍(FTP 版以字串字首比對),`::1` 與 `0:0:0:1` 視為相同(FTP 版比字串)。指定 `clickhouse` 而期間內 ClickHouse 沒有 log 回 404 `NETOPS_PA_NO_DATA`(`auto` 改走 FTP);指定 `clickhouse` 超過 30 天回 400;指定 `clickhouse` 而連不上回 503 `NETOPS_CLICKHOUSE_UNAVAILABLE`;執行中失敗或超過 50 秒時工作 `failed`,`error.code` 為 `NETOPS_CLICKHOUSE_UNAVAILABLE`。
 - 結果 `result.source` 為實際來源;ClickHouse 來源的 `files`、`filesScanned` 為 0,`scanned` 為 ClickHouse 讀過的列數,`stopReason` 為 `''` 或 `limit`;`progress` 只有 `{ found: 0 }`。
 
 | 方法 | 路徑 | 權限 | 說明 |

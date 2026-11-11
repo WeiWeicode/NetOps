@@ -7,6 +7,7 @@
  *
  * 時間參數一律 Unix 秒;欄位是 DateTime('Asia/Taipei'),回傳的小時也是 Unix 秒(呼叫端換成台灣時間的鍵)。
  */
+import { isIPv6 } from 'node:net';
 import { ClickHouseError, clickHouseBase, connectError, responseError, type ClickHouseConfig } from './index.js';
 
 /** 唯讀查詢用到的表(不接受外部字串) */
@@ -154,7 +155,8 @@ export interface TrafficFilter {
 }
 
 const IPV4 = /^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
-const isIPv6Text = (v: string) => v.includes(':') && /^[0-9a-fA-F:.]+$/.test(v);
+/** 合法的 IPv6(node:net 驗證;不合法的不送進 toIPv6,避免整個查詢失敗) */
+const isIPv6Text = (v: string) => !v.includes('%') && isIPv6(v);
 
 /** q 比對的文字欄位(FTP 版比對整列 CSV;原始 log 不存整列) */
 const TEXT_COLUMNS = [
@@ -250,7 +252,7 @@ export function createClickHouseReader(cfg: ClickHouseConfig, fetchImpl: Fetch =
   const maxSeconds = Math.min(opts.maxSeconds ?? 25, 50);
   const headers = { 'X-ClickHouse-User': cfg.user, 'X-ClickHouse-Key': cfg.password, 'Content-Type': 'text/plain; charset=utf-8' };
 
-  async function request(sql: string, params: Record<string, Param>, signal?: AbortSignal, settings: Record<string, string> = {}): Promise<Response> {
+  async function request(sql: string, params: Record<string, Param>, signal?: AbortSignal, settings: Record<string, string> = {}, waitMs = timeoutMs): Promise<Response> {
     const u = new URL(base);
     u.pathname = '/';
     for (const [k, v] of Object.entries(params)) u.searchParams.set(`param_${k}`, paramText(v));
@@ -258,7 +260,7 @@ export function createClickHouseReader(cfg: ClickHouseConfig, fetchImpl: Fetch =
     for (const [k, v] of Object.entries(settings)) u.searchParams.set(k, v);
     // UInt64(筆數、位元組)以數字輸出;實際值遠小於 2^53
     u.searchParams.set('output_format_json_quote_64bit_integers', '0');
-    const timeout = AbortSignal.timeout(timeoutMs);
+    const timeout = AbortSignal.timeout(waitMs);
     try {
       // redirect: 'error':轉址時 X-ClickHouse-Key 會被帶到別的主機,一律不跟隨
       const res = await fetchImpl(u, { method: 'POST', headers, body: sql, redirect: 'error', signal: signal ? AbortSignal.any([timeout, signal]) : timeout });
@@ -266,7 +268,7 @@ export function createClickHouseReader(cfg: ClickHouseConfig, fetchImpl: Fetch =
       return res;
     } catch (e) {
       if (e instanceof ClickHouseError) throw e;
-      throw connectError(e, timeoutMs);
+      throw connectError(e, waitMs);
     }
   }
 
@@ -295,8 +297,9 @@ export function createClickHouseReader(cfg: ClickHouseConfig, fetchImpl: Fetch =
     signal?: AbortSignal,
     settings?: Record<string, string>,
     onResponse?: (res: Response) => void,
+    waitMs?: number,
   ): Promise<number> {
-    const res = await request(`${sql} FORMAT JSONCompactEachRow`, params, signal, settings);
+    const res = await request(`${sql} FORMAT JSONCompactEachRow`, params, signal, settings, waitMs);
     onResponse?.(res);
     if (!res.body) throw new ClickHouseError('ClickHouse 回應沒有內容', undefined, res.status);
     const decoder = new TextDecoder();
@@ -442,6 +445,7 @@ export function createClickHouseReader(cfg: ClickHouseConfig, fetchImpl: Fetch =
       const names = TRAFFIC_FIELDS.map(([k]) => k);
       const out: LogRecord[] = [];
       let scanned = 0;
+      const secs = Math.min(Math.max(Math.floor(seconds), 1), 50);
       await stream(
         `SELECT ${TRAFFIC_FIELDS.map(([, e]) => e).join(', ')} FROM ${READ_TABLES.traffic} WHERE ${where.join(' AND ')} ORDER BY event_time, src LIMIT {lim:UInt32}`,
         { ...params, lim: limit + 1 },
@@ -452,7 +456,7 @@ export function createClickHouseReader(cfg: ClickHouseConfig, fetchImpl: Fetch =
         },
         signal,
         // 工作取消(HTTP 連線中斷)時 ClickHouse 也停止查詢
-        { max_execution_time: String(Math.min(Math.max(Math.floor(seconds), 1), 50)), cancel_http_readonly_queries_on_client_close: '1' },
+        { max_execution_time: String(secs), cancel_http_readonly_queries_on_client_close: '1' },
         (res) => {
           try {
             scanned = Number(JSON.parse(res.headers.get('x-clickhouse-summary') ?? '{}').read_rows) || 0;
@@ -460,6 +464,8 @@ export function createClickHouseReader(cfg: ClickHouseConfig, fetchImpl: Fetch =
             /* 沒有摘要標頭只是少了掃描筆數 */
           }
         },
+        // 用戶端等待比伺服器端上限多 10 秒:逾時由 ClickHouse 回 159(資安審查 M1)
+        (secs + 10) * 1000,
       );
       const more = out.length > limit;
       return { rows: more ? out.slice(0, limit) : out, more, scanned };

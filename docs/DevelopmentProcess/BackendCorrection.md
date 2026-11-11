@@ -6,6 +6,7 @@
 - 工作項目:C3(ARCHITECTURE D6、D29;手冊 §7.4、§12 CQ10)
 - 內容:`infra/clickhouse/reader.ts` 加 `trafficWhere`(明細條件 → SQL,值一律放參數:IP 完全相同 `toIPv6OrNull`、CIDR 換成 `IPv6CIDRToRange` 的 BETWEEN、萬用字元換 LIKE 並跳脫,不用正規表示式)、`searchTraffic`(依時間由舊到新取 limit+1 筆判斷 `limit`,執行上限 50 秒,工作取消時 `cancel_http_readonly_queries_on_client_close` 讓 ClickHouse 停止查詢)、`trafficCount`。`modules/pa/log-routes.ts`:`source`(設定 `NETOPS_PA_DETAIL_SOURCE`,預設 ftp,並行對帳 2 週後改 auto);ClickHouse 明細另一個工作佇列(同時 2 個,不佔 FTP 連線),結果格式、分頁、匯出、取消與 FTP 相同,`result.source` 標實際來源;期間最長 30 天。
 - 檔案:`backend/src/{infra/clickhouse/reader.ts,modules/pa/log-routes.ts,app.ts}`、`backend/test/{unit/ch-detail.test.ts,unit/logs.test.ts,integration/reader.int.test.ts,fixtures/fake-ch.ts}`
+- 審查修正(`code-reviewer`、`security-auditor` 2026-11-11):auto 時 ClickHouse 沒有資料改走 FTP(不回 404);明細查詢的用戶端等待改為伺服器上限 + 10 秒(逾時由 ClickHouse 回 159,訊息提示縮小範圍);ClickHouse 明細每人同時 1 個、全部保留 30 份結果;只用 `q` 沒有其他條件時 ClickHouse 期間最長 1 天;IPv6 改用 `node:net` 驗證,不合法的不送進 `toIPv6`。未處理(寫在 MR):`netops_reader` 加 `max_rows_to_read`(要改 users.d)、取消時 `KILL QUERY`(唯讀帳號不能)。
 - 驗證:`npm run typecheck`、`npm test`(263 通過);主機 2 測試區 ClickHouse 唯讀執行 7 種條件的明細 SQL(完全相同、CIDR、萬用字元、Port + block、文字條件、不合法 IP、IPv6 CIDR),一天範圍(約 177 萬筆)每次伺服器端不到 1 秒
 
 ## 2026-11-11 C3 第 1 批:總覽、安全事件、篩選選項改查 ClickHouse

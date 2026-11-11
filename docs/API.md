@@ -1,7 +1,7 @@
 # NetOps API
 
 > `netops-api` 的對外介面:前端(F1)照本文件串接。決策見 [ARCHITECTURE.md](ARCHITECTURE.md),工作項目見 [IMPL-PLAN.md](IMPL-PLAN.md)。
-> **狀態:B1 定稿;C3 `feature/clickhouse-c3-query` 加 §4.1、§4.2 的 `source`(ClickHouse),`feature/clickhouse-c3-detail` 加 §4.3 的 `source`,`feature/clickhouse-c3-reconcile` 加 §5.3 對帳與補漏;B2-pa 已實作 §4.1、§5.1;B2-ad 已實作 §4.2、§5.2、§6;B2-kb 已實作 §7;B2-logs 已實作 §4.3(B2 全部完成);A1(AI 搬移)第 2 批 `feature/a1-ai-api` 實作 §10**。各模組在 B2 分批實作,「批次」欄是預定交付的 MR;實作與本文件不同時,以 MR 描述的「API 變更」為準並同步更新本文件。
+> **狀態:B1 定稿;C3 `feature/clickhouse-c3-query` 加 §4.1、§4.2 的 `source`(ClickHouse),`feature/clickhouse-c3-detail` 加 §4.3 的 `source`,`feature/clickhouse-c3-reconcile` 加 §5.3 對帳與補漏;V-a `feature/viz-a-heatmap-data` 加 §4.4 熱力圖與時段明細;B2-pa 已實作 §4.1、§5.1;B2-ad 已實作 §4.2、§5.2、§6;B2-kb 已實作 §7;B2-logs 已實作 §4.3(B2 全部完成);A1(AI 搬移)第 2 批 `feature/a1-ai-api` 實作 §10**。各模組在 B2 分批實作,「批次」欄是預定交付的 MR;實作與本文件不同時,以 MR 描述的「API 變更」為準並同步更新本文件。
 > 欄位的完整定義以服務的 `/openapi.json` 為準(上架時匯入 Gateway);本文件寫路徑、權限、請求與回應格式。
 
 ---
@@ -28,7 +28,7 @@
 
 ### 1.1 工作狀態(Job)
 
-明細查詢、AD 的 FTP 檔案清單使用工作模式。工作**只有建立者本人可查與取消**,別人的工作回 404;只存在記憶體,服務重新啟動後失效(回 404 `NETOPS_JOB_NOT_FOUND`,前端提示重新送出);完成後保留 30 分鐘。進行中的工作上限依**工作類型**分開計算(明細查詢一組、AD 的 FTP 檔案清單一組):每種每人同時最多 2 個、全系統最多 6 個,超過回 409 `NETOPS_JOB_LIMIT_EXCEEDED`(取消後,要等工作真正停止才釋放名額,通常幾秒內)。每人保留的已完成工作:明細查詢 5 筆(§4.3)、AD 檔案清單 10 筆,超過時先丟自己最舊的。
+明細查詢、時段明細(§4.4,`pa-slice`)、AD 的 FTP 檔案清單使用工作模式。工作**只有建立者本人可查與取消**,別人的工作回 404;只存在記憶體,服務重新啟動後失效(回 404 `NETOPS_JOB_NOT_FOUND`,前端提示重新送出);完成後保留 30 分鐘。進行中的工作上限依**工作類型**分開計算(明細查詢一組、AD 的 FTP 檔案清單一組):每種每人同時最多 2 個、全系統最多 6 個,超過回 409 `NETOPS_JOB_LIMIT_EXCEEDED`(取消後,要等工作真正停止才釋放名額,通常幾秒內)。每人保留的已完成工作:明細查詢 5 筆(§4.3)、AD 檔案清單 10 筆,超過時先丟自己最舊的。
 
 取消一律用 `DELETE …/{id}`,回 **204**;工作已結束、已逾期或不存在也回 204(冪等,BFF 重試時不會報錯)。取消後再查詢,`status` 為 `cancelled`。
 
@@ -73,8 +73,8 @@ PA 匯入在背景佇列執行;同步、分析只是送進佇列,畫面輪詢狀
 | `netops.ping.read` | 連線驗證:查詢 | §3(含 §3.1 串流驗證) |
 | `netops.pa-realtime.read` | PA 即時監控:查詢 | §3.2(畫面節點 `netops.pa-live.read`) |
 | `netops.pa-realtime.write` | PA 即時監控:測試區暫停 / 繼續收集器 | §3.2 `collector-control`(按鈕 `netops.pa-live.manage`,只給 `netops-admin`;2026-11-09 需求方決定) |
-| `netops.pa.read` | PA 防火牆:查詢 | §4.1、§4.2 |
-| `netops.pa-log.read` | PA Log 明細:查詢 | §4.3 |
+| `netops.pa.read` | PA 防火牆:查詢 | §4.1、§4.2、§4.4 熱力圖 |
+| `netops.pa-log.read` | PA Log 明細:查詢 | §4.3、§4.4 時段明細 |
 | `netops.ftp.read` | FTP Log 檔案:查詢 | §5 讀取 |
 | `netops.ftp.write` | FTP Log 檔案:同步與管理 | §5 寫入 |
 | `netops.ad.read` | AD 事件:查詢 | §6.1 |
@@ -83,7 +83,7 @@ PA 匯入在背景佇列執行;同步、分析只是送進佇列,畫面輪詢狀
 | `netops.kb.write` | 知識庫:編輯 | §7 寫入、§10.2 立即同步 / 學習 |
 | `netops.ai.use` | AI 分析與問答:使用 | §10.1(分析、問答、狀態)。不是 `.read`:選單不能綁定,由按鈕 `netops.pa-ask.use`、`netops.ad-ask.use`、`netops.pa-dashboard.ai` 綁定(`gateway-rbac.yaml`);給 `netops-admin`、`netops-viewer`(2026-11-05 決定) |
 
-稽核:Log 明細查詢與匯出、知識庫下載、即時 log(§3.2 `logs`、`stream`)、AI 分析與問答(§10.1)設 `x-audit-level: meta`;測試區收集器開關(§3.2 `collector-control`)設 `body`(記錄要求的狀態)。
+稽核:Log 明細查詢與匯出、時段明細(§4.4)、知識庫下載、即時 log(§3.2 `logs`、`stream`)、AI 分析與問答(§10.1)設 `x-audit-level: meta`;測試區收集器開關(§3.2 `collector-control`)設 `body`(記錄要求的狀態)。
 
 取消工作(`DELETE …/{id}`)用該工作的**讀取**權限:只能取消自己送出的工作,不改變業務資料,因此不另設寫入權限(ARCHITECTURE §5)。
 
@@ -280,6 +280,82 @@ PA 匯入在背景佇列執行;同步、分析只是送進佇列,畫面輪詢狀
                "endReason": "tcp-fin", "category": "any", "srcCountry": "10.0.0.0-10.255.255.255", "dstCountry": "United States",
                "appRisk": 4, "threat": "", "severity": "", "url": "" } ],
   "total": 120, "page": 1, "pageSize": 50 }
+```
+
+### 4.4 活動熱力圖與時段明細(V-a)— 批次 `feature/viz-a-heatmap-data`
+
+設計見 [VIZ-RULES-DESIGN.md](VIZ-RULES-DESIGN.md) §3、§4.2、§4.3(決策 D34、D35;V1、V3、X4、X8、X9)。熱力圖只讀 ClickHouse 彙總表 `pa_heat_5m` / `_1h` / `_1d`(物化檢視從原始表算;正式區每 5 分鐘保留 1 年、每小時與每天 5 年,測試區 3 天);時段明細讀原始表,一次最多 1 天。
+
+| 方法 | 路徑 | 權限 | 稽核 | 說明 |
+| --- | --- | --- | --- | --- |
+| GET | `/api/netops/pa/heatmap?granularity&metric&date` | `netops.pa.read` | — | 熱力圖格子 |
+| GET | `/api/netops/pa/slice?start&end&type…` | `netops.pa-log.read` | `meta` | 時段明細;30 秒內回 200,否則 202 工作(`x-timeout-ms: 40000`) |
+| GET | `/api/netops/pa/slices/{id}` | `netops.pa-log.read` | `meta` | 時段明細工作狀態(完成時含 `result`) |
+| DELETE | `/api/netops/pa/slices/{id}` | `netops.pa-log.read` | — | 取消 / 丟棄結果(冪等,204) |
+
+**熱力圖**:
+
+| 參數 | 值 | 說明 |
+| --- | --- | --- |
+| `granularity` | `year` \| `month` \| `day` | 必填。`year`:以 `date` 所在週(週一開始)為最後一欄往前共 53 週,一格一天;`month`:`date` 所在月,一格一小時;`day`:`date` 當天,一格 5 分鐘 |
+| `metric` | `traffic` \| `deny` \| `threat` \| `ad` | 必填。`traffic` = 位元組;`deny` = 非 allow 筆數;`threat` = `10×critical + 5×high + 2×medium + 1×low`(只算 `log_type = threat` 的筆數,不乘 Repeat Count);`ad` 是 AD 階段(V-d)預留,回 409 `NETOPS_HEATMAP_METRIC_UNAVAILABLE` |
+| `date` | `YYYY-MM-DD` | 預設今天;晚於今天回 400。`day` 超過 1 年(5 分鐘彙總保留)回 422 `NETOPS_HEATMAP_OUT_OF_RETENTION`,`details.earliest` 為最早可查日 |
+
+```jsonc
+{
+  "granularity": "month", "metric": "traffic", "date": "2026-11-11",
+  "from": "2026-11-01T00:00:00+08:00", "to": "2026-12-01T00:00:00+08:00", "bucketSeconds": 3600,
+  "coverage": {
+    "since": "2026-11-10T15:00:00+08:00",   // 彙總表最早的格子;更早的格子 v = null(沒有資料,不是 0)。表內沒有資料時 null
+    "gaps": [ { "from": "2026-11-10T13:00:00+08:00", "to": "2026-11-10T14:00:00+08:00", "reason": "recon-gap" } ],  // §5.3 每日對帳的缺口小時
+    "gapsKnown": true                       // false:沒有對帳(ClickHouse 未設定),缺口未檢查
+  },
+  "levels": { "method": "quantile", "thresholds": [120000000, 480000000, 1500000000] },  // level 2–4 的下限;threat 為 { "method": "severity", "thresholds": [] }
+  "cells": [                                // 開始時間在現在之後的格子不回
+    { "t": "2026-11-11T08:00:00+08:00", "v": 2345678901, "level": 4, "partial": false,
+      "tip": { "bytes": 2345678901, "sessions": 412345, "deny": 3120,
+               "threats": { "critical": 0, "high": 2, "medium": 5, "low": 11, "info": 40 },
+               "topIp": { "traffic": "10.10.112.20", "deny": "10.10.113.7", "threat": "10.10.112.31" } } }  // topIp 為近似值(topK),畫面標「約」;沒有時 null
+  ],
+  "generatedAt": "2026-11-11T02:12:00.000Z"
+}
+```
+
+- `level`:`traffic`、`deny` 依本視圖非 0 格的 25 / 50 / 75 百分位分 1–4(0 = 0 或 null);`threat` 依最高嚴重度:critical 4、high 3、medium 2、low / info 1。
+- `partial`:格子和 `coverage.gaps` 重疊。
+- 快取(Redis `netops:cache:pa-heat:*`):含現在的期間 60 秒、已結束的期間 1 小時;三個指標共用同一份。
+- ClickHouse 未設定、連不上或查詢失敗回 503 `NETOPS_CLICKHOUSE_UNAVAILABLE`(同 §4.1)。
+
+**時段明細**(點熱力圖格子、圖表聯動):
+
+| 參數 | 說明 |
+| --- | --- |
+| `start`、`end` | ISO 8601 含時區;`end` 必須晚於 `start`,最長 1 天,超過 400 |
+| `type` | `traffic`(預設)\| `threat`(只查 `log_type = threat`) |
+| 篩選(選填) | `ip`(比對來源 / 目的,含 NAT)、`src`、`dst`:**只接受單一 IP 或 CIDR**(不接受萬用字元);`app`、`country`(包含,不分大小寫)、`fromZone`、`toZone`(完全相同)、`dport`(0–65535)、`action`(`allow` \| `block`);`type=threat` 另有 `severity`(`critical`…`info`)、`threatName`(包含)。語意同 §4.3 ClickHouse 來源 |
+| `rows` | 明細列數 0–200(預設 100);全部明細請用 §4.3 Log 明細查詢 |
+| `sort` | `time`(預設,新到舊)\| `bytes`(只對 `traffic`) |
+
+**熱 / 冷分界**:`hotFrom` = 今天 00:00 −(原始表保留天數 − 1)天(TRAFFIC 30 → 29 天、威脅 90 → 89 天;測試區 3 → 2 天;設定 `NETOPS_TTL_TRAFFIC_DAYS` / `NETOPS_TTL_THREAT_DAYS`,預設依部署區,要和 `apply-schema.sh` 一致)。`start ≥ hotFrom` 查原始表(`source: "hot"`);早於 `hotFrom` 的部分要讀冷歸檔(C4),**冷歸檔尚未提供**:回 409 `NETOPS_COLD_ARCHIVE_DISABLED`,`details.hotFrom` 為可查的起點。C4 之後冷的部分 `source` 為 `cold` / `mixed`,冷查詢全系統同時 1 個(Redis 鎖 `netops:cold:lock`),拿不到回 429 `NETOPS_COLD_QUERY_BUSY` 與 `Retry-After: 10`。
+
+**同步 30 秒,超過轉工作**:一律建 `pa-slice` 工作;30 秒內完成回 **200** 結果,否則回 **202** 工作狀態(§1.1),前端改輪詢 `GET /pa/slices/{id}`(完成時 `result` 為結果)。同一人、同一組參數在工作保留期間(30 分鐘)重送回同一個工作(進行中 202、完成 200),不重複查詢。工作每人同時 2 個、全系統 6 個(和 §4.3 分開計),每人保留 5 筆,執行上限 120 秒(ClickHouse 每個查詢 50 秒);30 秒內失敗直接回該錯誤(例 503 `NETOPS_CLICKHOUSE_UNAVAILABLE`)。熱查詢結果另有 60 秒共用快取(`netops:cache:pa-slice:*`)。
+
+```jsonc
+{
+  "source": "hot",                        // hot | cold | mixed
+  "type": "traffic", "start": "2026-11-11T08:00:00+08:00", "end": "2026-11-11T09:00:00+08:00",
+  "filters": { "ip": "10.10.112.20" },    // 有帶的篩選條件
+  "summary": { "sessions": 41234, "bytes": 2345678901, "sent": 1234567, "recv": 2344444334, "deny": 312,   // type=threat 時 sessions 為威脅筆數、bytes / sent / recv 為 0
+               "threats": { "critical": 0, "high": 2, "medium": 5, "low": 11, "info": 40 } },             // 同時段 log_type=threat 的筆數(type=traffic 時只套用 IP 條件)
+  "top": {                                // 各 Top 10;traffic:依位元組 { key, sessions, bytes };threat:依筆數 { key, count }(name 另有 severity)
+    "src": [ { "key": "10.10.112.20", "sessions": 1200, "bytes": 1300000000 } ], "dst": [], "app": [], "dport": [], "dstCountry": []
+    // type=threat:{ "name": [ { "key": "…", "severity": "high", "count": 9 } ], "src": [], "dst": [], "srcCountry": [] }
+  },
+  "rows": [ /* traffic:欄位同 §4.3 ClickHouse 來源(time 為 +08:00);threat:time、subtype、src、dst、natSrc、natDst、rule、srcUser、app、fromZone、toZone、dport、proto、action、url、name、category、severity、direction、srcCountry、dstCountry、repeat、thrCategory、filedigest、filetype */ ],
+  "rowsLimit": 100, "rowsTruncated": true,
+  "coverage": { "partial": false, "gaps": [], "gapsKnown": true },
+  "seconds": 0.8
+}
 ```
 
 ---
@@ -550,7 +626,11 @@ AI 相關(語意搜尋、向量同步、外部 IP 自動學習)見 §10.2(A1)。
 | 409 | `NETOPS_BACKFILL_NOTHING` | 這一天沒有需要補漏的小時(§5.3) |
 | 409 | `NETOPS_BACKFILL_BUSY` | 補漏佇列已滿(§5.3) |
 | 404 | `NETOPS_BACKFILL_NOT_FOUND` | 補漏工作不存在或已超過 7 天(§5.3) |
-| 503 | `NETOPS_CLICKHOUSE_UNAVAILABLE` | 指定 `source=clickhouse` 而 ClickHouse 連不上、查詢失敗或未設定(C3,§4.1);只影響用到 ClickHouse 的 API。原始錯誤只寫服務日誌 |
+| 503 | `NETOPS_CLICKHOUSE_UNAVAILABLE` | 指定 `source=clickhouse` 而 ClickHouse 連不上、查詢失敗或未設定(C3,§4.1);熱力圖與時段明細(§4.4)一律查 ClickHouse,同樣回這個代碼。只影響用到 ClickHouse 的 API。原始錯誤只寫服務日誌 |
+| 409 | `NETOPS_HEATMAP_METRIC_UNAVAILABLE` | 熱力圖指標尚未開放(`ad`,AD 階段 V-d;§4.4) |
+| 422 | `NETOPS_HEATMAP_OUT_OF_RETENTION` | 熱力圖日視圖超過 5 分鐘彙總保留(1 年);`details.earliest`(§4.4) |
+| 409 | `NETOPS_COLD_ARCHIVE_DISABLED` | 時段明細早於原始表保留、要讀冷歸檔,冷歸檔(C4)尚未提供;`details.hotFrom`(§4.4)。設定狀態,不用 5xx |
+| 429 | `NETOPS_COLD_QUERY_BUSY` | 已有冷資料查詢在執行(全系統 1 個)或歸檔匯出中;帶 `Retry-After`(§4.4,C4 起) |
 | 403 | `NETOPS_PA_CONTROL_DISABLED` | 正式區不能切換收集器的輪詢與接收(§3.2 `collector-control`,只有測試區可用) |
 | 424 | `NETOPS_REDIS_UNAVAILABLE` | 即時監控讀不到 `netops-redis`(§3.2;`snapshot` 例外,回 200 `state: unavailable`)。不用 5xx:避免累積 BFF 斷路器失敗。原始錯誤只寫服務日誌 |
 | 424 | `NETOPS_PA_LIVE_DISABLED` | 未設定 `REDIS_URL`(只會在 dev) |

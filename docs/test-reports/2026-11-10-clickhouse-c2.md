@@ -19,7 +19,9 @@
 | 收集器 | `ruff check`、`pytest`(pa-collector) | 84 通過 |
 | 後端型別 | `npm run typecheck` | 通過 |
 | 後端單元測試 | `npm test`(含 `test/unit/ingest.test.ts` 38 項:熔斷、未知 400、大小上限、缺口誤報) | 234 通過(2026-11-11) |
-| 整合測試 | CI `check:ingest-int`:一次性 Redis 7.4 + ClickHouse 26.3(同設定、schema、migrations、`netops_writer`),`npm run test:int`;`dedupe-day.sh` 測試 | 見 MR pipeline |
+| 整合測試 | CI `check:ingest-int`:一次性 Redis 7.4 + ClickHouse 26.3(同設定、schema、migrations、`netops_writer`),`npm run test:int`;`dedupe-day.sh` 測試 | pipeline 826(job 2519)通過:整合 9 項;兩筆相同列修正後原始表與彙總都是 1 |
+
+CI 整合測試抓到並已修正的問題:① ClickHouse 26.x 的 HTTP 寫入預設走 async insert,`insert_deduplication_token` 不生效(同 token 重送寫兩次)→ 寫入帶 `async_insert=0`;② 來源表略過重送區塊時仍推給物化檢視(彙總重複)→ `deduplicate_blocks_in_dependent_materialized_views=1` + 彙總表去重視窗(migration 002);③ `XTRIM` 不更新 `max-deleted-entry-id` → 缺口改用計數 + 已回報基準。
 
 整合測試涵蓋:JSONEachRow 欄位與型別(`seqno` 64 位元字串、IPv4 → `::ffff:`、台灣時間)、威脅類 migration 欄位、**同一 token 重送原始表與每小時彙總都不重複**、**寫入後 ACK 前當機 → 重啟補待處理清單不重複**、XTRIM 後的缺口偵測與「閒置類型」不誤報、Stream 過期後 group 自動重建、ClickHouse 錯誤代碼分類。
 

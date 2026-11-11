@@ -2,6 +2,11 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。
 
+## 2026-11-11 C3:PA 查詢只用 ClickHouse(推翻並行 2 週)
+- 工作項目:C3
+- 內容:需求方決定捨棄 FTP 查詢路徑、對帳改 01:00;ARCHITECTURE D43;API.md §4.1–§4.3、§5.3、§8;Gherkin `pa/overview.feature`、`pa-events/overview.feature`、`pa-log-searches/search.feature` 改寫;IMPL-PLAN、HANDOFF。
+- 檔案:`docs/{API,ARCHITECTURE,IMPL-PLAN,HANDOFF,PROJECT-MAP}.md`、`docs/Gherkin/`
+
 ## 2026-11-11 C3 查詢切換(第 3 批:FTP 對帳與補漏)
 - 工作項目:C3
 - 內容:FTP 與 ClickHouse 每日對帳(每小時筆數,0.5% 門檻)與手動補漏 API;API.md §5.3、§8;ARCHITECTURE D33 補實作方式;PA-LIVE-PLAN §4 加 `netops:cache:*`、`netops:backfill:*`;Gherkin `ftp/pa-recon.feature`(畫面不在這次,補在 MR 給 Gemini 的待辦)。

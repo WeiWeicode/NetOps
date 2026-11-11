@@ -2,6 +2,15 @@
 
 > 接手時先讀 `AGENT.md`,再讀 `docs/ARCHITECTURE.md`、`docs/IMPL-PLAN.md`。
 
+
+## 2026-11-11 C3 查詢只用 ClickHouse(`feature/clickhouse-c3-ch-only`)
+
+- 需求方 2026-11-11 晚上決定(ARCHITECTURE D43):推翻 CQ10「並行 2 週」,PA 總覽、安全事件(威脅類)、Top N、Log 明細**只查 ClickHouse**;FTP 只做每日對帳與補漏、AD、AI。
+- 原因:!71–!73 上線後總覽 11/10–11/11、安全事件 11/11 顯示 0。`auto` 只在期間開始晚於 ClickHouse 最早一小時(測試區 2026-11-11 08:00)才用 ClickHouse,其他時候走 FTP,而 FTP 還沒分析那幾天。另外測試區 15 時的每小時摘要一直建不起來(一段 8 萬列串流超過 30 秒逾時),已改成每段 2 萬列、最多等 180 秒。
+- 對帳:`NETOPS_RECON_HOUR` 預設 1(01:00 起),對帳流程自己同步分析 FTP 的 TRAFFIC 檔;PA 前一天的匯出檔約 07:45 才出現,之前為 pending、每 10 分鐘再試。
+- 後續:AI 分析 / 問答 / 外部 IP 學習改用 ClickHouse(目前用 FTP 摘要、連線組合統計與事件彙總,改動大);在那之前 `FTP_SYNC_MINUTES` 要保留(AI 與解密 / GlobalProtect / User-ID 仍要 FTP 分析)。
+- 前端:日期改單一區間欄位(`feature/netops-date-range`,堆疊在後端 MR 之後)。
+
 ## 2026-11-10 C2 寫入管線(`feature/clickhouse-c2-collector` → `feature/clickhouse-c2-ingest`)
 
 - **2026-11-11**:!67、!68 已合併(pipeline 830),測試區 `netops-ingest` 運作中。第一次核對通過(報告 §4);**接下來每天跑一次** `ssh host2 "wsl -u root -e sh -s 24" < deploy/clickhouse/verify-ingest.sh`,連續 3 天每小時差 < 0.5% 後補報告 §5、IMPL-PLAN C2 改完成。需求方決定 Redis ACL 與 `netops_writer` 縮權限都不做。

@@ -246,6 +246,8 @@ D13:骨架直接留用;AI 不在這次範圍,不做串流驗證(D7、D17)。
 
 **狀態:開發中(2026-11-11)**。第 1 批 `feature/clickhouse-c3-query`:`netops-api` 唯讀查詢(`infra/clickhouse/reader.ts`,帳號 `netops_reader`)、總覽 / 篩選選項 / 安全事件加 `source`(ftp / clickhouse / auto,設定 `NETOPS_PA_OVERVIEW_SOURCE` 預設 auto)、Redis 快取 60 秒;排行改由 ClickHouse 每小時摘要提供(ARCHITECTURE D42;彙總表只涵蓋 App、區域、來源 IP,不新增表)。第 2 批 `feature/clickhouse-c3-detail`:Log 明細加 `source`(ClickHouse ≤ 30 天,設定 `NETOPS_PA_DETAIL_SOURCE` 預設 ftp)。第 3 批 `feature/clickhouse-c3-reconcile`:每日對帳(`netops-api`,FTP 摘要 vs ClickHouse 每小時彙總,0.5% 門檻,每天 06:00 對帳前 3 天)與手動補漏(`netops-ingest` 只補缺的 seqno);API.md §5.3。驗收(誤差、明細秒數)等 C2 觀察完成後做。
 
+**2026-11-11 晚上需求方改決定(ARCHITECTURE D43)**:不並行 2 週,查詢全部改用 ClickHouse(`feature/clickhouse-c3-ch-only`):總覽、安全事件、Top N、Log 明細只查 ClickHouse,超過保留期限回 `NETOPS_PA_OUT_OF_RETENTION`;FTP 只做每日對帳(01:00 起,自己同步分析 FTP)與補漏。完成條件「並行對帳 2 週無未處理缺口」改為「每日對帳持續運作、缺口可補」;誤差 < 0.5%、一天範圍明細 < 10 秒照舊。AI 分析 / 問答改用 ClickHouse 列為後續。前端日期改單一區間欄位(`feature/netops-date-range`)。
+
 ## C4 冷歸檔(已核准,待 FTP 保留期限)
 
 1. 每天 02:30 匯出前一天 Parquet(本機暫存 → NAS `/mnt/nas-docker/giga-netops/{env}/pa-archive/YYYY/`)、SHA-256、manifest、重試到 D+25。歸檔原始 log 或只歸檔每小時彙總,依 E1 的結果(CQ3)。

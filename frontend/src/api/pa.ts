@@ -78,8 +78,11 @@ export type PaSearchKey = (typeof PA_SEARCH_KEYS)[number];
 export type PaSearchBody = { from: string; to: string; limit?: number; source?: PaSource } & Partial<Record<PaSearchKey, string>>;
 
 export interface PaSearchResult {
-  /** 實際來源(C3) */
-  source: 'ftp' | 'clickhouse';
+  /** C3 D43:固定 clickhouse */
+  source: 'clickhouse';
+  /** ClickHouse 有資料的範圍;partial = 期間有一部分在範圍之前(超過保留期限的部分沒有資料) */
+  coverage?: Coverage;
+  partial?: boolean;
   from: string;
   to: string;
   total: number;

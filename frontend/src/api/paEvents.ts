@@ -3,16 +3,23 @@
  * 類型:threat、url、data、wildfire、decryption、globalprotect、userid(只列出有設定 FTP 目錄的類型)。
  */
 import { http } from './gateway';
-import type { PaSource } from './pa';
+import type { Coverage, PaSource } from './pa';
 
 export interface PaEventType {
   type: string;
   label: string;
   dir: string;
+  /** clickhouse:有資料的小時數;ftp:已分析的檔案數 */
   files: number;
   rows: number;
-  /** 已分析的資料日期(新的在前) */
+  /** 有資料的日期(新的在前) */
   days: string[];
+  /** C3 D43:威脅、URL、資料過濾、WildFire 為 clickhouse;解密、GlobalProtect、User-ID 為 ftp */
+  source: 'ftp' | 'clickhouse';
+  /** 有資料的範圍 */
+  coverage: Coverage | null;
+  /** ClickHouse 暫時無法使用(只有 clickhouse 類型) */
+  unavailable?: boolean;
 }
 
 export interface KeyCountGroup {
@@ -28,8 +35,12 @@ export interface PaEventOverview {
   to: string;
   /** 實際使用的來源(C3:威脅、URL、資料過濾、WildFire 可為 clickhouse;其他類型一律 ftp) */
   source: 'ftp' | 'clickhouse';
-  /** source 為 clickhouse 時:KPI 與排行只算到這個時間 */
+  /** source 為 clickhouse 時:KPI 與排行只算到這個時間;topsState 不是 ok 時不完整 */
   topsUntil?: string;
+  topsState?: 'ok' | 'not-ready' | 'stale';
+  /** source 為 clickhouse 時:有資料的範圍;partial = 期間有一部分在範圍之前 */
+  coverage?: Coverage;
+  partial?: boolean;
   /** ftp:期間內已分析的檔案數;clickhouse:有摘要的小時數 */
   files: number;
   /** 已分析、但摘要讀不到的檔案數:大於 0 表示結果不完整 */

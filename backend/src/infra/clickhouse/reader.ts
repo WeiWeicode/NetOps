@@ -23,6 +23,8 @@ export const isChEventType = (t: string): t is ChEventType => (CH_EVENT_TYPES as
 
 /** 原始 log 一段最多幾筆(netops_reader 的 max_result_rows 是 100000) */
 export const SLICE_ROWS = 80_000;
+/** netops_reader 的 max_result_rows(users.d/profiles.xml) */
+const MAX_RESULT_ROWS = 100_000;
 
 /** IPv6 欄位 → 舊版畫面的字串(IPv4 去掉 ::ffff:;空位址 :: 為空字串) */
 const ipText = (col: string) => `if(${col} = toIPv6('::'), '', replaceRegexpOne(toString(${col}), '^::ffff:', ''))`;
@@ -112,13 +114,13 @@ export interface ClickHouseReader {
   /** 連線與帳密是否可用 */
   ping(): Promise<void>;
   /** 每小時彙總依小時與動作的合計(期間 [fromMs, toMs)) */
-  trafficHours(fromMs: number, toMs: number): Promise<TrafficHourRow[]>;
+  trafficHours(fromMs: number, toMs: number, signal?: AbortSignal): Promise<TrafficHourRow[]>;
   /** 明細查詢的下拉選項:期間內的 App(依次數前 limit 名)、區域、動作(來自每小時彙總) */
   trafficOptions(fromMs: number, toMs: number, limit: number): Promise<{ apps: string[]; zones: string[]; actions: string[] }>;
   /** 每小時彙總最早的小時(UTC 毫秒);沒有資料為 null */
-  earliestTrafficHour(): Promise<number | null>;
+  earliestTrafficHour(signal?: AbortSignal): Promise<number | null>;
   /** 威脅類每小時筆數(原始列數,不乘 Repeat Count) */
-  threatHourCounts(fromMs: number, toMs: number): Promise<{ type: ChEventType; hour: number; n: number }[]>;
+  threatHourCounts(fromMs: number, toMs: number, signal?: AbortSignal): Promise<{ type: ChEventType; hour: number; n: number }[]>;
   /** 逐列讀取期間內的 TRAFFIC 原始 log(核心紀錄格式);回傳筆數 */
   trafficRecords(fromMs: number, toMs: number, onRow: (r: LogRecord) => void, signal?: AbortSignal): Promise<number>;
   /** 逐列讀取期間內某類型的威脅類原始 log */
@@ -163,16 +165,26 @@ export function createClickHouseReader(cfg: ClickHouseConfig, fetchImpl: Fetch =
   }
 
   /** 小結果:JSONEachRow 一次讀完 */
-  async function rows<T>(sql: string, params: Record<string, Param> = {}): Promise<T[]> {
-    const res = await request(`${sql} FORMAT JSONEachRow`, params);
-    const text = await res.text();
-    return parseLines(text).map((l) => JSON.parse(l) as T);
+  async function rows<T>(sql: string, params: Record<string, Param> = {}, signal?: AbortSignal): Promise<T[]> {
+    const res = await request(`${sql} FORMAT JSONEachRow`, params, signal);
+    let text: string;
+    try {
+      text = await res.text();
+    } catch (e) {
+      throw connectError(e, timeoutMs);
+    }
+    try {
+      return parseLines(text).map((l) => JSON.parse(l) as T);
+    } catch {
+      // HTTP 200 之後的中途錯誤:不把錯誤原文帶出去(資安審查 L2:可能含 log 內容)
+      throw new ClickHouseError('ClickHouse 查詢中斷', Number(/Code: (\d+)/.exec(text)?.[1]) || undefined, 200);
+    }
   }
 
-  /** 大結果:逐行讀取(JSONCompactEachRow),中途的錯誤(HTTP 已回 200)以「無法解析的行」偵測 */
+  /** 大結果:逐行讀取(JSONCompactEachRow),中途的錯誤(HTTP 已回 200)以「無法解析的行」偵測;每個資料塊之後讓出事件迴圈 */
   async function stream(sql: string, params: Record<string, Param>, onLine: (cols: unknown[]) => void, signal?: AbortSignal): Promise<number> {
     const res = await request(`${sql} FORMAT JSONCompactEachRow`, params, signal);
-    if (!res.body) return 0;
+    if (!res.body) throw new ClickHouseError('ClickHouse 回應沒有內容', undefined, res.status);
     const decoder = new TextDecoder();
     let buf = '';
     let n = 0;
@@ -182,8 +194,7 @@ export function createClickHouseReader(cfg: ClickHouseConfig, fetchImpl: Fetch =
       try {
         cols = JSON.parse(line);
       } catch {
-        const code = Number(/Code: (\d+)/.exec(line)?.[1]);
-        throw new ClickHouseError(`ClickHouse 查詢中斷:${line.slice(0, 200)}`, Number.isFinite(code) ? code : undefined, 200);
+        throw new ClickHouseError('ClickHouse 查詢中斷', Number(/Code: (\d+)/.exec(line)?.[1]) || undefined, 200);
       }
       if (!Array.isArray(cols)) throw new ClickHouseError('ClickHouse 回應格式不符', undefined, 200);
       onLine(cols);
@@ -197,6 +208,7 @@ export function createClickHouseReader(cfg: ClickHouseConfig, fetchImpl: Fetch =
           take(buf.slice(0, i));
           buf = buf.slice(i + 1);
         }
+        await new Promise((r) => setImmediate(r));
       }
       take(buf + decoder.decode());
     } catch (e) {
@@ -206,38 +218,54 @@ export function createClickHouseReader(cfg: ClickHouseConfig, fetchImpl: Fetch =
     return n;
   }
 
-  /** 期間內每分鐘筆數 → 切成每段 ≤ SLICE_ROWS 的時間段 [from, to) */
-  async function slices(table: 'traffic' | 'threat', fromMs: number, toMs: number, type?: ChEventType): Promise<[number, number][]> {
+  /**
+   * 期間內的筆數分布 → 切成每段 ≤ SLICE_ROWS 的時間段 [from, to);expected = 期間內的總筆數(讀完核對用)。
+   * 先看每分鐘;單一分鐘就超過 SLICE_ROWS(大量掃描、DoS 經過防火牆)時,那一分鐘改看每秒(資安審查 M1)。
+   * 單一秒就超過帳號的 max_result_rows 時無法切段,丟出錯誤(該小時記失敗,其他小時照建)
+   */
+  async function slices(table: 'traffic' | 'threat', fromMs: number, toMs: number, type?: ChEventType, signal?: AbortSignal): Promise<{ parts: [number, number][]; expected: number }> {
     const cond = type ? 'AND log_type = {type:String}' : '';
-    const mins = await rows<{ m: number; n: number }>(
-      `SELECT toUnixTimestamp(toStartOfMinute(event_time)) AS m, count() AS n FROM ${READ_TABLES[table]}
-       WHERE event_time >= toDateTime({from:UInt32}) AND event_time < toDateTime({to:UInt32}) ${cond} GROUP BY m ORDER BY m`,
-      { from: sec(fromMs), to: sec(toMs), ...(type ? { type } : {}) },
-    );
-    const out: [number, number][] = [];
-    let start = -1;
-    let count = 0;
-    for (const { m, n } of mins) {
+    const t: Record<string, Param> = type ? { type } : {};
+    const count = (unit: 'toStartOfMinute' | 'toStartOfSecond', a: number, b: number) =>
+      rows<{ m: number; n: number }>(
+        `SELECT toUnixTimestamp(${unit === 'toStartOfMinute' ? 'toStartOfMinute(event_time)' : 'event_time'}) AS m, count() AS n FROM ${READ_TABLES[table]}
+         WHERE event_time >= toDateTime({from:UInt32}) AND event_time < toDateTime({to:UInt32}) ${cond} GROUP BY m ORDER BY m`,
+        { from: sec(a), to: sec(b), ...t },
+        signal,
+      );
+    const units: { ms: number; n: number }[] = [];
+    for (const { m, n } of await count('toStartOfMinute', fromMs, toMs)) {
       const ms = m * 1000;
-      if (start >= 0 && count + n > SLICE_ROWS) {
-        out.push([start, ms]);
-        start = -1;
-        count = 0;
-      }
-      // 第一分鐘可能早於 fromMs(fromMs 不在整分):段落不能超出期間
-      if (start < 0) start = Math.max(ms, fromMs);
-      count += n;
+      if (n <= SLICE_ROWS) units.push({ ms, n });
+      else for (const x of await count('toStartOfSecond', Math.max(ms, fromMs), Math.min(ms + 60_000, toMs))) units.push({ ms: x.m * 1000, n: x.n });
     }
-    if (start >= 0) out.push([start, toMs]);
-    return out;
+    const parts: [number, number][] = [];
+    let start = -1;
+    let acc = 0;
+    let expected = 0;
+    for (const { ms, n } of units) {
+      if (n > MAX_RESULT_ROWS) throw new ClickHouseError(`單一秒超過 ${MAX_RESULT_ROWS} 筆,無法分段讀取`, undefined, undefined);
+      expected += n;
+      if (start >= 0 && acc + n > SLICE_ROWS) {
+        parts.push([start, ms]);
+        start = -1;
+        acc = 0;
+      }
+      // 第一段可能早於 fromMs(fromMs 不在整分):段落不能超出期間
+      if (start < 0) start = Math.max(ms, fromMs);
+      acc += n;
+    }
+    if (start >= 0) parts.push([start, toMs]);
+    return { parts, expected };
   }
 
   async function records(table: 'traffic' | 'threat', fields: [string, string][], fromMs: number, toMs: number, onRow: (r: LogRecord) => void, signal?: AbortSignal, type?: ChEventType) {
     const select = fields.map(([, expr]) => expr).join(', ');
     const names = fields.map(([k]) => k);
     const cond = type ? 'AND log_type = {type:String}' : '';
+    const { parts, expected } = await slices(table, fromMs, toMs, type, signal);
     let total = 0;
-    for (const [a, b] of await slices(table, fromMs, toMs, type)) {
+    for (const [a, b] of parts) {
       if (signal?.aborted) throw connectError(Object.assign(new Error('aborted'), { name: 'AbortError' }), timeoutMs);
       total += await stream(
         `SELECT ${select} FROM ${READ_TABLES[table]} WHERE event_time >= toDateTime({from:UInt32}) AND event_time < toDateTime({to:UInt32}) ${cond}`,
@@ -250,6 +278,8 @@ export function createClickHouseReader(cfg: ClickHouseConfig, fetchImpl: Fetch =
         signal,
       );
     }
+    // 讀到的比分段時算的少:連線在行邊界被截斷等,不能當成完整(晚到的資料只會讓筆數變多)
+    if (total < expected) throw new ClickHouseError(`ClickHouse 原始 log 讀取不完整(${total} / ${expected})`, undefined, undefined);
     return total;
   }
 
@@ -260,11 +290,12 @@ export function createClickHouseReader(cfg: ClickHouseConfig, fetchImpl: Fetch =
       const r = await rows<{ x: number }>('SELECT 1 AS x');
       if (r[0]?.x !== 1) throw new ClickHouseError('ClickHouse ping 回應不符', undefined, undefined);
     },
-    async trafficHours(fromMs, toMs) {
+    async trafficHours(fromMs, toMs, signal) {
       const r = await rows<{ h: number; action: string; n: number; b: number }>(
         `SELECT toUnixTimestamp(hour) AS h, action, sum(sessions) AS n, sum(bytes) AS b FROM ${READ_TABLES.hourlyApp}
          WHERE hour >= toDateTime({from:UInt32}) AND hour < toDateTime({to:UInt32}) GROUP BY h, action ORDER BY h, action`,
         range(fromMs, toMs),
+        signal,
       );
       return r.map((x) => ({ hour: x.h * 1000, action: x.action, n: Number(x.n), bytes: Number(x.b) }));
     },
@@ -278,16 +309,17 @@ export function createClickHouseReader(cfg: ClickHouseConfig, fetchImpl: Fetch =
       ]);
       return { apps: apps.map((x) => x.app), zones: zones.map((x) => x.z).filter((z) => z && z !== '?'), actions: actions.map((x) => x.action || '(空白)') };
     },
-    async earliestTrafficHour() {
-      const r = await rows<{ h: number }>(`SELECT toUnixTimestamp(min(hour)) AS h FROM ${READ_TABLES.hourlyApp}`);
+    async earliestTrafficHour(signal) {
+      const r = await rows<{ h: number }>(`SELECT toUnixTimestamp(min(hour)) AS h FROM ${READ_TABLES.hourlyApp}`, {}, signal);
       const h = Number(r[0]?.h ?? 0);
       return h > 0 ? h * 1000 : null;
     },
-    async threatHourCounts(fromMs, toMs) {
+    async threatHourCounts(fromMs, toMs, signal) {
       const r = await rows<{ t: string; h: number; n: number }>(
         `SELECT log_type AS t, toUnixTimestamp(toStartOfHour(event_time)) AS h, count() AS n FROM ${READ_TABLES.threat}
          WHERE event_time >= toDateTime({from:UInt32}) AND event_time < toDateTime({to:UInt32}) GROUP BY t, h ORDER BY t, h`,
         range(fromMs, toMs),
+        signal,
       );
       return r.filter((x) => isChEventType(x.t)).map((x) => ({ type: x.t as ChEventType, hour: x.h * 1000, n: Number(x.n) }));
     },

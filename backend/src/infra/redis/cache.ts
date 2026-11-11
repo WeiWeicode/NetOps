@@ -26,10 +26,11 @@ export const cacheKey = (name: string, params: object): string => {
 };
 
 export function createDashboardCache(client: CacheClient | null): DashboardCache {
-  return {
-    async cached(name, params, ttlSec, load) {
-      const key = cacheKey(name, params);
-      if (client) {
+  /** 同一個鍵正在計算時共用同一個 Promise(冷快取時同時多個請求只算一次;資安審查 M2) */
+  const inflight = new Map<string, Promise<unknown>>();
+
+  async function compute(key: string, ttlSec: number, load: () => Promise<unknown>): Promise<unknown> {
+    if (client) {
         try {
           const hit = await client.get(key);
           if (hit) return JSON.parse(hit);
@@ -46,6 +47,20 @@ export function createDashboardCache(client: CacheClient | null): DashboardCache
         }
       }
       return value;
+  }
+
+  return {
+    async cached<T>(name: string, params: object, ttlSec: number, load: () => Promise<T>): Promise<T> {
+      const key = cacheKey(name, params);
+      const running = inflight.get(key);
+      if (running) return running as Promise<T>;
+      const p = compute(key, ttlSec, load);
+      inflight.set(key, p);
+      try {
+        return (await p) as T;
+      } finally {
+        inflight.delete(key);
+      }
     },
     close: async () => {
       await client?.quit().catch(() => undefined);

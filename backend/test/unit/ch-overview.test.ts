@@ -33,6 +33,7 @@ function sample() {
 }
 /** 「現在」= 2026-11-11 03:10(2 點那一小時已結束 3 分鐘以上) */
 const NOW = Date.parse('2026-11-11T03:10:00+08:00');
+const HOUR = 3600_000;
 
 describe('config(C3)', () => {
   const base = { GW_ENV: 'dev', SERVICE_CODE: 'netops-api', GW_JWKS_URL: 'http://127.0.0.1/jwks' };
@@ -93,24 +94,57 @@ describe('ClickHouse reader(HTTP)', () => {
   it('原始 log 依每分鐘筆數切段(每段 ≤ SLICE_ROWS),逐列轉成核心紀錄;中途錯誤要丟出', async () => {
     const t0 = 1794358800;
     const big = Math.ceil(SLICE_ROWS * 0.6);
-    const { reader, reqs } = make(({ init }) => {
-      const sql = String(init.body);
-      if (sql.includes('toStartOfMinute')) return new Response(`{"m":${t0},"n":${big}}\n{"m":${t0 + 60},"n":${big}}\n{"m":${t0 + 120},"n":10}\n`);
-      return new Response('["2026/11/11 09:00:00","end","10.1.1.1"]\n');
-    });
+    // 假 ClickHouse:每分鐘 / 每秒筆數照 minutes、seconds 回;資料查詢回該時間段應有的筆數
+    const fake = (minutes: [number, number][], seconds: [number, number][] = [], short = 0) =>
+      make(({ url, init }) => {
+        const sql = String(init.body);
+        const from = Number(url.searchParams.get('param_from'));
+        const to = Number(url.searchParams.get('param_to'));
+        const pick = (xs: [number, number][]) => xs.filter(([m]) => m >= from - 59 && m < to).map(([m, n]) => `{"m":${m},"n":${n}}`).join('\n');
+        if (sql.includes('toStartOfMinute')) return new Response(pick(minutes) + '\n');
+        if (sql.includes('count() AS n')) return new Response(pick(seconds) + '\n');
+        const n = [...minutes, ...seconds].filter(([m, c]) => m >= from && m < to && (c <= SLICE_ROWS || !seconds.length)).reduce((s, [, c]) => s + c, 0);
+        return new Response('["2026/11/11 09:00:00","end","10.1.1.1"]\n'.repeat(Math.max(n - short, 0)));
+      });
+    const dataSlices = (reqs: { url: URL; init: RequestInit }[]) =>
+      reqs.filter((r) => !String(r.init.body).includes('count() AS n')).map((r) => [Number(r.url.searchParams.get('param_from')) - t0, Number(r.url.searchParams.get('param_to')) - t0]);
+
+    const { reader, reqs } = fake([[t0, big], [t0 + 60, big], [t0 + 120, 10]]);
     const rows: Record<string, unknown>[] = [];
     const n = await reader.trafficRecords(t0 * 1000, (t0 + 3600) * 1000, (r) => rows.push(r));
     // 第一段只有第 1 分鐘;第 2、3 分鐘合成第二段
-    const slices = reqs.filter((r) => !String(r.init.body).includes('toStartOfMinute')).map((r) => [r.url.searchParams.get('param_from'), r.url.searchParams.get('param_to')]);
-    assert.deepEqual(slices, [[String(t0), String(t0 + 60)], [String(t0 + 60), String(t0 + 3600)]]);
-    assert.equal(n, 2);
+    assert.deepEqual(dataSlices(reqs), [[0, 60], [60, 3600]]);
+    assert.equal(n, big * 2 + 10);
     assert.equal(rows[0]!.time, '2026/11/11 09:00:00');
     assert.equal(rows[0]!.src, '10.1.1.1');
 
     const bad = make(({ init }) =>
       String(init.body).includes('toStartOfMinute') ? new Response(`{"m":${t0},"n":5}\n`) : new Response('["2026/11/11 09:00:00"]\nCode: 241. DB::Exception: Memory limit exceeded\n'),
     );
-    await assert.rejects(bad.reader.trafficRecords(t0 * 1000, (t0 + 3600) * 1000, () => {}), (e: unknown) => e instanceof ClickHouseError && e.code === 241);
+    await assert.rejects(bad.reader.trafficRecords(t0 * 1000, (t0 + 3600) * 1000, () => {}), (e: unknown) => e instanceof ClickHouseError && e.code === 241 && !e.message.includes('Memory'));
+  });
+
+  it('讀到的筆數比分段時少(連線截斷)要丟出,不能當成完整', async () => {
+    const t0 = 1794358800;
+    const { reader } = make(({ init }) =>
+      String(init.body).includes('toStartOfMinute') ? new Response(`{"m":${t0},"n":5}\n`) : new Response('["2026/11/11 09:00:00"]\n'.repeat(3)),
+    );
+    await assert.rejects(reader.trafficRecords(t0 * 1000, (t0 + 3600) * 1000, () => {}), /不完整/);
+  });
+
+  it('單一分鐘超過 SLICE_ROWS 時改看每秒切段', async () => {
+    const t0 = 1794358800;
+    const half = Math.ceil(SLICE_ROWS * 0.6);
+    const reqs: string[][] = [];
+    const reader = createClickHouseReader({ url: 'http://ch:8123', user: 'u', password: 'p' }, (async (url: URL, init: RequestInit) => {
+      const sql = String(init.body);
+      if (sql.includes('toStartOfMinute')) return new Response(`{"m":${t0},"n":${half * 2}}\n`);
+      if (sql.includes('count() AS n')) return new Response(`{"m":${t0},"n":${half}}\n{"m":${t0 + 30},"n":${half}}\n`);
+      reqs.push([url.searchParams.get('param_from')!, url.searchParams.get('param_to')!]);
+      return new Response('[1]\n'.repeat(half));
+    }) as unknown as typeof fetch);
+    assert.equal(await reader.trafficRecords(t0 * 1000, (t0 + 3600) * 1000, () => {}), half * 2);
+    assert.deepEqual(reqs, [[String(t0), String(t0 + 30)], [String(t0 + 30), String(t0 + 3600)]]);
   });
 
   it('字串參數跳脫反斜線與換行', async () => {
@@ -154,7 +188,7 @@ describe('每小時摘要', () => {
     assert.equal(b.status().lastError, null);
     assert.equal(b.earliest(), Date.parse('2026-11-11T00:00:00+08:00'));
     const from = Date.parse('2026-11-11T00:00:00+08:00');
-    const r = b.summaries('traffic', from, from + 86_400_000);
+    const r = await b.summaries('traffic', from, from + 86_400_000);
     assert.equal(r.list.length, 3);
     assert.equal(r.missing, 0);
     // 合併結果 = 用核心直接對所有紀錄算的摘要再合併
@@ -164,24 +198,24 @@ describe('每小時摘要', () => {
     assert.deepEqual({ ...mergeSummaries(r.list, 20), files: 0 }, { ...mergeSummaries([direct.result()], 20), files: 0 });
     const ev = createEventSummary('threat');
     for (const x of reader.threats) ev.add(x.rec as never);
-    assert.deepEqual(mergeEventSummaries('threat', b.summaries('threat', from, from + 86_400_000).list, 20).tops, mergeEventSummaries('threat', [ev.result()], 20).tops);
+    assert.deepEqual(mergeEventSummaries('threat', (await b.summaries('threat', from, from + 86_400_000)).list, 20).tops, mergeEventSummaries('threat', [ev.result()], 20).tops);
 
     // 2 點晚到一筆:下一輪重建那一小時;重建前 missing = 1
     reader.traffic.push(trafficRecord('2026/11/11 02:59:59', 99));
     const calls = reader.calls.length;
     await b.runOnce();
     assert.equal(reader.calls.slice(calls).filter((c) => c === 'trafficRecords').length, 1);
-    assert.equal(b.summaries('traffic', from, from + 86_400_000).missing, 0);
+    assert.equal((await b.summaries('traffic', from, from + 86_400_000)).missing, 0);
 
     // 進行中的小時(3 點)不建
     reader.traffic.push(trafficRecord('2026/11/11 03:05:00', 1));
     await b.runOnce();
-    assert.equal(b.summaries('traffic', from, from + 86_400_000).list.length, 3);
+    assert.equal((await b.summaries('traffic', from, from + 86_400_000)).list.length, 3);
 
     // 兩天後:超出 days=1 → 清除
     now = NOW + 2 * 86_400_000;
     await b.runOnce();
-    assert.equal(b.summaries('traffic', from, from + 86_400_000).list.length, 0);
+    assert.equal((await b.summaries('traffic', from, from + 86_400_000)).list.length, 0);
     assert.deepEqual(fs.readdirSync(path.join(dir, 'palogs/ch/traffic')), []);
   });
 
@@ -190,7 +224,37 @@ describe('每小時摘要', () => {
     r.failing = true;
     const b = createChSummaryBuilder({ reader: r, store: createStore(dir).pa, log: silent, days: 1, minutes: 0, now: () => NOW });
     await b.runOnce();
-    assert.match(b.status().lastError!, /ECONNREFUSED/);
+    // 日誌與狀態只留分類,不留 ClickHouse 原文
+    assert.match(b.status().lastError!, /更新失敗/);
+    // 還沒成功跑完一輪:不回看起來正常的空結果
+    await assert.rejects(b.summaries('traffic', 0, HOUR), (e: unknown) => e instanceof ClickHouseError && /尚未建立/.test(e.message));
+  });
+
+  it('太久沒成功跑完一輪就視為過期;單一小時失敗不影響其他小時', async () => {
+    const s = sample();
+    const r = createFakeReader(s.traffic, s.threats);
+    let now = NOW;
+    const b = createChSummaryBuilder({ reader: r, store: createStore(fs.mkdtempSync(path.join(dir, 'x-'))).pa, log: silent, days: 1, minutes: 5, now: () => now });
+    // 1 點那一小時讀取失敗:其他小時照建,1 點算 missing,30 分鐘內不重試
+    const orig = r.trafficRecords;
+    r.trafficRecords = async (from, to, onRow, sig) => {
+      if (from === Date.parse('2026-11-11T01:00:00+08:00')) throw new ClickHouseError('boom', 396, 200);
+      return orig(from, to, onRow, sig);
+    };
+    await b.runOnce();
+    const from = Date.parse('2026-11-11T00:00:00+08:00');
+    const res = await b.summaries('traffic', from, from + 86_400_000);
+    assert.equal(res.list.length, 2);
+    assert.equal(res.missing, 1);
+    assert.equal(b.status().failed, 1);
+    const before = r.calls.filter((c) => c === 'trafficRecords').length;
+    await b.runOnce();
+    assert.equal(r.calls.filter((c) => c === 'trafficRecords').length, before);
+    // ClickHouse 停了 20 分鐘(> 3 輪):查詢丟錯
+    r.failing = true;
+    now += 20 * 60_000;
+    await b.runOnce();
+    await assert.rejects(b.summaries('traffic', from, from + 86_400_000), /過期/);
   });
 
   it('摘要代號是台灣時間 YYYYMMDDHH', () => assert.equal(hourId(Date.parse('2026-11-11T09:30:00+08:00')), '2026111109'));

@@ -102,10 +102,10 @@ describe('每小時摘要(真 ClickHouse)', () => {
     const b = createChSummaryBuilder({ reader, store: createStore(dir).pa, log: { info() {}, warn() {} }, days: 3, minutes: 0, now: () => H + 2 * HOUR });
     await b.runOnce();
     assert.equal(b.status().lastError, null);
-    const tr = b.summaries('traffic', H, H + HOUR);
+    const tr = await b.summaries('traffic', H, H + HOUR);
     assert.equal(tr.missing, 0);
     assert.equal((tr.list[0] as { rows: number }).rows, N);
-    const th = b.summaries('threat', H, H + HOUR);
+    const th = await b.summaries('threat', H, H + HOUR);
     assert.equal((th.list[0] as { rows: number }).rows, 15); // 5 筆 × Repeat Count 3
   });
 });

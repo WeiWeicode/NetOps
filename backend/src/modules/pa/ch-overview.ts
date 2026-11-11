@@ -56,8 +56,10 @@ export async function viaClickHouse<T>(d: ChOverviewDeps, requested: string | un
     return await run();
   } catch (err) {
     if (!(err instanceof ClickHouseError)) throw err;
-    if ((requested ?? d.mode) === 'clickhouse') throw unavailable(err);
-    d.log.warn({ err: err.message }, 'ClickHouse 查詢失敗,改用 FTP 來源');
+    // 日誌只記代碼:ClickHouse 錯誤原文可能帶 log 內容(資安審查 L2)
+    const info = { code: err.code, status: err.status };
+    if ((requested ?? d.mode) === 'clickhouse') throw unavailable(info);
+    d.log.warn(info, 'ClickHouse 查詢失敗,改用 FTP 來源');
     return null;
   }
 }
@@ -65,17 +67,22 @@ export async function viaClickHouse<T>(d: ChOverviewDeps, requested: string | un
 /** 日期期間('yyyy/MM/dd')→ [fromMs, toMs) */
 export const dayRangeMs = (from: string, to: string): [number, number] => [taipeiDayStartMs(from), taipeiDayStartMs(to) + 86_400_000];
 
-const untilOut = (until: number | null, toMs: number) => (until === null ? '' : taipeiHourKey(Math.min(until, toMs)));
+const untilOut = (until: number, toMs: number) => taipeiHourKey(Math.min(until, toMs));
+
+/** 快取一律用排行上限算,回應前再截到 top:快取鍵不含 top,換 top 不會繞過快取(資安審查 M2) */
+const TOP_MAX = 100;
+type TopMap = Record<string, unknown[]>;
+const cut = (m: TopMap | undefined, n: number) => (m ? Object.fromEntries(Object.entries(m).map(([k, v]) => [k, v.slice(0, n)])) : m);
 
 /** TRAFFIC 總覽(格式同 routes.ts 的 FTP 來源;hours / timeMin / timeMax 仍是核心時間字串,由路由轉換) */
 export async function trafficOverview(d: ChOverviewDeps, from: string, to: string, topN: number) {
   const reader = d.reader!;
   const builder = d.builder!;
-  return d.cache.cached('pa-overview', { from, to, topN }, CACHE_SEC, async () => {
+  const r = await d.cache.cached('pa-overview', { from, to }, CACHE_SEC, async () => {
     const [fromMs, toMs] = dayRangeMs(from, to);
+    const { list, missing, until } = await builder.summaries('traffic', fromMs, toMs);
     const hourRows = await reader.trafficHours(fromMs, toMs);
-    const { list, missing, until } = builder.summaries('traffic', fromMs, toMs);
-    const merged = mergeSummaries(list, topN) as ReturnType<typeof mergeSummaries> & { timeMin: string; timeMax: string };
+    const merged = mergeSummaries(list, TOP_MAX) as ReturnType<typeof mergeSummaries> & { timeMin: string; timeMax: string };
     const hours = new Map<number, { n: number; allow: number; block: number; bytes: number }>();
     const actions: Record<string, number> = {};
     let rows = 0;
@@ -109,6 +116,7 @@ export async function trafficOverview(d: ChOverviewDeps, from: string, to: strin
       topsUntil: untilOut(until, toMs),
     };
   });
+  return { ...r, top: cut(r.top as TopMap, topN), topBytes: cut(r.topBytes as TopMap, topN) };
 }
 
 /** 明細查詢的下拉選項(App、區域、動作來自每小時彙總;規則來自每小時摘要) */
@@ -116,18 +124,19 @@ export async function trafficOptions(d: ChOverviewDeps, from: string, to: string
   return d.cache.cached('pa-options', { from, to }, CACHE_SEC, async () => {
     const [fromMs, toMs] = dayRangeMs(from, to);
     const o = await d.reader!.trafficOptions(fromMs, toMs, 200);
-    const m = mergeSummaries(d.builder!.summaries('traffic', fromMs, toMs).list, 200) as unknown as { top: Record<string, { key: string }[]> };
+    const m = mergeSummaries((await d.builder!.summaries('traffic', fromMs, toMs)).list, 200) as unknown as { top: Record<string, { key: string }[]> };
     return { apps: o.apps, rules: (m.top.rule ?? []).map((x) => x.key), zones: o.zones, actions: o.actions };
   });
 }
 
 /** 威脅類總覽(格式同 mergeEventSummaries;files = 有摘要的小時數) */
 export async function eventOverview(d: ChOverviewDeps, type: ChEventType, from: string, to: string, topN: number) {
-  return d.cache.cached('pa-events-overview', { type, from, to, topN }, CACHE_SEC, async () => {
+  const r = await d.cache.cached('pa-events-overview', { type, from, to }, CACHE_SEC, async () => {
     const [fromMs, toMs] = dayRangeMs(from, to);
-    const { list, missing, until } = d.builder!.summaries(type, fromMs, toMs);
-    const m = mergeEventSummaries(type, list, topN);
+    const { list, missing, until } = await d.builder!.summaries(type, fromMs, toMs);
+    const m = mergeEventSummaries(type, list, TOP_MAX);
     return { ...m, source: 'clickhouse' as const, missing, topsUntil: untilOut(until, toMs) };
   });
+  return { ...r, tops: r.tops.map((t: { items: unknown[] }) => ({ ...t, items: t.items.slice(0, topN) })) };
 }
 

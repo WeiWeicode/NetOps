@@ -23,7 +23,13 @@ export type ChEventType = (typeof CH_EVENT_TYPES)[number];
 export const isChEventType = (t: string): t is ChEventType => (CH_EVENT_TYPES as readonly string[]).includes(t);
 
 /** 原始 log 一段最多幾筆(netops_reader 的 max_result_rows 是 100000) */
-export const SLICE_ROWS = 80_000;
+/**
+ * 2026-11-11 測試區:一段 8 萬列串流 + 摘要超過 30 秒的請求逾時,那一小時一直建不起來;
+ * 改成每段 2 萬列、每段最多等 RECORDS_WAIT_MS
+ */
+export const SLICE_ROWS = 20_000;
+/** 原始 log 每段最多等多久(用戶端;伺服器端仍受 max_execution_time 限制) */
+const RECORDS_WAIT_MS = 180_000;
 /** netops_reader 的 max_result_rows(users.d/profiles.xml) */
 const MAX_RESULT_ROWS = 100_000;
 
@@ -120,6 +126,9 @@ export interface ClickHouseReader {
   trafficOptions(fromMs: number, toMs: number, limit: number): Promise<{ apps: string[]; zones: string[]; actions: string[] }>;
   /** 每小時彙總最早的小時(UTC 毫秒);沒有資料為 null */
   earliestTrafficHour(signal?: AbortSignal): Promise<number | null>;
+  /** ClickHouse 有資料的範圍與每天筆數(TRAFFIC 來自每小時彙總;威脅類來自原始表,依類型) */
+  trafficDays(): Promise<{ day: number; hours: number; rows: number }[]>;
+  threatDays(type: ChEventType): Promise<{ day: number; hours: number; rows: number }[]>;
   /** 威脅類每小時筆數(原始列數,不乘 Repeat Count) */
   threatHourCounts(fromMs: number, toMs: number, signal?: AbortSignal): Promise<{ type: ChEventType; hour: number; n: number }[]>;
   /** 逐列讀取期間內的 TRAFFIC 原始 log(核心紀錄格式);回傳筆數 */
@@ -393,6 +402,9 @@ export function createClickHouseReader(cfg: ClickHouseConfig, fetchImpl: Fetch =
           onRow(r);
         },
         signal,
+        undefined,
+        undefined,
+        RECORDS_WAIT_MS,
       );
     }
     // 讀到的比分段時算的少:連線在行邊界被截斷等,不能當成完整(晚到的資料只會讓筆數變多)
@@ -425,6 +437,19 @@ export function createClickHouseReader(cfg: ClickHouseConfig, fetchImpl: Fetch =
         rows<{ action: string }>(`SELECT DISTINCT action FROM ${READ_TABLES.hourlyApp} WHERE ${where} ORDER BY action`, p),
       ]);
       return { apps: apps.map((x) => x.app), zones: zones.map((x) => x.z).filter((z) => z && z !== '?'), actions: actions.map((x) => x.action || '(空白)') };
+    },
+    async trafficDays() {
+      const r = await rows<{ d: number; h: number; n: number }>(
+        `SELECT toUnixTimestamp(toStartOfDay(hour)) AS d, uniqExact(hour) AS h, sum(sessions) AS n FROM ${READ_TABLES.hourlyApp} GROUP BY d ORDER BY d DESC`,
+      );
+      return r.map((x) => ({ day: x.d * 1000, hours: Number(x.h), rows: Number(x.n) }));
+    },
+    async threatDays(type) {
+      const r = await rows<{ d: number; h: number; n: number }>(
+        `SELECT toUnixTimestamp(toStartOfDay(event_time)) AS d, uniqExact(toStartOfHour(event_time)) AS h, count() AS n FROM ${READ_TABLES.threat} WHERE log_type = {type:String} GROUP BY d ORDER BY d DESC`,
+        { type },
+      );
+      return r.map((x) => ({ day: x.d * 1000, hours: Number(x.h), rows: Number(x.n) }));
     },
     async earliestTrafficHour(signal) {
       const r = await rows<{ h: number }>(`SELECT toUnixTimestamp(min(hour)) AS h FROM ${READ_TABLES.hourlyApp}`, {}, signal);

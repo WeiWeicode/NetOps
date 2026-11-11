@@ -69,10 +69,10 @@ export interface ChSummaryBuilder {
   /**
    * 期間 [fromMs, toMs) 內已建好的摘要;missing = 已結束、有資料但摘要還沒建好(或過期)的小時數;
    * until = 已結束小時的上限(之後的小時還沒有排行)。
-   * 還沒成功跑完一輪、或太久沒成功(ClickHouse 停止)時丟 ClickHouseError:不回看起來正常的空結果(AGENT.md §5),
-   * 來源 auto 時呼叫端改用 FTP、指定 clickhouse 時回 503。每讀幾份就讓出事件迴圈
+   * state:ok;not-ready = 還沒成功跑完一輪(剛啟動);stale = 太久沒成功(ClickHouse 停止)。
+   * 不是 ok 時摘要可能不完整,呼叫端要標示(AGENT.md §5,不回看起來正常的空結果)。每讀幾份就讓出事件迴圈
    */
-  summaries(kind: ChKind, fromMs: number, toMs: number): Promise<{ list: unknown[]; missing: number; until: number }>;
+  summaries(kind: ChKind, fromMs: number, toMs: number): Promise<{ list: unknown[]; missing: number; until: number | null; state: 'ok' | 'not-ready' | 'stale' }>;
 }
 
 export function createChSummaryBuilder({
@@ -230,8 +230,7 @@ export function createChSummaryBuilder({
     status: () => ({ ...st }),
     earliest: () => earliest,
     async summaries(kind, fromMs, toMs) {
-      if (until === null || lastOkAt === null) throw new ClickHouseError('ClickHouse 每小時摘要尚未建立', undefined, undefined);
-      if (minutes && now() - lastOkAt > staleMs(minutes)) throw new ClickHouseError('ClickHouse 每小時摘要已過期(資料庫可能停止)', undefined, undefined);
+      const state = until === null || lastOkAt === null ? 'not-ready' : minutes && now() - lastOkAt > staleMs(minutes) ? 'stale' : 'ok';
       const metas = index.kinds[kind] ?? {};
       const known = counts.get(kind) ?? new Map<string, number>();
       const list: unknown[] = [];
@@ -260,15 +259,19 @@ export function createChSummaryBuilder({
         if (s) list.push(s);
         if (!s || (n !== undefined && meta.count !== n)) missing++;
       }
-      return { list, missing, until };
+      return { list, missing, until, state };
     },
   };
 }
 
 /** 日誌用:只留錯誤代碼與分類,不留 ClickHouse 錯誤原文 */
-function errInfo(err: unknown): { code?: number; status?: number; name: string } {
-  const e = err as { code?: unknown; status?: unknown; name?: string };
-  return { code: typeof e?.code === 'number' ? e.code : undefined, status: typeof e?.status === 'number' ? e.status : undefined, name: e?.name ?? 'Error' };
+function errInfo(err: unknown): { code?: number; status?: number; name: string; reason?: string } {
+  const e = err as { code?: unknown; status?: unknown; name?: string; message?: string };
+  const code = typeof e?.code === 'number' ? e.code : undefined;
+  const status = typeof e?.status === 'number' ? e.status : undefined;
+  // 沒有 ClickHouse 錯誤代碼的(連線、逾時、讀取不完整)訊息是本程式組的固定文字,不含 log 內容,可以記
+  const reason = code === undefined && e instanceof ClickHouseError ? String(e.message).slice(0, 120) : undefined;
+  return { code, status, name: e?.name ?? 'Error', reason };
 }
 
 /** 'YYYYMMDDHH'(台灣時間)→ UTC 毫秒 */

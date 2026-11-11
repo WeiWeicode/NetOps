@@ -232,20 +232,18 @@ describe('PA 安全事件總覽', () => {
     ftp.put(p, threatCsv('2026/11/01', 600, 40));
     await t.call({ method: 'POST', url: '/v1/ftp/pa/analyses', payload: { items: [{ path: p }] } });
     await waitFor(async () => !(await t.call({ url: '/v1/ftp/pa/status' })).json().events.busy);
-    const types = (await t.call({ url: '/v1/pa-events/types' })).json().types;
-    const threat = types.find((x: { type: string }) => x.type === 'threat');
-    assert.deepEqual(threat.days, ['2026-11-01']);
-    assert.equal(threat.files, 1);
+    // C3:威脅類只查 ClickHouse;沒有設定 ClickHouse 時回 503(不再讀 FTP 摘要)
+    const types = await t.call({ url: '/v1/pa-events/types' });
+    assert.equal(types.statusCode, 503);
 
     const { mergeEventSummaries } = await legacy('paevents.js');
     const idx = JSON.parse(fs.readFileSync(path.join(t.dataDir, 'palogs/events/index.json'), 'utf8')).files[p];
     const zlib = await import('node:zlib');
     const sum = JSON.parse(zlib.gunzipSync(fs.readFileSync(path.join(t.dataDir, 'palogs/events', idx.summary))).toString());
-    const m = mergeEventSummaries('threat', [sum], 15);
-    const o = (await t.call({ url: '/v1/pa-events/overview?type=threat&from=2026-11-01&top=15' })).json();
-    for (const k of ['type', 'label', 'files', 'rows', 'kpis', 'tops']) assert.deepEqual(o[k], m[k], k);
-    assert.deepEqual(o.hours, m.hours.map((h: { hour: string }) => ({ ...h, hour: iso(h.hour) })));
-    assert.equal(o.missing, 0);
+    // 匯入的摘要用新版核心合併 = 舊版合併(ClickHouse 每小時摘要也用同一份核心)
+    const { mergeEventSummaries: merge } = await import('../../src/modules/pa-events/core/paevents.js');
+    assert.deepEqual(merge('threat', [sum], 15), mergeEventSummaries('threat', [sum], 15));
+    assert.equal((await t.call({ url: '/v1/pa-events/overview?type=threat&from=2026-11-01&top=15' })).statusCode, 503);
     assert.equal((await t.call({ url: '/v1/pa-events/overview?type=nope&from=2026-11-01' })).statusCode, 400);
   });
 });

@@ -37,20 +37,21 @@ const HOUR = 3600_000;
 
 describe('config(C3)', () => {
   const base = { GW_ENV: 'dev', SERVICE_CODE: 'netops-api', GW_JWKS_URL: 'http://127.0.0.1/jwks' };
-  it('預設:沒有 ClickHouse;總覽 auto、明細 ftp;每小時摘要 30 天、5 分鐘', () => {
+  it('預設:dev 可以沒有 ClickHouse;每小時摘要 30 天、5 分鐘;對帳 01:00', () => {
     const c = loadConfig(base);
     assert.equal(c.clickhouse, null);
-    assert.deepEqual(c.paSource, { overview: 'auto', detail: 'ftp' });
     assert.deepEqual(c.chSummary, { days: 30, minutes: 5 });
+    assert.equal(c.reconHour, 1);
   });
   it('有 CLICKHOUSE_URL 時密碼必填;帳號預設 netops_reader;URL 不可帶帳密', () => {
     assert.throws(() => loadConfig({ ...base, CLICKHOUSE_URL: 'http://ch:8123' }), /CLICKHOUSE_PASSWORD_FILE/);
     assert.equal(loadConfig({ ...base, CLICKHOUSE_URL: 'http://ch:8123', CLICKHOUSE_PASSWORD: 'x' }).clickhouse!.user, 'netops_reader');
     assert.throws(() => loadConfig({ ...base, CLICKHOUSE_URL: 'http://a:b@ch:8123', CLICKHOUSE_PASSWORD: 'x' }), /不可帶帳密/);
   });
-  it('來源設定只接受 ftp / clickhouse / auto', () => {
-    assert.throws(() => loadConfig({ ...base, NETOPS_PA_DETAIL_SOURCE: 'db' }), /NETOPS_PA_DETAIL_SOURCE/);
-    assert.equal(loadConfig({ ...base, NETOPS_PA_DETAIL_SOURCE: 'ClickHouse' }).paSource.detail, 'clickhouse');
+  it('test / prod 必須設定 CLICKHOUSE_URL(PA 查詢只用 ClickHouse)', () => {
+    const t = { ...base, GW_ENV: 'test', GW_BASE_URL: 'http://gw', GW_API_KEY: 'k', SERVICE_ADVERTISE_URL: 'http://netops-api:51292', NETOPS_DATA_DIR: '/data', FTP_HOST: 'ftp', FTP_USER: 'u', FTP_PASSWORD: 'p', REDIS_URL: 'redis://r:6379/0' };
+    assert.throws(() => loadConfig(t), /CLICKHOUSE_URL/);
+    assert.equal(loadConfig({ ...t, CLICKHOUSE_URL: 'http://ch:8123', CLICKHOUSE_PASSWORD: 'x' }).clickhouse!.url, 'http://ch:8123');
   });
 });
 
@@ -226,8 +227,8 @@ describe('每小時摘要', () => {
     await b.runOnce();
     // 日誌與狀態只留分類,不留 ClickHouse 原文
     assert.match(b.status().lastError!, /更新失敗/);
-    // 還沒成功跑完一輪:不回看起來正常的空結果
-    await assert.rejects(b.summaries('traffic', 0, HOUR), (e: unknown) => e instanceof ClickHouseError && /尚未建立/.test(e.message));
+    // 還沒成功跑完一輪:state not-ready(呼叫端標示排行不完整,不回看起來正常的空結果)
+    assert.equal((await b.summaries('traffic', 0, HOUR)).state, 'not-ready');
   });
 
   it('太久沒成功跑完一輪就視為過期;單一小時失敗不影響其他小時', async () => {
@@ -250,17 +251,18 @@ describe('每小時摘要', () => {
     const before = r.calls.filter((c) => c === 'trafficRecords').length;
     await b.runOnce();
     assert.equal(r.calls.filter((c) => c === 'trafficRecords').length, before);
-    // ClickHouse 停了 20 分鐘(> 3 輪):查詢丟錯
+    assert.equal(res.state, 'ok');
+    // ClickHouse 停了 20 分鐘(> 3 輪):state stale
     r.failing = true;
     now += 20 * 60_000;
     await b.runOnce();
-    await assert.rejects(b.summaries('traffic', from, from + 86_400_000), /過期/);
+    assert.equal((await b.summaries('traffic', from, from + 86_400_000)).state, 'stale');
   });
 
   it('摘要代號是台灣時間 YYYYMMDDHH', () => assert.equal(hourId(Date.parse('2026-11-11T09:30:00+08:00')), '2026111109'));
 });
 
-describe('總覽 API 來源切換', () => {
+describe('總覽 API(只查 ClickHouse)', () => {
   let t: TestApp;
   let reader: FakeReader;
   before(async () => {
@@ -272,7 +274,7 @@ describe('總覽 API 來源切換', () => {
   });
   after(async () => t.close());
 
-  it('auto:期間在 ClickHouse 範圍內 → source clickhouse,格式同 FTP;排行到 topsUntil', async () => {
+  it('總覽:source clickhouse;筆數與每小時統計來自彙總、排行到 topsUntil;coverage 為有資料的範圍', async () => {
     const res = await t.call({ url: '/v1/pa/overview?from=2026-11-11&top=5' });
     assert.equal(res.statusCode, 200, res.body);
     const b = res.json();
@@ -285,20 +287,37 @@ describe('總覽 API 來源切換', () => {
     assert.equal(b.top.src.length, 5);
     assert.ok(b.top.aiApp.some((x: { key: string }) => x.key === 'openai-chatgpt'));
     assert.equal(b.topsUntil, '2026-11-11T03:00:00+08:00');
+    assert.equal(b.topsState, 'ok');
+    assert.deepEqual(b.coverage, { from: '2026-11-11', to: '2026-11-11' });
+    assert.equal(b.partial, false);
     assert.match(b.timeMin, /\+08:00$/);
   });
 
-  it('auto:期間早於 ClickHouse 範圍 → FTP', async () => {
-    const res = await t.call({ url: '/v1/pa/overview?from=2026-11-10&to=2026-11-11' });
-    assert.equal(res.json().source, 'ftp');
+  it('期間有一部分在資料之前:partial;整個超過保留期限:404 NETOPS_PA_OUT_OF_RETENTION(不回 0)', async () => {
+    const p = (await t.call({ url: '/v1/pa/overview?from=2026-11-10&to=2026-11-11' })).json();
+    assert.equal(p.partial, true);
+    assert.equal(p.rows, 150);
+    const old = await t.call({ url: '/v1/pa/overview?from=2026-10-01&to=2026-10-02' });
+    assert.equal(old.statusCode, 404);
+    assert.equal(old.json().code, 'NETOPS_PA_OUT_OF_RETENTION');
+    assert.match(old.json().message, /2026-11-11/);
+    const ev = await t.call({ url: '/v1/pa-events/overview?type=threat&from=2026-10-01' });
+    assert.equal(ev.json().code, 'NETOPS_PA_OUT_OF_RETENTION');
   });
 
-  it('source=ftp 強制 FTP;source 只接受列舉值', async () => {
-    assert.equal((await t.call({ url: '/v1/pa/overview?from=2026-11-11&source=ftp' })).json().source, 'ftp');
-    assert.equal((await t.call({ url: '/v1/pa/overview?from=2026-11-11&source=db' })).statusCode, 400);
+  it('有資料的日期與類型清單來自 ClickHouse;source 只接受 clickhouse', async () => {
+    const d = (await t.call({ url: '/v1/pa/days' })).json();
+    assert.deepEqual(d.days, [{ day: '2026-11-11', files: 3, rows: 150 }]);
+    assert.deepEqual(d.coverage, { from: '2026-11-11', to: '2026-11-11' });
+    const types = (await t.call({ url: '/v1/pa-events/types' })).json().types;
+    const threat = types.find((x: { type: string }) => x.type === 'threat');
+    assert.equal(threat.source, 'clickhouse');
+    assert.deepEqual(threat.days, ['2026-11-11']);
+    assert.equal((await t.call({ url: '/v1/pa/overview?from=2026-11-11&source=clickhouse' })).statusCode, 200);
+    assert.equal((await t.call({ url: '/v1/pa/overview?from=2026-11-11&source=ftp' })).statusCode, 400);
   });
 
-  it('篩選選項與威脅類總覽查 ClickHouse;User-ID 一律 FTP', async () => {
+  it('篩選選項與威脅類總覽查 ClickHouse;User-ID 不進 ClickHouse,仍是 FTP', async () => {
     const o = (await t.call({ url: '/v1/pa/options?from=2026-11-11' })).json();
     assert.deepEqual(o.apps, ['dns-base', 'openai-chatgpt', 'ssl']);
     assert.deepEqual(o.rules, ['Allow-Web']);
@@ -310,13 +329,10 @@ describe('總覽 API 來源切換', () => {
     assert.equal(uid.json().source, 'ftp');
   });
 
-  it('ClickHouse 失敗:auto 改用 FTP;指定 clickhouse 回 503', async () => {
+  it('ClickHouse 失敗回 503(不改用 FTP),回應不含錯誤原文', async () => {
     reader.failing = true;
     try {
-      // 快取會擋住同樣的參數:換 top
-      const auto = await t.call({ url: '/v1/pa/overview?from=2026-11-11&top=7' });
-      assert.equal(auto.json().source, 'ftp');
-      const res = await t.call({ url: '/v1/pa/overview?from=2026-11-11&top=8&source=clickhouse' });
+      const res = await t.call({ url: '/v1/pa/overview?from=2026-11-11&top=8' });
       assert.equal(res.statusCode, 503);
       assert.equal(res.json().code, 'NETOPS_CLICKHOUSE_UNAVAILABLE');
       assert.ok(!res.body.includes('ECONNREFUSED'));
@@ -325,11 +341,13 @@ describe('總覽 API 來源切換', () => {
     }
   });
 
-  it('沒有設定 ClickHouse 時指定 clickhouse 回 503,auto 用 FTP', async () => {
-    const t2 = await createTestApp({ ftp: createFakeFtp(), chReader: null });
+  it('摘要還沒建好:總覽仍回筆數,topsState not-ready、排行為空', async () => {
+    const t2 = await createTestApp({ ftp: createFakeFtp(), chReader: createFakeReader(sample().traffic), chNow: () => NOW, env: { NETOPS_CH_SUMMARY_MINUTES: '0' } });
     try {
-      assert.equal((await t2.call({ url: '/v1/pa/overview?from=2026-11-11&source=clickhouse' })).statusCode, 503);
-      assert.equal((await t2.call({ url: '/v1/pa/overview?from=2026-11-11' })).json().source, 'ftp');
+      const b = (await t2.call({ url: '/v1/pa/overview?from=2026-11-11' })).json();
+      assert.equal(b.rows, 150);
+      assert.equal(b.topsState, 'not-ready');
+      assert.equal(b.topsUntil, '');
     } finally {
       await t2.close();
     }

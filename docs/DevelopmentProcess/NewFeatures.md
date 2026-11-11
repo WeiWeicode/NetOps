@@ -7,6 +7,11 @@
 - 內容:流量總覽、篩選選項、安全事件(威脅、URL、資料過濾、WildFire)可查 ClickHouse,API 多 `source`、`topsUntil`,其他欄位不變;ARCHITECTURE 新增 D42(ClickHouse 每小時摘要);API.md §4.1、§4.2、§8;Gherkin `pa/overview.feature`、`pa-events/overview.feature` 加 C3 場景;前端 `api/pa.ts`、`api/paEvents.ts` 加 `source` 參數與型別(畫面不改)。
 - 檔案:`docs/{API,ARCHITECTURE,IMPL-PLAN,PROJECT-MAP}.md`、`docs/Gherkin/`、`frontend/src/api/{pa,paEvents}.ts`
 
+## 2026-11-11 熱力圖、儀表板與偵測規則引擎規劃(V-a–V-d)
+- 工作項目:V-a、V-b、V-c、V-d(規劃)
+- 內容:需求方 2026-11-11 提出 GitHub 風格熱力圖、冷熱資料反查、ECharts 儀表板、動畫與偵測規則引擎,並決定 V1–V10。新增設計文件(DDL、API、規則 1–7、元件介面、資源估算、待決 X1–X16)與給 Gemini 的交接規格;ARCHITECTURE 新增 §3.2 D34–D41、§5 權限節點、Q7;IMPL-PLAN 新增 V-a–V-d。熱力圖每小時 / 每天彙總保留 5 年、每 5 分鐘 1 年,和 CQ12(分維度每小時彙總 13 個月)的差異是需求方 2026-11-11 改的。只改文件,API.md 在實作 MR 才改。
+- 檔案:`docs/VIZ-RULES-DESIGN.md`、`docs/HANDOFF-GEMINI-VIZ.md`、`docs/{ARCHITECTURE,IMPL-PLAN}.md`
+
 ## 2026-11-10 C1 ClickHouse POC 與容量實測
 - 工作項目:C1
 - 內容:測試區 ClickHouse 容器與資料表(細節見 BackendCorrection 同日紀錄);匯入 FTP 一整天 TRAFFIC 實測容量與查詢,手冊 §4 換成實測值(每筆 20.6 bytes、30 天約 7–11 GB、Parquet 一年 80–122 GB),§7.1 `dst` 加 bloom_filter、§7.4 網段查詢改 `BETWEEN`、§10.2 補實作差異、§10.3 TTL 定案;IMPL-PLAN C0 補 E2 / E5 建議數字、C1 狀態。

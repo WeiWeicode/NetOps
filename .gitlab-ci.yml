@@ -92,7 +92,9 @@ check:ingest-int:
     - (cd backend && GITLAB_NPM_TOKEN="$(cat "$NPM_TOKEN_FILE")" npm ci --no-audit --no-fund)
     - (cd backend && npm run test:int) > "$L.test" 2>&1 && R=0 || R=$?; cat "$L.test" >> "$L"; tail -n 120 "$L.test"; rm -f "$L.test"; test "$R" = 0
     # 重複修正(dedupe-day.sh):不帶去重的同一列寫兩次 → 修正後原始表與每小時彙總都是 1
-    - Q="INSERT INTO netops.pa_traffic_logs (event_time, received_at, src, app, src_host, source) VALUES (now() - INTERVAL 1 DAY, now64(3) - INTERVAL 1 DAY, '::ffff:10.1.1.1', 'dup-test', 'dup-test', 'syslog')"
+    # 時間先算好(昨天同一秒):SQL 裡的 now() 每次 INSERT 都不同,兩列就不是完全相同
+    - E=$(($(date +%s) - 86400))
+    - Q="INSERT INTO netops.pa_traffic_logs (event_time, received_at, src, app, src_host, source) VALUES (toDateTime($E), toDateTime64($E, 3), '::ffff:10.1.1.1', 'dup-test', 'dup-test', 'syslog')"
     - docker exec "$N-ch" clickhouse-client --insert_deduplicate=0 --query "$Q"
     - docker exec "$N-ch" clickhouse-client --insert_deduplicate=0 --query "$Q"
     - DD="$(docker exec "$N-ch" clickhouse-client --query "SELECT toString(toDate(event_time)) FROM netops.pa_traffic_logs WHERE app = 'dup-test' LIMIT 1")"

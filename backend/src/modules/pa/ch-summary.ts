@@ -1,5 +1,5 @@
 /**
- * ClickHouse 每小時摘要(C3;ARCHITECTURE D29、D34):總覽的 27 種排行、疑似掃描、安全事件的 KPI 與排行,
+ * ClickHouse 每小時摘要(C3;ARCHITECTURE D29、D42):總覽的 27 種排行、疑似掃描、安全事件的 KPI 與排行,
  * 每小時彙總表(pa_traffic_hourly_app / src)只涵蓋 App、區域、來源 IP,其餘要掃原始 log(一天約 9 秒,超過路由逾時)。
  * 所以背景每 N 分鐘把「已結束的小時」從 ClickHouse 原始 log 逐列讀出,餵給和 FTP 相同的摘要邏輯
  * (core/palog.js createSummary、pa-events core/paevents.js createEventSummary),存成每小時一份摘要(infra/store);

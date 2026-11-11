@@ -79,7 +79,7 @@
     當 呼叫 GET /api/netops/pa/options
     那麼 回應 400,code 為 "VALIDATION_FAILED"
 
-  # ───── C3 查詢切換(ClickHouse;docs/API.md §4.1、ARCHITECTURE D29、D34、手冊 §12 CQ10、CQ11)─────
+  # ───── C3 查詢切換(ClickHouse;docs/API.md §4.1、ARCHITECTURE D29、D42、手冊 §12 CQ10、CQ11)─────
 
   # 來源: backend/src/modules/pa/routes.ts:78
   @C3 @auto

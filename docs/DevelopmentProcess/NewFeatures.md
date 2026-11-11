@@ -14,7 +14,7 @@
 
 ## 2026-11-11 C3 查詢切換(第 1 批:總覽與安全事件)
 - 工作項目:C3
-- 內容:流量總覽、篩選選項、安全事件(威脅、URL、資料過濾、WildFire)可查 ClickHouse,API 多 `source`、`topsUntil`,其他欄位不變;ARCHITECTURE 新增 D34(ClickHouse 每小時摘要);API.md §4.1、§4.2、§8;Gherkin `pa/overview.feature`、`pa-events/overview.feature` 加 C3 場景;前端 `api/pa.ts`、`api/paEvents.ts` 加 `source` 參數與型別(畫面不改)。
+- 內容:流量總覽、篩選選項、安全事件(威脅、URL、資料過濾、WildFire)可查 ClickHouse,API 多 `source`、`topsUntil`,其他欄位不變;ARCHITECTURE 新增 D42(ClickHouse 每小時摘要);API.md §4.1、§4.2、§8;Gherkin `pa/overview.feature`、`pa-events/overview.feature` 加 C3 場景;前端 `api/pa.ts`、`api/paEvents.ts` 加 `source` 參數與型別(畫面不改)。
 - 檔案:`docs/{API,ARCHITECTURE,IMPL-PLAN,PROJECT-MAP}.md`、`docs/Gherkin/`、`frontend/src/api/{pa,paEvents}.ts`
 
 ## 2026-11-10 C1 ClickHouse POC 與容量實測

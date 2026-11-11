@@ -131,7 +131,7 @@ NetOps/
 | PA 即時監控(R1)與測試區收集器開關 | 收集器 `pa-collector/netops_pa/`(開關 `control.py`、鍵 `keys.py`);API `backend/src/modules/pa-live/{live-routes,service}.ts`、Redis `backend/src/infra/redis/`;畫面 `frontend/src/pages/firewall/Live.vue`、`frontend/src/composables/paLive.ts`;鍵格式 `docs/PA-LIVE-PLAN.md` §4 |
 | SSE 串流(S0 驗證、R1、A1 問答) | `backend/src/modules/pa-live/routes.ts`、`docs/API.md` §3.1(逾時與標頭條件)、`docs/test-reports/2026-11-05-s0-sse.md` |
 | FTP 對帳與補漏(C3) | `backend/src/modules/pa/{reconcile,recon-routes}.ts`、`backend/src/ingest/backfill.ts`、`backend/src/infra/redis/backfill.ts`;API.md §5.3、ARCHITECTURE D33 |
-| PA 總覽 / 安全事件改查 ClickHouse(C3) | `backend/src/modules/pa/{ch-overview,ch-summary}.ts`、`backend/src/infra/clickhouse/reader.ts`、`backend/src/infra/redis/cache.ts`;ARCHITECTURE D29、D34 |
+| PA 總覽 / 安全事件改查 ClickHouse(C3) | `backend/src/modules/pa/{ch-overview,ch-summary}.ts`、`backend/src/infra/clickhouse/reader.ts`、`backend/src/infra/redis/cache.ts`;ARCHITECTURE D29、D42 |
 | PA log 寫入 ClickHouse(C2) | `backend/src/ingest/`、`backend/src/infra/{clickhouse,redis/ingest.ts}`、`deploy/clickhouse/`、手冊 `docs/PA-LOG-CLICKHOUSE-GUIDE.md` §6;Redis 鍵 `docs/PA-LIVE-PLAN.md` §4 |
 | 新版部署 | `.gitlab-ci.yml`、`deploy/` |
 | 接入規劃與決策 | `docs/ARCHITECTURE.md`、`docs/IMPL-PLAN.md`、`docs/PA-LIVE-PLAN.md`(PA 即時監控與 AI 搬移) |

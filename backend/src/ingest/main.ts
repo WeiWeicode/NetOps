@@ -27,7 +27,7 @@ export function heartbeatFields(w: Writer, cfg: Pick<IngestConfig, 'gwEnv' | 're
     startedAt,
     release: cfg.release,
     gwEnv: cfg.gwEnv,
-    state: !s.ready ? 'starting' : s.failing > 0 ? 'clickhouse-failing' : 'ok',
+    state: !s.ready ? 'starting' : s.schemaError ? 'clickhouse-schema-error' : s.failing > 0 ? 'clickhouse-failing' : 'ok',
     failing: String(s.failing),
     insertFailures: String(s.insertFailures),
     lastInsertAt: s.lastInsertAt ?? '',
@@ -43,7 +43,7 @@ export function heartbeatFields(w: Writer, cfg: Pick<IngestConfig, 'gwEnv' | 're
     if (g) {
       f[`gapFrom:${t}`] = g.from;
       f[`gapTo:${t}`] = g.to;
-      if (g.missed !== null) f[`gapMissed:${t}`] = String(g.missed);
+      f[`gapKind:${t}`] = g.kind;
     }
   }
   if (s.lastError) {
@@ -113,10 +113,12 @@ async function main(): Promise<void> {
 
   // 主迴圈:Redis 錯誤(連線中斷)時退避後重來;重來會先補待處理清單
   for (let attempt = 0; !stop.signal.aborted; ) {
+    const before = writer.status.aliveAt;
     try {
       await writer.run(stop.signal);
-      attempt = 0;
     } catch (e) {
+      // 這次 run 有推進過(讀到資料或完成過一輪)就是新的一次斷線:退避從 1 秒重新算
+      if (writer.status.aliveAt > before) attempt = 0;
       writer.status.fail('redis', e);
       log('warn', '讀取 Redis 失敗,稍後重試', { error: writer.status.lastError?.message });
       await sleep(Math.min(30_000, 1_000 * 2 ** Math.min(attempt++, 5)), stop.signal);

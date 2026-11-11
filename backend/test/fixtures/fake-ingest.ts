@@ -8,11 +8,12 @@ import { compareId, gapFrom, INGEST_TYPES, type Gap, type IngestRedis, type Inge
 interface Stream {
   entries: { id: string; data: string }[];
   added: number;
+  maxDeleted: string;
   group: { lastDelivered: string; read: number; pending: Set<string> } | null;
 }
 
 export class FakeIngestRedis implements IngestRedis {
-  streams = new Map<IngestType, Stream>(INGEST_TYPES.map((t) => [t, { entries: [], added: 0, group: null }]));
+  streams = new Map<IngestType, Stream>(INGEST_TYPES.map((t) => [t, { entries: [], added: 0, maxDeleted: '0-0', group: null }]));
   gaps: (Gap & { detectedAt: string })[] = [];
   heartbeat: Record<string, string> = {};
   acked: Partial<Record<IngestType, string[]>> = {};
@@ -33,6 +34,7 @@ export class FakeIngestRedis implements IngestRedis {
   /** 模擬 XTRIM MINID:刪掉 ID 小於 minId 的條目(不管 group 讀過沒有) */
   trim(t: IngestType, minId: string) {
     const s = this.streams.get(t)!;
+    for (const e of s.entries) if (compareId(e.id, minId) < 0 && compareId(e.id, s.maxDeleted) > 0) s.maxDeleted = e.id;
     s.entries = s.entries.filter((e) => compareId(e.id, minId) >= 0);
   }
 
@@ -81,8 +83,8 @@ export class FakeIngestRedis implements IngestRedis {
     const pend = [...s.group.pending].sort(compareId);
     return gapFrom(
       t,
-      { firstId: s.entries[0]?.id ?? null, length: s.entries.length, entriesAdded: s.added },
-      { lastDelivered: s.group.lastDelivered, entriesRead: s.group.read },
+      { firstId: s.entries[0]?.id ?? null, maxDeletedId: s.maxDeleted },
+      { lastDelivered: s.group.lastDelivered },
       { count: pend.length, minId: pend[0] ?? null },
     );
   }
@@ -103,6 +105,8 @@ export class FakeClickHouse implements ClickHouseWriter {
   failTransient = 0;
   /** 這些 src 值的列會讓 insert 拋資料錯誤(模擬型別錯誤) */
   badSrc = new Set<string>();
+  /** 每次 insert 都拋這個錯誤(模擬結構性錯誤、未知 400) */
+  failWith: ClickHouseError | null = null;
 
   async insert(table: TableKey, rows: readonly Record<string, unknown>[], token: string) {
     this.calls.push({ table, rows: rows.length, token });
@@ -110,6 +114,7 @@ export class FakeClickHouse implements ClickHouseWriter {
       this.failTransient--;
       throw new ClickHouseError('ClickHouse 連線失敗:ECONNREFUSED', undefined, undefined);
     }
+    if (this.failWith) throw this.failWith;
     if (rows.some((r) => this.badSrc.has(String(r.src)))) throw new ClickHouseError('Code: 27. Cannot parse input', 27, 400);
     // 同一個 token 重送:略過(non_replicated_deduplication_window)
     if (this.tokens.has(`${table}|${token}`)) return;

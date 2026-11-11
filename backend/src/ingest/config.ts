@@ -6,7 +6,8 @@
  *   CLICKHOUSE_USER           netops_writer
  *   CLICKHOUSE_PASSWORD_FILE  Docker secret ch_writer_password(正式區只接受 _FILE;dev / test 可用明文 CLICKHOUSE_PASSWORD)
  *   INGEST_BATCH_SECONDS      一批最長等待秒數,3–5(預設 5,C1 報告 §9-2)
- *   INGEST_BATCH_MAX          每種類型一批最多筆數(預設 5000)
+ *   INGEST_BATCH_MAX          每種類型一批最多筆數(100–5000,預設 5000;容器 256m,資安審查 M1)
+ *   兩次啟動之間不要改批次設定:待處理清單的切法要和當機前相同,去重 token 才對得上
  *   RELEASE_SHA               寫進心跳(哪一版在跑)
  */
 import type { GwEnv } from '@giganexus/backend-sdk';
@@ -54,7 +55,7 @@ export function loadIngestConfig(env: NodeJS.ProcessEnv = process.env): IngestCo
     redisUrl,
     clickhouse: { url, user, password },
     batchMs: int(env, 'INGEST_BATCH_SECONDS', 5, 3, 5) * 1000,
-    batchMax: int(env, 'INGEST_BATCH_MAX', 5000, 100, 20000),
+    batchMax: int(env, 'INGEST_BATCH_MAX', 5000, 100, 5000),
     release: str(env, 'RELEASE_SHA').slice(0, 40) || 'dev',
   };
 }

@@ -7,13 +7,16 @@
 # 做法:
 #   1. OPTIMIZE … PARTITION <日> FINAL DEDUPLICATE:只刪「所有欄位都相同」的列(重送的列連 received_at 都相同;
 #      不同的 log 不會被當成重複)。pa_traffic_logs、pa_threat_logs 都做
-#   2. 原始表筆數有變少時,重建那一天的 pa_traffic_hourly_app / _src(物化檢視當初也算了重複的列):
+#   2. 那一天的彙總(pa_traffic_hourly_app / _src 的 sessions 加總)和原始表筆數不同時重建
+#      (物化檢視當初也算了重複的列;上次執行在刪除彙總之後、寫回之前中斷,重跑也會補建):
 #      先刪掉那一天的彙總(mutations_sync=2,等完成),再從原始表重新彙總寫回
 # 不能修正今天(台灣時間):今天還在寫入,重建彙總期間進來的列會被算兩次。以容器內 default 帳號(只允許容器本機)執行。
 set -eu
 C="${1:?用法:dedupe-day.sh <容器名稱> <YYYY-MM-DD>}"
 D="${2:?缺少日期 YYYY-MM-DD}"
-echo "$D" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' || { echo "日期格式要 YYYY-MM-DD:$D" >&2; exit 2; }
+# case 比對整個字串(grep 逐行比對,多行參數可以繞過;值會直接放進 SQL)
+case "$D" in [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;; *) echo "日期格式要 YYYY-MM-DD" >&2; exit 2 ;; esac
+case "$C" in "" | *[!A-Za-z0-9_.-]*) echo "容器名稱只能是英數、底線、點與 -" >&2; exit 2 ;; esac
 TODAY=$(TZ=Asia/Taipei date +%Y-%m-%d)
 [ "$D" \< "$TODAY" ] || { echo "只能修正今天($TODAY)以前的日期" >&2; exit 2; }
 P=$(echo "$D" | tr -d '-')
@@ -27,7 +30,10 @@ T1=$(cnt pa_traffic_logs); X1=$(cnt pa_threat_logs)
 echo "pa_traffic_logs $D:$T0 → $T1(刪除 $((T0 - T1)))"
 echo "pa_threat_logs  $D:$X0 → $X1(刪除 $((X0 - X1)))"
 
-if [ "$T1" -lt "$T0" ]; then
+APP=$(ck "SELECT sum(sessions) FROM netops.pa_traffic_hourly_app WHERE toDate(hour) = toDate('$D')")
+SRC=$(ck "SELECT sum(sessions) FROM netops.pa_traffic_hourly_src WHERE toDate(hour) = toDate('$D')")
+echo "每小時彙總 $D:hourly_app $APP、hourly_src $SRC(原始表 $T1)"
+if [ "$APP" != "$T1" ] || [ "$SRC" != "$T1" ]; then
   echo "重建 $D 的每小時彙總"
   ck "ALTER TABLE netops.pa_traffic_hourly_app DELETE WHERE toDate(hour) = toDate('$D') SETTINGS mutations_sync = 2"
   ck "ALTER TABLE netops.pa_traffic_hourly_src DELETE WHERE toDate(hour) = toDate('$D') SETTINGS mutations_sync = 2"

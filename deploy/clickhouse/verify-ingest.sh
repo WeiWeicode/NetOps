@@ -3,6 +3,7 @@
 #   在主機 2 WSL(root 或 docker 群組):sh deploy/clickhouse/verify-ingest.sh [小時數,預設 24,最多 24]
 #   容器名稱預設測試區:NETOPS_PROJECT=giganexus-netops-test
 # 只執行讀取:redis-cli EVAL_RO / HGETALL / INFO / XINFO / XPENDING / LRANGE、clickhouse-client SELECT(容器內 default 帳號)。
+# 需要 GNU date(-d @秒數;主機 2 WSL Ubuntu),busybox / macOS 不適用。
 #
 # 比對方式(時間一律以「netops-pa 收到的時間」分小時,UTC 整點、顯示為台灣時間):
 #   TRAFFIC  Redis:netops:pa:agg:traffic:{分鐘} 的 count 加總(netops-pa 寫進 Stream 的筆數,保留 1 天)
@@ -20,6 +21,8 @@ P="${NETOPS_PROJECT:-giganexus-netops-test}"
 R="$P-netops-redis-1"
 CH="$P-netops-clickhouse-1"
 rc() { docker exec -i "$R" redis-cli "$@"; }
+# 心跳的 lastError、缺口清單可能含 log 內容:去掉 ASCII 控制字元(保留換行與 tab)再印(資安審查 L2)
+clean() { LC_ALL=C tr -d '\000-\010\013-\037\177'; }
 ck() { docker exec -i "$CH" clickhouse-client --query "$1"; }
 
 NOW=$(date -u +%s)
@@ -27,10 +30,10 @@ END=$((NOW / 3600 * 3600))          # 最後一個完整小時的結束(UTC 整�
 START=$((END - HOURS * 3600))
 
 echo "== netops-ingest 心跳 =="
-rc hgetall netops:ingest:heartbeat | paste - - | grep -E '^(updatedAt|startedAt|release|state|failing|insertFailures|lastInsertAt|lastError|lastErrorAt|(inserted|malformed|trimmed|rejected|badTime|lagMs|gapFrom|gapMissed):)' || echo "(沒有心跳)"
+rc hgetall netops:ingest:heartbeat | paste - - | grep -E '^(updatedAt|startedAt|release|state|failing|insertFailures|lastInsertAt|lastError|lastErrorAt|(inserted|malformed|trimmed|rejected|badTime|lagMs|gapFrom|gapKind):)' | clean || echo "(沒有心跳)"
 echo
 echo "== 缺口清單 netops:ingest:gaps(最新 10 筆)=="
-rc lrange netops:ingest:gaps 0 9
+rc lrange netops:ingest:gaps 0 9 | clean
 echo
 echo "== consumer group ch-writer(待處理 = 已讀未 ACK;lag = 尚未讀取)=="
 for t in traffic threat url data wildfire; do

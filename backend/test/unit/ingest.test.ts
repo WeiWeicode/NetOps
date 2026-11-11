@@ -7,12 +7,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { after, describe, it } from 'node:test';
-import { ClickHouseError, createClickHouseWriter, isDataError } from '../../src/infra/clickhouse/index.js';
+import { ClickHouseError, createClickHouseWriter, isDataError, isSchemaError, isUnknownBadRequest } from '../../src/infra/clickhouse/index.js';
 import { compareId, gapFrom } from '../../src/infra/redis/ingest.js';
 import { loadIngestConfig } from '../../src/ingest/config.js';
 import { heartbeatFields } from '../../src/ingest/main.js';
 import { ip, parsePaTime, seqno, taipeiText, toRow } from '../../src/ingest/rows.js';
-import { Writer } from '../../src/ingest/writer.js';
+import { MAX_BATCH_BYTES, MAX_ENTRY_BYTES, sanitizeMessage, Writer } from '../../src/ingest/writer.js';
 import { FakeClickHouse, FakeIngestRedis } from '../fixtures/fake-ingest.js';
 
 const T0 = Date.UTC(2026, 10, 10, 5, 45, 16, 123); // 2026-11-10 13:45:16.123 台灣
@@ -217,7 +217,7 @@ describe('Writer:批次寫入與 ACK', () => {
     assert.equal(w.status.counts.traffic.rejected, 1);
     assert.equal(w.status.counts.traffic.inserted, 4);
     assert.equal(redis.acked.traffic?.length, 5);
-    assert.ok(ch.calls.some((c) => c.token.endsWith(':a') || c.token.endsWith(':b')));
+    assert.ok(ch.calls.some((c) => /:[ab]\d+$/.test(c.token)), '子批 token 帶 :a / :b 與筆數');
   });
 
   it('壞 JSON 計 malformed、待處理已被修剪計 trimmed,都 ACK 不重讀', async () => {
@@ -257,6 +257,114 @@ describe('Writer:批次寫入與 ACK', () => {
   });
 });
 
+describe('Writer:熔斷與上限(審查修正)', () => {
+  it('結構性錯誤(Unknown field、欄位不存在):不拆批、不 ACK、不丟列,退避重試到修好', async () => {
+    const { redis, ch, make, waits } = setup();
+    const w = make();
+    await w.init();
+    for (let i = 0; i < 4; i++) redis.add('traffic', TRAFFIC);
+    ch.failWith = new ClickHouseError('ClickHouse HTTP 400:Code: 117. DB::Exception: Unknown field found while parsing JSONEachRow format: session_id', 117, 400);
+    let n = 0;
+    const orig = ch.insert.bind(ch);
+    ch.insert = async (...a) => {
+      if (++n === 4) ch.failWith = null; // 第 4 次 migration 補上了
+      return orig(...a);
+    };
+    await w.cycle(new AbortController().signal);
+    assert.ok(ch.calls.every((c) => c.rows === 4), '不拆批');
+    assert.equal(waits.length, 3);
+    assert.equal(ch.tables.traffic.length, 4);
+    assert.equal(w.status.counts.traffic.rejected, 0);
+    assert.equal(redis.acked.traffic?.length, 4);
+  });
+
+  it('資料錯誤拆到單列、前 3 列全被拒且沒有子批成功:熔斷成結構性錯誤,不 ACK', async () => {
+    const { redis, ch, make } = setup();
+    const w = make();
+    await w.init();
+    for (let i = 0; i < 8; i++) redis.add('traffic', { ...TRAFFIC, src: `10.0.0.${i}` });
+    for (let i = 0; i < 8; i++) ch.badSrc.add(`::ffff:10.0.0.${i}`);
+    const stop = new AbortController();
+    let failures = 0;
+    const orig = ch.insert.bind(ch);
+    ch.insert = async (...a) => {
+      try {
+        return await orig(...a);
+      } catch (e) {
+        if (++failures > 20) stop.abort();
+        throw e;
+      }
+    };
+    await w.cycle(stop.signal);
+    assert.equal(redis.acked.traffic, undefined, '沒有 ACK');
+    assert.equal(w.status.counts.traffic.rejected, 0);
+    assert.equal(w.status.schemaError, true);
+    assert.match(w.status.lastError!.message, /視為欄位或表對不上/);
+    // 每一輪最多 log2(8)+3 次請求,不會打出上萬次
+    assert.ok(ch.calls.length < 30, String(ch.calls.length));
+  });
+
+  it('無法分類的 HTTP 400:先整批重試,連續 5 次後才拆批找出壞列(資安審查 M2)', async () => {
+    const { redis, ch, make } = setup();
+    const w = make();
+    await w.init();
+    for (const s of ['10.0.0.1', '10.0.0.2', '10.0.0.3', '10.0.0.4']) redis.add('traffic', { ...TRAFFIC, src: s });
+    const weird = new ClickHouseError('ClickHouse HTTP 400:Code: 999. something new', 999, 400);
+    const orig = ch.insert.bind(ch);
+    ch.insert = async (table, rows, token) => {
+      if (rows.some((r) => r.src === '::ffff:10.0.0.3')) {
+        ch.calls.push({ table, rows: rows.length, token });
+        throw weird;
+      }
+      return orig(table, rows, token);
+    };
+    await w.cycle(new AbortController().signal);
+    assert.equal(w.status.insertFailures, 5);
+    assert.equal(w.status.counts.traffic.rejected, 1);
+    assert.deepEqual(ch.tables.traffic.map((r) => r.src).sort(), ['::ffff:10.0.0.1', '::ffff:10.0.0.2', '::ffff:10.0.0.4']);
+    assert.equal(redis.acked.traffic?.length, 4);
+  });
+
+  it('單筆超過 64 KB 計為 malformed(不寫、ACK)', async () => {
+    const { redis, ch, make } = setup();
+    const w = make();
+    await w.init();
+    redis.add('url', { src: '1.1.1.1', url: 'x'.repeat(MAX_ENTRY_BYTES) });
+    redis.add('url', { src: '1.1.1.1' });
+    await w.cycle(new AbortController().signal);
+    assert.equal(w.status.counts.url.malformed, 1);
+    assert.equal(ch.tables.threat.length, 1);
+    assert.equal(redis.acked.url?.length, 2);
+  });
+
+  it('一輪讀到的資料超過位元組上限就提早寫入', async () => {
+    const { redis, ch, make } = setup();
+    const w = make();
+    await w.init();
+    const big = { src: '1.1.1.1', url: 'y'.repeat(50_000) };
+    const n = Math.ceil(MAX_BATCH_BYTES / 100_000) + 1000;
+    for (let i = 0; i < n; i++) redis.add('url', big);
+    await w.cycle(new AbortController().signal);
+    assert.ok(ch.calls[0]!.rows < n, `第一批 ${ch.calls[0]!.rows} 筆`);
+  });
+
+  it('錯誤訊息去掉控制字元(含 C1)並截斷', () => {
+    assert.equal(sanitizeMessage(new Error('a\u009b31mb\u0000c\nsecond')), 'a 31mb c');
+    assert.equal(sanitizeMessage('x'.repeat(300)).length, 200);
+  });
+
+  it('錯誤分類:結構性、資料、未知 400', () => {
+    const e117field = new ClickHouseError('Code: 117. Unknown field found while parsing JSONEachRow format: x', 117, 400);
+    const e117data = new ClickHouseError('Code: 117. Cannot parse input: expected', 117, 400);
+    assert.deepEqual([isSchemaError(e117field), isDataError(e117field)], [true, false]);
+    assert.deepEqual([isSchemaError(e117data), isDataError(e117data)], [false, true]);
+    assert.equal(isSchemaError(new ClickHouseError('Code: 516. Authentication failed', 516, 403)), true);
+    assert.equal(isUnknownBadRequest(new ClickHouseError('Code: 999.', 999, 400)), true);
+    assert.equal(isUnknownBadRequest(new ClickHouseError('Code: 241. Memory limit', 241, 400)), false);
+    assert.equal(isUnknownBadRequest(new ClickHouseError('Code: 999.', 999, 500)), false);
+  });
+});
+
 describe('缺口偵測', () => {
   it('還沒讀就被修剪 → 記一筆缺口(同一個缺口只記一次)', async () => {
     const { redis, make } = setup();
@@ -271,22 +379,67 @@ describe('缺口偵測', () => {
     redis.trim('traffic', keep);
     const gaps = await w.checkGaps();
     assert.equal(gaps.length, 1);
-    assert.equal(gaps[0]!.missed, 2);
+    assert.equal(gaps[0]!.kind, 'undelivered-trimmed');
     assert.equal(gaps[0]!.to, keep);
     await w.checkGaps();
     assert.equal(redis.gaps.length, 1);
     assert.equal(w.status.gaps.traffic?.from, gaps[0]!.from);
+    // 讀過之後缺口不再成立:心跳上的缺口清掉(歷史留在缺口清單)
+    await w.cycle(new AbortController().signal);
+    assert.equal((await w.checkGaps()).length, 0);
+    assert.equal(w.status.gaps.traffic, undefined);
+    assert.equal(redis.gaps.length, 1);
   });
 
-  it('類型很久沒有新 log、舊的都被修剪後又來新的:不是缺口', () => {
-    assert.equal(gapFrom('threat', { firstId: '200-0', length: 1, entriesAdded: 6 }, { lastDelivered: '100-0', entriesRead: 5 }, { count: 0, minId: null }), null);
+  it('發生過缺口之後,類型閒置、已讀的舊條目被修剪:不再誤報(程式碼審查 #2)', async () => {
+    const { redis, make } = setup();
+    const w = make();
+    await w.init();
+    redis.add('threat', { src: '1.1.1.1' }, T0);
+    await w.cycle(new AbortController().signal);
+    const lost = redis.add('threat', { src: '1.1.1.1' }, T0 + 1000);
+    const keep = redis.add('threat', { src: '1.1.1.1' }, T0 + 2000);
+    redis.trim('threat', keep);
+    assert.equal((await w.checkGaps()).length, 1, lost);
+    await w.cycle(new AbortController().signal);
+    // 之後閒置:已讀的 keep 被修剪,再來一筆新的
+    const next = redis.add('threat', { src: '1.1.1.1' }, T0 + 9000);
+    redis.trim('threat', next);
+    assert.equal((await w.checkGaps()).length, 0);
   });
 
-  it('待處理條目被修剪 → 缺口;剛建立的 group(0-0)不是缺口;Redis 算不出計數時保守視為缺口', () => {
-    assert.deepEqual(gapFrom('url', { firstId: '200-0', length: 3, entriesAdded: 10 }, { lastDelivered: '150-0', entriesRead: 7 }, { count: 1, minId: '150-0' }), { type: 'url', from: '150-0', to: '200-0', missed: null });
-    assert.equal(gapFrom('url', { firstId: '200-0', length: 3, entriesAdded: 10 }, { lastDelivered: '0-0', entriesRead: 0 }, { count: 0, minId: null }), null);
-    assert.equal(gapFrom('url', { firstId: '200-0', length: 3, entriesAdded: null }, { lastDelivered: '100-0', entriesRead: null }, { count: 0, minId: null })?.missed, null);
-    assert.equal(gapFrom('url', { firstId: null, length: 0, entriesAdded: 3 }, { lastDelivered: '100-0', entriesRead: 3 }, { count: 0, minId: null }), null);
+  it('待處理條目被修剪,但那一批正在寫入(ClickHouse 停太久):不算缺口(程式碼審查 #3)', async () => {
+    const { redis, ch, make } = setup();
+    const w = make();
+    await w.init();
+    const id = redis.add('url', { src: '1.1.1.1' }, T0);
+    ch.failTransient = 2;
+    const origInsert = ch.insert.bind(ch);
+    let checked: unknown[] | null = null;
+    ch.insert = async (...a) => {
+      if (checked === null && ch.failTransient === 1) {
+        redis.trim('url', `${T0 + 1}-0`);
+        checked = await w.checkGaps();
+      }
+      return origInsert(...a);
+    };
+    await w.cycle(new AbortController().signal);
+    assert.deepEqual(checked, []);
+    assert.equal(ch.tables.threat.length, 1);
+    assert.deepEqual(redis.acked.url, [id]);
+  });
+
+  it('類型很久沒有新 log、最後一筆(已讀)被修剪後又來新的:不是缺口', () => {
+    assert.equal(gapFrom('threat', { firstId: '200-0', maxDeletedId: '100-0' }, { lastDelivered: '100-0' }, { count: 0, minId: null }), null);
+  });
+
+  it('待處理條目被修剪 → pending-trimmed;還沒送達就被修剪 → undelivered-trimmed;剛建立的 group 不是缺口', () => {
+    assert.deepEqual(gapFrom('url', { firstId: '200-0', maxDeletedId: '190-0' }, { lastDelivered: '150-0' }, { count: 1, minId: '150-0' }), { type: 'url', kind: 'pending-trimmed', from: '150-0', to: '200-0' });
+    assert.deepEqual(gapFrom('url', { firstId: '200-0', maxDeletedId: '190-0' }, { lastDelivered: '150-0' }, { count: 0, minId: null }), { type: 'url', kind: 'undelivered-trimmed', from: '150-0', to: '200-0' });
+    assert.equal(gapFrom('url', { firstId: '200-0', maxDeletedId: '190-0' }, { lastDelivered: '0-0' }, { count: 0, minId: null }), null);
+    assert.equal(gapFrom('url', { firstId: null, maxDeletedId: '0-0' }, { lastDelivered: '100-0' }, { count: 0, minId: null }), null);
+    // Stream 整個被修剪光(空的)、待處理還在
+    assert.equal(gapFrom('url', { firstId: null, maxDeletedId: '120-0' }, { lastDelivered: '120-0' }, { count: 2, minId: '110-0' })?.kind, 'pending-trimmed');
   });
 
   it('Stream ID 比較不受 2^53 限制', () => {
@@ -304,12 +457,12 @@ describe('心跳欄位', () => {
     const id = redis.add('traffic', TRAFFIC, T0);
     await w.cycle(new AbortController().signal);
     w.status.fail('clickhouse', new Error('Code: 241. Memory limit\nsecond line'));
-    w.status.gaps.url = { type: 'url', from: '1-0', to: '2-0', missed: 3 };
+    w.status.gaps.url = { type: 'url', kind: 'undelivered-trimmed', from: '1-0', to: '2-0' };
     const f = heartbeatFields(w, { gwEnv: 'test', release: 'abc1234' }, '2026-11-10T00:00:00.000Z', T0 + 5000);
     assert.equal(f['inserted:traffic'], '1');
     assert.equal(f['lastAcked:traffic'], id);
     assert.equal(f['lagMs:traffic'], '5000');
-    assert.equal(f['gapMissed:url'], '3');
+    assert.equal(f['gapKind:url'], 'undelivered-trimmed');
     assert.equal(f.lastError, 'Code: 241. Memory limit');
     assert.equal(f.state, 'ok');
     for (const v of Object.values(f)) assert.equal(typeof v, 'string');
@@ -366,6 +519,7 @@ describe('ClickHouse HTTP 用戶端', () => {
     assert.equal(url.searchParams.get('insert_deduplication_token'), 'traffic:1-0:2-0:2');
     assert.equal(url.searchParams.get('input_format_skip_unknown_fields'), '0');
     assert.doesNotMatch(url.toString(), /pw|netops_writer/);
+    assert.equal(init.redirect, 'error');
     assert.deepEqual((init.headers as Record<string, string>)['X-ClickHouse-Key'], 'pw');
     assert.equal(init.body, '{"a":1}\n{"a":"7688588907462574142"}');
   });

@@ -198,6 +198,8 @@ services:
       CLICKHOUSE_USER: netops_writer
       CLICKHOUSE_PASSWORD_FILE: /run/secrets/ch_writer_password
       INGEST_BATCH_SECONDS: ${NETOPS_INGEST_BATCH_SECONDS:-5}
+      # V8 heap 上限低於容器上限:記憶體吃緊時先 GC / 丟出錯誤,不要整個容器被 OOM kill(資安審查 M1)
+      NODE_OPTIONS: --max-old-space-size=160
     secrets: [ch_writer_password]
     # 映像的 HEALTHCHECK 是 netops-api 的 /healthz,這裡換掉
     healthcheck:

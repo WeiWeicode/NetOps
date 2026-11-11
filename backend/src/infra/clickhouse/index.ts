@@ -40,7 +40,7 @@ export class ClickHouseError extends Error {
 
 /**
  * 資料本身的錯誤(解析、型別、超出範圍):重試也不會成功,呼叫端要拆批找出壞列(手冊 §6.6)。
- * 其他錯誤(連線、逾時、記憶體、Too many parts、權限)都視為暫時性,退避重試。
+ * 結構性錯誤(isSchemaError)與其他錯誤(連線、逾時、記憶體、Too many parts)都視為暫時性,退避重試。
  * 代碼對照 ClickHouse 26.3 src/Common/ErrorCodes.cpp。
  */
 const DATA_ERROR_CODES = new Set([
@@ -61,7 +61,38 @@ const DATA_ERROR_CODES = new Set([
   676, // CANNOT_PARSE_IPV6
 ]);
 
-export const isDataError = (e: unknown): boolean => e instanceof ClickHouseError && e.code !== undefined && DATA_ERROR_CODES.has(e.code);
+/**
+ * 結構性錯誤:表或欄位對不上(migration 沒套用、程式與 schema 不同步)、帳密或權限錯誤。
+ * 每一列都會失敗,拆批只會把整批丟光,所以**當暫時性錯誤**:不拆批、不 ACK、退避重試,等人修好(程式碼審查 2026-11-10 #1)。
+ * 117 INCORRECT_DATA 也用在 JSONEachRow 的「Unknown field found」,依訊息另外判斷。
+ */
+const SCHEMA_ERROR_CODES = new Set([
+  16, // NO_SUCH_COLUMN_IN_TABLE
+  47, // UNKNOWN_IDENTIFIER
+  60, // UNKNOWN_TABLE
+  81, // UNKNOWN_DATABASE
+  192, // UNKNOWN_USER
+  193, // WRONG_PASSWORD
+  194, // REQUIRED_PASSWORD
+  497, // ACCESS_DENIED
+  516, // AUTHENTICATION_FAILED
+]);
+export const isSchemaError = (e: unknown): boolean =>
+  e instanceof ClickHouseError && e.code !== undefined && (SCHEMA_ERROR_CODES.has(e.code) || /unknown field|no such column|missing columns/i.test(e.message));
+
+/** 資料錯誤(可拆批找出壞列);結構性錯誤除外 */
+export const isDataError = (e: unknown): boolean =>
+  e instanceof ClickHouseError && e.code !== undefined && DATA_ERROR_CODES.has(e.code) && !isSchemaError(e);
+
+/** 已知的暫時性錯誤(逾時、同時查詢過多、記憶體、Too many parts 等):無限重試,不拆批 */
+const TRANSIENT_CODES = new Set([159, 202, 209, 210, 241, 252, 425]);
+
+/**
+ * 不在任何清單裡的 HTTP 400(ClickHouse 對輸入問題回 400)。整批連續失敗多次後,寫入端改用拆批找出壞列,
+ * 避免一筆無法分類的壞資料卡住整條管線(資安審查 2026-11-10 M2)。
+ */
+export const isUnknownBadRequest = (e: unknown): boolean =>
+  e instanceof ClickHouseError && e.status === 400 && !isSchemaError(e) && !isDataError(e) && !(e.code !== undefined && TRANSIENT_CODES.has(e.code));
 
 export interface ClickHouseWriter {
   /**
@@ -88,7 +119,8 @@ export function createClickHouseWriter(cfg: ClickHouseConfig, fetchImpl: Fetch =
     for (const [k, v] of Object.entries(params)) u.searchParams.set(k, v);
     let res: Response;
     try {
-      res = await fetchImpl(u, { method: 'POST', headers: { ...headers, 'Content-Type': 'text/plain; charset=utf-8' }, body, signal: AbortSignal.timeout(timeoutMs) });
+      // redirect: 'error':轉址時 X-ClickHouse-Key 會被帶到別的主機,一律不跟隨(資安審查 L4)
+      res = await fetchImpl(u, { method: 'POST', headers: { ...headers, 'Content-Type': 'text/plain; charset=utf-8' }, body, redirect: 'error', signal: AbortSignal.timeout(timeoutMs) });
     } catch (e) {
       // 連線拒絕、DNS、逾時:不帶 URL 以外的細節
       const name = (e as Error).name === 'TimeoutError' ? `逾時 ${timeoutMs} ms` : ((e as { cause?: { code?: string } }).cause?.code ?? (e as Error).name);

@@ -12,7 +12,7 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { after, before, describe, it } from 'node:test';
 import { Redis } from 'ioredis';
-import { ClickHouseError, createClickHouseWriter, isDataError } from '../../src/infra/clickhouse/index.js';
+import { ClickHouseError, createClickHouseWriter, isDataError, isSchemaError } from '../../src/infra/clickhouse/index.js';
 import { createIngestRedis, type IngestRedis } from '../../src/infra/redis/ingest.js';
 import { Writer } from '../../src/ingest/writer.js';
 
@@ -163,10 +163,16 @@ describe('缺口偵測(真 Redis XINFO)', () => {
     await r1.xadd(key, '4000-0', 'd', '{}');
     await r1.xtrim(key, 'MINID', '4000-0');
     const g = await ingest.detectGap('data');
-    assert.deepEqual(g, { type: 'data', from: '1000-0', to: '4000-0', missed: 2 });
+    assert.deepEqual(g, { type: 'data', kind: 'undelivered-trimmed', from: '1000-0', to: '4000-0' });
     await w.checkGaps();
     const list = await r1.lrange('netops:ingest:gaps', 0, -1);
-    assert.equal(JSON.parse(list[0]!).missed, 2);
+    assert.equal(JSON.parse(list[0]!).kind, 'undelivered-trimmed');
+    // 讀過之後不再是缺口;再閒置、已讀的被修剪也不誤報(Redis 7.4 max-deleted-entry-id)
+    await runUntilIdle(w);
+    assert.equal(await ingest.detectGap('data'), null);
+    await r1.xadd(key, '9000-0', 'd', '{}');
+    await r1.xtrim(key, 'MINID', '9000-0');
+    assert.equal(await ingest.detectGap('data'), null);
   });
 
   it('類型閒置後最後一筆被修剪、再來新的:不是缺口', async () => {
@@ -194,12 +200,14 @@ describe('缺口偵測(真 Redis XINFO)', () => {
 });
 
 describe('ClickHouse 錯誤分類', () => {
-  it('型別錯誤是資料錯誤(拆批丟列);欄位名稱錯誤也直接失敗', async () => {
-    const e1 = await ch.insert('traffic', [{ event_time: 'x', src: 'not-ip' }], `bad-${randomUUID()}`).catch((e) => e);
+  it('型別錯誤是資料錯誤(拆批丟列);欄位名稱錯誤是結構性錯誤(不拆批、重試)', async () => {
+    const e1 = await ch.insert('traffic', [{ event_time: '2026-11-10 13:45:16', src: 'not-ip' }], `bad-${randomUUID()}`).catch((e) => e);
     assert.ok(e1 instanceof ClickHouseError, String(e1));
-    assert.equal(isDataError(e1), true, `code ${e1.code}`);
+    assert.equal(isDataError(e1), true, `code ${e1.code}:${e1.message}`);
     const e2 = await ch.insert('traffic', [{ no_such_column: 1 }], `bad-${randomUUID()}`).catch((e) => e);
     assert.ok(e2 instanceof ClickHouseError);
+    assert.equal(isSchemaError(e2), true, `code ${e2.code}:${e2.message}`);
+    assert.equal(isDataError(e2), false);
   });
 
   it('帳密錯誤是暫時性錯誤(重試,不丟資料)', async () => {

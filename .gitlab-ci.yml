@@ -62,40 +62,52 @@ check:ingest-int:
   variables:
     CH_IMAGE: clickhouse/clickhouse-server:26.3.62.3
   script:
-    - export GITLAB_NPM_TOKEN="$(cat "$NPM_TOKEN_FILE")"
-    - N="netops-int-$CI_JOB_ID"; T="$(mktemp -d)"; echo "$T" > .int-tmp; mkdir "$T/s"
+    # 暫存目錄與輸出放在 checkout 外面(/tmp/netops-int-<job>.*),不留未追蹤檔;job 輸出另存 .log,
+    #   給沒有 Job 讀取權限的 AI 以 ssh 唯讀查看(保留 3 天)
+    - N="netops-int-$CI_JOB_ID"; L="/tmp/$N.log"; T="$(mktemp -d)"; echo "$T" > "/tmp/$N.path"; mkdir "$T/s"
+    - find /tmp -maxdepth 1 -name 'netops-int-*.log' -mtime +3 -delete 2>/dev/null || true
     - NETOPS_SECRETS_DIR="$T/s" sh deploy/host2-set-clickhouse-secrets.sh >/dev/null
     # 容器內 uid 101 要讀得到帳號檔(一次性密碼;主機上的正式檔是 101:101 / 400)
     - chmod 644 "$T/s/clickhouse/netops-users.xml"
     - D="$PWD/deploy/clickhouse"
+    # 這個 job 專用的網路(不放預設 bridge);port 只發佈到 127.0.0.1
+    - docker network create "$N-net" >/dev/null
     - >-
-      docker run -d --name "$N-ch" --user 101:101 --memory 1536m --memory-swap 1536m --tmpfs /tmp
+      docker run -d --name "$N-ch" --network "$N-net" --user 101:101 --memory 1536m --memory-swap 1536m --tmpfs /tmp
       -e CLICKHOUSE_SKIP_USER_SETUP=1 -p 127.0.0.1::8123
       -v "$D/config.d/low-memory.xml:/etc/clickhouse-server/config.d/zz-netops-low-memory.xml:ro"
       -v "$D/users.d/default.xml:/etc/clickhouse-server/users.d/zz-netops-default.xml:ro"
       -v "$D/users.d/profiles.xml:/etc/clickhouse-server/users.d/zz-netops-profiles.xml:ro"
       -v "$T/s/clickhouse/netops-users.xml:/etc/clickhouse-server/users.d/zz-netops-users.xml:ro"
       "$CH_IMAGE" >/dev/null
-    - docker run -d --name "$N-redis" -p 127.0.0.1::6379 redis:7.4-alpine >/dev/null
+    - docker run -d --name "$N-redis" --network "$N-net" -p 127.0.0.1::6379 redis:7.4-alpine >/dev/null
     - for i in $(seq 1 60); do docker exec "$N-ch" wget -qO- http://127.0.0.1:8123/ping >/dev/null 2>&1 && break; sleep 1; done
-    - sh deploy/clickhouse/apply-schema.sh test "$N-ch"
+    - sh deploy/clickhouse/apply-schema.sh test "$N-ch" 2>&1 | tee -a "$L"
     # migrations 可重複執行
     - sh deploy/clickhouse/apply-schema.sh test "$N-ch" >/dev/null
     - export INT_CLICKHOUSE_URL="http://127.0.0.1:$(docker port "$N-ch" 8123/tcp | head -n 1 | sed 's/.*://')"
     - export INT_REDIS_URL="redis://127.0.0.1:$(docker port "$N-redis" 6379/tcp | head -n 1 | sed 's/.*://')/0"
     - export INT_CLICKHOUSE_PASSWORD_FILE="$T/s/ch_writer_password"
-    - (cd backend && npm ci --no-audit --no-fund && npm run test:int)
+    # npm Token 只給 npm ci(測試碼與相依套件的 script 讀不到;資安審查 L5)
+    - (cd backend && GITLAB_NPM_TOKEN="$(cat "$NPM_TOKEN_FILE")" npm ci --no-audit --no-fund)
+    - (cd backend && npm run test:int) > "$L.test" 2>&1 && R=0 || R=$?; cat "$L.test" >> "$L"; tail -n 120 "$L.test"; rm -f "$L.test"; test "$R" = 0
     # 重複修正(dedupe-day.sh):不帶去重的同一列寫兩次 → 修正後原始表與每小時彙總都是 1
-    - Q="INSERT INTO netops.pa_traffic_logs (event_time, received_at, src, app, src_host, source) VALUES ('2026-11-08 08:00:00', '2026-11-08 00:00:00.123', '::ffff:10.1.1.1', 'dup-test', 'dup-test', 'syslog')"
+    - Q="INSERT INTO netops.pa_traffic_logs (event_time, received_at, src, app, src_host, source) VALUES (now() - INTERVAL 1 DAY, now64(3) - INTERVAL 1 DAY, '::ffff:10.1.1.1', 'dup-test', 'dup-test', 'syslog')"
     - docker exec "$N-ch" clickhouse-client --insert_deduplicate=0 --query "$Q"
     - docker exec "$N-ch" clickhouse-client --insert_deduplicate=0 --query "$Q"
-    - sh deploy/clickhouse/dedupe-day.sh "$N-ch" 2026-11-08
+    - DD="$(docker exec "$N-ch" clickhouse-client --query "SELECT toString(toDate(event_time)) FROM netops.pa_traffic_logs WHERE app = 'dup-test' LIMIT 1")"
+    - sh deploy/clickhouse/dedupe-day.sh "$N-ch" "$DD" 2>&1 | tee -a "$L"
     - R="$(docker exec "$N-ch" clickhouse-client --query "SELECT count() FROM netops.pa_traffic_logs WHERE app = 'dup-test'") $(docker exec "$N-ch" clickhouse-client --query "SELECT sum(sessions) FROM netops.pa_traffic_hourly_app WHERE app = 'dup-test'")"
-    - test "$R" = "1 1" || { echo "FAIL dedupe-day.sh:原始表 / 彙總 = $R(應為 1 1)" >&2; exit 1; }
-    - echo "OK   dedupe-day.sh"
+    - test "$R" = "1 1" || { echo "FAIL dedupe-day.sh:原始表 / 彙總 = $R(應為 1 1)" | tee -a "$L" >&2; exit 1; }
+    - echo "OK   dedupe-day.sh" | tee -a "$L"
   after_script:
-    - docker rm -f "netops-int-$CI_JOB_ID-ch" "netops-int-$CI_JOB_ID-redis" >/dev/null 2>&1 || true
-    - if [ -s .int-tmp ]; then rm -rf "$(cat .int-tmp)"; fi
+    - N="netops-int-$CI_JOB_ID"; L="/tmp/$N.log"
+    - echo "== job $CI_JOB_ID 結束:$CI_JOB_STATUS" >> "$L"
+    - '{ echo "== clickhouse 日誌"; docker logs --tail 80 "$N-ch"; echo "== redis 日誌"; docker logs --tail 20 "$N-redis"; } >> "$L" 2>&1 || true'
+    - chmod 644 "$L" 2>/dev/null || true
+    - docker rm -f "$N-ch" "$N-redis" >/dev/null 2>&1 || true
+    - docker network rm "$N-net" >/dev/null 2>&1 || true
+    - if [ -s "/tmp/$N.path" ]; then rm -rf "$(cat "/tmp/$N.path")" "/tmp/$N.path"; fi
 
 deploy-api-test:
   <<: *runner
@@ -155,13 +167,18 @@ deploy-api-test:
     - echo "OK   netops-clickhouse"
     # PA log 寫入管線(C2):netops-ingest(netops-api 同映像)。重建時未 ACK 的批次留在 Redis 待處理清單,啟動後先補(去重 token 相同,不重複)
     - test -f "$NETOPS_SECRETS_DIR/ch_writer_password" || { echo "缺少 ch_writer_password(先在主機 2 執行 deploy/host2-set-clickhouse-secrets.sh)" >&2; exit 1; }
+    # 心跳要是這一版、這次部署之後啟動的(同一個 commit 重跑 pipeline 時舊心跳的 release 也相同)、狀態 ok
+    #   (啟動檢查 ClickHouse 帳密與 consumer group 都過了才是 ok),最多等 60 秒
+    - SI="$(date -u +%Y-%m-%dT%H:%M:%S)"
     - $C up -d --wait --force-recreate netops-ingest
-    # 心跳要是這一版、狀態 ok(啟動檢查 ClickHouse 帳密與 consumer group 都過了才會寫心跳),最多等 60 秒
     - |
       for i in $(seq 1 30); do
-        HB="$($C exec -T netops-redis redis-cli hmget netops:ingest:heartbeat release state | paste -sd ' ' -)"
-        case "$HB" in "$CI_COMMIT_SHORT_SHA ok"*) echo "OK   netops-ingest($HB)"; break ;; esac
-        [ "$i" = 30 ] && { echo "FAIL netops-ingest 心跳不是這一版或狀態異常:$HB" >&2; $C logs --tail 20 netops-ingest >&2; exit 1; }
+        HB="$($C exec -T netops-redis redis-cli hmget netops:ingest:heartbeat release state startedAt | paste -sd ' ' -)" || HB=""
+        set -- $HB
+        if [ "${1:-}" = "$CI_COMMIT_SHORT_SHA" ] && [ "${2:-}" = ok ] && [ "$(printf '%s\n%s\n' "$SI" "${3:-}" | sort | head -n 1)" = "$SI" ]; then
+          echo "OK   netops-ingest($HB)"; break
+        fi
+        [ "$i" = 30 ] && { echo "FAIL netops-ingest 心跳不是這次部署的或狀態異常:$HB" >&2; $C logs --tail 20 netops-ingest >&2; exit 1; }
         sleep 2
       done
     # 冒煙測試:健康檢查(/healthz、/readyz 不進 giga-observe 監控)。

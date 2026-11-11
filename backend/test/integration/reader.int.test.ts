@@ -119,6 +119,19 @@ describe('netops_reader 唯讀查詢', () => {
   });
 });
 
+describe('FTP 補漏用的寫入(netops_writer,C3)', () => {
+  it('trafficSeqnos 列出這一小時已有的 seqno;insertJson 寫入 JSON 字串列', async () => {
+    const have = await writer.trafficSeqnos(H, H + HOUR);
+    for (let i = 0; i < N; i++) assert.ok(have.has(String(9_000_000 + i)));
+    const row = toTrafficRow({ time: taipeiText(H + 45 * 60_000), src: '10.77.9.9', app: 'c3-int-ftp', action: 'allow', seqno: '9100000' }, H + 45 * 60_000, { badTime: false });
+    await writer.insertJson('traffic', [JSON.stringify({ ...row, source: 'ftp' })], `c3-int-${randomUUID()}`);
+    assert.ok((await writer.trafficSeqnos(H, H + HOUR)).has('9100000'));
+    const rows: Record<string, unknown>[] = [];
+    await reader.trafficRecords(H, H + HOUR, (r) => r.app === 'c3-int-ftp' && rows.push(r));
+    assert.equal(rows.length, 1);
+  });
+});
+
 describe('每小時摘要(真 ClickHouse)', () => {
   let dir: string;
   before(() => (dir = fs.mkdtempSync(path.join(os.tmpdir(), 'netops-ch-int-'))));
@@ -130,7 +143,8 @@ describe('每小時摘要(真 ClickHouse)', () => {
     assert.equal(b.status().lastError, null);
     const tr = await b.summaries('traffic', H, H + HOUR);
     assert.equal(tr.missing, 0);
-    assert.equal((tr.list[0] as { rows: number }).rows, base.raw + N);
+    // + 1:上面 FTP 補漏用的寫入測試多寫一列
+    assert.equal((tr.list[0] as { rows: number }).rows, base.raw + N + 1);
     const th = await b.summaries('threat', H, H + HOUR);
     assert.equal((th.list[0] as { rows: number }).rows, base.threatWeighted + 15); // 5 筆 × Repeat Count 3
   });

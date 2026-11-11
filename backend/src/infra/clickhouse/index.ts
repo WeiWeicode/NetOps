@@ -100,8 +100,12 @@ export interface ClickHouseWriter {
    * (表要設 non_replicated_deduplication_window,schema.sql 已設 1000)。失敗拋 ClickHouseError。
    */
   insert(table: TableKey, rows: readonly Record<string, unknown>[], dedupToken: string): Promise<void>;
+  /** 同 insert,但列已經是 JSON 字串(FTP 補漏:先序列化,省記憶體) */
+  insertJson(table: TableKey, lines: readonly string[], dedupToken: string): Promise<void>;
   /** 連線與帳密是否可用(SELECT 1) */
   ping(): Promise<void>;
+  /** FTP 補漏(C3):期間 [fromMs, toMs) 已有的 TRAFFIC seqno(> 0),用來只補缺的列 */
+  trafficSeqnos(fromMs: number, toMs: number): Promise<Set<string>>;
 }
 
 type Fetch = typeof fetch;
@@ -149,9 +153,12 @@ export function createClickHouseWriter(cfg: ClickHouseConfig, fetchImpl: Fetch =
     return text;
   }
 
-  return {
+  const writer: ClickHouseWriter = {
     async insert(table, rows, dedupToken) {
-      if (!rows.length) return;
+      await writer.insertJson(table, rows.map((r) => JSON.stringify(r)), dedupToken);
+    },
+    async insertJson(table, lines, dedupToken) {
+      if (!lines.length) return;
       await post(
         {
           query: `INSERT INTO ${TABLES[table]} FORMAT JSONEachRow`,
@@ -169,12 +176,24 @@ export function createClickHouseWriter(cfg: ClickHouseConfig, fetchImpl: Fetch =
           // 不開這個彙總會重複計算(目標表要設 non_replicated_deduplication_window,migrations/002)
           deduplicate_blocks_in_dependent_materialized_views: '1',
         },
-        rows.map((r) => JSON.stringify(r)).join('\n'),
+        lines.join('\n'),
       );
+    },
+    async trafficSeqnos(fromMs, toMs) {
+      const out = await post(
+        {
+          query: `SELECT seqno FROM ${TABLES.traffic} WHERE event_time >= toDateTime({from:UInt32}) AND event_time < toDateTime({to:UInt32}) AND seqno > 0 FORMAT TabSeparated`,
+          param_from: String(Math.floor(fromMs / 1000)),
+          param_to: String(Math.floor(toMs / 1000)),
+        },
+        '',
+      );
+      return new Set(out.split('\n').filter(Boolean));
     },
     async ping() {
       const out = await post({ query: 'SELECT 1' }, '');
       if (out.trim() !== '1') throw new ClickHouseError('ClickHouse ping 回應不符', undefined, undefined);
     },
   };
+  return writer;
 }

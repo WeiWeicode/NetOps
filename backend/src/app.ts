@@ -38,6 +38,9 @@ import { createClickHouseReader, type ClickHouseReader } from './infra/clickhous
 import { connectDashboardCache, createDashboardCache, type DashboardCache } from './infra/redis/cache.js';
 import { createChSummaryBuilder, type ChSummaryBuilder } from './modules/pa/ch-summary.js';
 import type { ChOverviewDeps } from './modules/pa/ch-overview.js';
+import { createReconciler } from './modules/pa/reconcile.js';
+import reconRoutes from './modules/pa/recon-routes.js';
+import { connectBackfillQueue, type BackfillQueue } from './infra/redis/backfill.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -73,6 +76,8 @@ export async function buildApp(
     cache?: DashboardCache;
     /** 每小時摘要的「現在」(測試用) */
     chNow?: () => number;
+    /** FTP 補漏佇列(C3);測試注入 */
+    backfillQueue?: BackfillQueue | null;
   } = {},
 ): Promise<FastifyInstance> {
   const app = Fastify({
@@ -180,6 +185,15 @@ export async function buildApp(
   const ch: ChOverviewDeps = { reader: chReader, builder: chBuilder, cache, mode: config.paSource.overview, log: app.log };
   await app.register(paRoutes, { traffic, ch });
   await app.register(logRoutes, { ftp, traffic, parallel: config.ftp?.maxConnections ?? 1, limit: config.search.limit, seconds: config.search.seconds, ch: { ...ch, mode: config.paSource.detail } });
+  // FTP 對帳與補漏(C3,D33):對帳在本服務(只用已分析的 FTP 摘要);補漏工作交給 netops-ingest(Redis 佇列)
+  const recon = chReader && chBuilder ? createReconciler({ traffic, reader: chReader, builder: chBuilder, store: app.store.pa, log: app.log, hour: config.reconHour, now: deps.chNow }) : null;
+  if (recon) {
+    app.addHook('onReady', async () => recon.start());
+    app.addHook('onClose', async () => recon.stop());
+  }
+  const backfillQueue = deps.backfillQueue !== undefined ? deps.backfillQueue : config.redisUrl ? connectBackfillQueue(config.redisUrl) : null;
+  if (backfillQueue) app.addHook('onClose', async () => backfillQueue.close());
+  await app.register(reconRoutes, { recon, queue: backfillQueue });
   await app.register(paEventRoutes, { events, ch });
   await app.register(adRoutes, { ad });
   await app.register(adFtpRoutes, { ad });

@@ -21,6 +21,9 @@ const FILES = [
   ['/v1/kb/vector-', 'kb/ai.feature'],
   ['/v1/kb/ip-learning', 'kb/ai.feature'],
   ['/v1/pa/log-searches', 'pa-log-searches/search.feature'],
+  // C3:FTP 對帳與補漏
+  ['/v1/pa/reconciliations', 'ftp/pa-recon.feature'],
+  ['/v1/pa/backfills', 'ftp/pa-recon.feature'],
   ['/v1/pa-events/', 'pa-events/overview.feature'],
   ['/v1/pa/', 'pa/overview.feature'],
   ['/v1/ftp/pa/', 'ftp/pa-files.feature'],

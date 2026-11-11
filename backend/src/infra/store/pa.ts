@@ -7,6 +7,7 @@
  *   palogs/events/{type}/{name}.json.gz  其他類型 log 的摘要(index 內記成 "{type}/{name}")
  *   palogs/iplearn.json               外部 IP 自動學習查過的 IP、網段與分組(A1;同舊版位置)
  *   palogs/ch/index.json、ch/{kind}/{YYYYMMDDHH}.json.gz   ClickHouse 每小時摘要(C3;新版才有)
+ *   palogs/ch/recon/{YYYYMMDD}.json   FTP 與 ClickHouse 每日對帳結果(C3)
  */
 import path from 'node:path';
 import { ensureDir, readGzipJson, readGzipText, readJson, removeFile, safeJoin, writeGzipJson, writeGzipText, writeJson } from './files.js';
@@ -44,6 +45,10 @@ export interface PaStore {
   saveChSummary(kind: string, hour: string, summary: unknown): void;
   readChSummary<T>(kind: string, hour: string): T | null;
   removeChSummary(kind: string, hour: string): void;
+  /** FTP 與 ClickHouse 每日對帳結果(C3;day 為 'YYYYMMDD');不存在回 null */
+  saveRecon(day: string, result: unknown): void;
+  readRecon<T>(day: string): T | null;
+  removeRecon(day: string): void;
 }
 
 const CH_KINDS = ['traffic', 'threat', 'url', 'data', 'wildfire'];
@@ -58,6 +63,12 @@ export function createPaStore(root: string, eventTypes: readonly string[]): PaSt
   const evIndexFile = path.join(evDir, 'index.json');
   const chDir = path.join(base, 'ch');
   for (const k of CH_KINDS) ensureDir(path.join(chDir, k));
+  const reconDir = path.join(chDir, 'recon');
+  ensureDir(reconDir);
+  const reconFile = (day: string) => {
+    if (!/^\d{8}$/.test(day)) throw new Error(`不合法的對帳日期:${day}`);
+    return safeJoin(reconDir, `${day}.json`);
+  };
   const chFile = (kind: string, hour: string) => {
     if (!CH_KINDS.includes(kind) || !/^\d{10}$/.test(hour)) throw new Error(`不合法的 ClickHouse 摘要代號:${kind}/${hour}`);
     return safeJoin(path.join(chDir, kind), `${hour}.json.gz`);
@@ -95,5 +106,8 @@ export function createPaStore(root: string, eventTypes: readonly string[]): PaSt
     saveChSummary: (kind, hour, summary) => writeGzipJson(chFile(kind, hour), summary),
     readChSummary: (kind, hour) => readGzipJson(chFile(kind, hour)),
     removeChSummary: (kind, hour) => removeFile(chFile(kind, hour)),
+    saveRecon: (day, result) => writeJson(reconFile(day), result),
+    readRecon: (day) => readJson(reconFile(day)),
+    removeRecon: (day) => removeFile(reconFile(day)),
   };
 }

@@ -94,6 +94,8 @@ export interface Config {
   paSource: { overview: PaSource; detail: PaSource };
   /** ClickHouse 每小時摘要(總覽排行用):保留 / 補建幾天、每幾分鐘檢查一次(0 = 不建) */
   chSummary: { days: number; minutes: number };
+  /** FTP 與 ClickHouse 每日對帳(C3,CQ10):每天幾點(台灣時間)對帳前 3 天;-1 = 不自動(仍可手動) */
+  reconHour: number;
 }
 
 export const PA_SOURCES = ['ftp', 'clickhouse', 'auto'] as const;
@@ -160,7 +162,7 @@ export function readSecret(env: NodeJS.ProcessEnv, name: string, gwEnv: GwEnv): 
   return str(env, name);
 }
 
-function loadFtp(env: NodeJS.ProcessEnv, gwEnv: GwEnv): FtpConfig | null {
+export function loadFtp(env: NodeJS.ProcessEnv, gwEnv: GwEnv): FtpConfig | null {
   const host = str(env, 'FTP_HOST');
   const user = str(env, 'FTP_USER');
   const password = readSecret(env, 'FTP_PASSWORD', gwEnv);
@@ -285,5 +287,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, cwd?: string): 
     paSource: { overview: paSource(env, 'NETOPS_PA_OVERVIEW_SOURCE', 'auto'), detail: paSource(env, 'NETOPS_PA_DETAIL_SOURCE', 'ftp') },
     // 正式區 TRAFFIC 保留 30 天(CQ12);測試區 TTL 3 天,多的天數只是查不到
     chSummary: { days: int(env, 'NETOPS_CH_SUMMARY_DAYS', 30, 1, 92), minutes: int(env, 'NETOPS_CH_SUMMARY_MINUTES', 5, 0, 60) },
+    // FTP 前一天的匯出檔約 00:00–01:00 產生,同步分析後才能對帳;預設 06:00
+    reconHour: int(env, 'NETOPS_RECON_HOUR', 6, -1, 23),
   };
 }

@@ -46,6 +46,7 @@ export async function createTestApp({
   chReader?: NonNullable<Parameters<typeof buildApp>[1]>['chReader'];
   cache?: NonNullable<Parameters<typeof buildApp>[1]>['cache'];
   chNow?: () => number;
+  backfillQueue?: NonNullable<Parameters<typeof buildApp>[1]>['backfillQueue'];
 } = {}): Promise<TestApp> {
   const { publicKey, privateKey } = await generateKeyPair('ES256');
   const jwk = { ...(await exportJWK(publicKey)), kid: 'test', alg: 'ES256', use: 'sig' };

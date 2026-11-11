@@ -321,16 +321,17 @@ PA 匯入在背景佇列執行;同步、分析只是送進佇列,畫面輪詢狀
 }
 ```
 
-- `level`:`traffic`、`deny` 依本視圖非 0 格的 25 / 50 / 75 百分位分 1–4(0 = 0 或 null);`threat` 依最高嚴重度:critical 4、high 3、medium 2、low / info 1。
+- `level`:`traffic`、`deny` 依本視圖非 0 格的 25 / 50 / 75 百分位分 1–4(0 = 0 或 null);`threat` 依最高嚴重度:critical 4、high 3、medium 2、low / info 1。只有 info 的格子 `v = 0`(權重 0)但 `level = 1`,畫面以 `level` 上色、以 `tip.threats` 說明。
+- `coverage.since` 是整張彙總表最早的格子:上線當天(或 TTL 刪到一半的那天)的每天格只含部分時段,數字照實回、不標 `partial`(`partial` 只標已知的對帳缺口)。
 - `partial`:格子和 `coverage.gaps` 重疊。
-- 快取(Redis `netops:cache:pa-heat:*`):含現在的期間 60 秒、已結束的期間 1 小時;三個指標共用同一份。
+- 快取(Redis `netops:cache:pa-heat:*`):含現在或結束未滿 1 小時的期間 60 秒,更早結束的期間 1 小時;三個指標共用同一份。FTP 補漏或 `rebuild-day.sh` 重建之後,最多 1 小時才看到新的數字。
 - ClickHouse 未設定、連不上或查詢失敗回 503 `NETOPS_CLICKHOUSE_UNAVAILABLE`(同 §4.1)。
 
 **時段明細**(點熱力圖格子、圖表聯動):
 
 | 參數 | 說明 |
 | --- | --- |
-| `start`、`end` | ISO 8601 含時區;`end` 必須晚於 `start`,最長 1 天,超過 400 |
+| `start`、`end` | ISO 8601 含時區,對齊到分鐘(秒忽略);`end` 必須晚於 `start`,最長 1 天,超過 400 |
 | `type` | `traffic`(預設)\| `threat`(只查 `log_type = threat`) |
 | 篩選(選填) | `ip`(比對來源 / 目的,含 NAT)、`src`、`dst`:**只接受單一 IP 或 CIDR**(不接受萬用字元);`app`、`country`(包含,不分大小寫)、`fromZone`、`toZone`(完全相同)、`dport`(0–65535)、`action`(`allow` \| `block`);`type=threat` 另有 `severity`(`critical`…`info`)、`threatName`(包含)。語意同 §4.3 ClickHouse 來源 |
 | `rows` | 明細列數 0–200(預設 100);全部明細請用 §4.3 Log 明細查詢 |
@@ -338,7 +339,7 @@ PA 匯入在背景佇列執行;同步、分析只是送進佇列,畫面輪詢狀
 
 **熱 / 冷分界**:`hotFrom` = 今天 00:00 −(原始表保留天數 − 1)天(TRAFFIC 30 → 29 天、威脅 90 → 89 天;測試區 3 → 2 天;設定 `NETOPS_TTL_TRAFFIC_DAYS` / `NETOPS_TTL_THREAT_DAYS`,預設依部署區,要和 `apply-schema.sh` 一致)。`start ≥ hotFrom` 查原始表(`source: "hot"`);早於 `hotFrom` 的部分要讀冷歸檔(C4),**冷歸檔尚未提供**:回 409 `NETOPS_COLD_ARCHIVE_DISABLED`,`details.hotFrom` 為可查的起點。C4 之後冷的部分 `source` 為 `cold` / `mixed`,冷查詢全系統同時 1 個(Redis 鎖 `netops:cold:lock`),拿不到回 429 `NETOPS_COLD_QUERY_BUSY` 與 `Retry-After: 10`。
 
-**同步 30 秒,超過轉工作**:一律建 `pa-slice` 工作;30 秒內完成回 **200** 結果,否則回 **202** 工作狀態(§1.1),前端改輪詢 `GET /pa/slices/{id}`(完成時 `result` 為結果)。同一人、同一組參數在工作保留期間(30 分鐘)重送回同一個工作(進行中 202、完成 200),不重複查詢。工作每人同時 2 個、全系統 6 個(和 §4.3 分開計),每人保留 5 筆,執行上限 120 秒(ClickHouse 每個查詢 50 秒);30 秒內失敗直接回該錯誤(例 503 `NETOPS_CLICKHOUSE_UNAVAILABLE`)。熱查詢結果另有 60 秒共用快取(`netops:cache:pa-slice:*`)。
+**同步 30 秒,超過轉工作**:一律建 `pa-slice` 工作;30 秒內完成回 **200** 結果,否則回 **202** 工作狀態(§1.1),前端改輪詢 `GET /pa/slices/{id}`(完成時 `result` 為結果)。同一人、同一組參數在工作保留期間(30 分鐘)重送回同一個工作(進行中 202、完成 200),不重複查詢。工作每人同時 2 個、全系統 6 個(和 §4.3 分開計),同時執行 2 個(其餘排隊;一個工作內的 ClickHouse 查詢依序執行),每人保留 5 筆,執行上限 120 秒(ClickHouse 每個查詢 50 秒;冷工作 110 秒,全系統 1 個)。取消熱查詢工作時,已送出的 ClickHouse 查詢不會中止(結果是多人共用的快取),最多再跑 50 秒;30 秒內失敗直接回該錯誤(例 503 `NETOPS_CLICKHOUSE_UNAVAILABLE`)。熱查詢結果另有 60 秒共用快取(`netops:cache:pa-slice:*`)。
 
 ```jsonc
 {

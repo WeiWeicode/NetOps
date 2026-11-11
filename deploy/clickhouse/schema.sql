@@ -133,7 +133,9 @@ CREATE TABLE IF NOT EXISTS netops.pa_traffic_hourly_src
     src       IPv6,
     action    LowCardinality(String),
     sessions  UInt64,
-    bytes     UInt64
+    bytes     UInt64,
+    bytes_sent UInt64 DEFAULT 0,  -- V-a(migrations/003)
+    bytes_recv UInt64 DEFAULT 0
 )
 ENGINE = SummingMergeTree
 PARTITION BY toYYYYMM(hour)
@@ -142,7 +144,8 @@ TTL hour + INTERVAL {{TTL_HOURLY_SRC}} DELETE;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS netops.pa_traffic_hourly_src_mv
 TO netops.pa_traffic_hourly_src AS
-SELECT toStartOfHour(event_time) AS hour, src, action, count() AS sessions, sum(bytes) AS bytes
+SELECT toStartOfHour(event_time) AS hour, src, action, count() AS sessions, sum(bytes) AS bytes,
+       sum(bytes_sent) AS bytes_sent, sum(bytes_recv) AS bytes_recv
 FROM netops.pa_traffic_logs
 GROUP BY hour, src, action;
 
@@ -152,6 +155,8 @@ GROUP BY hour, src, action;
 --   {{TTL_HEAT_1D}}  每天       測試區 3 DAY、正式區 5 YEAR
 -- AggregatingMergeTree 只在背景合併:查詢一定要 sum() / -Merge + GROUP BY bucket。
 -- 每個粒度兩個 MV(TRAFFIC、威脅)寫同一張表,沒寫到的欄位是 0 / 空的聚合狀態;三個粒度各自從原始表算(不串接)。
+-- MV 一律用表別名 l 引用來源欄位:輸出別名和來源欄位同名(sum(bytes) AS bytes)時,同一個 SELECT 裡其他地方的 bytes
+--   會被解析成別名(26.3:ILLEGAL_AGGREGATION);輸出別名不能改(TO 表依欄位名稱對應)。
 -- 去重視窗同 migrations/002:netops-ingest 重送時 MV 用衍生 token 去重;手動重建(rebuild-day.sh)要帶 insert_deduplicate = 0。
 CREATE TABLE IF NOT EXISTS netops.pa_heat_5m
 (
@@ -191,22 +196,22 @@ TTL bucket + INTERVAL {{TTL_HEAT_1D}} DELETE
 SETTINGS non_replicated_deduplication_window = 1000;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS netops.pa_heat_5m_traffic_mv TO netops.pa_heat_5m AS
-SELECT toStartOfFiveMinutes(event_time) AS bucket, count() AS sessions, sum(bytes) AS bytes, sum(bytes_sent) AS bytes_sent,
-       sum(bytes_recv) AS bytes_recv, countIf(action != 'allow') AS deny,
-       topKWeightedState(3)(src, bytes) AS top_bytes_src, topKIfState(3)(src, action != 'allow') AS top_deny_src
-FROM netops.pa_traffic_logs GROUP BY bucket;
+SELECT toStartOfFiveMinutes(l.event_time) AS bucket, count() AS sessions, sum(l.bytes) AS bytes, sum(l.bytes_sent) AS bytes_sent,
+       sum(l.bytes_recv) AS bytes_recv, countIf(l.action != 'allow') AS deny,
+       topKWeightedState(3)(l.src, l.bytes) AS top_bytes_src, topKIfState(3)(l.src, l.action != 'allow') AS top_deny_src
+FROM netops.pa_traffic_logs AS l GROUP BY bucket;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS netops.pa_heat_1h_traffic_mv TO netops.pa_heat_1h AS
-SELECT toStartOfHour(event_time) AS bucket, count() AS sessions, sum(bytes) AS bytes, sum(bytes_sent) AS bytes_sent,
-       sum(bytes_recv) AS bytes_recv, countIf(action != 'allow') AS deny,
-       topKWeightedState(3)(src, bytes) AS top_bytes_src, topKIfState(3)(src, action != 'allow') AS top_deny_src
-FROM netops.pa_traffic_logs GROUP BY bucket;
+SELECT toStartOfHour(l.event_time) AS bucket, count() AS sessions, sum(l.bytes) AS bytes, sum(l.bytes_sent) AS bytes_sent,
+       sum(l.bytes_recv) AS bytes_recv, countIf(l.action != 'allow') AS deny,
+       topKWeightedState(3)(l.src, l.bytes) AS top_bytes_src, topKIfState(3)(l.src, l.action != 'allow') AS top_deny_src
+FROM netops.pa_traffic_logs AS l GROUP BY bucket;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS netops.pa_heat_1d_traffic_mv TO netops.pa_heat_1d AS
-SELECT toStartOfDay(event_time) AS bucket, count() AS sessions, sum(bytes) AS bytes, sum(bytes_sent) AS bytes_sent,
-       sum(bytes_recv) AS bytes_recv, countIf(action != 'allow') AS deny,
-       topKWeightedState(3)(src, bytes) AS top_bytes_src, topKIfState(3)(src, action != 'allow') AS top_deny_src
-FROM netops.pa_traffic_logs GROUP BY bucket;
+SELECT toStartOfDay(l.event_time) AS bucket, count() AS sessions, sum(l.bytes) AS bytes, sum(l.bytes_sent) AS bytes_sent,
+       sum(l.bytes_recv) AS bytes_recv, countIf(l.action != 'allow') AS deny,
+       topKWeightedState(3)(l.src, l.bytes) AS top_bytes_src, topKIfState(3)(l.src, l.action != 'allow') AS top_deny_src
+FROM netops.pa_traffic_logs AS l GROUP BY bucket;
 
 -- 威脅:只算 log_type = 'threat'(url、data、wildfire 不算進威脅指標);Top IP 依 critical / high / medium 筆數
 CREATE MATERIALIZED VIEW IF NOT EXISTS netops.pa_heat_5m_threat_mv TO netops.pa_heat_5m AS

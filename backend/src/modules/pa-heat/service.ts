@@ -6,7 +6,7 @@
  *     冷查詢全系統 1 個(Redis 鎖),拿不到回 429 NETOPS_COLD_QUERY_BUSY + Retry-After(不回 5xx,BFF 斷路器)
  * ClickHouse 失敗回 503 NETOPS_CLICKHOUSE_UNAVAILABLE(同 C3 的既有代碼,docs/API.md §8);原文只寫日誌。
  */
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { AppError } from '../../errors.js';
 import { ClickHouseError } from '../../infra/clickhouse/index.js';
 import type { HeatReader, SliceData, SliceFilter, SliceType } from '../../infra/clickhouse/heat.js';
@@ -29,6 +29,8 @@ export const SLICE_MAX_MS = DAY_MS;
 const SLICE_CH_SECONDS = 50;
 /** 工作執行上限(V-a §4.3.2:120 秒) */
 const SLICE_JOB_TIMEOUT_MS = 120_000;
+/** 冷工作執行上限:比冷查詢鎖的 TTL(120 秒)短,鎖不會在查詢結束前過期 */
+const COLD_JOB_TIMEOUT_MS = 110_000;
 /** 冷查詢忙碌時建議幾秒後重試 */
 export const COLD_RETRY_AFTER_SEC = 10;
 
@@ -118,11 +120,32 @@ export function mergeSlices(a: SliceData, b: SliceData, rowsLimit: number, sort:
 
 export function createHeatService(d: HeatDeps) {
   const now = d.now ?? Date.now;
-  const jobs = new JobRunner({ maxActivePerOwner: 2, maxActive: 6, concurrency: 3, retainMs: 30 * 60_000, maxRetained: 60, maxRetainedPerOwner: 5, now }, (kind, err) =>
-    d.log.warn({ err, kind }, '時段明細工作發生非預期錯誤'),
-  );
-  /** 同一人同條件 → 工作 id 與完成通知(GET 冪等:重送回同一個工作) */
-  const reuse = new Map<string, { id: string; done: Promise<void>; error: { err: unknown } | null }>();
+  const onError = (kind: string, err: unknown) => d.log.warn({ err, kind }, '時段明細工作發生非預期錯誤');
+  // 熱查詢:同時執行 2 個(一個工作內的查詢依序執行,ClickHouse 最多同時 2 個查詢;資安審查 M1)
+  const hotJobs = new JobRunner({ maxActivePerOwner: 2, maxActive: 6, concurrency: 2, retainMs: 30 * 60_000, maxRetained: 60, maxRetainedPerOwner: 5, now }, onError);
+  // 冷查詢:全系統 1 個(Redis 鎖在送出前取得);不排隊,鎖的 TTL(120 秒)涵蓋整個執行上限(110 秒)(程式碼審查 #2)
+  const coldJobs = new JobRunner({ maxActivePerOwner: 1, maxActive: 1, concurrency: 1, retainMs: 30 * 60_000, maxRetained: 20, maxRetainedPerOwner: 5, now }, onError);
+  /** 工作在哪個佇列(id 是 UUID,不會重複);都找不到時由熱佇列回 404 */
+  const jobsOf = (id: string, owner: string): JobRunner => {
+    try {
+      coldJobs.get(id, owner, SLICE_KIND);
+      return coldJobs;
+    } catch {
+      return hotJobs;
+    }
+  };
+  interface Entry {
+    /** 工作 id;送出前(等冷查詢鎖)為空字串 */
+    id: string;
+    runner: JobRunner;
+    /** 送出完成(或失敗)時 resolve;同條件的併發請求先等這個(程式碼審查 #3) */
+    ready: Promise<void>;
+    /** 工作結束時 resolve */
+    done: Promise<void>;
+    error: { err: unknown } | null;
+  }
+  /** 同一人同條件 → 工作(GET 冪等:重送回同一個工作) */
+  const reuse = new Map<string, Entry>();
 
   const reader = () => {
     if (!d.heat) throw unavailable();
@@ -157,13 +180,14 @@ export function createHeatService(d: HeatDeps) {
     }
     const range = heatRange(q.granularity, dayMs, t, q.weekStart ?? 1);
     const h = reader();
-    const live = range.toMs > t;
+    // 含現在、或剛結束 1 小時內(最後幾格可能還有遲到的寫入)用 60 秒;更早結束的期間 1 小時(程式碼審查 #8)
+    const live = range.toMs > t - 3600_000;
     // 快取原始格子(和指標無關:三個指標共用一份)
     const data = await viaCh(d.log, () =>
       d.cache.cached('pa-heat', { grain: range.grain, from: range.fromMs, to: range.toMs }, live ? 60 : 3600, async () => ({
         rows: await h.heatRows(range.grain, range.fromMs, range.toMs),
         since: await h.heatEarliest(range.grain),
-      }), { longTtl: true }),
+      }), { longTtl: !live }),
     );
     const { gaps, known } = gapsIn(range.fromMs, range.toMs);
     const { cells, levels } = buildCells(range, q.metric as PaMetric, data.rows, data.since, gaps);
@@ -185,8 +209,9 @@ export function createHeatService(d: HeatDeps) {
   const hotFloor = (type: SliceType) => taipeiDayOf(now()) - ((type === 'traffic' ? d.ttlDays.traffic : d.ttlDays.threat) - 1) * DAY_MS;
 
   function validate(q: SliceQuery): { startMs: number; endMs: number } {
-    const startMs = Date.parse(q.start);
-    const endMs = Date.parse(q.end);
+    // 對齊到分鐘(API.md §1:時間精確到分鐘);快取與重用的鍵不會因秒數不同而繞過(資安審查 L3)
+    const startMs = Math.floor(Date.parse(q.start) / 60_000) * 60_000;
+    const endMs = Math.floor(Date.parse(q.end) / 60_000) * 60_000;
     const bad = (field: string, message: string) => new AppError(400, 'VALIDATION_FAILED', '參數驗證失敗', [{ field, message }]);
     if (Number.isNaN(startMs)) throw bad('start', '時間不正確');
     if (Number.isNaN(endMs)) throw bad('end', '時間不正確');
@@ -236,91 +261,37 @@ export function createHeatService(d: HeatDeps) {
 
     const key = createHash('sha256').update(JSON.stringify([owner, type, startMs, endMs, rowsLimit, sort, FILTER_KEYS.map((k) => q[k] ?? null)])).digest('hex');
     let entry = reuse.get(key);
+    if (entry && !entry.id) {
+      // 同條件的請求正在等冷查詢鎖 / 送出:等它結束後重新判斷(拿到工作就重用,失敗就自己再試)
+      await entry.ready;
+      return slice(owner, q, waitMs);
+    }
     if (entry) {
+      let ok = false;
       try {
-        const job = jobs.get(entry.id, owner, SLICE_KIND);
-        if (job.status === 'failed' || job.status === 'cancelled') entry = undefined;
+        const st = entry.runner.get(entry.id, owner, SLICE_KIND).status;
+        ok = st !== 'failed' && st !== 'cancelled';
       } catch {
+        /* 已逾期 */
+      }
+      if (!ok) {
+        reuse.delete(key);
         entry = undefined;
       }
-      if (!entry) reuse.delete(key);
     }
-    if (!entry) {
-      const filter: SliceFilter = {
-        fromMs: startMs,
-        toMs: endMs,
-        ip: q.ip,
-        src: q.src,
-        dst: q.dst,
-        app: q.app,
-        fromZone: q.fromZone,
-        toZone: q.toZone,
-        port: q.dport === undefined ? undefined : String(q.dport),
-        action: q.action,
-        country: q.country,
-        severity: q.severity,
-        threatName: q.threatName,
-      };
-      let finish!: () => void;
-      const done = new Promise<void>((r) => (finish = r));
-      const holder: { id: string; done: Promise<void>; error: { err: unknown } | null } = { id: '', done, error: null };
-      let lockId = '';
-      if (source !== 'hot') {
-        // 冷查詢全系統 1 個(V3);Redis 異常也當成忙碌(不回 5xx)
-        lockId = key;
-        let ok = false;
-        try {
-          ok = Boolean(d.coldLock) && (await d.coldLock!.acquire(lockId));
-        } catch {
-          ok = false;
-        }
-        if (!ok) throw Object.assign(new AppError(429, 'NETOPS_COLD_QUERY_BUSY', `已有冷資料查詢在執行,請 ${COLD_RETRY_AFTER_SEC} 秒後再試`), { retryAfter: COLD_RETRY_AFTER_SEC });
-      }
-      let job: JobView<SliceResult>;
-      try {
-        job = jobs.submit<SliceResult>(
-          SLICE_KIND,
-          owner,
-          async ({ signal }) => {
-            const t0 = Date.now();
-            try {
-              const hot = (f: SliceFilter) =>
-                viaCh(d.log, () =>
-                  d.cache.cached('pa-slice', { type, f, rowsLimit, sort }, 60, () => reader().slice(type, f, rowsLimit, sort, SLICE_CH_SECONDS)),
-                );
-              let data: SliceData;
-              if (source === 'hot') data = await hot(filter);
-              else if (source === 'cold') data = await d.cold!.query(type, filter, rowsLimit, sort, signal);
-              else {
-                const [c, h] = await Promise.all([d.cold!.query(type, { ...filter, toMs: floor }, rowsLimit, sort, signal), hot({ ...filter, fromMs: floor })]);
-                data = mergeSlices(c, h, rowsLimit, sort);
-              }
-              return toResult(q, type, source, data, rowsLimit, startMs, endMs, t0);
-            } catch (err) {
-              holder.error = { err };
-              throw err;
-            } finally {
-              if (lockId) await d.coldLock!.release(lockId);
-              finish();
-            }
-          },
-          { timeoutMs: SLICE_JOB_TIMEOUT_MS },
-        );
-      } catch (err) {
-        if (lockId) await d.coldLock!.release(lockId);
-        throw err;
-      }
-      holder.id = job.id;
-      // 上限:只留最近 200 組條件(工作本身由 JobRunner 管保留期限)
-      if (reuse.size >= 200) reuse.delete(reuse.keys().next().value!);
-      reuse.set(key, holder);
-      entry = holder;
-    }
+    if (!entry) entry = await submit(key, owner, q, { type, startMs, endMs, rowsLimit, sort, floor, source });
 
-    let timer: NodeJS.Timeout | undefined;
-    await Promise.race([entry.done, new Promise<void>((r) => (timer = setTimeout(r, waitMs)))]);
-    clearTimeout(timer);
-    const view = jobs.get<SliceResult>(entry.id, owner, SLICE_KIND);
+    // 等完成或 waitMs;工作被取消(排隊中取消時 run 不會執行)也要結束等待
+    const deadline = Date.now() + waitMs;
+    for (;;) {
+      const st = entry.runner.get(entry.id, owner, SLICE_KIND).status;
+      const left = deadline - Date.now();
+      if (st === 'done' || st === 'failed' || st === 'cancelled' || left <= 0) break;
+      let timer: NodeJS.Timeout | undefined;
+      await Promise.race([entry.done, new Promise<void>((r) => (timer = setTimeout(r, Math.min(left, 500))))]);
+      clearTimeout(timer);
+    }
+    const view = entry.runner.get<SliceResult>(entry.id, owner, SLICE_KIND);
     if (view.status === 'done') return { status: 200, body: view.result };
     // 30 秒內失敗:直接回原本的錯誤(例:503 ClickHouse 無法使用)
     if (view.status === 'failed' && entry.error) {
@@ -330,21 +301,109 @@ export function createHeatService(d: HeatDeps) {
     return { status: 202, body: view };
   }
 
+  /** 建立工作(冷資料先取得冷查詢鎖);送出前先放進 reuse,同條件的併發請求會等這次送出 */
+  async function submit(
+    key: string,
+    owner: string,
+    q: SliceQuery,
+    o: { type: SliceType; startMs: number; endMs: number; rowsLimit: number; sort: 'time' | 'bytes'; floor: number; source: SliceResult['source'] },
+  ): Promise<Entry> {
+    let markReady!: () => void;
+    let finish!: () => void;
+    const entry: Entry = { id: '', runner: o.source === 'hot' ? hotJobs : coldJobs, ready: new Promise<void>((r) => (markReady = r)), done: new Promise<void>((r) => (finish = r)), error: null };
+    // 上限:只留最近 200 組條件(工作本身由 JobRunner 管保留期限)
+    if (reuse.size >= 200) reuse.delete(reuse.keys().next().value!);
+    reuse.set(key, entry);
+    const filter: SliceFilter = {
+      fromMs: o.startMs,
+      toMs: o.endMs,
+      ip: q.ip,
+      src: q.src,
+      dst: q.dst,
+      app: q.app,
+      fromZone: q.fromZone,
+      toZone: q.toZone,
+      port: q.dport === undefined ? undefined : String(q.dport),
+      action: q.action,
+      country: q.country,
+      severity: q.severity,
+      threatName: q.threatName,
+    };
+    // 鎖的值加亂數:同條件前一個工作逾時後重送,不會刪到對方的鎖
+    const lockId = o.source === 'hot' ? '' : `${key.slice(0, 16)}:${randomUUID()}`;
+    try {
+      if (lockId) {
+        // 冷查詢全系統 1 個(V3);Redis 異常也當成忙碌(不回 5xx)
+        let ok = false;
+        try {
+          ok = Boolean(d.coldLock) && (await d.coldLock!.acquire(lockId));
+        } catch {
+          ok = false;
+        }
+        if (!ok) throw Object.assign(new AppError(429, 'NETOPS_COLD_QUERY_BUSY', `已有冷資料查詢在執行,請 ${COLD_RETRY_AFTER_SEC} 秒後再試`), { retryAfter: COLD_RETRY_AFTER_SEC });
+      }
+      const { type, rowsLimit, sort, floor, source } = o;
+      let job: JobView<SliceResult>;
+      try {
+        job = entry.runner.submit<SliceResult>(
+          SLICE_KIND,
+          owner,
+          async ({ signal }) => {
+            const t0 = Date.now();
+            try {
+              // 熱查詢經 60 秒共用快取(inflight 多人共用,所以不帶工作的 signal:取消不會中止已送出的 ClickHouse 查詢,最多 50 秒)
+              const hot = (f: SliceFilter) =>
+                viaCh(d.log, () => d.cache.cached('pa-slice', { type, f, rowsLimit, sort }, 60, () => reader().slice(type, f, rowsLimit, sort, SLICE_CH_SECONDS)));
+              let data: SliceData;
+              if (source === 'hot') data = await hot(filter);
+              else if (source === 'cold') data = await d.cold!.query(type, filter, rowsLimit, sort, signal);
+              else {
+                const c = await d.cold!.query(type, { ...filter, toMs: floor }, rowsLimit, sort, signal);
+                data = mergeSlices(c, await hot({ ...filter, fromMs: floor }), rowsLimit, sort);
+              }
+              return toResult(q, type, source, data, rowsLimit, o.startMs, o.endMs, t0);
+            } catch (err) {
+              entry.error = { err };
+              throw err;
+            } finally {
+              if (lockId) await d.coldLock!.release(lockId);
+              finish();
+            }
+          },
+          { timeoutMs: source === 'hot' ? SLICE_JOB_TIMEOUT_MS : COLD_JOB_TIMEOUT_MS },
+        );
+      } catch (err) {
+        if (lockId) await d.coldLock!.release(lockId);
+        throw err;
+      }
+      entry.id = job.id;
+      return entry;
+    } catch (err) {
+      reuse.delete(key);
+      throw err;
+    } finally {
+      markReady();
+    }
+  }
+
   return {
     heatmap,
     slice,
     /** 工作狀態(本人);完成時含 result */
-    sliceJob: (id: string, owner: string) => jobs.get<SliceResult>(id, owner, SLICE_KIND),
+    sliceJob: (id: string, owner: string) => jobsOf(id, owner).get<SliceResult>(id, owner, SLICE_KIND),
     /** 取消(冪等):進行中中止,已完成丟棄結果 */
     cancelSlice(id: string, owner: string) {
       try {
-        jobs.cancel(id, owner, SLICE_KIND, { discard: true });
+        jobsOf(id, owner).cancel(id, owner, SLICE_KIND, { discard: true });
       } catch (err) {
         if (!(err instanceof AppError) || err.code !== 'NETOPS_JOB_NOT_FOUND') throw err;
       }
     },
     hotFloor,
-    close: () => jobs.close(),
+    close: () => {
+      hotJobs.close();
+      coldJobs.close();
+    },
   };
 }
 

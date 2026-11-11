@@ -267,7 +267,7 @@ describe('GET /v1/pa/slice', () => {
   it('超過 1 天、結束早於開始、萬用字元 IP 回 400', async () => {
     const t = await createTestApp({ ftp: createFakeFtp(), heat: { reader: fakeReader().reader, now: () => NOW } });
     try {
-      assert.equal((await t.call({ url: q('2026-11-10T08:00:00+08:00', '2026-11-11T08:00:01+08:00') })).statusCode, 400);
+      assert.equal((await t.call({ url: q('2026-11-10T08:00:00+08:00', '2026-11-11T08:01:00+08:00') })).statusCode, 400);
       assert.equal((await t.call({ url: q('2026-11-11T09:00:00+08:00', '2026-11-11T08:00:00+08:00') })).statusCode, 400);
       assert.equal((await t.call({ url: q('2026-11-11T08:00:00+08:00', '2026-11-11T09:00:00+08:00', '&ip=10.*') })).statusCode, 400);
       assert.equal((await t.call({ url: q('2026-11-11T08:00:00+08:00', '2026-11-11T09:00:00+08:00', '&rows=201') })).statusCode, 400);
@@ -317,6 +317,45 @@ describe('GET /v1/pa/slice', () => {
       assert.equal(done.result.summary.sessions, 4);
       assert.equal(held, null);
       assert.equal((await t.call({ url: q('2026-11-08T08:00:00+08:00', '2026-11-08T09:00:00+08:00'), emp: 'S000002' })).statusCode, 200);
+    } finally {
+      await t.close();
+    }
+  });
+});
+
+describe('時段明細的併發(程式碼審查 #2、#3)', () => {
+  const q = (start: string, end: string) => `/v1/pa/slice?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`;
+
+  it('冷資料同條件同時送兩次:重用同一個工作,不回 429', async () => {
+    let held: string | null = null;
+    const coldLock = createColdLock({ set: async (_k, v) => (held ? null : ((held = v), 'OK')), eval: async (_s, _n, _k, v) => (held === v ? ((held = null), 1) : 0), quit: async () => 'OK' });
+    const cold: ColdSlice = { query: async () => (await new Promise((r) => setTimeout(r, 80)), sliceData()) };
+    const t = await createTestApp({ ftp: createFakeFtp(), heat: { reader: fakeReader().reader, cold, coldLock, now: () => NOW, syncMs: 10 } });
+    try {
+      const url = q('2026-11-08T08:00:00+08:00', '2026-11-08T09:00:00+08:00');
+      const [a, b] = await Promise.all([t.call({ url }), t.call({ url })]);
+      assert.deepEqual([a.statusCode, b.statusCode], [202, 202]);
+      assert.equal(a.json().id, b.json().id);
+      await new Promise((r) => setTimeout(r, 150));
+      assert.equal(held, null);
+    } finally {
+      await t.close();
+    }
+  });
+
+  it('熱查詢同時 2 個:第三個排隊,前面完成後開始執行,同步等待期間會輪詢狀態並回 200', async () => {
+    const t = await createTestApp({ ftp: createFakeFtp(), heat: { reader: fakeReader({ sliceDelayMs: 300 }).reader, now: () => NOW, syncMs: 5000 } });
+    try {
+      // 熱查詢同時 2 個:前兩個佔滿,第三個排隊
+      const busy = [t.call({ url: q('2026-11-11T01:00:00+08:00', '2026-11-11T02:00:00+08:00'), emp: 'S000011' }), t.call({ url: q('2026-11-11T02:00:00+08:00', '2026-11-11T03:00:00+08:00'), emp: 'S000012' })];
+      await new Promise((r) => setTimeout(r, 20));
+      const t0 = Date.now();
+      const third = t.call({ url: q('2026-11-11T03:00:00+08:00', '2026-11-11T04:00:00+08:00'), emp: 'S000013' });
+      await new Promise((r) => setTimeout(r, 50));
+      const r3 = await third;
+      assert.equal(r3.statusCode, 200);
+      assert.ok(Date.now() - t0 < 2000);
+      await Promise.all(busy);
     } finally {
       await t.close();
     }

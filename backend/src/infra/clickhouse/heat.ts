@@ -181,35 +181,40 @@ export function createHeatReader(cfg: ClickHouseConfig, fetchImpl: typeof fetch 
       // 威脅嚴重度:TRAFFIC 明細也附上同時段、同 IP 條件的威脅數(抽屜摘要列;只帶 IP 條件)
       const thrFilter: SliceFilter = isTraffic ? { fromMs: f.fromMs, toMs: f.toMs, ip: f.ip, src: f.src, dst: f.dst } : f;
       const tw = threatWhere(thrFilter);
-      const sevP = rows<{ c: number; h: number; m: number; l: number; i: number }>(
+      // 查詢依序執行(不並行):一個時段明細最多同時佔 ClickHouse 1 個查詢名額(資安審查 M1)
+      const sevP = () => rows<{ c: number; h: number; m: number; l: number; i: number }>(
         `SELECT ${SEVERITIES.map((s, i) => `countIf(severity = '${s}') AS ${'chmli'[i]}`).join(', ')} FROM ${READ_TABLES.threat} WHERE ${tw.where.join(' AND ')}`,
         tw.params,
         maxSeconds,
         signal,
       );
-      const sumP = isTraffic
+      const sumP = () =>
+        isTraffic
         ? q<{ s: number; b: number; bs: number; br: number; d: number }>(
             `SELECT count() AS s, sum(bytes) AS b, sum(bytes_sent) AS bs, sum(bytes_recv) AS br, countIf(action != 'allow') AS d FROM ${table} WHERE ${w}`,
           )
         : q<{ s: number; d: number }>(`SELECT count() AS s, countIf(action != 'allow') AS d FROM ${table} WHERE ${w}`);
       const fields = isTraffic ? TRAFFIC_FIELDS : THREAT_FIELDS;
       const order = sort === 'bytes' && isTraffic ? 'bytes DESC, event_time DESC' : 'event_time DESC';
-      const rowsP = rowsLimit
+      const rowsP = () =>
+        rowsLimit
         ? q<Record<string, string | number>>(`SELECT ${fields.map(([, e], i) => `${e} AS f${i}`).join(', ')} FROM ${table} WHERE ${w} ORDER BY ${order} LIMIT {lim:UInt16}`, { lim: rowsLimit + 1 }).then(
             (list) => list.map((r) => Object.fromEntries(fields.map(([k], i) => [k, r[`f${i}`] ?? ''])) as LogRecord),
           )
         : Promise.resolve([] as LogRecord[]);
-      const topsP = isTraffic
-        ? Promise.all([topBy(ipText('src')), topBy(ipText('dst')), topBy('app'), topBy('toString(dport)'), topBy('dst_country')]).then(([src, dst, app, dport, dstCountry]) => ({ src, dst, app, dport, dstCountry }))
-        : Promise.all([
-            q<{ k: string; sv: string; n: number }>(`SELECT name AS k, any(severity) AS sv, count() AS n FROM ${table} WHERE ${w} GROUP BY k ORDER BY n DESC, k LIMIT ${TOP_N}`).then((r) =>
-              r.map((x) => ({ key: String(x.k ?? ''), severity: x.sv === 'informational' ? 'info' : x.sv, count: num(x.n) })),
-            ),
-            topBy(ipText('src')),
-            topBy(ipText('dst')),
-            topBy('src_country'),
-          ]).then(([name, src, dst, srcCountry]) => ({ name, src, dst, srcCountry }));
-      const [sev, sum, list, top] = await Promise.all([sevP, sumP, rowsP, topsP]);
+      const topsP = async (): Promise<SliceData['top']> => {
+        if (isTraffic) return { src: await topBy(ipText('src')), dst: await topBy(ipText('dst')), app: await topBy('app'), dport: await topBy('toString(dport)'), dstCountry: await topBy('dst_country') };
+        const name = (await q<{ k: string; sv: string; n: number }>(`SELECT name AS k, any(severity) AS sv, count() AS n FROM ${table} WHERE ${w} GROUP BY k ORDER BY n DESC, k LIMIT ${TOP_N}`)).map((x) => ({
+          key: String(x.k ?? ''),
+          severity: x.sv === 'informational' ? 'info' : x.sv,
+          count: num(x.n),
+        }));
+        return { name, src: await topBy(ipText('src')), dst: await topBy(ipText('dst')), srcCountry: await topBy('src_country') };
+      };
+      const sev = await sevP();
+      const sum = await sumP();
+      const list = await rowsP();
+      const top = await topsP();
       const s = sum[0] as { s?: number; b?: number; bs?: number; br?: number; d?: number } | undefined;
       const t = sev[0];
       const more = list.length > rowsLimit;
@@ -222,7 +227,7 @@ export function createHeatReader(cfg: ClickHouseConfig, fetchImpl: typeof fetch 
           deny: num(s?.d),
           threats: { critical: num(t?.c), high: num(t?.h), medium: num(t?.m), low: num(t?.l), info: num(t?.i) },
         },
-        top: top as SliceData['top'],
+        top,
         rows: more ? list.slice(0, rowsLimit) : list,
         more,
       };

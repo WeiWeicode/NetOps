@@ -36,7 +36,8 @@ HEAT=$(ck "SELECT sum(sessions) FROM netops.pa_heat_1d WHERE toDate(bucket) = to
 THR=$(ck "SELECT sum(thr_critical) + sum(thr_high) + sum(thr_medium) + sum(thr_low) + sum(thr_info) FROM netops.pa_heat_1d WHERE toDate(bucket) = toDate('$D')")
 XT=$(ck "SELECT countIf(severity IN ('critical', 'high', 'medium', 'low', 'informational')) FROM netops.pa_threat_logs WHERE log_type = 'threat' AND toDate(event_time) = toDate('$D')")
 echo "每小時彙總 $D:hourly_app $APP、hourly_src $SRC、heat_1d $HEAT(原始表 $T1);熱力圖威脅 $THR(原始 $XT)"
-if [ "$APP" != "$T1" ] || [ "$SRC" != "$T1" ] || [ "$HEAT" != "$T1" ] || [ "$THR" != "$XT" ]; then
+# 原始表已沒有資料(超過保留)時不比熱力圖(彙總以當時的值為準,rebuild-day.sh 也不會重建)
+if [ "$APP" != "$T1" ] || [ "$SRC" != "$T1" ] || { [ "$T1" != 0 ] && { [ "$HEAT" != "$T1" ] || [ "$THR" != "$XT" ]; }; }; then
   # 物化檢視當初也算了重複的列;上次執行在刪除彙總之後、寫回之前中斷,重跑也會補建
   sh "$(dirname "$0")/rebuild-day.sh" "$C" "$D"
 fi

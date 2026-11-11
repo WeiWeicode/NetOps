@@ -9,14 +9,16 @@
 # 做法:先刪掉那一天的彙總(mutations_sync=2,等完成),再從原始表重新彙總寫回(insert_deduplicate = 0:彙總表有去重視窗)。
 # 超過原始表保留的日子不能重建(原始 log 已刪,熱力圖以當時的值為準):原始表那天沒有資料時不刪除、直接結束。
 # 熱力圖每天格:超過 TRAFFIC 保留(30 天)但還在威脅保留(90 天)內的日子,只重建威脅欄位會把 TRAFFIC 總數清掉,所以 TRAFFIC 沒資料就整天不動。
-# 不能重建今天(台灣時間):今天還在寫入,重建期間進來的列會被算兩次。以容器內 default 帳號(只允許容器本機)執行。
+# 不能重建今天(台灣時間):今天還在寫入,重建期間進來的列會被算兩次。同樣的理由,**執行期間不要對同一天送 FTP 補漏**
+# (刪除彙總到寫回之間,物化檢視寫進來的列會被算兩次);補漏完成後再重建。以容器內 default 帳號(只允許容器本機)執行。
 set -eu
 C="${1:?用法:rebuild-day.sh <容器名稱> <YYYY-MM-DD>}"
 D="${2:?缺少日期 YYYY-MM-DD}"
 case "$D" in [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;; *) echo "日期格式要 YYYY-MM-DD" >&2; exit 2 ;; esac
 case "$C" in "" | *[!A-Za-z0-9_.-]*) echo "容器名稱只能是英數、底線、點與 -" >&2; exit 2 ;; esac
 TODAY=$(TZ=Asia/Taipei date +%Y-%m-%d)
-[ "$D" \< "$TODAY" ] || { echo "只能重建今天($TODAY)以前的日期" >&2; exit 2; }
+# 日期換成整數比較(POSIX test 沒有字串 <)
+[ "$(echo "$D" | tr -d -)" -lt "$(echo "$TODAY" | tr -d -)" ] || { echo "只能重建今天($TODAY)以前的日期" >&2; exit 2; }
 ck() { docker exec -i "$C" clickhouse-client --query "$1"; }
 
 T=$(ck "SELECT count() FROM netops.pa_traffic_logs WHERE toDate(event_time) = toDate('$D')")

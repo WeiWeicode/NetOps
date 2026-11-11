@@ -4,6 +4,8 @@
 
 ## 2026-11-10 C2 寫入管線(`feature/clickhouse-c2-collector` → `feature/clickhouse-c2-ingest`)
 
+- **2026-11-11**:!67、!68 已合併(pipeline 830),測試區 `netops-ingest` 運作中。第一次核對通過(報告 §4);**接下來每天跑一次** `ssh host2 "wsl -u root -e sh -s 24" < deploy/clickhouse/verify-ingest.sh`,連續 3 天每小時差 < 0.5% 後補報告 §5、IMPL-PLAN C2 改完成。需求方決定 Redis ACL 與 `netops_writer` 縮權限都不做。
+
 - **內容**:收集器 TRAFFIC 與威脅類保留 `seqno`(字串)、`sessionId`;`netops-ingest`(`backend/src/ingest/`,netops-api 同映像)讀 `netops:pa:log:{traffic,threat,url,data,wildfire}`(group `ch-writer`)每 5 秒批次寫 ClickHouse,成功才 ACK,重啟先補待處理(token 相同不重複),心跳 `netops:ingest:heartbeat`、缺口 `netops:ingest:gaps`;migration 001(`pa_threat_logs` 加 `session_id`、`sport`、`nat_dport`);ClickHouse 改放 `netops-ch` 網路;CI `check:ingest-int`(一次性 Redis + ClickHouse 整合測試與 `dedupe-day.sh` 測試)、`deploy-api-test` 起 `netops-ingest` 並確認心跳。
 - **合併順序**:collector 先、ingest 後。**collector 合併後 CI 會重建 `netops-pa`,TRAFFIC Syslog 斷線,請網通對 `netops-syslog` 再 Commit**。ingest 不動 `pa-collector/`,不會再重建 `netops-pa`。不需要新機密。
 - **驗收**:主機 2 `sh deploy/clickhouse/verify-ingest.sh`(只讀);報告草稿 `docs/test-reports/2026-11-10-clickhouse-c2.md`,連續 3 天的結果待補。

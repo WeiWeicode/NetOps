@@ -1107,7 +1107,7 @@ volumes:
 
 | 帳號 | 用途 | 權限 / 設定 |
 | --- | --- | --- |
-| `netops_writer` | `netops-ingest` 寫入、歸檔、補漏 | `INSERT`、`SELECT` on `netops.*`;`ALTER DELETE` / `REPLACE PARTITION` 只在補漏用 |
+| `netops_writer` | `netops-ingest` 寫入、歸檔、補漏 | `INSERT`、`SELECT` on `netops.*`;`ALTER DELETE` / `REPLACE PARTITION` 只在補漏用。**2026-11-11 需求方決定**:不另拆只有 INSERT 的寫入帳號(C2 資安審查 L3),寫入與補漏共用這個帳號 |
 | `netops_reader` | `netops-api` 一般查詢 | `SELECT` on `netops.*`;`readonly=2`,`<constraints>` 固定 `max_execution_time` ≤ 50、`max_memory_usage=500MB`、`max_result_rows=100000`、不給 `file()` |
 | `netops_cold` | 冷查詢 | `SELECT` + `file()`(只讀 `archive/`);`max_threads=1`、`max_execution_time=50` |
 

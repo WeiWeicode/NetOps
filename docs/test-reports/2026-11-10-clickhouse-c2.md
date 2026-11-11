@@ -1,7 +1,7 @@
 # NetOps C2 寫入管線驗收(草稿,2026-11-10 起)
 
 > 範圍:IMPL-PLAN **C2**。完成條件:測試區**連續 3 天**每小時筆數和 Redis 接收計數差 < 0.5%;重啟不漏、重複有修正;Redis 記憶體在上限內。
-> 狀態:**草稿**。§1–§3 是合併前的測試;§4 第一次核對待合併部署後由 Claude 補;§5 三天觀察之後再補。
+> 狀態:**草稿**。§1–§3 是合併前的測試;§4 第一次核對已完成(2026-11-11);§5 三天觀察之後再補。
 
 ## 1. 環境
 
@@ -62,9 +62,54 @@ sh deploy/clickhouse/dedupe-day.sh giganexus-netops-test-netops-clickhouse-1 202
 
 `verify-ingest.sh` 的「Redis 記憶體」:`used_memory` 低於 `maxmemory`(2 GB);consumer group `pending` 應接近 0(只有寫入中的那一批),`lag` 接近 0。收集器的 Stream JSON 多了 `seqno`、`sessionId`(每筆約 +50 bytes,TRAFFIC 1 小時約 +20–35 MB)。
 
-## 4. 合併後第一次核對
+## 4. 合併後第一次核對(2026-11-11 09:39–09:41 台灣時間,Claude,ssh 唯讀)
 
-(待補:部署 pipeline、心跳、`verify-ingest.sh` 結果、TRAFFIC Syslog 是否已恢復——collector 合併會重建 `netops-pa`,要網通對 `netops-syslog` 再 Commit 後 TRAFFIC 才會進來。)
+部署:!67、!68 合併,develop pipeline 830(`78114457`)通過。`netops-pa` 01:31:41 UTC 重建、`netops-ingest` 01:36:24 UTC 啟動(兩者 healthy);需求方已請網通對 `netops-syslog` 再 Commit,TRAFFIC 持續進 Redis。指令:`ssh host2 "wsl -u root -e sh -s 12" < deploy/clickhouse/verify-ingest.sh`,另以唯讀查詢做每 5 分鐘比對與容器記憶體。
+
+### 4.1 筆數
+
+**TRAFFIC**:ingest 第一次啟動時 consumer group 從 0 建立,只補得到 Stream 裡還在的最後 1 小時(Stream 第一筆 00:39:57 UTC,CQ13);更早的小時 ClickHouse 是 0 **是預期的**(ingest 還沒上線,不是缺口,`netops:ingest:gaps` 沒有紀錄),之後由 C3 的 FTP 補漏處理。Stream 涵蓋範圍內每 5 分鐘(收到時間,UTC)比對:
+
+| 時段(UTC) | Redis 接收計數 | ClickHouse | 差異 |
+| --- | --- | --- | --- |
+| 00:35(Stream 從 00:39:57 起,不完整) | 39,672 | 29,543 | — |
+| 00:40 | 35,451 | 35,456 | −0.01% |
+| 00:45 | 40,579 | 40,502 | +0.19% |
+| 00:50 | 38,582 | 38,625 | −0.11% |
+| 00:55 | 38,692 | 38,618 | +0.19% |
+| 01:00 | 36,281 | 36,356 | −0.21% |
+| 01:05 | 36,931 | 36,935 | −0.01% |
+| 01:10 | 35,705 | 35,694 | +0.03% |
+| 01:15 | 41,366 | 41,407 | −0.10% |
+| 01:20 | 37,163 | 37,184 | −0.06% |
+| 01:25 | 37,392 | 37,368 | +0.06% |
+| 01:30 | 35,604 | 35,585 | +0.05% |
+| **00:40–01:34 合計** | **413,746** | **413,730** | **0.004%** |
+
+單一 5 分鐘的 ±0.2% 是分桶時間差(Redis 分鐘桶用 `netops-pa` 收到的時間,ClickHouse 用 Stream ID 時間,相差約 1 秒),合計後抵銷。完成條件看的是**每小時**:第一個完整小時(10:00 台灣時間)起每天核對(§5)。
+
+**威脅類**(Stream 保留 2 天,全部補進來):`verify-ingest.sh 12` 列出的 12 個小時(2026-11-10 21:00 – 2026-11-11 08:00 台灣時間)threat、url、data **每小時差異都是 0.000%**;wildfire 這段期間沒有 log。
+
+### 4.2 心跳、缺口、重複
+
+| 項目 | 結果 |
+| --- | --- |
+| 心跳 | `state ok`、`release 78114457`、`failing 0`、`insertFailures 0`;`malformed` / `trimmed` / `rejected` / `badTime` 各類型都是 0;`inserted` traffic 476,109、threat 9,387、url 21,816、data 165,440(啟動 3 分鐘內) |
+| 落後 | `lagMs:traffic` 約 5–20 秒(批次 5 秒);threat 等量少的類型 `lagMs` 是「距最後一筆」的時間,沒有新 log 時會變大,不代表落後 |
+| 缺口 | `netops:ingest:gaps` 空、`netops:ingest:gapbase` 空;consumer group 各類型 `pending 0`、`lag 0` |
+| 重複 | 同一 seqno 重複 **0**(traffic、threat、url、data 每天都是 0) |
+| seqno | `netops-pa` 01:31 重建後的 log 都有 `seqno`(01:35 那 5 分鐘 34,439 / 34,439);重建前寫進 Stream 的(舊收集器)沒有,ClickHouse 存 0:TRAFFIC 474,456 筆中 419,900 筆、威脅類 2026-11-10 全部 |
+
+### 4.3 記憶體與大小
+
+| 項目 | 結果 |
+| --- | --- |
+| `netops-redis` | `used_memory` 537 MiB(峰值 542 MiB)/ `maxmemory` 2 GB,noeviction |
+| `netops-clickhouse` | 容器 348 MiB / 1.5 GiB;伺服器 `MemoryTracking` 84 MiB;寫入 256 次,單次最高 22.8 MiB、平均 64 ms |
+| `netops-ingest` | 30 MiB / 256 MiB |
+| ClickHouse 資料 | `pa_traffic_logs` 474,456 筆 8.0 MiB;`pa_threat_logs` 196,547 筆 2.2 MiB;每小時彙總 app 632 列、src 1,787 列 |
+
+**結論**:寫入管線正常,Stream 涵蓋範圍內筆數一致、無缺口、無重複、記憶體都在上限內,沒有異常需要回報。重啟不漏(之後每次 develop 部署都會重建 `netops-ingest`)與連續 3 天的每小時核對在 §5 補。
 
 ## 5. 連續 3 天觀察
 
@@ -73,6 +118,8 @@ sh deploy/clickhouse/dedupe-day.sh giganexus-netops-test-netops-clickhouse-1 202
 | (待補) | | | | | | |
 
 ## 6. 已知事項
+
+- **需求方決定(2026-11-11)**:資安審查 C2 的 M3(`netops-redis` 加 ACL)**不做**,維持 D26 ①「不設密碼 / ACL,只靠 Compose 內部網路隔離」;L3(`netops_writer` 縮成只有 INSERT)**不做**,`netops-ingest` 繼續用 `netops_writer`(`SELECT`、`INSERT`、`ALTER DELETE`,C4 補漏共用)。
 
 - `backend/test/unit/pa-live.test.ts` 的「超過全系統連線上限回 429」在本機全套測試時偶發失敗過一次(單獨跑通過;與本次變更無關,SSE 計時)。
 - CI `check:ingest-int` 的輸出另存在主機 2 `/tmp/netops-int-<job id>.log`(保留 3 天)。

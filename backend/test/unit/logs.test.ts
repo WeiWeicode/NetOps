@@ -117,7 +117,7 @@ describe('PA Log 明細 API', () => {
   it('狀態:進度與摘要;匯出 CSV', async () => {
     const res = await submit({ ...range, src: '10.10.1.5', limit: 30 });
     const job = await finish(res.json().id);
-    assert.deepEqual(Object.keys(job.result).sort(), ['files', 'filesScanned', 'from', 'limit', 'scanned', 'seconds', 'stopReason', 'to', 'total'].sort());
+    assert.deepEqual(Object.keys(job.result).sort(), ['files', 'filesScanned', 'from', 'limit', 'scanned', 'seconds', 'source', 'stopReason', 'to', 'total'].sort());
     assert.equal(job.result.from, '2026-11-01T06:00:00+08:00');
     assert.equal(job.result.files, 2);
     const csv = await t.call({ url: `/v1/pa/log-searches/${job.id}/export` });

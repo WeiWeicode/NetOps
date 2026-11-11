@@ -74,9 +74,12 @@ export const PA_SEARCH_KEYS = ['src', 'dst', 'ip', 'port', 'proto', 'app', 'rule
 export type PaSearchKey = (typeof PA_SEARCH_KEYS)[number];
 
 /** 送出的查詢:from / to 為 ISO 8601 含時區,其他條件選填 */
-export type PaSearchBody = { from: string; to: string; limit?: number } & Partial<Record<PaSearchKey, string>>;
+/** source(C3):省略時依後端設定(預設 ftp,並行對帳 2 週後改 auto) */
+export type PaSearchBody = { from: string; to: string; limit?: number; source?: PaSource } & Partial<Record<PaSearchKey, string>>;
 
 export interface PaSearchResult {
+  /** 實際來源(C3) */
+  source: 'ftp' | 'clickhouse';
   from: string;
   to: string;
   total: number;

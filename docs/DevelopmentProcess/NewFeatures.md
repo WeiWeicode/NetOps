@@ -2,6 +2,11 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。
 
+## 2026-11-11 C3 查詢切換(第 2 批:Log 明細)
+- 工作項目:C3
+- 內容:Log 明細查詢可查 ClickHouse(`source`,預設仍 FTP;並行對帳 2 週無未處理缺口後由需求方把 `NETOPS_PA_DETAIL_SOURCE` 改 auto);API.md §4.3;Gherkin `pa-log-searches/search.feature` 加 C3 場景;前端 `api/pa.ts` 的 `PaSearchBody`、`PaSearchResult` 加 `source`(畫面不改)。
+- 檔案:`docs/{API,IMPL-PLAN}.md`、`docs/Gherkin/pa-log-searches/search.feature`、`frontend/src/api/pa.ts`
+
 ## 2026-11-11 C3 查詢切換(第 1 批:總覽與安全事件)
 - 工作項目:C3
 - 內容:流量總覽、篩選選項、安全事件(威脅、URL、資料過濾、WildFire)可查 ClickHouse,API 多 `source`、`topsUntil`,其他欄位不變;ARCHITECTURE 新增 D34(ClickHouse 每小時摘要);API.md §4.1、§4.2、§8;Gherkin `pa/overview.feature`、`pa-events/overview.feature` 加 C3 場景;前端 `api/pa.ts`、`api/paEvents.ts` 加 `source` 參數與型別(畫面不改)。

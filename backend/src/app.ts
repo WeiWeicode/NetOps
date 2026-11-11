@@ -179,7 +179,7 @@ export async function buildApp(
   }
   const ch: ChOverviewDeps = { reader: chReader, builder: chBuilder, cache, mode: config.paSource.overview, log: app.log };
   await app.register(paRoutes, { traffic, ch });
-  await app.register(logRoutes, { ftp, traffic, parallel: config.ftp?.maxConnections ?? 1, limit: config.search.limit, seconds: config.search.seconds });
+  await app.register(logRoutes, { ftp, traffic, parallel: config.ftp?.maxConnections ?? 1, limit: config.search.limit, seconds: config.search.seconds, ch: { ...ch, mode: config.paSource.detail } });
   await app.register(paEventRoutes, { events, ch });
   await app.register(adRoutes, { ad });
   await app.register(adFtpRoutes, { ad });

@@ -93,6 +93,22 @@ describe('netops_reader 唯讀查詢', () => {
     assert.ok((await reader.earliestTrafficHour())! <= H);
   });
 
+  it('明細查詢(C3):完全相同、CIDR、萬用字元、Port、動作;依時間排序、超過上限標 more', async () => {
+    const q = (f: object, limit = 100) => reader.searchTraffic({ fromMs: H, toMs: H + HOUR, app: 'c3-int-app', ...f }, limit, 10);
+    assert.equal((await q({ src: '10.77.0.1' })).rows.length, 10);
+    assert.equal((await q({ src: '10.77.0.0/30' })).rows.length, N);
+    assert.equal((await q({ ip: '10.77.0.*' })).rows.length, N);
+    assert.equal((await q({ port: '443', action: 'block' })).rows.length, 6);
+    assert.equal((await q({ q: 'C3-RULE' })).rows.length, N);
+    assert.equal((await q({ dst: '10.77' })).rows.length, 0);
+    const lim = await q({}, 5);
+    assert.equal(lim.rows.length, 5);
+    assert.equal(lim.more, true);
+    assert.equal(lim.rows[0]!.time, taipeiText(H));
+    assert.ok(lim.rows.every((r, i) => i === 0 || String(r.time) >= String(lim.rows[i - 1]!.time)));
+    assert.ok((await reader.trafficCount(H, H + HOUR)) >= N);
+  });
+
   it('唯讀帳號不能寫入、不能放寬執行秒數上限', async () => {
     const post = (q: string, extra = '') =>
       fetch(`${CH_URL}/?${extra}`, { method: 'POST', headers: { 'X-ClickHouse-User': 'netops_reader', 'X-ClickHouse-Key': readerPw }, body: q });

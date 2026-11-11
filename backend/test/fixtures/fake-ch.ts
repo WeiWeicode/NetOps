@@ -3,6 +3,7 @@
  */
 import { ClickHouseError } from '../../src/infra/clickhouse/index.js';
 import type { ChEventType, ClickHouseReader, LogRecord } from '../../src/infra/clickhouse/reader.js';
+import { buildFilter } from '../../src/modules/pa/core/palog.js';
 
 const ms = (t: string) => Date.parse(`${t.slice(0, 10).replace(/\//g, '-')}T${t.slice(11, 19)}+08:00`);
 const HOUR = 3600_000;
@@ -78,6 +79,21 @@ export function createFakeReader(traffic: LogRecord[] = [], threats: { type: ChE
       let n = 0;
       for (const r of f.traffic) if (ms(String(r.time)) >= from && ms(String(r.time)) < to) (onRow({ ...r }), n++);
       return n;
+    },
+    async searchTraffic(q, limit) {
+      check('searchTraffic');
+      // 條件語意用核心 buildFilter(FTP 版);時間另外比
+      const { fromMs, toMs, ...rest } = q;
+      const filter = buildFilter(rest) as (r: LogRecord, raw: string) => boolean;
+      const hit = f.traffic
+        .filter((r) => ms(String(r.time)) >= fromMs && ms(String(r.time)) < toMs && filter(r, Object.values(r).join(',')))
+        .sort((a, b) => String(a.time).localeCompare(String(b.time)));
+      return { rows: hit.slice(0, limit).map((r) => ({ ...r })), more: hit.length > limit, scanned: f.traffic.length };
+    },
+    async trafficCount(from, to) {
+      check('trafficCount');
+      const h = (t: number) => Math.floor(t / HOUR) * HOUR;
+      return f.traffic.filter((r) => ms(String(r.time)) >= h(from) && ms(String(r.time)) < to).length;
     },
     async threatRecords(type, from, to, onRow) {
       check('threatRecords');

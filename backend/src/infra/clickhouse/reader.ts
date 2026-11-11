@@ -125,6 +125,111 @@ export interface ClickHouseReader {
   trafficRecords(fromMs: number, toMs: number, onRow: (r: LogRecord) => void, signal?: AbortSignal): Promise<number>;
   /** 逐列讀取期間內某類型的威脅類原始 log */
   threatRecords(type: ChEventType, fromMs: number, toMs: number, onRow: (r: LogRecord) => void, signal?: AbortSignal): Promise<number>;
+  /**
+   * TRAFFIC 明細查詢(C3,工作模式內執行;docs/API.md §4.3):依時間由舊到新最多 limit 筆;more = 還有更多符合的。
+   * scanned 為 ClickHouse 讀過的列數(X-ClickHouse-Summary;沒有時為 0)。maxSeconds ≤ 50(帳號 constraints)
+   */
+  searchTraffic(f: TrafficFilter, limit: number, maxSeconds: number, signal?: AbortSignal): Promise<{ rows: LogRecord[]; more: boolean; scanned: number }>;
+  /** 期間內 TRAFFIC 每小時彙總的總筆數(明細查詢前判斷有沒有資料) */
+  trafficCount(fromMs: number, toMs: number): Promise<number>;
+}
+
+/** 明細查詢條件(和 FTP 掃描 core/palog.js buildFilter 相同語意;時間為 UTC 毫秒,toMs 不含) */
+export interface TrafficFilter {
+  fromMs: number;
+  toMs: number;
+  src?: string;
+  dst?: string;
+  ip?: string;
+  port?: string;
+  proto?: string;
+  app?: string;
+  rule?: string;
+  action?: string;
+  fromZone?: string;
+  toZone?: string;
+  user?: string;
+  country?: string;
+  q?: string;
+}
+
+const IPV4 = /^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
+const isIPv6Text = (v: string) => v.includes(':') && /^[0-9a-fA-F:.]+$/.test(v);
+
+/** q 比對的文字欄位(FTP 版比對整列 CSV;原始 log 不存整列) */
+const TEXT_COLUMNS = [
+  ipText('src'), ipText('dst'), ipText('nat_src'), ipText('nat_dst'), 'toString(sport)', 'toString(dport)', 'subtype', 'proto', 'rule', 'src_user', 'app',
+  'from_zone', 'to_zone', 'action', 'category', 'src_country', 'dst_country', 'end_reason', 'src_host', 'dst_host',
+];
+
+/**
+ * 明細條件 → SQL 條件與參數(純函式;值一律放參數,欄位名稱只來自程式內常數)。
+ *   IP:完全相同(含 NAT 位址)、CIDR(IPv4 / IPv6,排序鍵友善的 BETWEEN)、萬用字元 *(LIKE,線性時間,沒有 ReDoS);
+ *       不是合法 IP 也不是合法 CIDR 時同 FTP 版:CIDR 以字首比對、其他以字串完全相同比對
+ *   其他欄位同 buildFilter:proto、區域完全相同不分大小寫;App、規則、使用者、國家包含;action allow / block / 原文
+ */
+export function trafficWhere(f: TrafficFilter): { where: string[]; params: Record<string, Param> } {
+  const where = ['event_time >= toDateTime({from:UInt32})', 'event_time < toDateTime({to:UInt32})'];
+  const params: Record<string, Param> = { from: sec(f.fromMs), to: Math.ceil(f.toMs / 1000) };
+  let n = 0;
+  const p = (v: Param, type: string) => {
+    const k = `p${n++}`;
+    params[k] = v;
+    return `{${k}:${type}}`;
+  };
+  const ipOne = (col: string, pattern: string): string => {
+    if (pattern.includes('/')) {
+      const [base = '', bitsText = ''] = pattern.split('/');
+      const bits = Number(bitsText);
+      const v4 = IPV4.test(base) && /^\d{1,2}$/.test(bitsText) && bits <= 32;
+      const v6 = isIPv6Text(base) && /^\d{1,3}$/.test(bitsText) && bits <= 128;
+      if (v4 || v6) {
+        const r = `IPv6CIDRToRange(toIPv6(${p(base, 'String')}), ${p(v4 ? bits + 96 : bits, 'UInt8')})`;
+        return `${col} BETWEEN tupleElement(${r}, 1) AND tupleElement(${r}, 2)`;
+      }
+      return `startsWith(${ipText(col)}, ${p(base, 'String')})`;
+    }
+    if (pattern.includes('*')) return `${ipText(col)} LIKE ${p(pattern.replace(/[\\%_]/g, '\\$&').replace(/\*/g, '%'), 'String')}`;
+    if (IPV4.test(pattern) || isIPv6Text(pattern)) return `${col} = toIPv6OrNull(${p(pattern, 'String')})`;
+    return `${ipText(col)} = ${p(pattern, 'String')}`;
+  };
+  const ipAny = (cols: [string, boolean][], pattern?: string) => {
+    const v = String(pattern ?? '').trim();
+    if (!v) return;
+    // NAT 欄位空白(::)時不比對(同 FTP:r.natSrc && …)
+    where.push(`(${cols.map(([c, nat]) => (nat ? `(${c} != toIPv6('::') AND ${ipOne(c, v)})` : ipOne(c, v))).join(' OR ')})`);
+  };
+  ipAny([['src', false], ['nat_src', true]], f.src);
+  ipAny([['dst', false], ['nat_dst', true]], f.dst);
+  ipAny([['src', false], ['dst', false], ['nat_src', true], ['nat_dst', true]], f.ip);
+  const port = String(f.port ?? '').trim();
+  if (port) {
+    const ports = [...new Set(port.split(/[,\s]+/).filter(Boolean).map(Number))].filter((x) => Number.isInteger(x) && x >= 0 && x <= 65535);
+    where.push(ports.length ? `dport IN ${p(`[${ports.join(',')}]`, 'Array(UInt16)')}` : '0');
+  }
+  const exact = (col: string, v?: string) => {
+    const x = String(v ?? '').trim().toLowerCase();
+    if (x) where.push(`lowerUTF8(${col}) = ${p(x, 'String')}`);
+  };
+  const contains = (cols: string[], v?: string) => {
+    const x = String(v ?? '').trim();
+    if (!x) return;
+    const k = p(x, 'String');
+    where.push(`(${cols.map((c) => `positionCaseInsensitiveUTF8(${c}, ${k}) > 0`).join(' OR ')})`);
+  };
+  exact('proto', f.proto);
+  contains(['app'], f.app);
+  contains(['rule'], f.rule);
+  exact('from_zone', f.fromZone);
+  exact('to_zone', f.toZone);
+  contains(['src_user'], f.user);
+  contains(['src_country', 'dst_country'], f.country);
+  const action = String(f.action ?? '').trim();
+  if (action === 'allow') where.push(`action = 'allow'`);
+  else if (action === 'block') where.push(`action != 'allow'`);
+  else if (action) where.push(`action = ${p(action, 'String')}`);
+  contains([`concat(${TEXT_COLUMNS.join(", ',', ")})`], f.q);
+  return { where, params };
 }
 
 type Fetch = typeof fetch;
@@ -145,11 +250,12 @@ export function createClickHouseReader(cfg: ClickHouseConfig, fetchImpl: Fetch =
   const maxSeconds = Math.min(opts.maxSeconds ?? 25, 50);
   const headers = { 'X-ClickHouse-User': cfg.user, 'X-ClickHouse-Key': cfg.password, 'Content-Type': 'text/plain; charset=utf-8' };
 
-  async function request(sql: string, params: Record<string, Param>, signal?: AbortSignal): Promise<Response> {
+  async function request(sql: string, params: Record<string, Param>, signal?: AbortSignal, settings: Record<string, string> = {}): Promise<Response> {
     const u = new URL(base);
     u.pathname = '/';
     for (const [k, v] of Object.entries(params)) u.searchParams.set(`param_${k}`, paramText(v));
     u.searchParams.set('max_execution_time', String(maxSeconds));
+    for (const [k, v] of Object.entries(settings)) u.searchParams.set(k, v);
     // UInt64(筆數、位元組)以數字輸出;實際值遠小於 2^53
     u.searchParams.set('output_format_json_quote_64bit_integers', '0');
     const timeout = AbortSignal.timeout(timeoutMs);
@@ -182,8 +288,16 @@ export function createClickHouseReader(cfg: ClickHouseConfig, fetchImpl: Fetch =
   }
 
   /** 大結果:逐行讀取(JSONCompactEachRow),中途的錯誤(HTTP 已回 200)以「無法解析的行」偵測;每個資料塊之後讓出事件迴圈 */
-  async function stream(sql: string, params: Record<string, Param>, onLine: (cols: unknown[]) => void, signal?: AbortSignal): Promise<number> {
-    const res = await request(`${sql} FORMAT JSONCompactEachRow`, params, signal);
+  async function stream(
+    sql: string,
+    params: Record<string, Param>,
+    onLine: (cols: unknown[]) => void,
+    signal?: AbortSignal,
+    settings?: Record<string, string>,
+    onResponse?: (res: Response) => void,
+  ): Promise<number> {
+    const res = await request(`${sql} FORMAT JSONCompactEachRow`, params, signal, settings);
+    onResponse?.(res);
     if (!res.body) throw new ClickHouseError('ClickHouse 回應沒有內容', undefined, res.status);
     const decoder = new TextDecoder();
     let buf = '';
@@ -322,6 +436,40 @@ export function createClickHouseReader(cfg: ClickHouseConfig, fetchImpl: Fetch =
         signal,
       );
       return r.filter((x) => isChEventType(x.t)).map((x) => ({ type: x.t as ChEventType, hour: x.h * 1000, n: Number(x.n) }));
+    },
+    async searchTraffic(f, limit, seconds, signal) {
+      const { where, params } = trafficWhere(f);
+      const names = TRAFFIC_FIELDS.map(([k]) => k);
+      const out: LogRecord[] = [];
+      let scanned = 0;
+      await stream(
+        `SELECT ${TRAFFIC_FIELDS.map(([, e]) => e).join(', ')} FROM ${READ_TABLES.traffic} WHERE ${where.join(' AND ')} ORDER BY event_time, src LIMIT {lim:UInt32}`,
+        { ...params, lim: limit + 1 },
+        (cols) => {
+          const r: LogRecord = {};
+          for (let i = 0; i < names.length; i++) r[names[i]!] = cols[i] as string | number;
+          out.push(r);
+        },
+        signal,
+        // 工作取消(HTTP 連線中斷)時 ClickHouse 也停止查詢
+        { max_execution_time: String(Math.min(Math.max(Math.floor(seconds), 1), 50)), cancel_http_readonly_queries_on_client_close: '1' },
+        (res) => {
+          try {
+            scanned = Number(JSON.parse(res.headers.get('x-clickhouse-summary') ?? '{}').read_rows) || 0;
+          } catch {
+            /* 沒有摘要標頭只是少了掃描筆數 */
+          }
+        },
+      );
+      const more = out.length > limit;
+      return { rows: more ? out.slice(0, limit) : out, more, scanned };
+    },
+    async trafficCount(fromMs, toMs) {
+      const r = await rows<{ n: number }>(
+        `SELECT sum(sessions) AS n FROM ${READ_TABLES.hourlyApp} WHERE hour >= toStartOfHour(toDateTime({from:UInt32})) AND hour < toDateTime({to:UInt32})`,
+        { from: sec(fromMs), to: Math.ceil(toMs / 1000) },
+      );
+      return Number(r[0]?.n ?? 0);
     },
     trafficRecords: (fromMs, toMs, onRow, signal) => records('traffic', TRAFFIC_FIELDS, fromMs, toMs, onRow, signal),
     threatRecords: (type, fromMs, toMs, onRow, signal) => records('threat', THREAT_FIELDS, fromMs, toMs, onRow, signal, type),

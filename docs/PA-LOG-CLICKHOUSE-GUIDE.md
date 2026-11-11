@@ -406,6 +406,8 @@ const compareId = (a: string, b: string) => {
 - **其他類型**(threat、url、data、wildfire)同樣做法,寫 `pa_threat_logs`;decryption、globalprotect、userid 量很小,第一期不進 ClickHouse(Redis 2 天 + FTP)。
 - **不在 `netops-pa` 寫 ClickHouse 的理由**見決策 CQ4。
 
+> **C2 實作(2026-11-10)與上面範例的差異**:① 不加 `@clickhouse/client`,用 Node 內建 `fetch` 打 HTTP 介面(`backend/src/infra/clickhouse/`;只需要 `INSERT … FORMAT JSONEachRow`,帳密放 `X-ClickHouse-User` / `X-ClickHouse-Key` 標頭)。② consumer group 從 `0` 建立(第一次部署把 Stream 裡現有的 1 小時 TRAFFIC、2 天威脅類一起寫進去),Stream 過期重建時自動重建 group。③ 一個迴圈同時讀 5 個 Stream(`XREADGROUP … STREAMS` 多鍵),每 5 秒或任一類型滿 5,000 筆寫一批;**重啟時待處理清單單獨成批**(不混新資料),token(類型 + 第一、最後 ID + 筆數)和當機前相同。④ 缺口判斷除了 ID 比較,還用 `entries-added − entries-read − length` 扣掉已回報的基準(`netops:ingest:gapbase`;被修剪跳過的筆數不會補進 entries-read,不扣會一直誤報;`max-deleted-entry-id` 只記 XDEL,不能用);缺口寫 `netops:ingest:gaps`。⑩ 寫入帶 `async_insert=0`:26.x 的 HTTP 寫入預設走 async insert,`insert_deduplication_token` 不生效;另帶 `deduplicate_blocks_in_dependent_materialized_views=1`,彙總表開去重視窗(`migrations/002`),否則重送時彙總會重複。⑤ 資料錯誤代碼對照 26.3(`DATA_ERROR_CODES`);結構性錯誤(欄位或表不存在、Unknown field、權限)不拆批、退避重試,拆批時前 3 個單列都被拒就熔斷;無法分類的 400 連續 5 次後才拆批;其他一律退避重試。單筆 64 KB、一輪 16 MB 上限。⑥ 進入點 `dist/src/ingest/main.js`;健康檢查看 `/tmp/netops-ingest.alive`。⑦ ClickHouse 改放獨立的 internal 網路 `netops-ch`(只有 `netops-ingest`,C3 起加 `netops-api`)。⑧ `seqno` 在 Stream JSON 裡是字串(64 位元)。⑨ 重複修正:`deploy/clickhouse/dedupe-day.sh`(`OPTIMIZE … FINAL DEDUPLICATE` + 重建那天的每小時彙總)。
+
 ### 6.7 範例:儀表板快取(TS,範例)
 
 ```ts

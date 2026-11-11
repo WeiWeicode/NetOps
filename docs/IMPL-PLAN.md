@@ -230,6 +230,8 @@ D13:骨架直接留用;AI 不在這次範圍,不做串流驗證(D7、D17)。
 
 **前置**:C1;E3(網通改轉送格式)。**負責人**:Claude 寫;需求方執行機密腳本、合併;網通改 PA-560。**完成條件**:測試區連續 3 天每小時筆數和 Redis 接收計數差 < 0.5%;重啟不漏、重複有修正;Redis 記憶體在上限內。
 
+**狀態:程式完成,MR 待合併(2026-11-10)**。兩個 MR 依序合併:`feature/clickhouse-c2-collector`(收集器 `seqno`、`sessionId`;**會重建 `netops-pa`,合併後要請網通對 `netops-syslog` 再 Commit**)→ `feature/clickhouse-c2-ingest`(`netops-ingest`、migration 001、`netops-ch` 網路、CI)。不需要新機密(`ch_writer_password` 在 C1 已產生)。驗收用 `deploy/clickhouse/verify-ingest.sh`,報告 `docs/test-reports/2026-11-10-clickhouse-c2.md`(3 天觀察待補)。
+
 ## C3 查詢切換(已核准)
 
 1. `netops-api` 新增 `infra/clickhouse`(唯讀帳號、`query_params`)。

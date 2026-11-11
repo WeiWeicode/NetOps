@@ -4,7 +4,7 @@
 --   {{TTL_HOURLY_APP}}  每小時彙總(App)   測試區 3 DAY、正式區 13 MONTH
 --   {{TTL_HOURLY_SRC}}  每小時彙總(來源)  測試區 3 DAY、正式區 90 DAY
 -- 全部 IF NOT EXISTS,可重複執行;TTL 變更由 apply-schema.sh 另外 MODIFY TTL。
--- 已建立的表要改欄位(C2 起)另寫 migration,不要直接改這裡。
+-- 已建立的表要改欄位(C2 起)另寫 migration(deploy/clickhouse/migrations/),不要直接改這裡。
 
 CREATE DATABASE IF NOT EXISTS netops;
 
@@ -47,7 +47,7 @@ CREATE TABLE IF NOT EXISTS netops.pa_traffic_logs
     app_tech       LowCardinality(String),
     src_host       String CODEC(ZSTD(3)),
     dst_host       String CODEC(ZSTD(3)),
-    source         LowCardinality(String),  -- 'syslog' | 'ftp'
+    source         LowCardinality(String),  -- 'syslog'(netops-ingest)| 'ftp'(補漏)
 
     INDEX idx_dst   dst   TYPE bloom_filter(0.01) GRANULARITY 1,
     INDEX idx_dport dport TYPE set(256)  GRANULARITY 4,
@@ -90,7 +90,7 @@ CREATE TABLE IF NOT EXISTS netops.pa_threat_logs
     thr_category  LowCardinality(String),
     file_digest   String CODEC(ZSTD(3)),
     file_type     LowCardinality(String),
-    source        LowCardinality(String)
+    source        LowCardinality(String)   -- 'http'(netops-ingest)| 'ftp'(補漏);session_id、sport、nat_dport 見 migrations/001
 )
 ENGINE = MergeTree
 PARTITION BY toYYYYMMDD(event_time)

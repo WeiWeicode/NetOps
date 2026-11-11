@@ -95,8 +95,9 @@ check:ingest-int:
     # 時間先算好(昨天同一秒):SQL 裡的 now() 每次 INSERT 都不同,兩列就不是完全相同
     - E=$(($(date +%s) - 86400))
     - Q="INSERT INTO netops.pa_traffic_logs (event_time, received_at, src, app, src_host, source) VALUES (toDateTime($E), toDateTime64($E, 3), '::ffff:10.1.1.1', 'dup-test', 'dup-test', 'syslog')"
-    - docker exec "$N-ch" clickhouse-client --insert_deduplicate=0 --query "$Q"
-    - docker exec "$N-ch" clickhouse-client --insert_deduplicate=0 --query "$Q"
+    - docker exec "$N-ch" clickhouse-client --async_insert=0 --insert_deduplicate=0 --query "$Q"
+    - docker exec "$N-ch" clickhouse-client --async_insert=0 --insert_deduplicate=0 --query "$Q"
+    - test "$(docker exec "$N-ch" clickhouse-client --query "SELECT count() FROM netops.pa_traffic_logs WHERE app = 'dup-test'")" = 2 || { echo "FAIL 重複列沒有寫進去" | tee -a "$L" >&2; exit 1; }
     - DD="$(docker exec "$N-ch" clickhouse-client --query "SELECT toString(toDate(event_time)) FROM netops.pa_traffic_logs WHERE app = 'dup-test' LIMIT 1")"
     - sh deploy/clickhouse/dedupe-day.sh "$N-ch" "$DD" 2>&1 | tee -a "$L"
     - R="$(docker exec "$N-ch" clickhouse-client --query "SELECT count() FROM netops.pa_traffic_logs WHERE app = 'dup-test'") $(docker exec "$N-ch" clickhouse-client --query "SELECT sum(sessions) FROM netops.pa_traffic_hourly_app WHERE app = 'dup-test'")"

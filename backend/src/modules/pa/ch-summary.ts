@@ -270,7 +270,8 @@ function errInfo(err: unknown): { code?: number; status?: number; name: string; 
   const code = typeof e?.code === 'number' ? e.code : undefined;
   const status = typeof e?.status === 'number' ? e.status : undefined;
   // 沒有 ClickHouse 錯誤代碼的(連線、逾時、讀取不完整)訊息是本程式組的固定文字,不含 log 內容,可以記
-  const reason = code === undefined && e instanceof ClickHouseError ? String(e.message).slice(0, 120) : undefined;
+  // ClickHouse 回應來的錯誤(status 有值)可能帶回應原文,不記(資安審查 L)
+  const reason = code === undefined && status === undefined && e instanceof ClickHouseError ? String(e.message).slice(0, 120) : undefined;
   return { code, status, name: e?.name ?? 'Error', reason };
 }
 

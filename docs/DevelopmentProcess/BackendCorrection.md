@@ -5,7 +5,8 @@
 ## 2026-11-11 C3:PA 查詢只用 ClickHouse、對帳 01:00
 - 工作項目:C3(ARCHITECTURE D43,需求方 2026-11-11 晚上決定)
 - 內容:① 總覽、篩選選項、有資料的日期、安全事件(威脅類)、Log 明細只查 ClickHouse;`source` 只接受 clickhouse;`NETOPS_PA_OVERVIEW_SOURCE`、`NETOPS_PA_DETAIL_SOURCE` 移除;test / prod 必須設定 `CLICKHOUSE_URL`。② 期間整個超過保留期限回 404 `NETOPS_PA_OUT_OF_RETENTION`;回應加 `coverage`、`partial`、`topsState`(摘要還沒建好時排行標不完整,筆數照回)。③ `/pa/days`、`/pa-events/types` 改列 ClickHouse 有資料的日期(新增 `trafficDays`、`threatDays`)。④ 明細移除 FTP 掃描路徑。⑤ 每日對帳 `NETOPS_RECON_HOUR` 預設 1,FTP 檔沒分析完時自己同步(30 分鐘最多一次)並每 10 分鐘再試;FTP 完整的判斷改回「有檔涵蓋到 23:50 以後或隔天有檔」(PA 前一天的檔約 07:45 才出現,隔天的檔要再等一天)。⑥ 每小時摘要:每段 2 萬列、每段最多等 180 秒(測試區 15 時一直逾時);失敗日誌記本程式組的原因文字。
-- 檔案:`backend/src/{config.ts,app.ts,infra/clickhouse/reader.ts,modules/pa/{ch-overview,ch-summary,routes,log-routes,reconcile}.ts,modules/pa-events/routes.ts}`、`backend/test/`、`deploy/docker-compose.yml`
+- 審查修正(`code-reviewer`、`security-auditor` 2026-11-11):有資料的日期在程序內記 2 分鐘、威脅類一次查全部類型、日期以 `Asia/Taipei` 切;`/pa-events/types` 在 ClickHouse 失敗時只標 ClickHouse 類型 `unavailable`,保留 `dir`;`/pa/options` 也檢查保留期限;`partial` 以最早一小時判斷;`topsState` 不是 ok 的結果不快取;摘要日誌的 `reason` 只記本程式組的訊息;自動對帳防重入、單日失敗不中斷其他日、pending 超過 120 次停止自動重試;新增自動對帳測試。
+- 檔案:`backend/src/{config.ts,app.ts,infra/clickhouse/reader.ts,infra/redis/cache.ts,modules/pa/{ch-overview,ch-summary,routes,log-routes,reconcile}.ts,modules/pa-events/routes.ts}`、`backend/test/`、`deploy/docker-compose.yml`
 - 驗證:`npm run typecheck`、`npm test`
 
 ## 2026-11-11 C3 第 3 批:FTP 每日對帳與補漏

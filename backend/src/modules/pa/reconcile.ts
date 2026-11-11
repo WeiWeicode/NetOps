@@ -92,6 +92,10 @@ export function createReconciler({
   let doneDay = '';
   let done = new Set<string>();
   let lastSyncAt = 0;
+  let running = false;
+  /** 每天 pending 的次數:超過 MAX_TRIES(10 分鐘一次,約 20 小時)就不再自動重試 */
+  const tries = new Map<string, number>();
+  const MAX_TRIES = 120;
 
   function ftpHours(day: string): { counts: Map<string, number>; files: number; complete: boolean } {
     const files = traffic.filesInRange(day, day);
@@ -141,6 +145,17 @@ export function createReconciler({
    * 之後每 10 分鐘再試,直到不是 pending(PA 前一天的匯出檔約 07:45 才出現在 FTP)
    */
   async function auto() {
+    // 上一輪還沒結束(FTP 同步或對帳慢)就跳過這一輪(資安審查 L)
+    if (running) return;
+    running = true;
+    try {
+      await autoOnce();
+    } finally {
+      running = false;
+    }
+  }
+
+  async function autoOnce() {
     const t = now();
     const today = taipeiText(t).slice(0, 10);
     if (Number(taipeiText(t).slice(11, 13)) < hour) return;
@@ -163,13 +178,19 @@ export function createReconciler({
     for (const day of days) {
       try {
         const r = await reconcile(day);
-        if (r.status === 'pending') continue;
+        if (r.status === 'pending') {
+          const n = (tries.get(day) ?? 0) + 1;
+          tries.set(day, n);
+          if (n < MAX_TRIES) continue;
+          log.warn({ day, tries: n }, 'FTP 對帳:FTP 檔一直不完整,停止自動重試(可手動對帳)');
+        }
+        tries.delete(day);
         done.add(day);
         if (r.status === 'gap') log.warn({ day, gaps: r.gaps }, 'FTP 對帳:ClickHouse 有缺口(需要補漏)');
         else log.info({ day, status: r.status, excess: r.excess }, 'FTP 對帳完成');
       } catch (err) {
         log.warn({ day, code: (err as { code?: unknown }).code }, 'FTP 對帳失敗,下次再試');
-        return;
+        continue;
       }
     }
   }

@@ -13,7 +13,8 @@ export interface CacheClient {
 
 export interface DashboardCache {
   /** 有快取回快取,否則 load() 後存 ttlSec 秒;name 只能是程式內的常數名稱 */
-  cached<T>(name: string, params: object, ttlSec: number, load: () => Promise<T>): Promise<T>;
+  /** keep 回 false 的結果不存快取(例如排行還沒建好的總覽) */
+  cached<T>(name: string, params: object, ttlSec: number, load: () => Promise<T>, keep?: (v: T) => boolean): Promise<T>;
   close(): Promise<void>;
 }
 
@@ -29,7 +30,7 @@ export function createDashboardCache(client: CacheClient | null): DashboardCache
   /** 同一個鍵正在計算時共用同一個 Promise(冷快取時同時多個請求只算一次;資安審查 M2) */
   const inflight = new Map<string, Promise<unknown>>();
 
-  async function compute(key: string, ttlSec: number, load: () => Promise<unknown>): Promise<unknown> {
+  async function compute(key: string, ttlSec: number, load: () => Promise<unknown>, keep?: (v: never) => boolean): Promise<unknown> {
     if (client) {
         try {
           const hit = await client.get(key);
@@ -39,7 +40,7 @@ export function createDashboardCache(client: CacheClient | null): DashboardCache
         }
       }
       const value = await load();
-      if (client) {
+      if (client && (!keep || keep(value as never))) {
         try {
           await client.set(key, JSON.stringify(value), 'EX', Math.min(Math.max(ttlSec, 1), 60));
         } catch {
@@ -50,11 +51,11 @@ export function createDashboardCache(client: CacheClient | null): DashboardCache
   }
 
   return {
-    async cached<T>(name: string, params: object, ttlSec: number, load: () => Promise<T>): Promise<T> {
+    async cached<T>(name: string, params: object, ttlSec: number, load: () => Promise<T>, keep?: (v: T) => boolean): Promise<T> {
       const key = cacheKey(name, params);
       const running = inflight.get(key);
       if (running) return running as Promise<T>;
-      const p = compute(key, ttlSec, load);
+      const p = compute(key, ttlSec, load, keep as ((v: never) => boolean) | undefined);
       inflight.set(key, p);
       try {
         return (await p) as T;

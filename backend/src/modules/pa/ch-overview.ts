@@ -61,11 +61,30 @@ const untilOut = (until: number | null, toMs: number) => (until === null ? '' : 
 /** ClickHouse 有資料的日期(新的在前):TRAFFIC 來自每小時彙總;威脅類來自原始表 */
 export type DayRow = { day: string; hours: number; rows: number };
 
+/**
+ * 有資料的日期也放在程序內 2 分鐘(資安審查 M:Redis 停止時不讓每個請求都掃一次);威脅類一次查全部類型
+ */
+const DAYS_MEMO_MS = 120_000;
+const memo = new WeakMap<ChOverviewDeps, Map<string, { at: number; v: Promise<DayRow[]> }>>();
+
 export async function dataDays(d: ChOverviewDeps, kind: 'traffic' | ChEventType): Promise<DayRow[]> {
   const { reader } = need(d);
-  return d.cache.cached('pa-days', { kind }, CACHE_SEC, () =>
-    viaClickHouse(async () => (kind === 'traffic' ? await reader.trafficDays() : await reader.threatDays(kind)).map((x) => ({ day: ymd(x.day), hours: x.hours, rows: x.rows }))),
-  );
+  const key = kind === 'traffic' ? 'traffic' : 'threat';
+  const m = memo.get(d) ?? new Map();
+  memo.set(d, m);
+  let hit = m.get(key);
+  if (!hit || Date.now() - hit.at > DAYS_MEMO_MS) {
+    const v = viaClickHouse(async () => {
+      if (key === 'traffic') return (await reader.trafficDays()).map((x) => ({ type: 'traffic', day: ymd(x.day), hours: x.hours, rows: x.rows }));
+      return (await reader.threatDays()).map((x) => ({ type: x.type, day: ymd(x.day), hours: x.hours, rows: x.rows }));
+    });
+    hit = { at: Date.now(), v };
+    m.set(key, hit);
+    // 失敗不留在記憶裡,下次重查
+    v.catch(() => m.get(key) === hit && m.delete(key));
+  }
+  const all = (await hit.v) as (DayRow & { type: string })[];
+  return all.filter((x) => x.type === kind).map(({ day, hours, rows }) => ({ day, hours, rows }));
 }
 
 /**
@@ -79,7 +98,9 @@ export async function checkCoverage(d: ChOverviewDeps, kind: 'traffic' | ChEvent
   const first = taipeiDayStartMs(coverage.from.replace(/-/g, '/'));
   if (toMs <= first)
     throw new AppError(404, 'NETOPS_PA_OUT_OF_RETENTION', `這段期間超過資料保留期限:目前只有 ${coverage.from} ~ ${coverage.to} 的資料`, [{ field: 'from', message: `最早 ${coverage.from}` }]);
-  return { coverage, partial: fromMs < first };
+  // TRAFFIC 用最早一小時判斷(最早那天可能只從 08:00 起有資料);威脅類以天為單位(程式碼審查 #5)
+  const earliest = kind === 'traffic' ? (d.builder?.earliest() ?? first) : first;
+  return { coverage, partial: fromMs < Math.max(earliest, first) };
 }
 
 /** 快取一律用排行上限算,回應前再截到 top:快取鍵不含 top,換 top 不會繞過快取(資安審查 M2) */
@@ -131,6 +152,8 @@ export async function trafficOverview(d: ChOverviewDeps, from: string, to: strin
         topsState: state,
       };
     }),
+    // 排行還沒建好 / 過期的結果不快取(建好後馬上看得到;程式碼審查 #8)
+    (v) => v.topsState === 'ok',
   );
   return { ...r, ...cov, top: cut(r.top as TopMap, topN), topBytes: cut(r.topBytes as TopMap, topN) };
 }
@@ -138,6 +161,8 @@ export async function trafficOverview(d: ChOverviewDeps, from: string, to: strin
 /** 明細查詢的下拉選項(App、區域、動作來自每小時彙總;規則來自每小時摘要) */
 export async function trafficOptions(d: ChOverviewDeps, from: string, to: string) {
   const { reader, builder } = need(d);
+  // 超過保留期限同總覽回 404(程式碼審查 #3)
+  await checkCoverage(d, 'traffic', ...dayRangeMs(from, to));
   return d.cache.cached('pa-options', { from, to }, CACHE_SEC, () =>
     viaClickHouse(async () => {
       const [fromMs, toMs] = dayRangeMs(from, to);
@@ -159,6 +184,7 @@ export async function eventOverview(d: ChOverviewDeps, type: ChEventType, from: 
       const m = mergeEventSummaries(type, list, TOP_MAX);
       return { ...m, source: 'clickhouse' as const, missing, topsUntil: untilOut(until, toMs), topsState: state };
     }),
+    (v) => v.topsState === 'ok',
   );
   return { ...r, ...cov, tops: r.tops.map((t: { items: unknown[] }) => ({ ...t, items: t.items.slice(0, topN) })) };
 }

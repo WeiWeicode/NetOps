@@ -128,7 +128,8 @@ export interface ClickHouseReader {
   earliestTrafficHour(signal?: AbortSignal): Promise<number | null>;
   /** ClickHouse 有資料的範圍與每天筆數(TRAFFIC 來自每小時彙總;威脅類來自原始表,依類型) */
   trafficDays(): Promise<{ day: number; hours: number; rows: number }[]>;
-  threatDays(type: ChEventType): Promise<{ day: number; hours: number; rows: number }[]>;
+  /** 威脅類各類型每天的小時數與筆數(一次查全部類型) */
+  threatDays(): Promise<{ type: ChEventType; day: number; hours: number; rows: number }[]>;
   /** 威脅類每小時筆數(原始列數,不乘 Repeat Count) */
   threatHourCounts(fromMs: number, toMs: number, signal?: AbortSignal): Promise<{ type: ChEventType; hour: number; n: number }[]>;
   /** 逐列讀取期間內的 TRAFFIC 原始 log(核心紀錄格式);回傳筆數 */
@@ -440,16 +441,17 @@ export function createClickHouseReader(cfg: ClickHouseConfig, fetchImpl: Fetch =
     },
     async trafficDays() {
       const r = await rows<{ d: number; h: number; n: number }>(
-        `SELECT toUnixTimestamp(toStartOfDay(hour)) AS d, uniqExact(hour) AS h, sum(sessions) AS n FROM ${READ_TABLES.hourlyApp} GROUP BY d ORDER BY d DESC`,
+        `SELECT toUnixTimestamp(toStartOfDay(hour, 'Asia/Taipei')) AS d, uniqExact(hour) AS h, sum(sessions) AS n FROM ${READ_TABLES.hourlyApp} GROUP BY d ORDER BY d DESC`,
       );
       return r.map((x) => ({ day: x.d * 1000, hours: Number(x.h), rows: Number(x.n) }));
     },
-    async threatDays(type) {
-      const r = await rows<{ d: number; h: number; n: number }>(
-        `SELECT toUnixTimestamp(toStartOfDay(event_time)) AS d, uniqExact(toStartOfHour(event_time)) AS h, count() AS n FROM ${READ_TABLES.threat} WHERE log_type = {type:String} GROUP BY d ORDER BY d DESC`,
-        { type },
+    async threatDays() {
+      // 威脅類量小(每天數萬筆);只讀 log_type 與 event_time 兩欄
+      const r = await rows<{ t: string; d: number; h: number; n: number }>(
+        `SELECT log_type AS t, toUnixTimestamp(toStartOfDay(event_time, 'Asia/Taipei')) AS d, uniqExact(toStartOfHour(event_time)) AS h, count() AS n
+         FROM ${READ_TABLES.threat} GROUP BY t, d ORDER BY t, d DESC`,
       );
-      return r.map((x) => ({ day: x.d * 1000, hours: Number(x.h), rows: Number(x.n) }));
+      return r.filter((x) => isChEventType(x.t)).map((x) => ({ type: x.t as ChEventType, day: x.d * 1000, hours: Number(x.h), rows: Number(x.n) }));
     },
     async earliestTrafficHour(signal) {
       const r = await rows<{ h: number }>(`SELECT toUnixTimestamp(min(hour)) AS h FROM ${READ_TABLES.hourlyApp}`, {}, signal);

@@ -20,7 +20,7 @@ const paEventRoutes: FastifyPluginAsync<{ events: EventImporter; ch: ChOverviewD
         operationId: 'netops.pa-events.types',
         summary: 'PA 安全事件的類型',
         description:
-          '其他類型 log 的清單與有資料的日期(新的在前)。威脅、URL 過濾、資料過濾、WildFire 為 ClickHouse(source clickhouse;files 為有資料的小時數、rows 為筆數、coverage 為有資料的範圍);解密、GlobalProtect、User-ID 為 FTP 已分析的檔案(source ftp,只列有設定 FTP 目錄的)。ClickHouse 無法使用回 503 NETOPS_CLICKHOUSE_UNAVAILABLE。',
+          '其他類型 log 的清單與有資料的日期(新的在前)。威脅、URL 過濾、資料過濾、WildFire 為 ClickHouse(source clickhouse;files 為有資料的小時數、rows 為筆數、coverage 為有資料的範圍;ClickHouse 無法使用時這幾個類型 unavailable 為 true、其他照常);解密、GlobalProtect、User-ID 為 FTP 已分析的檔案(source ftp,只列有設定 FTP 目錄的)。',
         tags: ['PA 安全事件'],
         'x-permission': 'netops.pa.read',
         'x-gherkin': ['場景: 列出類型', '  當 呼叫 GET /api/netops/pa-events/types', '  那麼 回應 200', '  而且 types 含 threat'].join('\n'),
@@ -31,10 +31,19 @@ const paEventRoutes: FastifyPluginAsync<{ events: EventImporter; ch: ChOverviewD
       const types = [];
       for (const t of events.overview()) {
         if (isChEventType(t.type)) {
-          const days = await dataDays(ch, t.type);
+          // ClickHouse 失敗時只有這些類型標 unavailable,解密 / GlobalProtect / User-ID(FTP)照常列出(程式碼審查 #4)
+          const days = await dataDays(ch, t.type).catch((err) => {
+            if ((err as { code?: string }).code === 'NETOPS_CLICKHOUSE_UNAVAILABLE') return null;
+            throw err;
+          });
+          if (!days) {
+            types.push({ type: t.type, label: t.label, dir: t.dir, source: 'clickhouse', unavailable: true, files: 0, rows: 0, days: [], coverage: null });
+            continue;
+          }
           types.push({
             type: t.type,
             label: t.label,
+            dir: t.dir,
             source: 'clickhouse',
             files: days.reduce((n, d) => n + d.hours, 0),
             rows: days.reduce((n, d) => n + d.rows, 0),

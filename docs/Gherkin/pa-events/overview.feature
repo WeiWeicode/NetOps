@@ -21,7 +21,7 @@
     而且 types 含 threat(source "clickhouse",days 為 ClickHouse 有資料的日期、coverage 為範圍)
     而且 解密、GlobalProtect、User-ID 為 source "ftp"(只列有設定 FTP 目錄的)
 
-  # 來源: backend/src/modules/pa-events/routes.ts:63
+  # 來源: backend/src/modules/pa-events/routes.ts:72
   @auto
   場景: 查詢威脅總覽
     假如 ClickHouse 有 2026-11-12 的威脅 log
@@ -30,13 +30,13 @@
     而且 type 為 "threat"、source 為 "clickhouse"
     而且 rows、kpis、tops 為 ClickHouse 每小時摘要合併的結果(次數乘 Repeat Count,同舊版 mergeEventSummaries)
 
-  # 來源: backend/src/modules/pa-events/routes.ts:69
+  # 來源: backend/src/modules/pa-events/routes.ts:78
   @auto
   場景: 不支援的類型
     當 呼叫 GET /api/netops/pa-events/overview?type=nope&from=2026-11-01
     那麼 回應 400 VALIDATION_FAILED
 
-  # 來源: backend/src/modules/pa-events/routes.ts:73
+  # 來源: backend/src/modules/pa-events/routes.ts:82
   @auto @changed
   場景: 威脅類超過保留期限
     # 舊版查 FTP;新版只查 ClickHouse(正式區威脅類保留 90 天),超過不回 0
@@ -44,7 +44,7 @@
     當 呼叫 GET /api/netops/pa-events/overview?type=threat&from=2026-10-01
     那麼 回應 404 NETOPS_PA_OUT_OF_RETENTION
 
-  # 來源: backend/src/modules/pa-events/routes.ts:78
+  # 來源: backend/src/modules/pa-events/routes.ts:87
   @auto
   場景: 不在 ClickHouse 的類型查 FTP
     當 呼叫 GET /api/netops/pa-events/overview?type=userid&from=2026-11-12

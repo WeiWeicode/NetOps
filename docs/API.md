@@ -160,7 +160,8 @@ PA 匯入在背景佇列執行;同步、分析只是送進佇列,畫面輪詢狀
 - ClickHouse 無法使用或未設定回 503 `NETOPS_CLICKHOUSE_UNAVAILABLE`(不再改用 FTP)。
 - **保留期限**:回應 `coverage` = ClickHouse 實際有 TRAFFIC 的日期範圍 `{ from, to }`(正式區保留 30 天);期間有一部分在 `coverage.from` 之前時 `partial: true`;期間**整個**在之前回 404 `NETOPS_PA_OUT_OF_RETENTION`(訊息含有資料的範圍),不回 0。
 - `rows`、`allow`、`block`、`bytes`、`hours`、`actions` 來自每小時彙總表(含進行中的小時);`top`、`topBytes`、`scan`、`sent`、`recv`、`subtypes`、`timeMin`、`timeMax` 來自 ClickHouse 每小時摘要(和舊版 FTP 摘要同一份核心邏輯),**只算到 `topsUntil`**(最後一個已結束、已建好摘要的小時的結束時間;背景每 5 分鐘建,小時結束 3 分鐘後才建)。`topsState`:`ok`、`not-ready`(服務剛啟動,摘要建立中)、`stale`(太久沒更新,ClickHouse 可能停止),不是 `ok` 時排行不完整。`files` 為有資料的小時數,`missing` 為已結束、有資料但摘要還沒建好(或筆數變了待重建)的小時數;`import` 為摘要建立狀態(`busy` 建立中、`failed` 1 = 上一輪失敗)。
-- 同樣的參數 60 秒內重複查詢走 Redis 快取(CQ11),所以結果最多晚 60 秒。
+- 同樣的參數 60 秒內重複查詢走 Redis 快取(CQ11),所以結果最多晚 60 秒;`topsState` 不是 `ok` 的結果不快取。有資料的日期另在程序內記 2 分鐘。
+- `partial`:TRAFFIC 以 ClickHouse 最早一小時判斷(最早那天可能只從中午才有資料),威脅類以天判斷。`/pa/options` 超過保留期限同樣回 404。
 - 和舊版 FTP 摘要的差異:FTP 每個檔案只留前 300 名再合併,ClickHouse 每小時只留前 300 名再合併(排行尾端的數字可能不同)。
 
 **`GET /pa/days`**:ClickHouse 有 TRAFFIC 的日期(新的在前);`files` 沿用舊欄位名稱,意思改為**有資料的小時數**;另有 `coverage`(有資料的範圍,沒有資料為 null)。畫面用它顯示可查的範圍(取代舊的「已分析 … 天」)。
@@ -208,7 +209,7 @@ PA 匯入在背景佇列執行;同步、分析只是送進佇列,畫面輪詢狀
 
 `type`:`threat`、`url`、`data`、`wildfire`、`decryption`、`globalprotect`、`userid`(只列出有設定 FTP 目錄的類型)。
 
-**資料來源(C3,D43)**:`threat`、`url`、`data`、`wildfire` **只查 ClickHouse**(全部來自 ClickHouse 每小時摘要,只到 `topsUntil`;`files` 為有摘要的小時數;`coverage`、`partial`、`topsState` 與 404 `NETOPS_PA_OUT_OF_RETENTION`、503 規則同 §4.1;正式區威脅類保留 90 天);`decryption`、`globalprotect`、`userid` 不進 ClickHouse(AGENT.md §7.2),仍是 FTP 已分析的摘要(`source: "ftp"`)。`types` 回應每個類型多 `source` 與 `coverage`,ClickHouse 類型的 `days` 為 ClickHouse 有資料的日期、`files` 為有資料的小時數。
+**資料來源(C3,D43)**:`threat`、`url`、`data`、`wildfire` **只查 ClickHouse**(全部來自 ClickHouse 每小時摘要,只到 `topsUntil`;`files` 為有摘要的小時數;`coverage`、`partial`、`topsState` 與 404 `NETOPS_PA_OUT_OF_RETENTION`、503 規則同 §4.1;正式區威脅類保留 90 天);`decryption`、`globalprotect`、`userid` 不進 ClickHouse(AGENT.md §7.2),仍是 FTP 已分析的摘要(`source: "ftp"`)。`types` 回應每個類型多 `source` 與 `coverage`(`dir` 照舊),ClickHouse 類型的 `days` 為 ClickHouse 有資料的日期、**`files` 意思改為有資料的小時數**;ClickHouse 無法使用時這幾個類型 `unavailable: true`,解密等 FTP 類型照常列出。
 
 ```jsonc
 // GET /pa-events/types

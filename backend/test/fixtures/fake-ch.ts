@@ -73,9 +73,10 @@ export function createFakeReader(traffic: LogRecord[] = [], threats: { type: ChE
       check('trafficDays');
       return days(f.traffic.map((r) => ms(String(r.time))));
     },
-    async threatDays(type) {
+    async threatDays() {
       check('threatDays');
-      return days(f.threats.filter((x) => x.type === type).map((x) => ms(String(x.rec.time))));
+      const types = [...new Set(f.threats.map((x) => x.type))];
+      return types.flatMap((type) => days(f.threats.filter((x) => x.type === type).map((x) => ms(String(x.rec.time)))).map((d) => ({ type, ...d })));
     },
     async earliestTrafficHour() {
       check('earliestTrafficHour');

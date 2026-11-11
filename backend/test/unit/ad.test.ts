@@ -234,7 +234,8 @@ describe('PA 安全事件總覽', () => {
     await waitFor(async () => !(await t.call({ url: '/v1/ftp/pa/status' })).json().events.busy);
     // C3:威脅類只查 ClickHouse;沒有設定 ClickHouse 時回 503(不再讀 FTP 摘要)
     const types = await t.call({ url: '/v1/pa-events/types' });
-    assert.equal(types.statusCode, 503);
+    assert.equal(types.statusCode, 200);
+    assert.equal(types.json().types.find((x: { type: string }) => x.type === 'threat').unavailable, true);
 
     const { mergeEventSummaries } = await legacy('paevents.js');
     const idx = JSON.parse(fs.readFileSync(path.join(t.dataDir, 'palogs/events/index.json'), 'utf8')).files[p];

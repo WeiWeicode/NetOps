@@ -802,6 +802,22 @@ SETTINGS max_threads = 1, max_execution_time = 50;
 
 ---
 
+### 8.6 實作差異(C4,2026-11-12)
+
+| 項目 | 手冊範例 | 實作 |
+| --- | --- | --- |
+| 用戶端 | `@clickhouse/client` | 同 C2,HTTP 介面 + Node 內建 fetch(`infra/clickhouse/archive.ts`),不加套件 |
+| 匯出設定 | `max_threads=1`、ZSTD | 另加 `output_format_parquet_row_group_size=100000`、`_bytes=64 MB`(預設 100 萬列整組放記憶體,C1 實測匯出 407 MiB) |
+| 列數核對 | 改名後讀正式檔、不符就刪 | 先讀 NAS 上的 `.tmp`,相符才改名:重新歸檔失敗時原本的正式檔不動 |
+| 冷查詢條件 | 直接比 IP 文字 | `file()` 外包一層子查詢把 IP 轉回 `IPv6`、時間轉回 `Asia/Taipei`,和熱查詢共用同一份條件與欄位(`heat.ts` `runSlice`);代價是 IP 條件不能裁切 row group(一天的檔整個讀) |
+| `file()` 路徑 | 參數化或驗證後組字串 | 驗證後組字串:路徑只由常數與 `YYYY-MM-DD`(真的日期)組成 |
+| manifest | `table_name` = `pa_traffic` / `pa_threat`、`sha256 FixedString(64)` | `traffic` / `threat`;`sha256 String`(失敗列是空字串);`status` 多 `expired`(保留期限刪檔) |
+| 重試與告警 | D+25 | 重試到原始表還完整的最後一天(今天 −(保留天數 − 1));告警 `INGEST_ARCHIVE_ALERT_DAYS` 預設 min(25, TRAFFIC 保留天數 − 1)(測試區 2) |
+| 補漏之後 | — | 每小時比對來源列數與 manifest,不同就重新歸檔(C3 的 FTP 補漏通常在歸檔之後) |
+| 鎖 | `netops:archive:lock` | 共用冷查詢鎖 `netops:cold:lock`(D35;單一容器,不另設歸檔鎖),每 30 秒延長 |
+| ClickHouse 讀 NAS | 唯讀掛載 | 主機 cifs 掛載是 uid / gid 1000、0640 / 0750:`netops-clickhouse` 加 `group_add: ["1000"]` |
+| 保留期限 | 至少 1 年 | 測試區 14 天(`NETOPS_ARCHIVE_KEEP_DAYS`,NAS 只剩約 18 GB);正式區 0 = 不刪,設定時至少 366 |
+
 ## 9. 模組四 PA SDK / API 的安全定位
 
 ### 9.1 什麼查哪裡

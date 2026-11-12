@@ -2,6 +2,15 @@
 
 > 接手時先讀 `AGENT.md`,再讀 `docs/ARCHITECTURE.md`、`docs/IMPL-PLAN.md`。
 
+## 2026-11-12 C4 冷歸檔(`feature/clickhouse-c4-archive`)
+
+- `netops-ingest` 每天 02:30 起歸檔前一天的 TRAFFIC 與威脅類 Parquet 到 NAS(`/mnt/nas-docker/giga-netops/<env>/pa-archive/YYYY/`),SHA-256、ClickHouse 讀回核對、manifest 表;V-a 時段明細冷路由接上(缺歸檔 404)。細節:IMPL-PLAN C4、手冊 §8.6、API.md §4.4。
+- **需求方**:合併前(或後)在主機 2 執行 `sudo sh deploy/host2-setup-pa-archive.sh`(建目錄與標記檔;不經手 NAS 帳密)。沒有標記檔時不寫入,心跳 `archiveState=nas-missing`。測試區保留 14 天(約 3–6 GB)。
+- 狀態:`redis-cli hgetall netops:ingest:heartbeat` 的 `archive*` 欄位;檔案 `ls /mnt/nas-docker/giga-netops/test/pa-archive/<年>/`;紀錄 `SELECT * FROM netops.pa_archive_manifest FINAL`。
+- 正式區:E2(NAS 空間)核准前設 `NETOPS_ARCHIVE_ENABLED=0`(冷路由回 409);核准後保留期限至少 366 或 0(不刪)。
+- 完成條件(連續 7 天歸檔成功、7 天前可查、拔 NAS 不影響寫入)在測試區觀察後補報告。
+
+
 
 ## 2026-11-11 C3 查詢只用 ClickHouse(`feature/clickhouse-c3-ch-only`)
 

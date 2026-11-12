@@ -339,7 +339,7 @@ PA 匯入在背景佇列執行;同步、分析只是送進佇列,畫面輪詢狀
 | `rows` | 明細列數 0–200(預設 100);全部明細請用 §4.3 Log 明細查詢 |
 | `sort` | `time`(預設,新到舊)\| `bytes`(只對 `traffic`) |
 
-**熱 / 冷分界**:`hotFrom` = 今天 00:00 −(原始表保留天數 − 1)天(TRAFFIC 30 → 29 天、威脅 90 → 89 天;測試區 3 → 2 天;設定 `NETOPS_TTL_TRAFFIC_DAYS` / `NETOPS_TTL_THREAT_DAYS`,預設依部署區,要和 `apply-schema.sh` 一致)。`start ≥ hotFrom` 查原始表(`source: "hot"`);早於 `hotFrom` 的部分要讀冷歸檔(C4),**冷歸檔尚未提供**:回 409 `NETOPS_COLD_ARCHIVE_DISABLED`,`details.hotFrom` 為可查的起點。C4 之後冷的部分 `source` 為 `cold` / `mixed`,冷查詢全系統同時 1 個(Redis 鎖 `netops:cold:lock`),拿不到回 429 `NETOPS_COLD_QUERY_BUSY` 與 `Retry-After: 10`。
+**熱 / 冷分界**:`hotFrom` = 今天 00:00 −(原始表保留天數 − 1)天(TRAFFIC 30 → 29 天、威脅 90 → 89 天;測試區 3 → 2 天;設定 `NETOPS_TTL_TRAFFIC_DAYS` / `NETOPS_TTL_THREAT_DAYS`,預設依部署區,要和 `apply-schema.sh` 一致)。`start ≥ hotFrom` 查原始表(`source: "hot"`);早於 `hotFrom` 的部分讀 **NAS 冷歸檔**(C4,每天一個 Parquet,帳號 `netops_cold` 以 `file()` 讀),`source` 為 `cold` / `mixed`(跨分界時兩段合併:總數相加、排行重排、明細列依排序合併),欄位格式和熱資料相同。冷歸檔關閉(`NETOPS_ARCHIVE_ENABLED=0`,例如正式區 NAS 空間還沒核准)回 409 `NETOPS_COLD_ARCHIVE_DISABLED`,`details.hotFrom` 為可查的起點。期間涵蓋的任何一天沒有歸檔成功回 404 `NETOPS_COLD_ARCHIVE_NOT_FOUND`,`details.missing` 為 `[{ type: "traffic" | "threat", day: "YYYY-MM-DD", status }]`,`status`:`missing`(尚未歸檔,例:前一天 02:30 之前)、`failed`(歸檔失敗,每小時重試中)、`expired`(超過歸檔保留期限:測試區 14 天;正式區至少 1 年)、`unreadable`(紀錄成功但檔案讀不到:NAS 未掛載或檔案遺失);TRAFFIC 明細另外要同一天的威脅歸檔(摘要列的威脅數)。不回傳檔案路徑。冷查詢全系統同時 1 個(Redis 鎖 `netops:cold:lock`,和每天 02:30 起的歸檔匯出共用),拿不到回 429 `NETOPS_COLD_QUERY_BUSY` 與 `Retry-After: 10`。冷查詢從 NAS 讀整天的檔,通常超過 30 秒轉成工作(202)。
 
 **同步 30 秒,超過轉工作**:一律建 `pa-slice` 工作;30 秒內完成回 **200** 結果,否則回 **202** 工作狀態(§1.1),前端改輪詢 `GET /pa/slices/{id}`(完成時 `result` 為結果)。同一人、同一組參數在工作保留期間(30 分鐘)重送回同一個工作(進行中 202、完成 200),不重複查詢。工作每人同時 2 個、全系統 6 個(和 §4.3 分開計),同時執行 2 個(其餘排隊;一個工作內的 ClickHouse 查詢依序執行),每人保留 5 筆,執行上限 120 秒(ClickHouse 每個查詢 50 秒;冷工作 110 秒,全系統 1 個)。取消熱查詢工作時,已送出的 ClickHouse 查詢不會中止(結果是多人共用的快取),最多再跑 50 秒;30 秒內失敗直接回該錯誤(例 503 `NETOPS_CLICKHOUSE_UNAVAILABLE`)。熱查詢結果另有 60 秒共用快取(`netops:cache:pa-slice:*`)。
 
@@ -633,7 +633,8 @@ AI 相關(語意搜尋、向量同步、外部 IP 自動學習)見 §10.2(A1)。
 | 503 | `NETOPS_CLICKHOUSE_UNAVAILABLE` | ClickHouse 連不上、查詢失敗或未設定(C3,§4.1–§4.3;不再改用 FTP);熱力圖與時段明細(§4.4)同樣回這個代碼。只影響用到 ClickHouse 的 API。原始錯誤只寫服務日誌 |
 | 409 | `NETOPS_HEATMAP_METRIC_UNAVAILABLE` | 熱力圖指標尚未開放(`ad`,AD 階段 V-d;§4.4) |
 | 422 | `NETOPS_HEATMAP_OUT_OF_RETENTION` | 熱力圖日視圖超過 5 分鐘彙總保留(1 年);`details.earliest`(§4.4) |
-| 409 | `NETOPS_COLD_ARCHIVE_DISABLED` | 時段明細早於原始表保留、要讀冷歸檔,冷歸檔(C4)尚未提供;`details.hotFrom`(§4.4)。設定狀態,不用 5xx |
+| 409 | `NETOPS_COLD_ARCHIVE_DISABLED` | 時段明細早於原始表保留、要讀冷歸檔,冷歸檔關閉(`NETOPS_ARCHIVE_ENABLED=0`);`details.hotFrom`(§4.4)。設定狀態,不用 5xx |
+| 404 | `NETOPS_COLD_ARCHIVE_NOT_FOUND` | 時段明細期間有一天沒有歸檔成功(尚未歸檔、失敗、超過保留期限、檔案讀不到);`details.missing`(§4.4,C4) |
 | 429 | `NETOPS_COLD_QUERY_BUSY` | 已有冷資料查詢在執行(全系統 1 個)或歸檔匯出中;帶 `Retry-After`(§4.4,C4 起) |
 | 403 | `NETOPS_PA_CONTROL_DISABLED` | 正式區不能切換收集器的輪詢與接收(§3.2 `collector-control`,只有測試區可用) |
 | 424 | `NETOPS_REDIS_UNAVAILABLE` | 即時監控讀不到 `netops-redis`(§3.2;`snapshot` 例外,回 200 `state: unavailable`)。不用 5xx:避免累積 BFF 斷路器失敗。原始錯誤只寫服務日誌 |

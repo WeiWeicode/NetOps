@@ -2,6 +2,12 @@
 
 > `backend/`、`deploy/` 的修改;新紀錄加在最上方,格式見 `AGENT.md` §11。
 
+## 2026-11-12 C4 冷歸檔與時段明細冷路由
+- 工作項目:C4、V-a 第 5 步(ARCHITECTURE D30、D35;X1 = A 歸檔原始 log,CQ12、CQ14)
+- 內容:① `netops-ingest` 每天 02:30 起把前一天的 TRAFFIC 與威脅類匯出成 Parquet(IP 轉文字、ZSTD、row group 10 萬列),本機暫存(volume `netops_ingest_staging`)→ NAS `pa-archive/YYYY/` 的 `.tmp` → 重讀比對 SHA-256 → ClickHouse(`netops_cold`)讀回列數 = 來源 → 改名、`.sha256`、manifest `netops.pa_archive_manifest`(migration 004)。② 失敗每小時重試到資料被 TTL 刪除前;D+25(測試區 D+2)心跳 `archiveState=late`、日誌 error;沒有標記檔 `.giga-netops-archive` 不寫(`nas-missing`)。③ 每小時比對來源列數,補漏 / 去重後重新歸檔。④ 保留期限 `NETOPS_ARCHIVE_KEEP_DAYS`(測試區 14、正式區 0 或 ≥ 366)。⑤ 冷查詢鎖加 `refresh`,歸檔與冷明細共用。⑥ `netops-api` 時段明細冷路由:先查 manifest(缺任何一天 404 `NETOPS_COLD_ARCHIVE_NOT_FOUND`),再以 Parquet 子查詢跑和熱路由相同的查詢(`heat.ts` 抽出 `runSlice`、`queryRunner`,熱路由行為不變)。⑦ Compose:`netops-clickhouse` 唯讀掛 NAS 歸檔到 `user_files/archive`、`group_add: ["1000"]`;`netops-ingest` 讀寫掛載與暫存 volume;兩個服務加 `ch_cold_password`;`NETOPS_ARCHIVE_ENABLED`(預設 1)。⑧ CI `check:ingest-int` 的一次性 ClickHouse 掛暫存歸檔目錄、整合測試 `archive.int.test.ts`;`deploy-api-test` 檢查 `ch_cold_password` 並顯示歸檔狀態。⑨ 需求方腳本 `deploy/host2-setup-pa-archive.sh`(建目錄與標記檔)。
+- 檔案:`backend/src/{ingest/{archive,config,main}.ts,infra/clickhouse/{archive,heat}.ts,infra/redis/cold-lock.ts,modules/pa-heat/{cold,routes}.ts,app.ts,config.ts}`、`backend/Dockerfile`、`backend/test/{unit/archive.test.ts,integration/archive.int.test.ts}`、`deploy/{docker-compose.yml,host2-setup-pa-archive.sh,clickhouse/migrations/004-c4-archive-manifest.sql}`、`.gitlab-ci.yml`
+- 驗證:`npm run typecheck`、`npm test`、`check-scenarios.mjs`;CI `check:ingest-int`(真 ClickHouse 匯出 / 讀回、冷熱明細一致)
+
 ## 2026-11-11 C3:PA 查詢只用 ClickHouse、對帳 01:00
 - 工作項目:C3(ARCHITECTURE D43,需求方 2026-11-11 晚上決定)
 - 內容:① 總覽、篩選選項、有資料的日期、安全事件(威脅類)、Log 明細只查 ClickHouse;`source` 只接受 clickhouse;`NETOPS_PA_OVERVIEW_SOURCE`、`NETOPS_PA_DETAIL_SOURCE` 移除;test / prod 必須設定 `CLICKHOUSE_URL`。② 期間整個超過保留期限回 404 `NETOPS_PA_OUT_OF_RETENTION`;回應加 `coverage`、`partial`、`topsState`(摘要還沒建好時排行標不完整,筆數照回)。③ `/pa/days`、`/pa-events/types` 改列 ClickHouse 有資料的日期(新增 `trafficDays`、`threatDays`)。④ 明細移除 FTP 掃描路徑。⑤ 每日對帳 `NETOPS_RECON_HOUR` 預設 1,FTP 檔沒分析完時自己同步(30 分鐘最多一次)並每 10 分鐘再試;FTP 完整的判斷改回「有檔涵蓋到 23:50 以後或隔天有檔」(PA 前一天的檔約 07:45 才出現,隔天的檔要再等一天)。⑥ 每小時摘要:每段 2 萬列、每段最多等 180 秒(測試區 15 時一直逾時);失敗日誌記本程式組的原因文字。

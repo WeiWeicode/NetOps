@@ -101,20 +101,36 @@
     那麼 回應 429 NETOPS_COLD_QUERY_BUSY
     而且 回應標頭有 Retry-After
 
-  # 來源: backend/src/modules/pa-heat/routes.ts:163
+  # 來源: backend/src/modules/pa-heat/routes.ts:115
+  @auto
+  場景: 冷資料時段明細
+    假如 2026-10-01 的 TRAFFIC 與威脅類已歸檔到 NAS
+    當 呼叫 GET /api/netops/pa/slice?start=2026-10-01T08:00:00%2B08:00&end=2026-10-01T09:00:00%2B08:00
+    那麼 回應 200(30 秒內)或 202 工作狀態
+    而且 source 為 "cold",欄位格式和熱資料相同
+
+  # 來源: backend/src/modules/pa-heat/routes.ts:121
+  @auto
+  場景: 冷歸檔沒有那一天
+    假如 冷歸檔已開放,但 2026-10-01 沒有歸檔成功
+    當 呼叫 GET /api/netops/pa/slice 查 2026-10-01 的時段
+    那麼 回應 404 NETOPS_COLD_ARCHIVE_NOT_FOUND
+    而且 details.missing 列出 type、day 與 status(missing / failed / expired / unreadable),不含檔案路徑
+
+  # 來源: backend/src/modules/pa-heat/routes.ts:175
   @auto
   場景: 查詢時段明細工作
     當 呼叫 GET /api/netops/pa/slices/{id}
     那麼 回應 200
     而且 完成時 result 含 summary、top、rows
 
-  # 來源: backend/src/modules/pa-heat/routes.ts:163
+  # 來源: backend/src/modules/pa-heat/routes.ts:175
   @auto
   場景: 別人的時段明細工作
     當 另一位使用者查詢同一個 id
     那麼 回應 404 NETOPS_JOB_NOT_FOUND
 
-  # 來源: backend/src/modules/pa-heat/routes.ts:180
+  # 來源: backend/src/modules/pa-heat/routes.ts:192
   @auto
   場景: 取消時段明細工作
     當 呼叫 DELETE /api/netops/pa/slices/{id}

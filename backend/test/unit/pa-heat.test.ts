@@ -152,6 +152,12 @@ function fakeReader(opts: { since?: number | null; rows?: HeatRow[]; sliceDelayM
     async heatEarliest() {
       return opts.since === undefined ? parseDay('2026-11-01') : opts.since;
     },
+    insightFlows: async () => [],
+    insightTopApps: async () => [],
+    insightTopSrc: async () => [],
+    threatCountries: async () => [],
+    threatTopInternalSrc: async () => [],
+    threatTopNames: async () => [],
     async slice() {
       calls.slice++;
       if (opts.sliceDelayMs) await new Promise((r) => setTimeout(r, opts.sliceDelayMs));

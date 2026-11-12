@@ -15,6 +15,8 @@ export const READ_TABLES = {
   traffic: 'netops.pa_traffic_logs',
   threat: 'netops.pa_threat_logs',
   hourlyApp: 'netops.pa_traffic_hourly_app',
+  /** V-b1 儀表板 Top 10 頻寬 IP */
+  hourlySrc: 'netops.pa_traffic_hourly_src',
 } as const;
 
 /** 存進 ClickHouse 的威脅類 log(其他類型仍只有 FTP;AGENT.md §7.2) */

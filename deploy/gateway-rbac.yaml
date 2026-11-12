@@ -27,6 +27,9 @@ permissions:
   - { code: netops.pa-live.read, name: 即時監控, kind: menu, parent: netops.group.firewall, sort: 5, includes: [netops.pa-realtime.read] }
   # 測試區暫停 / 繼續收集器(2026-11-09 需求方決定;只給 netops-admin)。正式區 API 回 403、畫面不顯示按鈕
   - { code: netops.pa-live.manage, name: 測試區暫停 / 繼續收集器, kind: button, parent: netops.pa-live.read, sort: 10, includes: [netops.pa-realtime.write] }
+  # C5 PA 精準查詢(XML API log、Session Browser;D31):只給 netops-admin(CQ7,netops-viewer 不列)。
+  # 熱力圖 / 儀表板的同名按鈕(netops.pa-heatmap.query、netops.pa-insight.query)等那兩個選單(!78)合併後再登記
+  - { code: netops.pa-live.query, name: 查詢 PA 即時連線 / 精準 log, kind: button, parent: netops.pa-live.read, sort: 20, includes: [netops.pa-query.read] }
   - { code: netops.pa-dashboard.read, name: 流量總覽, kind: menu, parent: netops.group.firewall, sort: 10, includes: [netops.pa.read] }
   - { code: netops.pa-events.read, name: 安全事件, kind: menu, parent: netops.group.firewall, sort: 20, includes: [netops.pa.read] }
   - { code: netops.pa-search.read, name: Log 明細查詢, kind: menu, parent: netops.group.firewall, sort: 30, includes: [netops.pa-log.read] }
@@ -63,6 +66,7 @@ roles:
       - netops.app.access
       - netops.pa-live.read
       - netops.pa-live.manage
+      - netops.pa-live.query
       - netops.pa-dashboard.read
       - netops.pa-events.read
       - netops.pa-search.read

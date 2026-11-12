@@ -71,3 +71,16 @@ def test_prod_receive_requires_tls_unless_plaintext_set(tmp_path):
     with pytest.raises(ConfigError, match="TLS"):
         load_config(env)
     assert load_config({**env, "PA_RECEIVE_PLAINTEXT": "1"}).receive.tls_cert == ""
+
+
+def test_query_config(tmp_path):
+    key = tmp_path / "key"
+    key.write_text("k" * 20)
+    assert load_config(BASE).query is None
+    cfg = load_config({**BASE, "PA_QUERY_ENABLED": "1", "PA_HOST": "pa", "PA_API_KEY_FILE": str(key)})
+    assert cfg.query is not None and cfg.query.max_mgmt_cpu == 50 and cfg.poll is None
+    with pytest.raises(ConfigError, match="PA_HOST"):
+        load_config({**BASE, "PA_QUERY_ENABLED": "1", "PA_API_KEY_FILE": str(key)})
+    # E4:門檻實測前不放寬(上限 50)
+    with pytest.raises(ConfigError):
+        load_config({**BASE, "PA_QUERY_ENABLED": "1", "PA_HOST": "pa", "PA_API_KEY_FILE": str(key), "PA_QUERY_MAX_MGMT_CPU": "80"})

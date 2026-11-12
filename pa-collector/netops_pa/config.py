@@ -99,6 +99,21 @@ class PollConfig:
 
 
 @dataclass(frozen=True)
+class QueryConfig:
+    """PA 精準查詢(C5;PA-LOG-CLICKHOUSE-GUIDE §9、E4 結果):連線設定同輪詢,另加管理平面 CPU 門檻。"""
+
+    host: str
+    port: int
+    api_key: str
+    ca_file: str
+    tls_insecure: bool
+    # 單一 HTTP 請求逾時(秒);整個工作另有 60 秒上限(pa_query.JOB_TIMEOUT)
+    timeout: int
+    # 送出前取樣管理平面 CPU,超過就不送(E4:50%)
+    max_mgmt_cpu: int
+
+
+@dataclass(frozen=True)
 class ReceiveConfig:
     bind: str
     http_port: int
@@ -126,6 +141,8 @@ class Config:
     log_level: str
     poll: PollConfig | None
     receive: ReceiveConfig | None
+    # PA 精準查詢執行者(PA_QUERY_ENABLED;測試區預設關閉,需求方手動開,D31)
+    query: QueryConfig | None
     # 每分鐘排行每個維度保留前幾名(PA-LIVE-PLAN §4)
     top_n: int
     queue_size: int
@@ -161,6 +178,27 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
             # 正式區 10–15 秒(PA-LIVE-PLAN §3.1);下限 10 秒避免加重 PA-560 負擔
             interval=_int(env, "PA_POLL_SECONDS", 15, 10, 300),
             timeout=_int(env, "PA_TIMEOUT_SECONDS", 8, 2, 30),
+        )
+
+    query = None
+    if _bool(env, "PA_QUERY_ENABLED"):
+        host = _str(env, "PA_HOST")
+        api_key = read_secret(env, "PA_API_KEY", gw_env)
+        missing = [k for k, v in (("PA_HOST", host), ("PA_API_KEY_FILE", api_key)) if not v]
+        if missing:
+            raise ConfigError(f"PA_QUERY_ENABLED=1 缺少必要設定:{'、'.join(missing)}")
+        insecure = _bool(env, "PA_TLS_INSECURE")
+        if insecure and gw_env == "prod":
+            raise ConfigError("正式區不可設定 PA_TLS_INSECURE")
+        query = QueryConfig(
+            host=host,
+            port=_int(env, "PA_PORT", 443, 1, 65535),
+            api_key=api_key,
+            ca_file=_file(env, "PA_CA_FILE"),
+            tls_insecure=insecure,
+            timeout=_int(env, "PA_QUERY_HTTP_TIMEOUT_SECONDS", 15, 2, 30),
+            # E4(2026-11-10):超過 50% 不送;實測前不放寬(上限 50)
+            max_mgmt_cpu=_int(env, "PA_QUERY_MAX_MGMT_CPU", 50, 10, 50),
         )
 
     receive = None
@@ -207,6 +245,7 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
         log_level=_str(env, "LOG_LEVEL", "DEBUG" if gw_env == "dev" else "INFO").upper(),
         poll=poll,
         receive=receive,
+        query=query,
         top_n=_int(env, "PA_TOP_N", 200, 10, 1000),
         queue_size=_int(env, "PA_QUEUE_SIZE", 50_000, 1000, 500_000),
     )

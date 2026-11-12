@@ -7,9 +7,8 @@
 # 做法:
 #   1. OPTIMIZE … PARTITION <日> FINAL DEDUPLICATE:只刪「所有欄位都相同」的列(重送的列連 received_at 都相同;
 #      不同的 log 不會被當成重複)。pa_traffic_logs、pa_threat_logs 都做
-#   2. 那一天的彙總(pa_traffic_hourly_app / _src 的 sessions 加總)和原始表筆數不同時重建
-#      (物化檢視當初也算了重複的列;上次執行在刪除彙總之後、寫回之前中斷,重跑也會補建):
-#      先刪掉那一天的彙總(mutations_sync=2,等完成),再從原始表重新彙總寫回
+#   2. 那一天的彙總(pa_traffic_hourly_app / _src、熱力圖 pa_heat_*)和原始表筆數不同時重建(rebuild-day.sh;
+#      物化檢視當初也算了重複的列;上次執行在刪除彙總之後、寫回之前中斷,重跑也會補建)
 # 不能修正今天(台灣時間):今天還在寫入,重建彙總期間進來的列會被算兩次。以容器內 default 帳號(只允許容器本機)執行。
 set -eu
 C="${1:?用法:dedupe-day.sh <容器名稱> <YYYY-MM-DD>}"
@@ -32,19 +31,14 @@ echo "pa_threat_logs  $D:$X0 → $X1(刪除 $((X0 - X1)))"
 
 APP=$(ck "SELECT sum(sessions) FROM netops.pa_traffic_hourly_app WHERE toDate(hour) = toDate('$D')")
 SRC=$(ck "SELECT sum(sessions) FROM netops.pa_traffic_hourly_src WHERE toDate(hour) = toDate('$D')")
-echo "每小時彙總 $D:hourly_app $APP、hourly_src $SRC(原始表 $T1)"
-if [ "$APP" != "$T1" ] || [ "$SRC" != "$T1" ]; then
-  echo "重建 $D 的每小時彙總"
-  ck "ALTER TABLE netops.pa_traffic_hourly_app DELETE WHERE toDate(hour) = toDate('$D') SETTINGS mutations_sync = 2"
-  ck "ALTER TABLE netops.pa_traffic_hourly_src DELETE WHERE toDate(hour) = toDate('$D') SETTINGS mutations_sync = 2"
-  # 彙總表有去重視窗(migrations/002):重建寫入不帶 token,要關掉去重,否則和上次重建相同的區塊會被略過
-  ck "INSERT INTO netops.pa_traffic_hourly_app SETTINGS insert_deduplicate = 0
-      SELECT toStartOfHour(event_time) AS hour, action, app, from_zone, to_zone, count(), sum(bytes), sum(packets)
-      FROM netops.pa_traffic_logs WHERE toDate(event_time) = toDate('$D') GROUP BY hour, action, app, from_zone, to_zone"
-  ck "INSERT INTO netops.pa_traffic_hourly_src SETTINGS insert_deduplicate = 0
-      SELECT toStartOfHour(event_time) AS hour, src, action, count(), sum(bytes)
-      FROM netops.pa_traffic_logs WHERE toDate(event_time) = toDate('$D') GROUP BY hour, src, action"
-  ck "SELECT 'hourly_app', sum(sessions) FROM netops.pa_traffic_hourly_app WHERE toDate(hour) = toDate('$D')
-      UNION ALL SELECT 'raw', count() FROM netops.pa_traffic_logs WHERE toDate(event_time) = toDate('$D') FORMAT TSV"
+# 熱力圖(V-a):每天格的 TRAFFIC 筆數與威脅筆數(log_type = 'threat')
+HEAT=$(ck "SELECT sum(sessions) FROM netops.pa_heat_1d WHERE toDate(bucket) = toDate('$D')")
+THR=$(ck "SELECT sum(thr_critical) + sum(thr_high) + sum(thr_medium) + sum(thr_low) + sum(thr_info) FROM netops.pa_heat_1d WHERE toDate(bucket) = toDate('$D')")
+XT=$(ck "SELECT countIf(severity IN ('critical', 'high', 'medium', 'low', 'informational')) FROM netops.pa_threat_logs WHERE log_type = 'threat' AND toDate(event_time) = toDate('$D')")
+echo "每小時彙總 $D:hourly_app $APP、hourly_src $SRC、heat_1d $HEAT(原始表 $T1);熱力圖威脅 $THR(原始 $XT)"
+# 原始表已沒有資料(超過保留)時不比熱力圖(彙總以當時的值為準,rebuild-day.sh 也不會重建)
+if [ "$APP" != "$T1" ] || [ "$SRC" != "$T1" ] || { [ "$T1" != 0 ] && { [ "$HEAT" != "$T1" ] || [ "$THR" != "$XT" ]; }; }; then
+  # 物化檢視當初也算了重複的列;上次執行在刪除彙總之後、寫回之前中斷,重跑也會補建
+  sh "$(dirname "$0")/rebuild-day.sh" "$C" "$D"
 fi
 echo "完成"

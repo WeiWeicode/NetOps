@@ -96,6 +96,11 @@ export interface Config {
   chSummary: { days: number; minutes: number };
   /** FTP 與 ClickHouse 每日對帳(C3,CQ10):每天幾點(台灣時間)對帳前 3 天;-1 = 不自動(仍可手動) */
   reconHour: number;
+  /**
+   * ClickHouse 原始表保留天數(V-a 時段明細的熱 / 冷分界,docs/VIZ-RULES-DESIGN.md §4.3.1)。要和 deploy/clickhouse/apply-schema.sh 一致:
+   * 正式區 TRAFFIC 30、威脅 90(CQ12);測試區與本機 3。NETOPS_TTL_TRAFFIC_DAYS / _THREAT_DAYS 可覆寫
+   */
+  paTtlDays: { traffic: number; threat: number };
 }
 
 export const PA_SOURCES = ['ftp', 'clickhouse', 'auto'] as const;
@@ -289,5 +294,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, cwd?: string): 
     chSummary: { days: int(env, 'NETOPS_CH_SUMMARY_DAYS', 30, 1, 92), minutes: int(env, 'NETOPS_CH_SUMMARY_MINUTES', 5, 0, 60) },
     // FTP 前一天的匯出檔約 00:00–01:00 產生,同步分析後才能對帳;預設 06:00
     reconHour: int(env, 'NETOPS_RECON_HOUR', 6, -1, 23),
+    paTtlDays: {
+      traffic: int(env, 'NETOPS_TTL_TRAFFIC_DAYS', gateway.gwEnv === 'prod' ? 30 : 3, 1, 3650),
+      threat: int(env, 'NETOPS_TTL_THREAT_DAYS', gateway.gwEnv === 'prod' ? 90 : 3, 1, 3650),
+    },
   };
 }

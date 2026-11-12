@@ -41,9 +41,16 @@ async function query<T = Record<string, unknown>>(sql: string, params: Record<st
 const countBy = async (table: string, col: string, mark: string) =>
   Number((await query<{ c: string }>(`SELECT count() AS c FROM ${table} WHERE ${col} = {m:String}`, { m: mark }))[0]!.c);
 
+/**
+ * 測試資料的日期:台灣時間的昨天(測試區 TTL 3 天,寫死的日期過了 3 天會被 TTL 刪掉;2026-11-12 CI 因此失敗)。
+ * D_SLASH 給 log 欄位(yyyy/MM/dd),D_DASH 給 ClickHouse 的比對(YYYY-MM-DD)
+ */
+const D_DASH = new Date(Date.now() - 86_400_000 + 8 * 3600_000).toISOString().slice(0, 10);
+const D_SLASH = D_DASH.replace(/-/g, '/');
+
 const traffic = (mark: string, i: number) => ({
-  type: 'TRAFFIC', time: '2026/11/10 13:45:16', src: '10.10.112.13', dst: '8.8.8.8', natDst: '2001:db8::1', app: 'dns', action: 'allow',
-  proto: 'udp', dport: 53, sport: 40000 + i, bytes: 100, packets: 1, start: '2026/11/10 13:45:00', seqno: '7688588907462574142', sessionId: 288580 + i, srcHost: mark,
+  type: 'TRAFFIC', time: `${D_SLASH} 13:45:16`, src: '10.10.112.13', dst: '8.8.8.8', natDst: '2001:db8::1', app: 'dns', action: 'allow',
+  proto: 'udp', dport: 53, sport: 40000 + i, bytes: 100, packets: 1, start: `${D_SLASH} 13:45:00`, seqno: '7688588907462574142', sessionId: 288580 + i, srcHost: mark,
 });
 const xadd = (t: string, d: object) => r1.xadd(`netops:pa:log:${t}`, '*', 'd', JSON.stringify(d));
 
@@ -86,21 +93,21 @@ describe('寫入 ClickHouse', () => {
     assert.equal(rows[0]!.dst, '::ffff:8.8.8.8');
     assert.equal(rows[0]!.nat_dst, '2001:db8::1');
     assert.equal(rows[0]!.nat_src, '::');
-    assert.equal(rows[0]!.et, '2026-11-10 13:45:16');
-    assert.equal(Number(rows[0]!.ets), Date.UTC(2026, 10, 10, 5, 45, 16) / 1000, '台灣時間 13:45:16 = UTC 05:45:16');
-    assert.equal(rows[0]!.ss, '2026-11-10 13:45:00');
+    assert.equal(rows[0]!.et, `${D_DASH} 13:45:16`);
+    assert.equal(Number(rows[0]!.ets), Date.parse(`${D_DASH}T05:45:16Z`) / 1000, '台灣時間 13:45:16 = UTC 05:45:16');
+    assert.equal(rows[0]!.ss, `${D_DASH} 13:45:00`);
     assert.equal(rows[0]!.source, 'syslog');
     const pending = (await r1.xpending('netops:pa:log:traffic', 'ch-writer')) as [number];
     assert.equal(pending[0], 0);
     // 每小時彙總(物化檢視)
-    const hourly = await query<{ s: string }>(`SELECT sum(sessions) AS s FROM netops.pa_traffic_hourly_src WHERE hour = toDateTime('2026-11-10 13:00:00', 'Asia/Taipei') AND src = toIPv6('10.10.112.13')`);
+    const hourly = await query<{ s: string }>(`SELECT sum(sessions) AS s FROM netops.pa_traffic_hourly_src WHERE hour = toDateTime('${D_DASH} 13:00:00', 'Asia/Taipei') AND src = toIPv6('10.10.112.13')`);
     assert.ok(Number(hourly[0]!.s) >= 3);
   });
 
   it('威脅類:migration 001 的 session_id、sport、nat_dport 存在,log_type 依 Stream', async () => {
     const mark = `it-${randomUUID()}`;
-    await xadd('url', { time: '2026/11/10 13:45:16', src: '10.0.0.1', url: mark, sport: 1234, natDport: 4321, sessionId: 77, seqno: '18446744073709551615', repeat: 2 });
-    await xadd('wildfire', { time: '2026/11/10 13:45:16', src: '10.0.0.2', url: mark, category: 'benign' });
+    await xadd('url', { time: `${D_SLASH} 13:45:16`, src: '10.0.0.1', url: mark, sport: 1234, natDport: 4321, sessionId: 77, seqno: '18446744073709551615', repeat: 2 });
+    await xadd('wildfire', { time: `${D_SLASH} 13:45:16`, src: '10.0.0.2', url: mark, category: 'benign' });
     const w = newWriter();
     await w.init();
     await runUntilIdle(w);
@@ -116,7 +123,7 @@ describe('寫入 ClickHouse', () => {
 describe('去重與重啟', () => {
   it('同一個 token 重送:原始表與每小時彙總都不重複', async () => {
     const mark = `it-${randomUUID()}`;
-    const row = { event_time: '2026-11-09 08:00:00', received_at: '2026-11-09T00:00:00.000Z', src: '::ffff:10.99.0.1', action: 'allow', app: mark, src_host: mark, source: 'syslog' };
+    const row = { event_time: `${D_DASH} 08:00:00`, received_at: `${D_DASH}T00:00:00.000Z`, src: '::ffff:10.99.0.1', action: 'allow', app: mark, src_host: mark, source: 'syslog' };
     const token = `traffic:${mark}`;
     await ch.insert('traffic', [row, { ...row, src: '::ffff:10.99.0.2' }], token);
     await ch.insert('traffic', [row, { ...row, src: '::ffff:10.99.0.2' }], token);
@@ -197,7 +204,7 @@ describe('缺口偵測(真 Redis XINFO)', () => {
     await w.init();
     await r1.del(key);
     const mark = `it-${randomUUID()}`;
-    await xadd('wildfire', { time: '2026/11/10 13:45:16', url: mark });
+    await xadd('wildfire', { time: `${D_SLASH} 13:45:16`, url: mark });
     await runUntilIdle(w);
     assert.equal(await countBy('netops.pa_threat_logs', 'url', mark), 1);
   });
@@ -205,7 +212,7 @@ describe('缺口偵測(真 Redis XINFO)', () => {
 
 describe('ClickHouse 錯誤分類', () => {
   it('型別錯誤是資料錯誤(拆批丟列);欄位名稱錯誤是結構性錯誤(不拆批、重試)', async () => {
-    const e1 = await ch.insert('traffic', [{ event_time: '2026-11-10 13:45:16', src: 'not-ip' }], `bad-${randomUUID()}`).catch((e) => e);
+    const e1 = await ch.insert('traffic', [{ event_time: `${D_DASH} 13:45:16`, src: 'not-ip' }], `bad-${randomUUID()}`).catch((e) => e);
     assert.ok(e1 instanceof ClickHouseError, String(e1));
     assert.equal(isDataError(e1), true, `code ${e1.code}:${e1.message}`);
     const e2 = await ch.insert('traffic', [{ no_such_column: 1 }], `bad-${randomUUID()}`).catch((e) => e);

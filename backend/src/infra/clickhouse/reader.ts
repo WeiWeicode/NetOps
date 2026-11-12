@@ -34,14 +34,14 @@ const RECORDS_WAIT_MS = 180_000;
 const MAX_RESULT_ROWS = 100_000;
 
 /** IPv6 欄位 → 舊版畫面的字串(IPv4 去掉 ::ffff:;空位址 :: 為空字串) */
-const ipText = (col: string) => `if(${col} = toIPv6('::'), '', replaceRegexpOne(toString(${col}), '^::ffff:', ''))`;
+export const ipText = (col: string) => `if(${col} = toIPv6('::'), '', replaceRegexpOne(toString(${col}), '^::ffff:', ''))`;
 const timeText = (col: string) => `formatDateTime(${col}, '%Y/%m/%d %H:%i:%S')`;
 
 /**
  * 原始 log → 核心(core/palog.js、core/paevents.js)的紀錄欄位;欄位名稱同 FTP CSV 的對應(COLUMNS),
  * 所以 FTP 與 ClickHouse 用同一份摘要邏輯(createSummary / createEventSummary)。
  */
-const TRAFFIC_FIELDS: [string, string][] = [
+export const TRAFFIC_FIELDS: [string, string][] = [
   ['time', timeText('event_time')],
   ['subtype', 'subtype'],
   ['src', ipText('src')],
@@ -78,7 +78,7 @@ const TRAFFIC_FIELDS: [string, string][] = [
   ['dstHost', 'dst_host'],
 ];
 
-const THREAT_FIELDS: [string, string][] = [
+export const THREAT_FIELDS: [string, string][] = [
   ['time', timeText('event_time')],
   ['subtype', 'subtype'],
   ['src', ipText('src')],
@@ -245,10 +245,10 @@ export function trafficWhere(f: TrafficFilter): { where: string[]; params: Recor
 }
 
 type Fetch = typeof fetch;
-type Param = string | number;
+export type Param = string | number;
 
 /** 字串參數:ClickHouse 以跳脫字元解析 param_*(反斜線、tab、換行要跳脫) */
-const paramText = (v: Param) => (typeof v === 'number' ? String(v) : v.replace(/\\/g, '\\\\').replace(/\t/g, '\\t').replace(/\n/g, '\\n').replace(/\r/g, '\\r'));
+export const paramText = (v: Param) => (typeof v === 'number' ? String(v) : v.replace(/\\/g, '\\\\').replace(/\t/g, '\\t').replace(/\n/g, '\\n').replace(/\r/g, '\\r'));
 const sec = (ms: number) => Math.floor(ms / 1000);
 
 export interface ReaderOptions {

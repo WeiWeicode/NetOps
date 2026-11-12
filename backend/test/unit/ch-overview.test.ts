@@ -169,6 +169,21 @@ describe('儀表板快取', () => {
     assert.throws(() => cacheKey('bad name', {}), /不合法/);
     assert.match(cacheKey('pa-overview', { a: 1 }), /^netops:cache:pa-overview:[0-9a-f]{24}$/);
   });
+
+  it('opts:longTtl 上限 1 小時;keep 回 false 不存快取(兩個選項可同時用)', async () => {
+    const kv = new Map<string, string>();
+    const sets: number[] = [];
+    const c = createDashboardCache({ get: async (k) => kv.get(k) ?? null, set: async (k, v, _m, s) => (kv.set(k, v), sets.push(s)), quit: async () => 0 });
+    await c.cached('pa-heat', { a: 1 }, 7200, async () => 'h', { longTtl: true });
+    assert.deepEqual(sets, [3600]);
+    let n = 0;
+    const notReady = { keep: (v: { ok: boolean }) => v.ok };
+    await c.cached('pa-overview', { b: 1 }, 60, async () => ({ ok: false, n: ++n }), notReady);
+    assert.equal((await c.cached('pa-overview', { b: 1 }, 60, async () => ({ ok: false, n: ++n }), notReady)).n, 2);
+    assert.deepEqual(sets, [3600]);
+    await c.cached('pa-overview', { c: 1 }, 600, async () => ({ ok: true, n: 0 }), { ...notReady, longTtl: true });
+    assert.deepEqual(sets, [3600, 600]);
+  });
 });
 
 describe('每小時摘要', () => {

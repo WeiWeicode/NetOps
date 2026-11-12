@@ -47,6 +47,8 @@ export async function createTestApp({
   cache?: NonNullable<Parameters<typeof buildApp>[1]>['cache'];
   chNow?: () => number;
   backfillQueue?: NonNullable<Parameters<typeof buildApp>[1]>['backfillQueue'];
+  /** V-a 熱力圖與時段明細 */
+  heat?: NonNullable<Parameters<typeof buildApp>[1]>['heat'];
 } = {}): Promise<TestApp> {
   const { publicKey, privateKey } = await generateKeyPair('ES256');
   const jwk = { ...(await exportJWK(publicKey)), kid: 'test', alg: 'ES256', use: 'sig' };

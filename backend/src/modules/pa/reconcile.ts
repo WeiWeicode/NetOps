@@ -88,7 +88,14 @@ export function createReconciler({
   now?: () => number;
 }): Reconciler {
   let timer: NodeJS.Timeout | null = null;
-  let lastAuto = '';
+  /** 今天的自動對帳已完成(不是 pending)的日期;換日清空 */
+  let doneDay = '';
+  let done = new Set<string>();
+  let lastSyncAt = 0;
+  let running = false;
+  /** 每天 pending 的次數:超過 MAX_TRIES(10 分鐘一次,約 20 小時)就不再自動重試 */
+  const tries = new Map<string, number>();
+  const MAX_TRIES = 120;
 
   function ftpHours(day: string): { counts: Map<string, number>; files: number; complete: boolean } {
     const files = traffic.filesInRange(day, day);
@@ -102,9 +109,10 @@ export function createReconciler({
       }
       for (const [h, v] of Object.entries(s.hours ?? {})) if (h.startsWith(day)) counts.set(h, (counts.get(h) ?? 0) + v.n);
     }
-    // 這一天的 FTP 資料已完整:隔天也有分析完的檔案(PA 匯出檔依時間接續)、沒有讀不到的摘要、沒有在分析中(程式碼審查 #5)
+    // 這一天的 FTP 資料已完整:PA 每天的匯出檔(last_calendar_day)約隔天 07:45 才出現,最後一個檔到 23:5x;
+    // 有分析完的檔涵蓋到 23:50 以後(或隔天也有檔)、沒有讀不到的摘要、沒有在分析中才算完整
     const next = nextDay(day);
-    const reachesNext = traffic.filesInRange(next, next).length > 0;
+    const reachesNext = files.some((f) => (f.timeMax ?? '') >= `${day} 23:50`) || traffic.filesInRange(next, next).length > 0;
     return { counts, files: files.length, complete: reachesNext && !missing && !traffic.status().busy };
   }
 
@@ -131,25 +139,62 @@ export function createReconciler({
     return r;
   }
 
+  /**
+   * 自動對帳(需求方 2026-11-11 決定,ARCHITECTURE D43):每天 hour 點(預設 01:00)起對帳前 3 天。
+   * 對帳要的 FTP 分析由這裡自己確保:FTP 檔還沒分析完時先同步(只排 TRAFFIC 檔,30 分鐘最多一次),
+   * 之後每 10 分鐘再試,直到不是 pending(PA 前一天的匯出檔約 07:45 才出現在 FTP)
+   */
   async function auto() {
+    // 上一輪還沒結束(FTP 同步或對帳慢)就跳過這一輪(資安審查 L)
+    if (running) return;
+    running = true;
+    try {
+      await autoOnce();
+    } finally {
+      running = false;
+    }
+  }
+
+  async function autoOnce() {
     const t = now();
     const today = taipeiText(t).slice(0, 10);
-    if (Number(taipeiText(t).slice(11, 13)) < hour || lastAuto === today) return;
-    lastAuto = today;
-    // 前 3 天:前一天第一次對帳;再前兩天補 FTP 晚到或補漏後的結果
-    for (let i = 1; i <= 3; i++) {
-      const day = taipeiText(taipeiDayStartMs(today) - i * 86_400_000).slice(0, 10);
+    if (Number(taipeiText(t).slice(11, 13)) < hour) return;
+    if (doneDay !== today) {
+      doneDay = today;
+      done = new Set();
+    }
+    const days = [1, 2, 3].map((i) => taipeiText(taipeiDayStartMs(today) - i * 86_400_000).slice(0, 10)).filter((d) => !done.has(d));
+    if (!days.length) return;
+    const st = traffic.status();
+    if (days.some((d) => !ftpHours(d).complete) && !st.busy && t - lastSyncAt > 30 * 60_000) {
+      lastSyncAt = t;
+      try {
+        const r = await traffic.sync();
+        if (r.added) log.info({ added: r.added }, 'FTP 對帳:同步 FTP 檔並排入分析');
+      } catch (err) {
+        log.warn({ code: (err as { code?: unknown }).code }, 'FTP 對帳:同步 FTP 失敗,下次再試');
+      }
+    }
+    for (const day of days) {
       try {
         const r = await reconcile(day);
+        if (r.status === 'pending') {
+          const n = (tries.get(day) ?? 0) + 1;
+          tries.set(day, n);
+          if (n < MAX_TRIES) continue;
+          log.warn({ day, tries: n }, 'FTP 對帳:FTP 檔一直不完整,停止自動重試(可手動對帳)');
+        }
+        tries.delete(day);
+        done.add(day);
         if (r.status === 'gap') log.warn({ day, gaps: r.gaps }, 'FTP 對帳:ClickHouse 有缺口(需要補漏)');
         else log.info({ day, status: r.status, excess: r.excess }, 'FTP 對帳完成');
       } catch (err) {
-        lastAuto = '';
         log.warn({ day, code: (err as { code?: unknown }).code }, 'FTP 對帳失敗,下次再試');
-        return;
+        continue;
       }
     }
   }
+
 
   return {
     reconcile,

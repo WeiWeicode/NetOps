@@ -8,6 +8,13 @@
 - 檔案:`pa-collector/netops_pa/{pa_query,config,keys,__main__}.py`、`pa-collector/tests/{test_pa_query,test_config}.py`、`backend/src/{app,openapi}.ts`、`backend/src/infra/redis/pa-query.ts`、`backend/src/modules/pa-query/`、`backend/test/{unit/pa-query.test.ts,helpers.ts}`、`deploy/{gateway-rbac.yaml,docker-compose.yml,host2-set-pa-secrets.sh}`
 - 驗證:pa-collector `ruff check`、`pytest`(本機 Python 3.14);backend `npm run typecheck`、`npm test`;`check-scenarios.mjs`;CI 見 MR
 
+## 2026-11-11 C3:PA 查詢只用 ClickHouse、對帳 01:00
+- 工作項目:C3(ARCHITECTURE D43,需求方 2026-11-11 晚上決定)
+- 內容:① 總覽、篩選選項、有資料的日期、安全事件(威脅類)、Log 明細只查 ClickHouse;`source` 只接受 clickhouse;`NETOPS_PA_OVERVIEW_SOURCE`、`NETOPS_PA_DETAIL_SOURCE` 移除;test / prod 必須設定 `CLICKHOUSE_URL`。② 期間整個超過保留期限回 404 `NETOPS_PA_OUT_OF_RETENTION`;回應加 `coverage`、`partial`、`topsState`(摘要還沒建好時排行標不完整,筆數照回)。③ `/pa/days`、`/pa-events/types` 改列 ClickHouse 有資料的日期(新增 `trafficDays`、`threatDays`)。④ 明細移除 FTP 掃描路徑。⑤ 每日對帳 `NETOPS_RECON_HOUR` 預設 1,FTP 檔沒分析完時自己同步(30 分鐘最多一次)並每 10 分鐘再試;FTP 完整的判斷改回「有檔涵蓋到 23:50 以後或隔天有檔」(PA 前一天的檔約 07:45 才出現,隔天的檔要再等一天)。⑥ 每小時摘要:每段 2 萬列、每段最多等 180 秒(測試區 15 時一直逾時);失敗日誌記本程式組的原因文字。
+- 審查修正(`code-reviewer`、`security-auditor` 2026-11-11):有資料的日期在程序內記 2 分鐘、威脅類一次查全部類型、日期以 `Asia/Taipei` 切;`/pa-events/types` 在 ClickHouse 失敗時只標 ClickHouse 類型 `unavailable`,保留 `dir`;`/pa/options` 也檢查保留期限;`partial` 以最早一小時判斷;`topsState` 不是 ok 的結果不快取;摘要日誌的 `reason` 只記本程式組的訊息;自動對帳防重入、單日失敗不中斷其他日、pending 超過 120 次停止自動重試;新增自動對帳測試。
+- 檔案:`backend/src/{config.ts,app.ts,infra/clickhouse/reader.ts,infra/redis/cache.ts,modules/pa/{ch-overview,ch-summary,routes,log-routes,reconcile}.ts,modules/pa-events/routes.ts}`、`backend/test/`、`deploy/docker-compose.yml`
+- 驗證:`npm run typecheck`、`npm test`
+
 ## 2026-11-11 V-a 熱力圖資料層:彙總表、熱力圖與時段明細 API
 - 工作項目:V-a(第 1–4、6 步;第 5 步冷路由等 C4)(ARCHITECTURE D34、D35;VIZ-RULES-DESIGN §3、§4.2、§4.3)
 - 內容:① `deploy/clickhouse/schema.sql`:`pa_heat_5m` / `_1h` / `_1d`(AggregatingMergeTree,總數 + topK Top IP)與 6 個物化檢視(TRAFFIC、威脅 × 3 粒度;威脅只算 `log_type = threat` 筆數);`apply-schema.sh` 加 `{{TTL_HEAT_*}}`(正式區 1 年 / 5 年 / 5 年,測試區 3 天)與 `YEAR` 單位。② `migrations/003`:`pa_traffic_hourly_src` 加 `bytes_sent`、`bytes_recv` 並 `MODIFY QUERY`(新安裝的 `schema.sql` 直接含)。③ `rebuild-day.sh`:重建一天的全部彙總(上線回填、補漏後);`dedupe-day.sh` 改呼叫它並比對熱力圖。④ `infra/clickhouse/heat.ts`(熱力圖、時段明細查詢;`reader.ts` 只把欄位對照與 `paramText` 等改成 export)、`infra/redis/cold-lock.ts`(冷查詢鎖,C4 接上)、`infra/redis/cache.ts` 加 `longTtl`(上限 1 小時,預設仍 60 秒)、`config.ts` 加 `paTtlDays`(`NETOPS_TTL_TRAFFIC_DAYS` / `_THREAT_DAYS`,預設依部署區)。⑤ `modules/pa-heat/`:`GET /v1/pa/heatmap`、`GET /v1/pa/slice`、`GET|DELETE /v1/pa/slices/{id}`

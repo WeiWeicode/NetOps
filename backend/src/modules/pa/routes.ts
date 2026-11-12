@@ -1,30 +1,24 @@
 /**
  * PA 流量總覽(docs/API.md §4.1;舊版 server/routes/palog.js 的 days、summary、options)
- * 只做驗證、權限宣告與格式轉換;合併與研判在 core/palog.js(AGENT.md §9)。
+ * C3(2026-11-11 需求方決定,ARCHITECTURE D43):只查 ClickHouse,不再讀 FTP 摘要(FTP 只做對帳與補漏)。
+ * 只做驗證、權限宣告與格式轉換;查詢在 ch-overview.ts,合併與研判在 core/palog.js(AGENT.md §9)。
  */
 import type { FastifyPluginAsync } from 'fastify';
-import { dayRangeQuery, importStatus, looseObject, TOP } from '../../shared/schemas.js';
+import { dayRangeQuery, looseObject, TOP } from '../../shared/schemas.js';
 import { dayOut, dayRange, logTimeOut } from '../../shared/time.js';
-import { mergeSummaries } from './core/palog.js';
-import type { TrafficImporter } from './importer.js';
-import { dayRangeMs, pickSource, trafficOptions, trafficOverview, viaClickHouse, type ChOverviewDeps } from './ch-overview.js';
+import { dataDays, need, trafficOptions, trafficOverview, type ChOverviewDeps } from './ch-overview.js';
 
-/** 資料來源(C3;docs/API.md §4.1):省略時依設定 NETOPS_PA_OVERVIEW_SOURCE */
-export const SOURCE = { type: 'string', enum: ['ftp', 'clickhouse', 'auto'], description: '資料來源;省略時依設定(預設 auto)' } as const;
+/**
+ * 資料來源(docs/API.md §4.1):C3 起只有 clickhouse。參數保留只為相容(帶 clickhouse 或不帶都可以);
+ * ftp / auto 已移除,帶了回 400
+ */
+export const SOURCE = { type: 'string', enum: ['clickhouse'], description: '資料來源(只有 clickhouse;可省略)' } as const;
 
-type Merged = ReturnType<typeof mergeSummaries> & { hours: { hour: string }[]; timeMin: string; timeMax: string };
-
-/** 期間內摘要的合併結果;missing:index 有、摘要檔讀不到(總覽不完整) */
-export function mergeRange(traffic: TrafficImporter, from: string, to: string, topN: number) {
-  const files = traffic.filesInRange(from, to);
-  const sums = files.map((f) => traffic.readSummary(f.summary!)).filter(Boolean);
-  return { files: files.length, missing: files.length - sums.length, merged: mergeSummaries(sums, topN) as Merged };
-}
-
-const paRoutes: FastifyPluginAsync<{ traffic: TrafficImporter; ch: ChOverviewDeps }> = async (app, { traffic, ch }) => {
+const paRoutes: FastifyPluginAsync<{ ch: ChOverviewDeps }> = async (app, { ch }) => {
+  /** 摘要建立狀態(沿用 import 欄位:busy 建立中、failed 1 = 上一輪失敗) */
   const importBrief = () => {
-    const { running: _running, ...s } = traffic.status();
-    return s;
+    const b = need(ch).builder.status();
+    return { busy: b.busy, failed: b.lastError ? 1 : 0 };
   };
 
   app.get(
@@ -33,20 +27,29 @@ const paRoutes: FastifyPluginAsync<{ traffic: TrafficImporter; ch: ChOverviewDep
       schema: {
         operationId: 'netops.pa.days',
         summary: 'PA 有資料的日期',
-        description: '列出已分析的 PA TRAFFIC log 有資料的日期(依 log 內的資料時間),每天的檔案數與筆數,新的在前;附匯入狀態,畫面據此提示資料是否還在分析。',
+        description:
+          'ClickHouse 有 TRAFFIC 資料的日期(新的在前),每天有資料的小時數與筆數;coverage 為最早到最新的日期(正式區保留 30 天,超過保留期限的資料已刪除)。ClickHouse 無法使用回 503 NETOPS_CLICKHOUSE_UNAVAILABLE。',
         tags: ['PA 流量總覽'],
         'x-permission': 'netops.pa.read',
         'x-gherkin': [
           '場景: 列出有資料的日期',
-          '  假如 2026-11-02 有 6 個已分析的 TRAFFIC 檔案',
+          '  假如 ClickHouse 有 2026-11-11、2026-11-12 的 TRAFFIC',
           '  當 呼叫 GET /api/netops/pa/days',
           '  那麼 回應 200',
-          '  而且 days 第一筆的 day 為 "2026-11-02"、files 為 6',
+          '  而且 days 第一筆的 day 為 "2026-11-12",coverage 為 { from: "2026-11-11", to: "2026-11-12" }',
         ].join('\n'),
-        response: { 200: looseObject('{ days: [{ day, files, rows }], import }') },
+        response: { 200: looseObject('{ days: [{ day, files, rows }], coverage, import }') },
       },
     },
-    async () => ({ days: traffic.availableDays().map((d) => ({ ...d, day: dayOut(d.day) })), import: importBrief() }),
+    async () => {
+      const days = await dataDays(ch, 'traffic');
+      // files 沿用舊欄位名稱:有資料的小時數
+      return {
+        days: days.map((d) => ({ day: d.day, files: d.hours, rows: d.rows })),
+        coverage: days.length ? { from: days.at(-1)!.day, to: days[0]!.day } : null,
+        import: importBrief(),
+      };
+    },
   );
 
   app.get<{ Querystring: { from: string; to?: string; top?: number; source?: string } }>(
@@ -56,40 +59,34 @@ const paRoutes: FastifyPluginAsync<{ traffic: TrafficImporter; ch: ChOverviewDep
         operationId: 'netops.pa.overview',
         summary: 'PA 流量總覽',
         description:
-          '期間內的總筆數、允許 / 阻擋、流量、每小時統計、動作、各項排行與疑似掃描來源。source 為實際來源:clickhouse(C3,筆數與每小時統計來自每小時彙總、排行來自 ClickHouse 每小時摘要,只到 topsUntil;files 為有資料的小時數)或 ftp(已分析的 FTP 檔案摘要;files 為檔案數)。files 為 0 表示沒有資料(不是沒有流量);missing 大於 0 或匯入中時結果不完整。指定 source=clickhouse 而 ClickHouse 無法使用時回 503 NETOPS_CLICKHOUSE_UNAVAILABLE。',
+          '期間內的總筆數、允許 / 阻擋、流量、每小時統計、動作、各項排行與疑似掃描來源(ClickHouse)。筆數與每小時統計來自每小時彙總(含進行中的小時);排行來自 ClickHouse 每小時摘要,只到 topsUntil,topsState 不是 ok 時排行不完整。files 為有資料的小時數(0 = 這段期間沒有資料);missing 大於 0 時排行不完整。coverage 為 ClickHouse 有資料的範圍,partial 為期間有一部分在範圍之前。期間整個在範圍之前回 404 NETOPS_PA_OUT_OF_RETENTION;ClickHouse 無法使用回 503 NETOPS_CLICKHOUSE_UNAVAILABLE。',
         tags: ['PA 流量總覽'],
         'x-permission': 'netops.pa.read',
         'x-gherkin': [
           '場景: 查詢期間總覽',
-          '  假如 2026-11-02 有已分析的 TRAFFIC 檔案',
-          '  當 呼叫 GET /api/netops/pa/overview?from=2026-11-02',
+          '  假如 ClickHouse 有 2026-11-12 的 TRAFFIC',
+          '  當 呼叫 GET /api/netops/pa/overview?from=2026-11-12',
           '  那麼 回應 200',
-          '  而且 files 大於 0、hours 的時間為 ISO 8601 +08:00',
+          '  而且 source 為 "clickhouse"、files 為有資料的小時數、hours 的時間為 ISO 8601 +08:00',
           '',
-          '場景: 沒有資料的期間',
-          '  當 呼叫 GET /api/netops/pa/overview?from=2020-01-01',
+          '場景: 期間有一部分早於 ClickHouse 的資料',
+          '  假如 ClickHouse 從 2026-11-11 起有資料',
+          '  當 呼叫 GET /api/netops/pa/overview?from=2026-11-10&to=2026-11-11',
           '  那麼 回應 200',
-          '  而且 files 為 0',
+          '  而且 partial 為 true,coverage.from 為 "2026-11-11"',
+          '',
+          '場景: 超過保留期限',
+          '  假如 ClickHouse 從 2026-11-11 起有資料',
+          '  當 呼叫 GET /api/netops/pa/overview?from=2026-10-01',
+          '  那麼 回應 404 NETOPS_PA_OUT_OF_RETENTION',
           '',
           '場景: 日期格式錯誤',
           '  當 呼叫 GET /api/netops/pa/overview?from=2026/11/02',
           '  那麼 回應 400 VALIDATION_FAILED',
           '',
-          '場景: 期間在 ClickHouse 範圍內時查 ClickHouse',
-          '  假如 ClickHouse 從 2026-11-11 08:00 起有資料,總覽來源設定為 auto',
-          '  當 呼叫 GET /api/netops/pa/overview?from=2026-11-12',
-          '  那麼 回應 200',
-          '  而且 source 為 "clickhouse"、files 為有資料的小時數、topsUntil 為排行涵蓋到的時間',
-          '',
-          '場景: 期間早於 ClickHouse 範圍時查 FTP',
-          '  假如 ClickHouse 從 2026-11-11 08:00 起有資料,總覽來源設定為 auto',
-          '  當 呼叫 GET /api/netops/pa/overview?from=2026-11-11',
-          '  那麼 回應 200',
-          '  而且 source 為 "ftp"',
-          '',
-          '場景: 指定 ClickHouse 但無法使用',
+          '場景: ClickHouse 無法使用',
           '  假如 ClickHouse 連不上',
-          '  當 呼叫 GET /api/netops/pa/overview?from=2026-11-12&source=clickhouse',
+          '  當 呼叫 GET /api/netops/pa/overview?from=2026-11-12',
           '  那麼 回應 503 NETOPS_CLICKHOUSE_UNAVAILABLE',
         ].join('\n'),
         querystring: dayRangeQuery({ top: TOP, source: SOURCE }),
@@ -98,38 +95,16 @@ const paRoutes: FastifyPluginAsync<{ traffic: TrafficImporter; ch: ChOverviewDep
     },
     async (req) => {
       const { from, to } = dayRange(req.query);
-      const topN = req.query.top ?? 20;
-      if (pickSource(ch, req.query.source, dayRangeMs(from, to)[0]) === 'clickhouse') {
-        const r = await viaClickHouse(ch, req.query.source, () => trafficOverview(ch, from, to, topN));
-        if (r) {
-          const b = ch.builder!.status();
-          return {
-            ...r,
-            from: dayOut(from),
-            to: dayOut(to),
-            import: { busy: b.busy, failed: b.lastError ? 1 : 0 },
-            timeMin: logTimeOut(r.timeMin),
-            timeMax: logTimeOut(r.timeMax),
-            topsUntil: logTimeOut(r.topsUntil),
-            hours: r.hours.map((h) => ({ ...h, hour: logTimeOut(h.hour) })),
-          };
-        }
-      }
-      const { files, missing, merged } = mergeRange(traffic, from, to, topN);
-      // 小時統計只留期間內(跨日的檔案會帶到前後一天的零星資料)
-      const hours = merged.hours.filter((h) => h.hour.slice(0, 10) >= from && h.hour.slice(0, 10) <= to).map((h) => ({ ...h, hour: logTimeOut(h.hour) }));
-      const st = traffic.status();
+      const r = await trafficOverview(ch, from, to, req.query.top ?? 20);
       return {
-        ...merged,
-        source: 'ftp',
+        ...r,
         from: dayOut(from),
         to: dayOut(to),
-        files,
-        missing,
-        import: { busy: st.busy, failed: st.failed },
-        timeMin: logTimeOut(merged.timeMin),
-        timeMax: logTimeOut(merged.timeMax),
-        hours,
+        import: importBrief(),
+        timeMin: logTimeOut(r.timeMin),
+        timeMax: logTimeOut(r.timeMax),
+        topsUntil: logTimeOut(r.topsUntil),
+        hours: r.hours.map((h) => ({ ...h, hour: logTimeOut(h.hour) })),
       };
     },
   );
@@ -140,25 +115,17 @@ const paRoutes: FastifyPluginAsync<{ traffic: TrafficImporter; ch: ChOverviewDep
       schema: {
         operationId: 'netops.pa.options',
         summary: 'PA 明細查詢的篩選選項',
-        description: '期間內出現過的應用程式、規則、區域與動作,供明細查詢的下拉選單使用。',
+        description: '期間內出現過的應用程式、規則、區域與動作(ClickHouse),供明細查詢的下拉選單使用。',
         tags: ['PA 流量總覽'],
         'x-permission': 'netops.pa.read',
-        'x-gherkin': ['場景: 取得篩選選項', '  當 呼叫 GET /api/netops/pa/options?from=2026-11-02', '  那麼 回應 200', '  而且 回應含 apps、rules、zones、actions'].join('\n'),
+        'x-gherkin': ['場景: 取得篩選選項', '  當 呼叫 GET /api/netops/pa/options?from=2026-11-12', '  那麼 回應 200', '  而且 回應含 apps、rules、zones、actions'].join('\n'),
         querystring: dayRangeQuery({ source: SOURCE }),
         response: { 200: looseObject('{ apps, rules, zones, actions }') },
       },
     },
     async (req) => {
       const { from, to } = dayRange(req.query);
-      if (pickSource(ch, req.query.source, dayRangeMs(from, to)[0]) === 'clickhouse') {
-        const r = await viaClickHouse(ch, req.query.source, () => trafficOptions(ch, from, to));
-        if (r) return r;
-      }
-      const m = mergeRange(traffic, from, to, 200).merged as unknown as { top: Record<string, { key: string }[]>; actions: Record<string, number> };
-      const keys = (name: string) => (m.top[name] ?? []).map((x) => x.key);
-      const zones = new Set<string>();
-      for (const z of keys('zone')) for (const part of z.split(' → ')) if (part && part !== '?') zones.add(part);
-      return { apps: keys('app'), rules: keys('rule'), zones: [...zones].sort(), actions: Object.keys(m.actions).sort() };
+      return trafficOptions(ch, from, to);
     },
   );
 };

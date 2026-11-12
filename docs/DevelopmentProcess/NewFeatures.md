@@ -7,6 +7,11 @@
 - 內容:PA 精準查詢 API(`/pa-query/status`、`/pa-query/jobs`)、權限 `netops.pa-query.read`(只給 netops-admin)、按鈕 `netops.pa-live.query`;API.md §2、§3.3、§8;Gherkin `pa-query/query.feature`;PA-LIVE-PLAN §4 鍵表;HANDOFF-GEMINI-VIZ §10
 - 檔案:`docs/{API,IMPL-PLAN,PA-LIVE-PLAN,PROJECT-MAP,HANDOFF-GEMINI-VIZ}.md`、`docs/Gherkin/`
 
+## 2026-11-11 C3:PA 查詢只用 ClickHouse(推翻並行 2 週)
+- 工作項目:C3
+- 內容:需求方決定捨棄 FTP 查詢路徑、對帳改 01:00;ARCHITECTURE D43;API.md §4.1–§4.3、§5.3、§8;Gherkin `pa/overview.feature`、`pa-events/overview.feature`、`pa-log-searches/search.feature` 改寫;IMPL-PLAN、HANDOFF。
+- 檔案:`docs/{API,ARCHITECTURE,IMPL-PLAN,HANDOFF,PROJECT-MAP}.md`、`docs/Gherkin/`
+
 ## 2026-11-11 V-a 熱力圖資料層
 - 工作項目:V-a(第 1–4、6 步;第 5 步冷路由等 C4)
 - 內容:活動熱力圖 API(年 / 月 / 日,traffic / deny / threat,`ad` 回 409 預留)與時段明細 API(30 秒同步、超過轉工作、熱 / 冷分界;冷歸檔未提供回 409 `NETOPS_COLD_ARCHIVE_DISABLED`,冷查詢鎖 429 介面已保留);API.md §4.4、§8;Gherkin `pa/heatmap.feature`;PA-LIVE-PLAN §4 加 `netops:cold:lock`、快取 `pa-heat` / `pa-slice`

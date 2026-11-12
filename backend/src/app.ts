@@ -188,9 +188,10 @@ export async function buildApp(
     app.addHook('onReady', async () => chBuilder.start());
     app.addHook('onClose', async () => chBuilder.stop());
   }
-  const ch: ChOverviewDeps = { reader: chReader, builder: chBuilder, cache, mode: config.paSource.overview, log: app.log };
-  await app.register(paRoutes, { traffic, ch });
-  await app.register(logRoutes, { ftp, traffic, parallel: config.ftp?.maxConnections ?? 1, limit: config.search.limit, seconds: config.search.seconds, ch: { ...ch, mode: config.paSource.detail } });
+  const ch: ChOverviewDeps = { reader: chReader, builder: chBuilder, cache, log: app.log };
+  // PA 總覽、安全事件、明細只查 ClickHouse(ARCHITECTURE D43);FTP 只做對帳與補漏、AD 與 AI
+  await app.register(paRoutes, { ch });
+  await app.register(logRoutes, { limit: config.search.limit, seconds: config.search.seconds, ch });
   // FTP 對帳與補漏(C3,D33):對帳在本服務(只用已分析的 FTP 摘要);補漏工作交給 netops-ingest(Redis 佇列)
   const recon = chReader && chBuilder ? createReconciler({ traffic, reader: chReader, builder: chBuilder, store: app.store.pa, log: app.log, hour: config.reconHour, now: deps.chNow }) : null;
   if (recon) {

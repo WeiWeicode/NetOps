@@ -243,3 +243,66 @@ def test_now_window_uses_now():
     future = {**LOG_PARAMS, "from": (NOW + timedelta(minutes=2)).isoformat(), "to": (NOW + timedelta(minutes=5)).isoformat()}
     with pytest.raises(JobError):
         build_log_query(future, NOW)
+
+
+def test_unexpected_params_fail_job_and_skip_global_gap(pa):
+    w, r = make(pa)
+    jid = "33333333-3333-3333-3333-333333333333"
+    r.hset(keys.paq_job(jid), mapping={"status": "queued", "kind": "log", "emp": "emp:S1", "params": "[]"})
+    r.set(keys.PAQ_ACTIVE, jid, ex=90)
+    r.lpush(keys.PAQ_JOBS, jid)
+    w.run_one()
+    assert job(r, jid)["status"] == "failed" and job(r, jid)["error"] == "NETOPS_PA_QUERY_INVALID"
+    # 沒有送 PA:不設全域間隔、名額釋放
+    assert r.get(keys.PAQ_COOL_GLOBAL) is None and r.get(keys.PAQ_ACTIVE) is None
+    assert pa.requests == []
+
+
+def test_worker_waits_global_gap_and_refunds_cooldown_on_reject(pa):
+    w, r = make(pa)
+    r.set(keys.PAQ_COOL_GLOBAL, "1", px=4000)
+    pa.idle = 30.0  # 管理平面 70% → rejected
+    jid = submit(r, "session", {"ip": "10.0.0.1"})
+    r.set("netops:paq:cool:emp:S112009", "1", ex=60)
+    r.hset(keys.paq_job(jid), "emp", "emp:S112009")
+    w.run_one()
+    assert w.clock() >= 3.9  # 先等完全域間隔才查 CPU(pttl 取整數毫秒)
+    assert job(r, jid)["status"] == "rejected"
+    assert r.get("netops:paq:cool:emp:S112009") is None
+
+
+def test_whitelist_and_no_redirect(pa):
+    w, r = make(pa)
+    with pytest.raises(ValueError):
+        w.api.call({"type": "config", "action": "set"})
+    with pytest.raises(ValueError):
+        w.api.op("<show><session><all><filter><source>1.1.1.1</source></filter></all></session><request/></show>")
+    # 3xx 不跟隨(Key 不會被帶到別的主機)
+    from netops_pa.pa_query import PaApiError
+
+    class Redirect(FakeQueryPa):
+        pass
+
+    import http.server
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_POST(self):  # noqa: N802
+            self.send_response(302)
+            self.send_header("Location", "http://127.0.0.1:1/steal")
+            self.end_headers()
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        cfg = QueryConfig(host="127.0.0.1", port=srv.server_address[1], api_key=KEY, ca_file="", tls_insecure=False, timeout=5, max_mgmt_cpu=50)
+        with pytest.raises(PaApiError, match="302"):
+            XmlApi(cfg, use_http=True).op(CPU_CMD)
+    finally:
+        srv.shutdown()
+
+
+def test_ipv4_mapped_address_is_normalised():
+    assert "addr in 10.0.0.5" in build_log_query({**LOG_PARAMS, "ip": "::ffff:10.0.0.5"}, NOW).query

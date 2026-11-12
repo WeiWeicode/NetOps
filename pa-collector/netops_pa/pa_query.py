@@ -16,9 +16,11 @@ API Key 只放在 X-PAN-KEY 標頭(不進 URL、不進 POST 內容);錯誤訊息
 
 from __future__ import annotations
 
+import http.client
 import ipaddress
 import json
 import logging
+import re
 import ssl
 import threading
 import time
@@ -51,6 +53,19 @@ DIRECTIONS = {"src": "source", "dst": "destination"}
 JOB_TIMEOUT = 60.0
 MAX_FIELD = 512
 CPU_CMD = "<show><system><resources></resources></system></show>"
+# Session Browser 指令的完整格式(白名單;資安審查 C5 L2)
+_SESSION_CMD = re.compile(r"^<show><session><all><filter><(source|destination)>[0-9a-fA-F:.]{2,45}</\1></filter></all></session></show>$")
+# call() 只接受這些請求(type、action);其他一律拒絕
+_ALLOWED_CALLS = {("log", None), ("log", "get"), ("log", "finish"), ("op", None)}
+# 結果寫進 Redis 的總長度上限(500 筆實際約數百 KB;資安審查 L4)
+MAX_RESULT_BYTES = 2 * 1024 * 1024
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """不跟隨轉址:urllib 跟隨 3xx 時會把 X-PAN-KEY 帶到新網址(資安審查 C5 M1)"""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001, ARG002
+        return None
 
 
 def release_slot(r: redis.Redis, job_id: str) -> None:
@@ -87,9 +102,11 @@ def _ip(v: Any) -> str:
     if not isinstance(v, str) or len(v) > 45 or "%" in v:
         raise JobError("NETOPS_PA_QUERY_INVALID", "IP 格式不正確")
     try:
-        return str(ipaddress.ip_address(v.strip()))
+        addr = ipaddress.ip_address(v.strip())
     except ValueError:
         raise JobError("NETOPS_PA_QUERY_INVALID", "IP 格式不正確") from None
+    mapped = getattr(addr, "ipv4_mapped", None)
+    return str(mapped or addr)
 
 
 def _time(v: Any) -> datetime:
@@ -189,17 +206,24 @@ class XmlApi:
             self.ctx.verify_mode = ssl.CERT_NONE
         else:
             self.ctx = ssl.create_default_context(cafile=cfg.ca_file or None)
+        handlers: list[urllib.request.BaseHandler] = [_NoRedirect()]
+        if self.ctx is not None:
+            handlers.append(urllib.request.HTTPSHandler(context=self.ctx))
+        self._open = urllib.request.build_opener(*handlers).open
 
     def call(self, params: dict[str, str], timeout: float | None = None) -> ET.Element:
+        if (params.get("type"), params.get("action")) not in _ALLOWED_CALLS:
+            raise ValueError("不在唯讀請求白名單內")
         body = urllib.parse.urlencode(params).encode()
         headers = {"X-PAN-KEY": self.key, "Content-Type": "application/x-www-form-urlencoded"}
         req = urllib.request.Request(self.url, data=body, method="POST", headers=headers)  # noqa: S310 — 位址只從設定讀
         try:
-            with urllib.request.urlopen(req, timeout=timeout or self.timeout, context=self.ctx) as res:  # noqa: S310
+            with self._open(req, timeout=timeout or self.timeout) as res:
                 raw = res.read(8 * 1024 * 1024 + 1)
         except urllib.error.HTTPError as e:
+            # 3xx 也在這裡(不跟隨轉址)
             raise PaApiError(f"PA 回應 HTTP {e.code}") from None
-        except (urllib.error.URLError, TimeoutError, OSError) as e:
+        except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException) as e:
             raise PaApiError(f"連不到 PA-560:{type(getattr(e, 'reason', e)).__name__}") from None
         if len(raw) > 8 * 1024 * 1024:
             raise PaApiError("PA 回應過大")
@@ -208,12 +232,15 @@ class XmlApi:
         except ET.ParseError:
             raise PaApiError("PA 回應不是 XML") from None
         if root.get("status") != "success":
-            msg = " ".join(t.strip() for t in root.itertext() if t.strip())[:200]
-            raise PaApiError(mask(f"PA 回應錯誤{('(code ' + root.get('code', '') + ')') if root.get('code') else ''}:{msg}"))
+            # 畫面只顯示分類與 PA 的錯誤代碼;PA 原文只寫日誌(遮罩後;資安審查 L3)
+            code = root.get("code", "")
+            detail = " ".join(t.strip() for t in root.itertext() if t.strip())[:200]
+            log.warning("PA 回應錯誤 code=%s:%s", code or "-", mask(detail))
+            raise PaApiError(f"PA-560 回應錯誤{f'(code {code})' if code.isdigit() else ''}")
         return root
 
     def op(self, cmd: str, timeout: float | None = None) -> ET.Element:
-        if cmd != CPU_CMD and not cmd.startswith("<show><session><all><filter>"):
+        if cmd != CPU_CMD and not _SESSION_CMD.match(cmd):
             raise ValueError("不在唯讀指令白名單內")
         return self.call({"type": "op", "cmd": cmd}, timeout)
 
@@ -264,11 +291,23 @@ class QueryWorker:
         h = {k.decode(): v.decode() for k, v in self.r.hgetall(jk).items()}
         if h.get("status") != "queued":
             return job_id
+        sent = False  # 真的送過 PA 請求才設全域間隔(過期、參數不合法的工作不擋別人)
         try:
             active = self.r.get(keys.PAQ_ACTIVE)
             if active is None or active.decode() != job_id:
                 raise JobError("NETOPS_PA_QUERY_EXPIRED", "等候太久,查詢名額已收回,請重新送出")
-            params = json.loads(h.get("params") or "{}")
+            # 全域間隔在執行者端也強制(名額過期時 netops-api 可能已接受下一個工作;程式碼審查 C5 #5)
+            gap = self.r.pttl(keys.PAQ_COOL_GLOBAL)
+            if gap and gap > 0:
+                self.sleep(gap / 1000)
+            # 名額續到工作上限之後(從送出起算的 90 秒在最壞情況餘裕不足;#6)
+            self.r.expire(keys.PAQ_ACTIVE, int(JOB_TIMEOUT) + 30)
+            try:
+                params = json.loads(h.get("params") or "{}")
+            except ValueError:
+                params = None
+            if not isinstance(params, dict):
+                raise JobError("NETOPS_PA_QUERY_INVALID", "查詢參數損壞")
             kind = h.get("kind")
             # 先驗參數(不合法就不碰 PA)
             if kind == "log":
@@ -279,6 +318,7 @@ class QueryWorker:
                 raise JobError("NETOPS_PA_QUERY_INVALID", "不支援的查詢類型")
             self.r.hset(jk, mapping={"status": "running", "startedAt": iso()})
             deadline = self.clock() + JOB_TIMEOUT
+            sent = True
             cpu = self.mgmt_cpu()
             if cpu is None:
                 raise JobError("NETOPS_PA_QUERY_CPU_UNKNOWN", "讀不到 PA-560 管理平面 CPU,為保護設備不送出查詢", "rejected")
@@ -290,21 +330,33 @@ class QueryWorker:
                 truncated = len(rows) >= q.nlogs
             else:
                 rows, truncated = parse_sessions(self.api.op(cmd, timeout=max(1.0, deadline - self.clock())))
+            data = json.dumps(rows, ensure_ascii=False, separators=(",", ":"))
+            while len(data.encode()) > MAX_RESULT_BYTES and rows:
+                rows = rows[: len(rows) // 2]
+                truncated = True
+                data = json.dumps(rows, ensure_ascii=False, separators=(",", ":"))
             self.r.hset(jk, mapping={"status": "done", "finishedAt": iso(), "mgmtCpu": str(cpu), "count": str(len(rows)),
-                                     "truncated": "1" if truncated else "0", "result": json.dumps(rows, ensure_ascii=False, separators=(",", ":"))})
+                                     "truncated": "1" if truncated else "0", "result": data})
             self.status.ok("query")
         except JobError as e:
             self.r.hset(jk, mapping={"status": e.status, "finishedAt": iso(), "error": e.code, "message": str(e)})
             if e.status == "failed":
                 log.warning("PA 查詢失敗:%s", e.code)
+            # 為保護設備沒送出:不扣使用者的 60 秒冷卻(#9)
+            if e.status == "rejected" and h.get("emp"):
+                self.r.delete(f"{keys.PAQ_PREFIX}:cool:{h['emp']}")
         except PaApiError as e:
             self.r.hset(jk, mapping={"status": "failed", "finishedAt": iso(), "error": "NETOPS_PA_QUERY_FAILED", "message": str(e)})
             self.status.fail("query", e)
             log.warning("PA 查詢失敗:%s", e)
+        except Exception as e:  # noqa: BLE001 — 非預期錯誤也要讓工作結束成 failed,不能停在 queued / running(#2)
+            self.r.hset(jk, mapping={"status": "failed", "finishedAt": iso(), "error": "NETOPS_PA_QUERY_FAILED", "message": "PA 查詢發生非預期錯誤"})
+            log.error("PA 查詢發生非預期錯誤:%s", mask(f"{type(e).__name__}: {e}"))
         finally:
             self.r.expire(jk, keys.PAQ_JOB_TTL)
             release_slot(self.r, job_id)
-            self.r.set(keys.PAQ_COOL_GLOBAL, "1", ex=keys.PAQ_COOL_GLOBAL_SEC)
+            if sent:
+                self.r.set(keys.PAQ_COOL_GLOBAL, "1", ex=keys.PAQ_COOL_GLOBAL_SEC)
         return job_id
 
     def mgmt_cpu(self) -> float | None:

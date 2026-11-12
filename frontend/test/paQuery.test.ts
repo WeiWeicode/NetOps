@@ -91,6 +91,40 @@ describe('usePaQuery', () => {
     expect(Date.parse(b.to)).toBe(NOW);
   });
 
+  it('完成後冷卻 60 秒:剩餘秒數會遞減,歸零後重新讀狀態、ready 恢復(審查 #1)', async () => {
+    let t = NOW;
+    m.status.mockResolvedValueOnce({ enabled: true, executor: true, heartbeatAgeSec: 2, activeSec: 0, globalCoolSec: 0, userCoolSec: 60, mgmtCpu: 4 });
+    const scope = effectScope();
+    const q = scope.run(() => usePaQuery({ now: () => t }))!;
+    await q.refreshState();
+    expect(q.waitSec.value).toBe(60);
+    for (let i = 0; i < 61; i++) {
+      t += 1000;
+      await vi.advanceTimersByTimeAsync(1000);
+    }
+    expect(q.waitSec.value).toBe(0);
+    expect(m.status).toHaveBeenCalledTimes(2);
+    expect(q.ready.value).toBe(true);
+    scope.stop();
+  });
+
+  it('輪詢單次失敗不放棄;429 倒數結束後不再是錯誤(審查 #3、#4)', async () => {
+    m.submit.mockResolvedValueOnce(job('queued'));
+    m.job.mockRejectedValueOnce(new Error('network')).mockResolvedValueOnce(job('done', { result: { rows: [], count: 0, truncated: false } }));
+    const { q } = setup();
+    await q.session('10.0.0.1');
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(q.state.value).toBe('waiting');
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(q.state.value).toBe('done');
+    m.submit.mockRejectedValueOnce(new ApiError(429, 'NETOPS_PA_QUERY_BUSY', '忙碌', 'r', { retryAfter: 2 }));
+    await q.session('10.0.0.1');
+    expect(q.state.value).toBe('busy');
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(q.error.value).toBeNull();
+    expect(q.state.value).toBe('idle');
+  });
+
   it('執行者未啟用或還在冷卻:ready 為 false;離開頁面停止輪詢', async () => {
     m.status.mockResolvedValue({ enabled: true, executor: true, heartbeatAgeSec: 2, activeSec: 0, globalCoolSec: 0, userCoolSec: 42, mgmtCpu: 4 });
     const { q, scope } = setup();

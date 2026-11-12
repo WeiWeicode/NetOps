@@ -23,6 +23,14 @@ export function usePaQuery(opts: { pollMs?: number; now?: () => number } = {}) {
   const pollMs = opts.pollMs ?? POLL_MS;
   const canQuery = computed(() => can(UI.paLiveQuery));
   const server = shallowRef<PaQueryState | null>(null);
+  /** 讀狀態的時間:冷卻剩餘秒數依現在時間遞減(程式碼審查 C5 #1) */
+  const serverAt = ref(0);
+  /** 每秒更新一次,讓剩餘秒數會動 */
+  const tick = ref(0);
+  /** 狀態讀取失敗(和查詢的 error 分開,不蓋掉已完成的結果;#4) */
+  const stateError = ref<Error | null>(null);
+  let ticker: ReturnType<typeof setInterval> | undefined;
+  let pollFailures = 0;
   const job = shallowRef<PaQueryJob | null>(null);
   const error = ref<Error | null>(null);
   const submitting = ref(false);
@@ -32,7 +40,12 @@ export function usePaQuery(opts: { pollMs?: number; now?: () => number } = {}) {
   let seq = 0;
   let deadline = 0;
 
-  const waitSec = computed(() => Math.max(retryAfter.value, server.value ? Math.max(server.value.activeSec, server.value.globalCoolSec, server.value.userCoolSec) : 0));
+  const waitSec = computed(() => {
+    void tick.value;
+    const s = server.value;
+    const left = s ? Math.max(s.activeSec, s.globalCoolSec, s.userCoolSec) - Math.floor((now() - serverAt.value) / 1000) : 0;
+    return Math.max(retryAfter.value, left, 0);
+  });
   const ready = computed(() => canQuery.value && !!server.value?.enabled && waitSec.value === 0 && !submitting.value && state.value !== 'waiting');
   const state = computed<PaQueryUiState>(() => {
     if (submitting.value) return 'submitting';
@@ -53,7 +66,25 @@ export function usePaQuery(opts: { pollMs?: number; now?: () => number } = {}) {
     retryAfter.value = sec;
     countdown = setInterval(() => {
       retryAfter.value = Math.max(0, retryAfter.value - 1);
-      if (!retryAfter.value) stopCountdown();
+      if (!retryAfter.value) {
+        stopCountdown();
+        // 倒數結束:429 的提示不再是錯誤(#4)
+        if (error.value instanceof ApiError && error.value.status === 429) error.value = null;
+        void refreshState();
+      }
+    }, 1000);
+  }
+
+  /** 狀態裡還有要等的秒數時每秒更新;歸零時重新讀狀態 */
+  function startTicker() {
+    clearInterval(ticker);
+    ticker = setInterval(() => {
+      tick.value++;
+      if (waitSec.value === 0) {
+        clearInterval(ticker);
+        ticker = undefined;
+        void refreshState();
+      }
     }, 1000);
   }
 
@@ -61,8 +92,12 @@ export function usePaQuery(opts: { pollMs?: number; now?: () => number } = {}) {
     if (!canQuery.value) return;
     try {
       server.value = await paQuery.status();
+      serverAt.value = now();
+      stateError.value = null;
+      const s = server.value;
+      if (s && Math.max(s.activeSec, s.globalCoolSec, s.userCoolSec) > 0 && !ticker) startTicker();
     } catch (e) {
-      error.value = e as Error;
+      stateError.value = e as Error;
     }
   }
 
@@ -71,12 +106,16 @@ export function usePaQuery(opts: { pollMs?: number; now?: () => number } = {}) {
     try {
       const j = await paQuery.job(job.value.id);
       if (my !== seq) return;
+      pollFailures = 0;
       job.value = j;
       if ((j.status === 'queued' || j.status === 'running') && now() < deadline) timer = setTimeout(() => void poll(my), pollMs);
       else if (j.status === 'queued' || j.status === 'running') error.value = new Error('PA 查詢等候逾時,請稍後再看結果或重新送出');
       else void refreshState();
     } catch (e) {
-      if (my === seq) error.value = e as Error;
+      if (my !== seq) return;
+      // 單次失敗(網路抖動、424)不放棄:連續 3 次才顯示錯誤(#3)
+      if (++pollFailures < 3 && now() < deadline) timer = setTimeout(() => void poll(my), pollMs);
+      else error.value = e as Error;
     }
   }
 
@@ -86,6 +125,7 @@ export function usePaQuery(opts: { pollMs?: number; now?: () => number } = {}) {
     const my = ++seq;
     error.value = null;
     job.value = null;
+    pollFailures = 0;
     submitting.value = true;
     try {
       const j = await paQuery.submit(b);
@@ -122,8 +162,9 @@ export function usePaQuery(opts: { pollMs?: number; now?: () => number } = {}) {
     onScopeDispose(() => {
       seq++;
       clearTimeout(timer);
+      clearInterval(ticker);
       stopCountdown();
     });
 
-  return { canQuery, server, job, error, state, ready, waitSec, retryAfter, refreshState, submit, session, recentLog, reset };
+  return { canQuery, server, stateError, job, error, state, ready, waitSec, retryAfter, refreshState, submit, session, recentLog, reset };
 }

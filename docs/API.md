@@ -163,7 +163,7 @@ PA 匯入在背景佇列執行;同步、分析只是送進佇列,畫面輪詢狀
 }
 ```
 
-- API Key 只在 `netops-pa`,放 `X-PAN-KEY` 標頭(不進網址、POST 內容與錯誤訊息,日誌遮罩)。
+- API Key 只在 `netops-pa`,放 `X-PAN-KEY` 標頭(不進網址、POST 內容與錯誤訊息,日誌遮罩)。不跟隨轉址;PA 的錯誤原文只寫日誌,`error.message` 只有分類與 PA code。PA 端該 Key 的 Admin Role 應只開 XML API Log 與 Operational Requests(網通設定;程式另以白名單只送唯讀請求)。
 - 測試區與正式區查同一台 PA-560,名額與冷卻各在自己的 Redis(兩區同時查可能各 1 個;正式區上線前再評估)。
 
 ### 3.2 PA 即時監控(R1)— 批次 `feature/r1-api`

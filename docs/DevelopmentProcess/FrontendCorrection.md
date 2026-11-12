@@ -6,7 +6,8 @@
 - 工作項目:C5
 - 內容:`api/paQuery.ts`、`composables/usePaQuery.ts`(按鈕權限才呼叫 API、送出 → 每 2 秒輪詢最多 90 秒、429 倒數、rejected / failed)、`components/PaQueryPanel.vue`(即時監控頁的樸素版,正式畫面交 Gemini,HANDOFF-GEMINI-VIZ §10)、`perms.ts` 加 `UI.paLiveQuery`、`API.paQueryRead`;假 Gateway `mock/paQuery.ts` 與 admin 的按鈕權限
 - 檔案:`frontend/src/{api/paQuery.ts,api/perms.ts,composables/usePaQuery.ts,components/PaQueryPanel.vue,pages/firewall/Live.vue}`、`frontend/mock/{paQuery,gateway}.ts`、`frontend/test/paQuery.test.ts`
-- 驗證:`vue-tsc`、`npm test`(122 通過);`MOCK=admin` 瀏覽器:即時監控頁送出 Session 查詢,約 3 秒後顯示 6 筆
+- 審查修正(2026-11-12):冷卻剩餘秒數依時間遞減、歸零後重讀狀態(原本按鈕停用到重新整理);輪詢連續失敗 3 次才放棄;429 倒數結束清掉錯誤;狀態讀取失敗另存 `stateError`,不蓋掉已完成的結果
+- 驗證:`vue-tsc`、`npm test`(124 通過);`MOCK=admin` 瀏覽器:即時監控頁送出 Session 查詢,約 3 秒後顯示 6 筆
 
 ## 2026-11-11 C3:日期區間欄位、顯示 ClickHouse 可查範圍
 - 工作項目:C3(ARCHITECTURE D43;需求方 2026-11-11 要求日期改單一區間欄位)

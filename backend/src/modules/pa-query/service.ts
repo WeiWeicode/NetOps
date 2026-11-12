@@ -125,7 +125,8 @@ export function createPaQueryService(store: PaQueryStore | null, now: () => numb
   }
 
   async function submit(owner: string, body: PaQueryBody): Promise<PaQueryJob> {
-    if (!owner) throw new AppError(403, 'NETOPS_JOB_OWNER_UNKNOWN', '無法識別使用者,不能送出查詢');
+    // 工號格式不符時不組 Redis 鍵(資安審查 C5 L7:原本被包成 424)
+    if (!owner || !/^[\w:.-]{1,80}$/.test(owner)) throw new AppError(403, 'NETOPS_JOB_OWNER_UNKNOWN', '無法識別使用者,不能送出查詢');
     const params = validateQuery(body, now());
     const s = need();
     const st = await call(() => s.state(owner, now()));

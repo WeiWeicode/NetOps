@@ -1,7 +1,7 @@
 # NetOps API
 
 > `netops-api` 的對外介面:前端(F1)照本文件串接。決策見 [ARCHITECTURE.md](ARCHITECTURE.md),工作項目見 [IMPL-PLAN.md](IMPL-PLAN.md)。
-> **狀態:B1 定稿;C3 `feature/clickhouse-c3-query` 加 §4.1、§4.2 的 `source`(ClickHouse),`feature/clickhouse-c3-detail` 加 §4.3 的 `source`,`feature/clickhouse-c3-reconcile` 加 §5.3 對帳與補漏;V-a `feature/viz-a-heatmap-data` 加 §4.4 熱力圖與時段明細;B2-pa 已實作 §4.1、§5.1;B2-ad 已實作 §4.2、§5.2、§6;B2-kb 已實作 §7;B2-logs 已實作 §4.3(B2 全部完成);A1(AI 搬移)第 2 批 `feature/a1-ai-api` 實作 §10**。各模組在 B2 分批實作,「批次」欄是預定交付的 MR;實作與本文件不同時,以 MR 描述的「API 變更」為準並同步更新本文件。
+> **狀態:B1 定稿;C3 `feature/clickhouse-c3-query` 加 §4.1、§4.2 的 `source`(ClickHouse),`feature/clickhouse-c3-detail` 加 §4.3 的 `source`,`feature/clickhouse-c3-reconcile` 加 §5.3 對帳與補漏;V-a `feature/viz-a-heatmap-data` 加 §4.4 熱力圖與時段明細;V-b1 `feature/viz-b1-insight-frontend` 加 §4.5 分析儀表板;B2-pa 已實作 §4.1、§5.1;B2-ad 已實作 §4.2、§5.2、§6;B2-kb 已實作 §7;B2-logs 已實作 §4.3(B2 全部完成);A1(AI 搬移)第 2 批 `feature/a1-ai-api` 實作 §10**。各模組在 B2 分批實作,「批次」欄是預定交付的 MR;實作與本文件不同時,以 MR 描述的「API 變更」為準並同步更新本文件。
 > 欄位的完整定義以服務的 `/openapi.json` 為準(上架時匯入 Gateway);本文件寫路徑、權限、請求與回應格式。
 
 ---
@@ -73,7 +73,7 @@ PA 匯入在背景佇列執行;同步、分析只是送進佇列,畫面輪詢狀
 | `netops.ping.read` | 連線驗證:查詢 | §3(含 §3.1 串流驗證) |
 | `netops.pa-realtime.read` | PA 即時監控:查詢 | §3.2(畫面節點 `netops.pa-live.read`) |
 | `netops.pa-realtime.write` | PA 即時監控:測試區暫停 / 繼續收集器 | §3.2 `collector-control`(按鈕 `netops.pa-live.manage`,只給 `netops-admin`;2026-11-09 需求方決定) |
-| `netops.pa.read` | PA 防火牆:查詢 | §4.1、§4.2、§4.4 熱力圖 |
+| `netops.pa.read` | PA 防火牆:查詢 | §4.1、§4.2、§4.4 熱力圖、§4.5 儀表板 |
 | `netops.pa-log.read` | PA Log 明細:查詢 | §4.3、§4.4 時段明細 |
 | `netops.ftp.read` | FTP Log 檔案:查詢 | §5 讀取 |
 | `netops.ftp.write` | FTP Log 檔案:同步與管理 | §5 寫入 |
@@ -358,6 +358,53 @@ PA 匯入在背景佇列執行;同步、分析只是送進佇列,畫面輪詢狀
   "seconds": 0.8
 }
 ```
+
+### 4.5 分析儀表板(V-b1)— 批次 `feature/viz-b1-insight-frontend`
+
+設計見 [VIZ-RULES-DESIGN.md](VIZ-RULES-DESIGN.md) §4.4。一個視角一支 API,一次回該視角全部圖表的資料(畫面一個請求,快取一份 `netops:cache:pa-insight:*`:含今天或結束未滿 1 小時 60 秒,其他 10 分鐘)。權限 `netops.pa.read`。
+
+| 方法 | 路徑 | 說明 |
+| --- | --- | --- |
+| GET | `/api/netops/pa/insight/traffic?from&to` | 流量視角 |
+| GET | `/api/netops/pa/insight/threat?from&to` | 安全威脅視角 |
+
+`from`、`to`:`YYYY-MM-DD`(含當天),最長 **90 天**(來源 IP 彙總與威脅原始表保留 90 天);`to` 晚於今天、早於 `from` 回 400。時間序列的數值 `null` 表示沒有資料(彙總表最早的格子之前),和 0 不同;`coverage` 同 §4.4。ClickHouse 無法使用回 503 `NETOPS_CLICKHOUSE_UNAVAILABLE`。
+
+```jsonc
+// traffic
+{
+  "view": "traffic", "from": "2026-11-05", "to": "2026-11-11",
+  "bucketSeconds": 3600,                 // trend:≤ 2 天 300、≤ 31 天 3600、其他 86400
+  "allowDenyBucketSeconds": 86400,       // allowDeny:≤ 2 天 3600、其他 86400
+  "coverage": { "since": "…", "gaps": [], "gapsKnown": true },
+  "trend": [ { "t": "2026-11-05T00:00:00+08:00", "sent": 1200, "recv": 5400, "sessions": 310 } ],   // pa_heat_*
+  "sankey": {                            // 來源區域 → App → 目的區域(位元組);App 取前 15,其他併「其他」
+    "nodes": [ { "id": "z:LAN", "name": "LAN", "layer": 0 }, { "id": "a:ssl", "name": "ssl", "layer": 1 }, { "id": "d:WAN", "name": "WAN", "layer": 2 } ],
+    "links": [ { "source": "z:LAN", "target": "a:ssl", "bytes": 3000 } ]
+  },
+  "topIp": [ { "ip": "10.10.112.20", "bytes": 3000, "sent": 1000, "recv": 2000, "sessions": 100 } ],  // pa_traffic_hourly_src;migration 003 之前的列上傳 / 下載為 0
+  "topApp": [ { "app": "ssl", "bytes": 3000, "sessions": 100 } ],
+  "allowDeny": [ { "t": "…", "allow": 90, "deny": 10 } ],
+  "generatedAt": "…"
+}
+// threat(只算 log_type = threat 的筆數,不乘 Repeat Count)
+{
+  "view": "threat", "from": "…", "to": "…", "bucketSeconds": 3600, "coverage": { … },
+  "score": { "critical": 1, "high": 2, "medium": 5, "low": 11, "info": 40,
+             "prev": { "critical": 0, "high": 4, "medium": 3, "low": 9, "info": 30 },   // 前一個同長度期間;資料起點晚於前一期開始時為 null(畫面不顯示增減)
+             "prevFrom": "2026-10-29", "prevTo": "2026-11-04" },
+  "timeline": [ { "t": "…", "critical": 0, "high": 1, "medium": 0, "low": 2 } ],
+  "countries": [ { "country": "China", "iso2": "CN", "count": 30, "critical": 1, "high": 5 } ],  // 全部國家(給地圖);內網範圍不列,對不到的併成 { "country": "未知", "iso2": null }
+  "topInternalSrc": [ { "ip": "10.10.112.31", "count": 12, "high": 3 } ],   // RFC 1918 來源(V-c 網段設定後改用設定)
+  "topServerDst": null,                  // 伺服器網段在偵測設定(V-c)之前沒有,見 notes
+  "topNames": [ { "name": "…(12345)", "severity": "high", "count": 9 } ],
+  "notes": [ "內網以 RFC 1918 判斷;伺服器網段尚未設定(偵測設定 V-c),「被攻擊最多的伺服器」暫不提供" ],
+  "generatedAt": "…"
+}
+```
+
+- 國家:PA 的國家欄位是英文全名,後端轉 ISO 3166-1 alpha-2(`backend/src/modules/pa-insight/countries.ts`);前端地圖以 ISO2 對應(`frontend/src/ui/charts/world/`)。
+- 和流量總覽一致:`trend` 的 `sessions` 加總 = 流量總覽同期間的 `rows`(兩者都來自 ClickHouse 寫入的 TRAFFIC;彙總表上線前的日子要先用 `rebuild-day.sh` 回填)。
 
 ---
 

@@ -28,6 +28,8 @@ const FILES = [
   // V-a:熱力圖與時段明細(/v1/pa/slice 與 /v1/pa/slices/)
   ['/v1/pa/heatmap', 'pa/heatmap.feature'],
   ['/v1/pa/slice', 'pa/heatmap.feature'],
+  // V-b1:分析儀表板
+  ['/v1/pa/insight/', 'pa/insight.feature'],
   ['/v1/pa/', 'pa/overview.feature'],
   ['/v1/ftp/pa/', 'ftp/pa-files.feature'],
   ['/v1/ftp/ad/', 'ftp/ad-files.feature'],

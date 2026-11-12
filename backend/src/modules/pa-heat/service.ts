@@ -340,7 +340,7 @@ export function createHeatService(d: HeatDeps) {
         } catch {
           ok = false;
         }
-        if (!ok) throw Object.assign(new AppError(429, 'NETOPS_COLD_QUERY_BUSY', `已有冷資料查詢在執行,請 ${COLD_RETRY_AFTER_SEC} 秒後再試`), { retryAfter: COLD_RETRY_AFTER_SEC });
+        if (!ok) throw Object.assign(new AppError(429, 'NETOPS_COLD_QUERY_BUSY', `已有冷資料查詢在執行,請 ${COLD_RETRY_AFTER_SEC} 秒後再試`, { retryAfter: COLD_RETRY_AFTER_SEC }), { retryAfter: COLD_RETRY_AFTER_SEC });
       }
       const { type, rowsLimit, sort, floor, source } = o;
       let job: JobView<SliceResult>;

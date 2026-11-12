@@ -2,6 +2,12 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。範圍:`frontend/`。
 
+## 2026-11-12 V-b1 熱力圖 / 儀表板前端邏輯層與元件介面
+- 工作項目:V-b1(VIZ-RULES-DESIGN §6;決策 D40、D41、V9、V10)
+- 內容:① `api/heatmap.ts`、`slice.ts`(200 結果 / 202 工作)、`insight.ts`。② composables:`useHeatmap`(粒度 / 指標 / 日期、下鑽、前後期、AD 停用)、`useSlice`(202 自動輪詢、429 倒數重試、409 學熱 / 冷分界、Log 明細查詢連結、離開時取消)、`useInsight`(今天 / 7 / 30 / 90 天 / 自訂 ≤ 90 天,含今天每 60 秒刷新)、`useChartPick`(圖表點擊 → 時段明細條件,最多 1 天)、`useReducedMotion`、`useLivePaQuery`(C5 前停用)、`vizTime`(台灣時間)。③ 新增相依 `echarts@6.1.0`(鎖版本):`ui/charts/echarts.ts` 按需引入(Line、Bar、Pie、Sankey、Treemap、Map + SVGRenderer)、CSS token 主題、世界地圖;`GEChart.vue` 動態載入(`ui/index.ts` 全域註冊 `charts/G*.vue`,所以不能在頂層 import ECharts),reduced-motion 關動畫、明暗切換重建、點擊正規化 `ChartPick`。④ `ui/charts/viz-types.ts`(全部圖表元件的 props / emits)、樸素版 `GHeatmap`、`GDrawer`、`GSourceBadge`、`tokens.css` 新 token 名稱。⑤ 路由 `firewall/heatmap`、`firewall/insight` 與樸素示範頁、`perms.ts`。⑥ 假資料 `test/fixtures/viz/generate.ts` 與假 Gateway `mock/viz.ts`(各種狀態)。⑦ 世界地圖 `ui/charts/world/`(Natural Earth 1:110m,`scripts/build-world-geo.mjs` 產生,不連 CDN)
+- 檔案:`frontend/{package.json,package-lock.json}`、`frontend/src/{api,composables,ui/charts,ui/components,pages/firewall}/`、`frontend/src/{router.ts,components.d.ts,ui/styles/tokens.css}`、`frontend/mock/{viz,gateway}.ts`、`frontend/scripts/build-world-geo.mjs`、`frontend/test/{viz.test.ts,gechart.mount.test.ts,fixtures/viz/generate.ts}`
+- 驗證:`vue-tsc`、`npm test`(134 通過)、`vite build`:ECharts 獨立 chunk `echarts-*.js` 905 KB(gzip 303 KB,含世界地圖約 52 KB),只在儀表板頁載入,首頁 `index-*.js` 77 KB(gzip 27 KB);`MOCK=admin` 瀏覽器確認熱力圖、抽屜(409 冷資料提示)、儀表板趨勢圖(暗色主題)
+
 ## 2026-11-10 R1:即時 log 串流上限提高,前端不修改
 - 工作項目:R1(對應 BackendCorrection 同日紀錄)
 - 內容:評估 `composables/paLive.ts` 的 `mergeLogs`(最多 500 筆、依 `type:id` 去重)與 `Live.vue`:每個 `logs` 事件(最多 200 筆)只更新一次 `shallowRef`,每秒 100+ 筆不需改動;未修改任何前端檔案。

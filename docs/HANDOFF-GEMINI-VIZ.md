@@ -1,7 +1,7 @@
 # 交接給 Gemini:熱力圖、儀表板、告警畫面與動畫(V-b2、V-c 畫面)
 
 > **給 Gemini 的工作規格**。Gemini 開工前先讀 `AGENT.md`「AI 分工」與本文件;不確定是畫面還是邏輯時**一律視為邏輯**,寫進 MR 說明交給 Claude。
-> 背景與設計見 [VIZ-RULES-DESIGN.md](VIZ-RULES-DESIGN.md)(§6 是元件介面),決策 ARCHITECTURE D34–D41,工作項目 IMPL-PLAN V-b2、V-c 第 4 步。**狀態:規劃(2026-11-11),待需求方審;要等 Claude 完成 §2 的交付才開工。**
+> 背景與設計見 [VIZ-RULES-DESIGN.md](VIZ-RULES-DESIGN.md)(§6 是元件介面),決策 ARCHITECTURE D34–D41,工作項目 IMPL-PLAN V-b2、V-c 第 4 步。**狀態:V-b1 交付完成(2026-11-12,`feature/viz-b1-insight-frontend`,MR 合併後)→ 熱力圖、儀表板、時段明細抽屜可以開工(§2.1);告警與偵測設定(V-c 畫面)要等 V-c 第 4 步。**
 
 ---
 
@@ -35,6 +35,53 @@
 | ECharts 基底 | `ui/charts/GEChart.vue`、`echarts.ts` | 圖表元件內部都用 `GEChart`,傳 `option`、收 `pick` |
 | 路由與空頁 | `firewall/heatmap`、`firewall/insight`、`detect/alerts`、`detect/settings` | 你填頁面內容 |
 | 假資料 | `frontend/test/fixtures/viz/`(5 年每天、31 天每小時、1 天每 5 分鐘;儀表板兩個視角;告警與設定) | 本機開發與元件測試 |
+
+### 2.1 V-b1 已交付(2026-11-12):開工方式
+
+**可以開始做**:活動熱力圖頁、分析儀表板頁(流量、威脅兩個 Tab)、時段明細抽屜 `SliceDrawer`、§4.2 的 9 個圖表元件、`GHeatmap` / `GDrawer` / `GSourceBadge` 的畫面與動畫、§6 token 色值。**還不能做**:告警頁、偵測設定頁、側欄徽章(V-c 第 4 步才有 `useAlerts`、`useAlertBadge`、`useDetectConfig` 與路由)。
+
+| 交付 | 檔案 | 你怎麼用 |
+| --- | --- | --- |
+| Composables | `composables/useHeatmap.ts`、`useSlice.ts`、`useInsight.ts`、`useChartPick.ts`、`useReducedMotion.ts`、`useLivePaQuery.ts`;時間工具 `vizTime.ts`(`formatRange` 等,台灣時間) | 頁面只用這些;各檔開頭註解寫了回傳值與用法 |
+| 元件介面 | `ui/charts/viz-types.ts` | 每個元件的 props / emits;**照型別實作,不改型別**。圖表點擊一律 `emit('pick', ChartPick)`,`chart` 用 `ChartId` 的值 |
+| ECharts 基底 | `ui/charts/GEChart.vue`(動態載入 `echarts.ts`)、主題 `echarts.ts` 的 `severityColors()`、`pairColors()` | 圖表元件內部用 `<GEChart :option="…" ariaLabel="…" chart="sankey" @pick="…">`(**`ariaLabel` 用駝峰寫法**);不要在元件頂層 `import 'echarts'` 或 `./echarts`(會把 ECharts 拉進首頁 bundle);世界地圖名稱 `'world'`,資料 `name` 用 ISO2 |
+| 樸素版元件 | `ui/charts/GHeatmap.vue`、`ui/components/GDrawer.vue`、`GSourceBadge.vue` | 功能完整、樣式樸素;**畫面、tooltip、動畫由你改寫**,props / emits 不變(排版與鍵盤邏輯可保留) |
+| 路由與頁面 | `/firewall/heatmap`(`pages/firewall/Heatmap.vue`)、`/firewall/insight`(`Insight.vue`) | 兩頁目前是樸素示範(證明資料串得通),由你改寫內容;`SliceDrawer` 新增在 `components/SliceDrawer.vue` |
+| Token 名稱 | `ui/styles/tokens.css` 最後一段(`--heat-*`、`--glow-*`、`--badge-*`) | 起點值由既有色混出;你調四種組合的色值與對比 |
+| 假資料 | `frontend/test/fixtures/viz/generate.ts`(`heatmapResponse`、`sliceResult`、`trafficInsight`、`threatInsight`) | 元件測試直接用;本機假 Gateway 也用這份 |
+
+**本機跑假資料**(不連測試區):
+
+```sh
+cd frontend
+MOCK=admin npm run dev      # PowerShell:$env:MOCK='admin'; npm run dev
+# 開 http://localhost:5181/netops/firewall/heatmap、/netops/firewall/insight
+# MOCK=viewer 看唯讀角色
+```
+
+用假 Gateway 造出各種狀態(`mock/viz.ts`):
+
+| 想看的狀態 | 怎麼造 |
+| --- | --- |
+| `v === null`(沒有資料) | 熱力圖日期選 2026-01-01 以前(資料起點設在 2026-01-01) |
+| 日視圖超過 1 年(422) | 日視圖選 1 年前的日期 |
+| 冷歸檔尚未提供(409) | 點 29 天以前的格子 |
+| 冷查詢忙碌(429 倒數) | `useSlice.open({ …, ip: '10.0.0.98' })` |
+| 背景查詢(202 → 約 4 秒後完成) | `ip: '10.0.0.99'` |
+| 冷 / 混合資料徽章 | `ip: '10.0.0.97'`(cold)、`'10.0.0.96'`(mixed) |
+| ClickHouse 無法使用(503) | `ip: '10.0.0.95'` |
+| `partial` 格子 | 每 17 格一個 |
+| 伺服器網段未設定 | 威脅 Tab 的 `topServerDst` 一律 `null`,`notes` 有說明 |
+
+**`useSlice` 的狀態**:`idle` → `loading` → `done`;`waiting-job`(202,自動輪詢,可 `cancel()`);`busy`(429,`retryAfter` 每秒倒數,到 0 才能 `retry()`);`error`(`error.code` 判斷:`NETOPS_COLD_ARCHIVE_DISABLED` / `NETOPS_ARCHIVE_NOT_FOUND` 用中性提示,其他用 danger)。`isCold` 在開查前就有值,用來決定要不要放冷資料過場。
+
+**AD 指標**:`useHeatmap().metricOptions` 的 `ad` 是 `disabled: true, hint: 'AD 階段開放'`,畫面要顯示但不能選;儀表板 AD Tab 停用。
+
+**目前資料的限制**(畫面要照實呈現,不要當成 bug):
+- 測試區彙總表只保留 3 天;月 / 年視圖在測試區大多是 `null`,版面用假資料驗。
+- 時段明細只查得到原始表保留期間(測試區 2 天、正式區 29 天);更早的回 409(冷歸檔要等 C4)。
+- 儀表板「被攻擊最多的伺服器」在偵測設定(V-c)前是 `null`。
+- 「查詢即時連線」按鈕在 C5 前不會出現(`useLivePaQuery().canQuery` 一律 false)。
 
 ## 3. 頁面清單
 

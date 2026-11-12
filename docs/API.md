@@ -337,7 +337,7 @@ PA 匯入在背景佇列執行;同步、分析只是送進佇列,畫面輪詢狀
 | `rows` | 明細列數 0–200(預設 100);全部明細請用 §4.3 Log 明細查詢 |
 | `sort` | `time`(預設,新到舊)\| `bytes`(只對 `traffic`) |
 
-**熱 / 冷分界**:`hotFrom` = 今天 00:00 −(原始表保留天數 − 1)天(TRAFFIC 30 → 29 天、威脅 90 → 89 天;測試區 3 → 2 天;設定 `NETOPS_TTL_TRAFFIC_DAYS` / `NETOPS_TTL_THREAT_DAYS`,預設依部署區,要和 `apply-schema.sh` 一致)。`start ≥ hotFrom` 查原始表(`source: "hot"`);早於 `hotFrom` 的部分要讀冷歸檔(C4),**冷歸檔尚未提供**:回 409 `NETOPS_COLD_ARCHIVE_DISABLED`,`details.hotFrom` 為可查的起點。C4 之後冷的部分 `source` 為 `cold` / `mixed`,冷查詢全系統同時 1 個(Redis 鎖 `netops:cold:lock`),拿不到回 429 `NETOPS_COLD_QUERY_BUSY` 與 `Retry-After: 10`。
+**熱 / 冷分界**:`hotFrom` = 今天 00:00 −(原始表保留天數 − 1)天(TRAFFIC 30 → 29 天、威脅 90 → 89 天;測試區 3 → 2 天;設定 `NETOPS_TTL_TRAFFIC_DAYS` / `NETOPS_TTL_THREAT_DAYS`,預設依部署區,要和 `apply-schema.sh` 一致)。`start ≥ hotFrom` 查原始表(`source: "hot"`);早於 `hotFrom` 的部分要讀冷歸檔(C4),**冷歸檔尚未提供**:回 409 `NETOPS_COLD_ARCHIVE_DISABLED`,`details.hotFrom` 為可查的起點。C4 之後冷的部分 `source` 為 `cold` / `mixed`,冷查詢全系統同時 1 個(Redis 鎖 `netops:cold:lock`),拿不到回 429 `NETOPS_COLD_QUERY_BUSY` 與 `Retry-After: 10`(`details.retryAfter` 同值,前端 web-kit 讀不到回應標頭時用)。
 
 **同步 30 秒,超過轉工作**:一律建 `pa-slice` 工作;30 秒內完成回 **200** 結果,否則回 **202** 工作狀態(§1.1),前端改輪詢 `GET /pa/slices/{id}`(完成時 `result` 為結果)。同一人、同一組參數在工作保留期間(30 分鐘)重送回同一個工作(進行中 202、完成 200),不重複查詢。工作每人同時 2 個、全系統 6 個(和 §4.3 分開計),同時執行 2 個(其餘排隊;一個工作內的 ClickHouse 查詢依序執行),每人保留 5 筆,執行上限 120 秒(ClickHouse 每個查詢 50 秒;冷工作 110 秒,全系統 1 個)。取消熱查詢工作時,已送出的 ClickHouse 查詢不會中止(結果是多人共用的快取),最多再跑 50 秒;30 秒內失敗直接回該錯誤(例 503 `NETOPS_CLICKHOUSE_UNAVAILABLE`)。熱查詢結果另有 60 秒共用快取(`netops:cache:pa-slice:*`)。
 

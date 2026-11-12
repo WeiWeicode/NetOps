@@ -315,6 +315,7 @@ describe('GET /v1/pa/slice', () => {
       assert.equal(r2.statusCode, 429);
       assert.equal(r2.json().code, 'NETOPS_COLD_QUERY_BUSY');
       assert.equal(r2.headers['retry-after'], '10');
+      assert.equal(r2.json().details.retryAfter, 10);
       release();
       await new Promise((r) => setTimeout(r, 50));
       const done = (await t.call({ url: `/v1/pa/slices/${r1.json().id}` })).json();

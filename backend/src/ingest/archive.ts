@@ -239,14 +239,15 @@ export class Archiver {
   }
 
   private async acquire(owner: string, signal: AbortSignal): Promise<boolean> {
-    const until = this.now() + (this.d.lockWaitMs ?? LOCK_WAIT_MS);
+    // 等待時間用實際時間(this.now 可能是測試注入的固定時間)
+    const until = Date.now() + (this.d.lockWaitMs ?? LOCK_WAIT_MS);
     for (;;) {
       try {
         if (await this.d.lock.acquire(owner)) return true;
       } catch (e) {
         this.fail('冷查詢鎖', e);
       }
-      if (this.now() >= until || signal.aborted) return false;
+      if (Date.now() >= until || signal.aborted) return false;
       await new Promise((r) => setTimeout(r, Math.min(5_000, this.d.lockWaitMs ?? 5_000)));
     }
   }

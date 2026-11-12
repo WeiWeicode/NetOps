@@ -3,7 +3,7 @@
 #                    netops-ingest 整合測試(check:ingest-int:一次性 Redis + ClickHouse 容器,只在 backend/ 或 deploy/clickhouse/ 有變更時)
 #   deploy-api-test  develop:在主機 2 建置並更新 netops-api(加入 Gateway 網路;啟動後自動註冊路由草稿)與知識庫 NAS 備份 netops-kb-backup;
 #                    PA 即時監控 netops-redis、netops-pa(R1;netops-pa 沒變更時不重建,deploy/ci-netops-pa.sh);PA log ClickHouse netops-clickhouse 與建表(C1);
-#                    寫入管線 netops-ingest(C2)
+#                    寫入管線 netops-ingest(C2;C4 起含每天的冷歸檔,NAS 目錄唯讀掛給 netops-clickhouse)
 #   deploy-web-test  develop:建置 SPA 並發佈到 Gateway 的 gw_www(Nginx /netops/;IMPL-PLAN D1,同 GigaItApp、giga-Portal)
 #   rbac-test        develop:以已部署的 Gateway 映像套用 deploy/gateway-rbac.yaml(netops.* 畫面權限、netops-admin / netops-viewer 角色;不指派成員)
 # 舊版 IIS 程式(根目錄 server/、src/)不在 Pipeline 內,切換前 main 維持舊版(ARCHITECTURE D12),本檔沒有 main 的工作(正式區屬 D2)。
@@ -65,6 +65,8 @@ check:ingest-int:
     # 暫存目錄與輸出放在 checkout 外面(/tmp/netops-int-<job>.*),不留未追蹤檔;job 輸出另存 .log,
     #   給沒有 Job 讀取權限的 AI 以 ssh 唯讀查看(保留 3 天)
     - N="netops-int-$CI_JOB_ID"; L="/tmp/$N.log"; T="$(mktemp -d)"; echo "$T" > "/tmp/$N.path"; mkdir "$T/s"
+    # C4:冷歸檔的「NAS」目錄(測試寫入,ClickHouse 唯讀掛在 user_files/archive,同 Compose);容器內 uid 101 要讀得到
+    - mkdir -m 755 "$T/a"
     - find /tmp -maxdepth 1 -name 'netops-int-*.log' -mtime +3 -delete 2>/dev/null || true
     - NETOPS_SECRETS_DIR="$T/s" sh deploy/host2-set-clickhouse-secrets.sh >/dev/null
     # 容器內 uid 101 要讀得到帳號檔(一次性密碼;主機上的正式檔是 101:101 / 400)
@@ -79,6 +81,7 @@ check:ingest-int:
       -v "$D/users.d/default.xml:/etc/clickhouse-server/users.d/zz-netops-default.xml:ro"
       -v "$D/users.d/profiles.xml:/etc/clickhouse-server/users.d/zz-netops-profiles.xml:ro"
       -v "$T/s/clickhouse/netops-users.xml:/etc/clickhouse-server/users.d/zz-netops-users.xml:ro"
+      -v "$T/a:/var/lib/clickhouse/user_files/archive:ro"
       "$CH_IMAGE" >/dev/null
     - docker run -d --name "$N-redis" --network "$N-net" -p 127.0.0.1::6379 redis:7.4-alpine >/dev/null
     - for i in $(seq 1 60); do docker exec "$N-ch" wget -qO- http://127.0.0.1:8123/ping >/dev/null 2>&1 && break; sleep 1; done
@@ -90,6 +93,8 @@ check:ingest-int:
     - export INT_CLICKHOUSE_PASSWORD_FILE="$T/s/ch_writer_password"
     # C3:netops-api 的唯讀查詢(netops_reader)
     - export INT_CLICKHOUSE_READER_PASSWORD_FILE="$T/s/ch_reader_password"
+    # C4:冷歸檔與冷明細(netops_cold 讀 file())
+    - export INT_CLICKHOUSE_COLD_PASSWORD_FILE="$T/s/ch_cold_password" INT_ARCHIVE_DIR="$T/a"
     # npm Token 只給 npm ci(測試碼與相依套件的 script 讀不到;資安審查 L5)
     - (cd backend && GITLAB_NPM_TOKEN="$(cat "$NPM_TOKEN_FILE")" npm ci --no-audit --no-fund)
     - (cd backend && npm run test:int) > "$L.test" 2>&1 && R=0 || R=$?; cat "$L.test" >> "$L"; tail -n 120 "$L.test"; rm -f "$L.test"; test "$R" = 0
@@ -130,6 +135,8 @@ deploy-api-test:
     - for f in gw_api_key monitor_api_key ftp_password qdrant_api_key; do test -f "$NETOPS_SECRETS_DIR/$f" || { echo "缺少 netops-api 機密 $f(先在主機 2 執行 deploy/host2-set-secrets.sh)" >&2; exit 1; }; done
     # C3:netops-api 唯讀查詢 ClickHouse(deploy/host2-set-clickhouse-secrets.sh 已產生)
     - test -f "$NETOPS_SECRETS_DIR/ch_reader_password" || { echo "缺少 ch_reader_password(先在主機 2 執行 deploy/host2-set-clickhouse-secrets.sh)" >&2; exit 1; }
+    # C4:冷明細與歸檔讀回核對(netops_cold;同一支腳本在 C1 已產生)
+    - test -f "$NETOPS_SECRETS_DIR/ch_cold_password" || { echo "缺少 ch_cold_password(先在主機 2 執行 deploy/host2-set-clickhouse-secrets.sh)" >&2; exit 1; }
     - export IMAGE_TAG=$CI_COMMIT_SHORT_SHA RELEASE_SHA=$CI_COMMIT_SHORT_SHA COMPOSE_ENV_FILES="$NETOPS_ENV_FILE"
     - export GITLAB_NPM_TOKEN="$(cat "$NPM_TOKEN_FILE")"
     - C="docker compose -f deploy/docker-compose.yml"
@@ -182,7 +189,10 @@ deploy-api-test:
         HB="$($C exec -T netops-redis redis-cli hmget netops:ingest:heartbeat release state startedAt | paste -sd ' ' -)" || HB=""
         set -- $HB
         if [ "${1:-}" = "$CI_COMMIT_SHORT_SHA" ] && [ "${2:-}" = ok ] && [ "$(printf '%s\n%s\n' "$SI" "${3:-}" | sort | head -n 1)" = "$SI" ]; then
-          echo "OK   netops-ingest($HB)"; break
+          echo "OK   netops-ingest($HB)"
+          # 冷歸檔(C4):只顯示狀態不擋部署(nas-missing = 需求方還沒執行 deploy/host2-setup-pa-archive.sh;late = 逾期未歸檔)
+          echo "INFO 冷歸檔:$($C exec -T netops-redis redis-cli hmget netops:ingest:heartbeat archiveState archiveLastOk:traffic archiveLateCount archiveError | paste -sd ' ' -)"
+          break
         fi
         [ "$i" = 30 ] && { echo "FAIL netops-ingest 心跳不是這次部署的或狀態異常:$HB" >&2; $C logs --tail 20 netops-ingest >&2; exit 1; }
         sleep 2

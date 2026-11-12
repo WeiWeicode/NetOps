@@ -2,6 +2,13 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。範圍:`frontend/`。
 
+## 2026-11-12 V-b2 審查修正(Claude)
+- 工作項目:V-b2(審查 Gemini 41f7b53;`code-reviewer`)
+- 內容:① `GHeatmap`:滑鼠單擊延遲 250ms 才 `select`,雙擊只 `drill`(原本第一下就打開抽屜,遮罩吃掉第二下,雙擊下鑽做不到);年視圖欄位從 `from` 所在週的週起點起算(原本同一欄會跨兩週、最後一欄可能兩格疊在一起);資料換了(刷新、同長度的上一期 / 下一期)就清 tooltip;每格的 label 與 style 在 `placed` 一次算好(hover 不再讓 371 格重算 label);加 Home / End。② `GDrawer`:Esc 也掛在 document(焦點掉回 body 時仍可關)、開著時鎖背景捲動、可聚焦判斷改用 `getClientRects`、點 SVG / 表格列開啟時不把 body 當成觸發元素。③ `useInsight` 加 `canSlice`(和 `useHeatmap` 同一個判斷),`Insight.vue` 改讀它,沒有 Log 明細權限時提示而不是不動;合併重複的 import;Top 10 威脅名稱在 ≤ 640px 縮小左側標籤區。④ `Heatmap.vue`:換粒度 / 期間時清掉選取格。⑤ `components.d.ts` 補 9 個圖表元件(報告 §5 第 2 點)。⑥ 測試:雙擊 / 單擊延遲、年視圖欄位、Home / End、tooltip 清除、抽屜捲動鎖與 document Esc;頁面級測試逾時 15 秒(全套件冷啟動時偶發超過 5 秒)。
+- 未改(列為後續):每個圖表元件各自的 `MutationObserver` 與 `esc()` 抽成共用(主題切換時每張圖重畫 2 次);熱力圖格子小於 24px 觸控目標;無權限時熱力圖格子仍可選取但沒有提示;多個無限循環的呼吸光暈沒有暫停機制。
+- 檔案:`frontend/src/ui/charts/GHeatmap.vue`、`frontend/src/ui/components/GDrawer.vue`、`frontend/src/composables/useInsight.ts`、`frontend/src/pages/firewall/{Heatmap,Insight}.vue`、`frontend/src/components.d.ts`、`frontend/test/viz.mount.test.ts`
+- 驗證:`npm run typecheck`、`npm test`(146 通過)、`npm run build`;`MOCK=admin` 瀏覽器:雙擊下鑽到日視圖、單擊開抽屜、Esc 關閉後焦點回到格子、背景捲動鎖;年視圖 368 格沒有重疊;分析儀表板 375px `scrollWidth` = 375
+
 ## 2026-11-12 V-b2 熱力圖、時段明細抽屜、分析儀表板與 9 個圖表元件(Gemini)
 - 工作項目:V-b2(`docs/HANDOFF-GEMINI-VIZ.md` §1–§8;VIZ-RULES-DESIGN §3–§6)
 - 內容:① `ui/styles/tokens.css`:補齊並調校明亮 / 黑暗 × 玻璃 / 扁平 4 組主題的 `--heat-empty`、`--heat-traffic-1..4`、`--heat-deny-1..4`、`--heat-threat-1..4`、`--heat-ad-1..4`、`--glow-critical`、`--glow-high`、`--badge-hot`、`--badge-cold`,色塊與相鄰背景對比 ≥ 3.4:1、徽章文字對比 ≥ 6.3:1。② `ui/components/GSourceBadge.vue`(⚡ 即時熱資料 / 🧊 歷史冷歸檔 / mixed)、`ui/components/GDrawer.vue`(右側 200ms 滑出、Esc 關閉、Tab 焦點鎖定、關閉後焦點回到觸發鈕)。③ `ui/charts/GHeatmap.vue`:GitHub 風格 CSS Grid 熱力圖(年 53×7 / 月 31×24 / 日 12×24)、`v === null` 斜線底紋區分 `0`、`partial` 缺口標記、鍵盤方向鍵移動焦點與 Enter 選取 / Shift+Enter 下鑽、毛玻璃 tooltip(Top 1 IP 標「約」)、觸控裝置兩段點擊、初次載入與換粒度 stagger ≤ 600ms(`prefers-reduced-motion` 自動停用)。④ `components/SliceDrawer.vue`:熱力圖與儀表板共用的時段明細抽屜,支援冷資料掃描線過場、202 背景工作輪詢與取消、429 忙碌倒數重試、409/404 冷歸檔未提供中性提示並保留熱力圖格彙總、503 danger 錯誤、Top 10 排行與 200 列明細表(C5 前隱藏即時連線查詢鈕)。⑤ 9 個圖表元件(`ui/charts/{GTrendDualAxis,GSankey,GTopBars,GAppShare,GAllowDeny,GSeverityCards,GThreatTimeline,GWorldMap,GTopCompare}.vue`):內部皆透過 `GEChart` 渲染(不頂層 import ECharts),自訂 tooltip HTML 一律跳脫,支援流光 / count-up / 嚴重度呼吸光暈動效與 `prefers-reduced-motion`。⑥ `pages/firewall/{Heatmap,Insight}.vue`:完整熱力圖與分析儀表板頁面(含 AD 指標與 AD Tab 停用標示「AD 階段開放」、日視圖 422 保留期限提示、每個圖表的「看表格」無障礙切換、429 忙碌倒數自動重試、點擊聯動開啟 `SliceDrawer`)。⑦ 元件掛載測試 `test/viz.mount.test.ts` 與測試報告 `docs/test-reports/2026-11-12-viz-b2.md`。

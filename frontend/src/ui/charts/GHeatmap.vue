@@ -46,8 +46,18 @@ function local(iso: string) {
 
 const bucketSec = computed(() => (props.granularity === 'year' ? 86400 : props.granularity === 'month' ? 3600 : 300));
 
+/** 年視圖:from 那天在週內的位置(第一欄從 from 所在週的週起點開始,同一欄不跨兩週;程式碼審查 #4) */
+const yearLead = computed(() => {
+  const ms = Date.parse(props.from);
+  return Number.isNaN(ms) ? 0 : (local(props.from).dow - props.weekStart + 7) % 7;
+});
+const yearCol = (iso: string) => Math.floor((Math.round((Date.parse(iso) - Date.parse(props.from)) / DAY_MS) + yearLead.value) / 7);
+
 const shape = computed(() => {
-  if (props.granularity === 'year') return { cols: 53, rows: 7 };
+  if (props.granularity === 'year') {
+    const last = props.cells.length ? yearCol(props.cells[props.cells.length - 1]!.t) : 0;
+    return { cols: Math.max(53, last + 1), rows: 7 };
+  }
   if (props.granularity === 'month') {
     const days = Math.max(1, Math.round((Date.parse(props.to) - Date.parse(props.from)) / DAY_MS));
     return { cols: days, rows: 24 };
@@ -59,16 +69,32 @@ const shape = computed(() => {
 function place(c: HeatCell): { col: number; row: number } {
   const l = local(c.t);
   if (props.granularity === 'year') {
-    return {
-      col: Math.max(0, Math.min(52, Math.floor((Date.parse(c.t) - Date.parse(props.from)) / (7 * DAY_MS)))),
-      row: (l.dow - props.weekStart + 7) % 7,
-    };
+    return { col: Math.max(0, yearCol(c.t)), row: (l.dow - props.weekStart + 7) % 7 };
   }
   if (props.granularity === 'month') return { col: l.day - 1, row: l.hour };
   return { col: Math.floor(l.minute / 5), row: l.hour };
 }
 
-const placed = computed(() => props.cells.map((c, i) => ({ c, i, ...place(c) })));
+/**
+ * 每格的顯示資料一次算好(label、style):hover / focus 只改 tooltip,不讓 371 格每次重算 label(程式碼審查 #2)
+ */
+const placed = computed(() =>
+  props.cells.map((c, i) => {
+    const pos = place(c);
+    return {
+      c,
+      i,
+      ...pos,
+      label: label(c),
+      style: {
+        gridColumn: pos.col + 1,
+        gridRow: pos.row + 1,
+        '--heat': c.level ? `var(--heat-${props.metric}-${c.level})` : 'var(--heat-empty)',
+        '--delay': `${Math.min(i * 4, 360)}ms`,
+      },
+    };
+  }),
+);
 const byPos = computed(() => new Map(placed.value.map((p) => [`${p.col}:${p.row}`, p.i])));
 
 /** 上方欄標頭(年=月份、月=日期、日=5分鐘刻度) */
@@ -78,8 +104,9 @@ const colHeaders = computed(() => {
     const fromMs = Date.parse(props.from);
     if (Number.isNaN(fromMs)) return headers;
     let prevMonth = -1;
-    for (let col = 0; col < 53; col++) {
-      const d = new Date(fromMs + col * 7 * DAY_MS + OFFSET_MS);
+    for (let col = 0; col < shape.value.cols; col++) {
+      // 該欄第一天(週起點;第一欄的週起點可能早於 from)
+      const d = new Date(fromMs + (col * 7 - yearLead.value) * DAY_MS + OFFSET_MS);
       const m = d.getUTCMonth() + 1;
       if (m !== prevMonth) {
         if (headers.length === 0 || col - headers[headers.length - 1]!.col >= 3) {
@@ -171,6 +198,7 @@ watch(
 
 onBeforeUnmount(() => {
   clearTimeout(staggerTimer);
+  clearTimeout(clickTimer);
 });
 
 /* ───── 鍵盤導覽、Hover Tooltip 與觸控兩段點擊(§4.1) ───── */
@@ -186,12 +214,14 @@ const tipPos = ref<{ x: number; y: number; alignRight: boolean; alignBottom: boo
 const lastTouchType = ref(false);
 const touchArmedT = ref<string | null>(null);
 
+// 資料換了(刷新、同長度的上一期 / 下一期也算)就清掉 tooltip 與觸控狀態(程式碼審查 #3)
 watch(
-  () => props.cells.length,
-  (n) => {
-    if (focusIndex.value >= n) focusIndex.value = Math.max(0, n - 1);
+  () => props.cells,
+  (cells) => {
+    if (focusIndex.value >= cells.length) focusIndex.value = Math.max(0, cells.length - 1);
     activeCell.value = null;
     touchArmedT.value = null;
+    clearTimeout(clickTimer);
   },
 );
 
@@ -224,6 +254,13 @@ function onPointerDown(e: PointerEvent) {
   lastTouchType.value = e.pointerType === 'touch';
 }
 
+/**
+ * 滑鼠單擊延遲 DBLCLICK_MS 才 select:select 會打開抽屜,抽屜的遮罩會吃掉第二下,格子收不到 dblclick(程式碼審查 #1)。
+ * 觸控維持「點一下 tooltip、再點開抽屜」,不延遲;鍵盤 Enter / Shift+Enter 不受影響
+ */
+const DBLCLICK_MS = 250;
+let clickTimer: ReturnType<typeof setTimeout> | undefined;
+
 function onCellClick(e: MouseEvent, c: HeatCell) {
   if (lastTouchType.value) {
     if (touchArmedT.value !== c.t) {
@@ -232,15 +269,28 @@ function onCellClick(e: MouseEvent, c: HeatCell) {
       return;
     }
     touchArmedT.value = null;
+    emit('select', c);
+    return;
   }
-  emit('select', c);
+  clearTimeout(clickTimer);
+  if (e.detail > 1) return; // 雙擊的第二下由 onCellDblClick 處理
+  clickTimer = setTimeout(() => emit('select', c), DBLCLICK_MS);
+}
+
+function onCellDblClick(c: HeatCell) {
+  clearTimeout(clickTimer);
+  emit('drill', c);
 }
 
 function move(i: number, dc: number, dr: number) {
   const p = placed.value[i];
   if (!p) return;
   const j = byPos.value.get(`${p.col + dc}:${p.row + dr}`);
-  if (j === undefined) return;
+  if (j !== undefined) focusAt(j);
+}
+
+function focusAt(j: number) {
+  if (!placed.value[j]) return;
   focusIndex.value = j;
   const btn = root.value?.querySelector<HTMLButtonElement>(`[data-i="${j}"]`);
   btn?.focus();
@@ -257,6 +307,9 @@ function onKey(e: KeyboardEvent, i: number, c: HeatCell) {
   if (d[e.key]) {
     e.preventDefault();
     move(i, d[e.key]![0], d[e.key]![1]);
+  } else if (e.key === 'Home' || e.key === 'End') {
+    e.preventDefault();
+    focusAt(e.key === 'Home' ? 0 : placed.value.length - 1);
   } else if (e.key === 'Enter') {
     e.preventDefault();
     if (e.shiftKey) emit('drill', c);
@@ -273,7 +326,7 @@ function onKey(e: KeyboardEvent, i: number, c: HeatCell) {
     class="g-heatmap-wrap"
     :class="[`is-${granularity}`, { 'is-loading': loading, 'is-stagger': staggering }]"
     role="group"
-    aria-label="熱力圖(方向鍵移動、Enter 開明細、Shift+Enter 下鑽)"
+    aria-label="熱力圖(方向鍵移動、Home / End 到第一 / 最後一格、Enter 開明細、Shift+Enter 下鑽)"
     :aria-busy="loading"
     @mouseleave="hideTip"
   >
@@ -318,17 +371,12 @@ function onKey(e: KeyboardEvent, i: number, c: HeatCell) {
                 'is-selected': selected === p.c.t,
               },
             ]"
-            :style="{
-              gridColumn: p.col + 1,
-              gridRow: p.row + 1,
-              '--heat': p.c.level ? `var(--heat-${metric}-${p.c.level})` : 'var(--heat-empty)',
-              '--delay': `${Math.min(p.i * 4, 360)}ms`,
-            }"
+            :style="p.style"
             :tabindex="p.i === focusIndex ? 0 : -1"
-            :aria-label="label(p.c)"
+            :aria-label="p.label"
             @pointerdown="onPointerDown"
             @click="onCellClick($event, p.c)"
-            @dblclick="emit('drill', p.c)"
+            @dblclick="onCellDblClick(p.c)"
             @keydown="onKey($event, p.i, p.c)"
             @focus="
               focusIndex = p.i;

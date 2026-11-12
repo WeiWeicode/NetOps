@@ -6,7 +6,7 @@
  *   - coverage.since 之前顯示「此日期前沒有資料」;partial 標示「此時段資料不完整」
  *   - 點格子 → 開 SliceDrawer(useSlice.open);雙擊或抽屜「下鑽」→ useHeatmap.drill
  */
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { fmtNum, fmtShort, fmtSize } from '@/api/format';
 import { ApiError, describeError } from '@/api/gateway';
 import type { HeatCell, HeatMetric } from '@/api/heatmap';
@@ -20,6 +20,9 @@ const s = useSlice();
 
 const drawer = ref(false);
 const selectedCell = ref<HeatCell | null>(null);
+
+// 換粒度、換期間後舊的選取格不再對應目前的畫面(程式碼審查 #11)
+watch([h.granularity, h.date], () => (selectedCell.value = null));
 
 const granularityOptions = h.granularityOptions.map((g) => ({ label: g.label, value: g.value }));
 

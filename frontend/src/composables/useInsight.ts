@@ -7,7 +7,9 @@
  *   只採用最後一次送出、且期間沒變的回應;換期間時先清掉舊資料(不顯示新期間標籤配舊資料);自動刷新失敗保留舊資料。
  */
 import { computed, getCurrentScope, onScopeDispose, ref, shallowRef, watch, type Ref } from 'vue';
+import { can } from '@/api/gateway';
 import { insight, type DateRange, type ThreatInsight, type TrafficInsight } from '@/api/insight';
+import { API } from '@/api/perms';
 import { HIDDEN_FACTOR } from './usePolling';
 import { addDays, spanDays, taipeiDay } from './vizTime';
 
@@ -110,5 +112,7 @@ export function useInsight<V extends InsightView>(view: V, opts: { preset?: Excl
       clearTimeout(timer);
     });
 
-  return { view, range, activePreset, presets: PRESETS, rangeError, data, loading, error, includesToday, preset, setCustom, refresh: () => load() };
+  /** 點圖表開時段明細需要 Log 明細權限(頁面只要 netops.pa.read;和 useHeatmap.canSlice 同一個判斷) */
+  const canSlice = computed(() => can(API.paLogRead));
+  return { view, range, activePreset, presets: PRESETS, rangeError, data, loading, error, includesToday, canSlice, preset, setCustom, refresh: () => load() };
 }

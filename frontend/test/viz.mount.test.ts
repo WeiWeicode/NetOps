@@ -204,6 +204,56 @@ describe('GHeatmap 熱力圖元件', () => {
     expect(w.emitted('select')).toHaveLength(1);
     w.unmount();
   });
+
+  // Claude 2026-11-12(程式碼審查 #1、#3、#4、#9)
+  it('滑鼠單擊延遲後才 select;雙擊只 drill(抽屜遮罩不會吃掉第二下)', async () => {
+    vi.useFakeTimers();
+    const res = heatmapResponse({ granularity: 'day', metric: 'traffic', date: '2026-11-10', now: NOW });
+    const w = mount(GHeatmap, {
+      props: { granularity: 'day', metric: 'traffic', cells: res.cells.slice(0, 12) as HeatmapResponse['cells'], from: res.from, to: res.to },
+      global: { plugins: [ui] },
+    });
+    const btn = w.find('button.g-heatmap__cell');
+    await btn.trigger('pointerdown', { pointerType: 'mouse' });
+    await btn.trigger('click', { detail: 1 });
+    expect(w.emitted('select')).toBeUndefined();
+    vi.advanceTimersByTime(260);
+    expect(w.emitted('select')).toHaveLength(1);
+
+    await btn.trigger('click', { detail: 1 });
+    await btn.trigger('click', { detail: 2 });
+    await btn.trigger('dblclick');
+    vi.advanceTimersByTime(260);
+    expect(w.emitted('select')).toHaveLength(1);
+    expect(w.emitted('drill')).toHaveLength(1);
+    w.unmount();
+  });
+
+  it('年視圖欄位從 from 所在週的週起點起算(同一欄不跨週)、資料換了就清 tooltip、Home / End', async () => {
+    // 2026-11-12(週四)起 14 天
+    const from = '2026-11-12T00:00:00+08:00';
+    const day = (i: number) => new Date(Date.parse(from) + i * 86_400_000).toISOString();
+    const cells = Array.from({ length: 14 }, (_, i) => ({ t: day(i), v: 1, level: 1, partial: false, tip: { bytes: 1, sessions: 1, deny: 0, threats: { critical: 0, high: 0, medium: 0, low: 0, info: 0 }, topIp: { traffic: null, deny: null, threat: null } } }));
+    const w = mount(GHeatmap, {
+      props: { granularity: 'year', metric: 'traffic', cells: cells as unknown as HeatmapResponse['cells'], from, to: day(14) },
+      global: { plugins: [ui] },
+    });
+    const b = w.findAll('button.g-heatmap__cell');
+    const pos = (i: number) => [b[i]!.attributes('style')!.match(/grid-column: (\d+)/)![1], b[i]!.attributes('style')!.match(/grid-row: (\d+)/)![1]];
+    expect(pos(0)).toEqual(['1', '4']); // 週四 = 第 4 列
+    expect(pos(3)).toEqual(['1', '7']); // 週日仍在第 1 欄
+    expect(pos(4)).toEqual(['2', '1']); // 週一換到第 2 欄
+    await b[0]!.trigger('keydown', { key: 'End' });
+    expect(b[13]!.attributes('tabindex')).toBe('0');
+    await b[13]!.trigger('keydown', { key: 'Home' });
+    expect(b[0]!.attributes('tabindex')).toBe('0');
+
+    await b[2]!.trigger('mouseenter');
+    expect(w.find('.g-heatmap__tip').exists()).toBe(true);
+    await w.setProps({ cells: cells.map((c) => ({ ...c, v: 2 })) as unknown as HeatmapResponse['cells'] });
+    expect(w.find('.g-heatmap__tip').exists()).toBe(false);
+    w.unmount();
+  });
 });
 
 describe('GSourceBadge 與 GDrawer / SliceDrawer', () => {
@@ -229,7 +279,12 @@ describe('GSourceBadge 與 GDrawer / SliceDrawer', () => {
     expect(w.find('[role="dialog"]').exists()).toBe(true);
     await w.find('.g-drawer').trigger('keydown', { key: 'Escape' });
     expect(w.emitted('update:modelValue')?.[0]).toEqual([false]);
+    // 開著時鎖背景捲動;焦點在 body 時 document 層的 Esc 也能關(Claude 2026-11-12,程式碼審查 #6)
+    expect(document.body.style.overflow).toBe('hidden');
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    expect(w.emitted('update:modelValue')).toHaveLength(2);
     w.unmount();
+    expect(document.body.style.overflow).toBe('');
   });
 
   it('SliceDrawer 呈現冷資料過場、202 背景查詢、429 忙碌倒數、409 保留熱力圖格彙總與完成結果', async () => {
@@ -390,7 +445,8 @@ describe('9 個圖表元件與資安跳脫', () => {
   });
 });
 
-describe('Heatmap.vue 與 Insight.vue 頁面整合', () => {
+// 頁面級測試掛載 10 張以上圖表,全套件冷啟動時可能超過預設 5 秒(Claude 2026-11-12,程式碼審查)
+describe('Heatmap.vue 與 Insight.vue 頁面整合', { timeout: 15_000 }, () => {
   it('Heatmap.vue 顯示停用的 AD 指標與提示、處理日視圖 422 超過保留期限、點擊格子開啟 SliceDrawer', async () => {
     const res = heatmapResponse({
       granularity: 'year',
@@ -422,6 +478,7 @@ describe('Heatmap.vue 與 Insight.vue 頁面整合', () => {
     // 點擊格子開啟明細抽屜
     const cells = w.findAll('button.g-heatmap__cell');
     await cells.at(-1)!.trigger('click');
+    await new Promise((r) => setTimeout(r, 300)); // 單擊延遲 250ms 才 select(等待確認不是雙擊)
     await flushPromises();
     expect(mocks.sliceGet).toHaveBeenCalled();
     expect(w.text()).toContain('即時熱資料');

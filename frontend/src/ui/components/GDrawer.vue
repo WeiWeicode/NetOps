@@ -22,14 +22,20 @@ function close() {
   emit('update:modelValue', false);
 }
 
-function onKeydown(e: KeyboardEvent) {
-  if (e.key === 'Escape') {
+/** Esc 掛在 document:焦點掉回 body(點了抽屜內的文字)時也能關閉(程式碼審查 #6) */
+function onDocKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape' && props.modelValue) {
     e.stopPropagation();
     close();
-    return;
   }
+}
+
+function onKeydown(e: KeyboardEvent) {
+  // 焦點在抽屜內:這裡處理並停止冒泡,document 那層就不會再關一次
+  if (e.key === 'Escape') return onDocKeydown(e);
   if (e.key !== 'Tab' || !panel.value) return;
-  const nodes = Array.from(panel.value.querySelectorAll<HTMLElement>(FOCUSABLE)).filter((el) => el.offsetParent !== null || el === document.activeElement);
+  // offsetParent 在 position:fixed 的子孫是 null,改用 getClientRects 判斷是否顯示(程式碼審查 #6)
+  const nodes = Array.from(panel.value.querySelectorAll<HTMLElement>(FOCUSABLE)).filter((el) => el.getClientRects().length > 0 || el === document.activeElement);
   if (!nodes.length) {
     e.preventDefault();
     panel.value.focus();
@@ -49,11 +55,28 @@ function onKeydown(e: KeyboardEvent) {
   }
 }
 
+/** 開著時鎖住背景捲動(aria-modal 的抽屜,滾輪不該捲到底下的頁面;程式碼審查 #6) */
+let prevOverflow: string | null = null;
+function lockScroll(on: boolean) {
+  if (on && prevOverflow === null) {
+    prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    document.addEventListener('keydown', onDocKeydown);
+  } else if (!on && prevOverflow !== null) {
+    document.body.style.overflow = prevOverflow;
+    prevOverflow = null;
+    document.removeEventListener('keydown', onDocKeydown);
+  }
+}
+
 watch(
   () => props.modelValue,
   async (open) => {
+    lockScroll(open);
     if (open) {
-      opener = document.activeElement as HTMLElement | null;
+      const a = document.activeElement as HTMLElement | null;
+      // 點 ECharts 的 SVG 或表格列時 activeElement 是 body:不記,關閉後不把焦點丟到頁首
+      opener = a && a !== document.body ? a : null;
       await nextTick();
       panel.value?.focus();
     } else {
@@ -63,10 +86,12 @@ watch(
       target?.focus?.();
     }
   },
+  { immediate: true },
 );
 
 onBeforeUnmount(() => {
   opener = null;
+  lockScroll(false);
 });
 </script>
 

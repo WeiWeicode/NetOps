@@ -10,16 +10,15 @@
  *   - 任何圖表元素點擊 → useChartPick.toSliceQuery → useSlice.open(SliceDrawer)
  */
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
-import { can } from '@/api/gateway';
 import { fmtNum, fmtSize } from '@/api/format';
 import { ApiError, describeError } from '@/api/gateway';
 import type { CountryCount, TopApp, TopIp, TopIpTraffic, TopThreatName } from '@/api/insight';
-import { API } from '@/api/perms';
 import SliceDrawer from '@/components/SliceDrawer.vue';
 import { useChartPick } from '@/composables/useChartPick';
 import { useInsight, type InsightView, type RangePreset } from '@/composables/useInsight';
 import { useSlice } from '@/composables/useSlice';
 import { taipeiLocal } from '@/composables/vizTime';
+import { toast } from '@/ui';
 import GAllowDeny from '@/ui/charts/GAllowDeny.vue';
 import GAppShare from '@/ui/charts/GAppShare.vue';
 import GEChart from '@/ui/charts/GEChart.vue';
@@ -151,7 +150,8 @@ function toggleTable(key: string) {
 
 /* ───── 點擊圖表或表格列 → 時段明細抽屜(§3.3) ───── */
 function onPick(p: ChartPick) {
-  if (!can(API.paLogRead)) return;
+  // 沒有 Log 明細權限:提示而不是靜默不動(程式碼審查 #5)
+  if (!traffic.canSlice.value) return toast.info('沒有時段明細權限', '需要「Log 明細查詢」權限才能開啟時段明細');
   const d = traffic.data.value;
   const td = threat.data.value;
   const q = toSliceQuery(p, traffic.range.value, {
@@ -164,6 +164,12 @@ function onPick(p: ChartPick) {
 }
 
 /* ───── Top 10 威脅名稱圖表設定(威脅 Tab 第 5 張圖) ───── */
+// 窄螢幕(≤ 640px)縮小左側標籤區,不讓長條只剩幾十 px(程式碼審查 #7)
+const narrowMq = typeof window !== 'undefined' && window.matchMedia ? window.matchMedia('(max-width: 640px)') : null;
+const narrow = ref(!!narrowMq?.matches);
+const onNarrow = (e: MediaQueryListEvent) => (narrow.value = e.matches);
+narrowMq?.addEventListener?.('change', onNarrow);
+onBeforeUnmount(() => narrowMq?.removeEventListener?.('change', onNarrow));
 const themeTick = ref(0);
 let mo: MutationObserver | null = null;
 
@@ -206,7 +212,7 @@ const topNamesOption = computed<Record<string, unknown>>(() => {
   };
 
   return {
-    grid: { top: 16, right: 28, bottom: 24, left: 210, containLabel: false },
+    grid: { top: 16, right: 28, bottom: 24, left: narrow.value ? '38%' : 210, containLabel: false },
     tooltip: {
       trigger: 'axis',
       axisPointer: { type: 'shadow' },
@@ -227,7 +233,7 @@ const topNamesOption = computed<Record<string, unknown>>(() => {
       type: 'category',
       data: items.map((x) => x.name),
       axisLabel: {
-        width: 195,
+        width: narrow.value ? 110 : 195,
         overflow: 'truncate',
       },
     },

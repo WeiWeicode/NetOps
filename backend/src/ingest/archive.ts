@@ -121,8 +121,8 @@ const key = (kind: ArchiveKind, day: string) => `${kind}:${day}`;
 const sleep = (ms: number, signal: AbortSignal) =>
   new Promise<void>((r) => {
     if (signal.aborted || ms <= 0) return r();
+    // await 的計時器不能 unref:它是唯一待辦時 Node 會當成事件迴圈已結束,promise 永遠不會 resolve(2026-11-12 CI 在 Linux 取消測試)
     const t = setTimeout(r, ms);
-    t.unref();
     signal.addEventListener('abort', () => (clearTimeout(t), r()), { once: true });
   });
 const minutesOfDay = (ms: number) => Math.floor(((ms + TZ_MS) % DAY_MS) / 60_000);
@@ -332,7 +332,7 @@ export class Archiver {
         this.fail('冷查詢鎖', e);
       }
       if (Date.now() >= until || signal.aborted) return false;
-      await new Promise((r) => setTimeout(r, Math.min(5_000, this.d.lockWaitMs ?? 5_000)).unref());
+      await new Promise((r) => setTimeout(r, Math.min(5_000, this.d.lockWaitMs ?? 5_000)));
     }
   }
 

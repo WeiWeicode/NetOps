@@ -150,15 +150,17 @@ function client(cfg: ClickHouseConfig, fetchImpl: typeof fetch) {
 /** 讀 manifest 的最新狀態(FINAL);netops_writer / netops_cold 都有 SELECT */
 async function readManifest(c: ReturnType<typeof client>, days: readonly string[]): Promise<ManifestEntry[]> {
   if (!days.length) return [];
-  type R = { day: string; table_name: string; status: string; rows: number; bytes: number; sha256: string; path: string; error: string; t: number };
+  type R = { d: string; table_name: string; status: string; rows: number; bytes: number; sha256: string; path: string; error: string; t: number };
+  // 別名不能和欄位同名:ClickHouse 的 WHERE 會先解析成 SELECT 的別名(toString(day) AS day 會讓日期條件變成字串比較,一筆都查不到;
+  // 2026-11-12 CI 整合測試發現)
   const rows = await c.json<R>(
-    `SELECT toString(day) AS day, table_name, status, rows, bytes, sha256, path, error, toUnixTimestamp64Milli(updated_at) AS t
+    `SELECT toString(day) AS d, table_name, status, rows, bytes, sha256, path, error, toUnixTimestamp64Milli(updated_at) AS t
      FROM ${MANIFEST_TABLE} FINAL WHERE day IN {days:Array(Date)}`,
     { days: `[${days.map((d) => `'${mustDay(d)}'`).join(',')}]` },
   );
   return rows
     .filter((r) => (ARCHIVE_KIND_LIST as string[]).includes(r.table_name))
-    .map((r) => ({ day: r.day, kind: r.table_name as ArchiveKind, status: r.status as ArchiveStatus, rows: num(r.rows), bytes: num(r.bytes), sha256: r.sha256, path: r.path, error: r.error, updatedAt: num(r.t) }));
+    .map((r) => ({ day: r.d, kind: r.table_name as ArchiveKind, status: r.status as ArchiveStatus, rows: num(r.rows), bytes: num(r.bytes), sha256: r.sha256, path: r.path, error: r.error, updatedAt: num(r.t) }));
 }
 
 export interface ArchiveWriterClient {

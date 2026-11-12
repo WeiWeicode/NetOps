@@ -15,7 +15,7 @@
  */
 import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
-import { access, mkdir, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { access, lstat, mkdir, readdir, rename, rm, stat, statfs, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -46,6 +46,17 @@ const RETRY_MS = 3600_000;
 const RECHECK_MS = 3600_000;
 const LOCK_WAIT_MS = 60_000;
 const LOCK_REFRESH_MS = 30_000;
+/** 延長鎖連續失敗(Redis 斷線)超過這麼久就中止歸檔:鎖 TTL 120 秒,留 30 秒餘裕(code review #1、資安審查 L4) */
+const LOCK_LOST_MS = 90_000;
+/** 等鎖時的預約(netops-api 看到預約就不接新的冷明細,資安審查 M1);涵蓋一個檔的匯出上限 */
+const RESERVE_MS = 20 * 60_000;
+/** 一輪最多歸檔幾個檔、檔與檔之間讓出鎖幾秒(補檔期間冷明細還有機會執行;code review #4) */
+const MAX_FILES_PER_TICK = 6;
+const PAUSE_MS = 5_000;
+/** 來源列數比對只看最近幾天(FTP 補漏在對帳後幾天內;每小時全範圍 GROUP BY 太重,code review #7) */
+const RECHECK_DAYS = 7;
+/** 剩餘空間下限(暫存與 NAS 都要):低於就不歸檔(資安審查 M2) */
+export const MIN_FREE_BYTES = 2 * 1024 ** 3;
 /** 心跳最多列幾個逾期的日子 */
 const LATE_SHOW = 10;
 
@@ -60,6 +71,8 @@ export interface ArchiveOptions {
   alertDays: number;
   /** 原始表保留天數(重試範圍) */
   ttlDays: Record<ArchiveKind, number>;
+  /** 單一檔案上限(位元組;超過就中止,資安審查 M2) */
+  maxBytes: number;
 }
 
 export interface ArchiveDeps {
@@ -68,11 +81,14 @@ export interface ArchiveDeps {
   lock: ColdLock;
   log: (level: 'info' | 'warn' | 'error', msg: string, extra?: Record<string, unknown>) => void;
   now?: () => number;
-  /** 測試縮短等鎖時間 */
+  /** 測試縮短等鎖時間、檔與檔之間的暫停 */
   lockWaitMs?: number;
+  pauseMs?: number;
+  /** 剩餘空間(測試注入;預設 fs.statfs) */
+  freeBytes?: (dir: string) => Promise<number>;
 }
 
-export type ArchiveState = 'starting' | 'ok' | 'late' | 'nas-missing' | 'failing';
+export type ArchiveState = 'starting' | 'ok' | 'late' | 'nas-missing' | 'disk-low' | 'failing';
 
 export interface ArchiveStatus {
   state: ArchiveState;
@@ -85,9 +101,29 @@ export interface ArchiveStatus {
   archived: number;
 }
 
-/** 錯誤訊息只留一行、截斷(不含路徑以外的資料內容) */
-const brief = (e: unknown) => String((e as Error)?.message ?? e).replace(/\p{Cc}+/gu, ' ').slice(0, 200);
+/**
+ * 錯誤訊息只留一行、截斷;檔案路徑換成 <path>(心跳與 manifest 給內部人員看,原文只寫容器日誌;資安審查 L5)。
+ * Node fs 錯誤只留代碼
+ */
+export const brief = (e: unknown): string => {
+  const code = (e as { code?: unknown })?.code;
+  if (typeof code === 'string' && /^E[A-Z]+$/.test(code)) return `檔案系統錯誤 ${code}`;
+  return String((e as Error)?.message ?? e)
+    .replace(/\p{Cc}+/gu, ' ')
+    .replace(/(?:\/[\w.@-]+){2,}/g, '<path>')
+    .slice(0, 200);
+};
+async function defaultFreeBytes(dir: string): Promise<number> {
+  const s = await statfs(dir);
+  return Number(s.bavail) * Number(s.bsize);
+}
 const key = (kind: ArchiveKind, day: string) => `${kind}:${day}`;
+const sleep = (ms: number, signal: AbortSignal) =>
+  new Promise<void>((r) => {
+    if (signal.aborted || ms <= 0) return r();
+    const t = setTimeout(r, ms);
+    signal.addEventListener('abort', () => (clearTimeout(t), r()), { once: true });
+  });
 const minutesOfDay = (ms: number) => Math.floor(((ms + TZ_MS) % DAY_MS) / 60_000);
 const ageDays = (day: string, today: string) => Math.round((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${day}T00:00:00Z`)) / DAY_MS);
 
@@ -124,6 +160,10 @@ export class Archiver {
   private readonly lateLogged = new Set<string>();
   private lastRecheck = 0;
   private retentionDay = '';
+  /** 正式檔已改名、但 .sha256 或 manifest 沒寫成功:下一輪強制重做(code review #8) */
+  private readonly redo = new Set<string>();
+  /** manifest 每個 (類型, 日) 最後的 updated_at:ReplacingMergeTree 以它判斷新舊,時鐘回跳時仍要遞增(code review #2) */
+  private readonly stamps = new Map<string, number>();
   private readonly now: () => number;
 
   constructor(
@@ -131,6 +171,17 @@ export class Archiver {
     private readonly o: ArchiveOptions,
   ) {
     this.now = d.now ?? Date.now;
+  }
+
+  private seen(entries: readonly ManifestEntry[]) {
+    for (const e of entries) this.stamps.set(key(e.kind, e.day), Math.max(this.stamps.get(key(e.kind, e.day)) ?? 0, e.updatedAt));
+  }
+
+  /** 遞增的 updated_at */
+  private stamp(kind: ArchiveKind, day: string): number {
+    const t = Math.max(this.now(), (this.stamps.get(key(kind, day)) ?? 0) + 1);
+    this.stamps.set(key(kind, day), t);
+    return t;
   }
 
   private fail(where: string, e: unknown) {
@@ -162,15 +213,18 @@ export class Archiver {
         if (oldest > newest) continue;
         const days: string[] = [];
         for (let d = oldest; d <= newest; d = addDays(d, 1)) days.push(d);
-        const manifest = new Map((await this.d.ch.manifest(days)).filter((e) => e.kind === kind).map((e) => [e.day, e]));
-        const counts = recheck ? await this.d.ch.countDays(kind, oldest, newest) : null;
+        const rows = (await this.d.ch.manifest(days)).filter((e) => e.kind === kind);
+        this.seen(rows);
+        const manifest = new Map(rows.map((e) => [e.day, e]));
+        const recheckFrom = [oldest, addDays(newest, -(RECHECK_DAYS - 1))].sort().at(-1)!;
+        const counts = recheck ? await this.d.ch.countDays(kind, recheckFrom, newest) : null;
         for (const day of days) {
           const e = manifest.get(day);
           if (e?.status === 'expired') continue;
           if (e?.status === 'ok') {
             this.status.lastOk[kind] = !this.status.lastOk[kind] || day > this.status.lastOk[kind]! ? day : this.status.lastOk[kind];
-            // 歸檔後來源列數變了(補漏、去重):重新歸檔
-            if (counts && (counts.get(day) ?? 0) !== e.rows) pending.push({ kind, day, stale: true });
+            // 歸檔後來源列數變了(補漏、去重),或上次改名後沒寫完:重新歸檔
+            if (this.redo.has(key(kind, day)) || (counts && day >= recheckFrom && (counts.get(day) ?? 0) !== e.rows)) pending.push({ kind, day, stale: true });
             continue;
           }
           pending.push({ kind, day, stale: false });
@@ -198,35 +252,51 @@ export class Archiver {
 
     // 舊的先做(離 TTL 刪除最近);重新歸檔排在最後
     pending.sort((a, b) => Number(a.stale) - Number(b.stale) || a.day.localeCompare(b.day) || a.kind.localeCompare(b.kind));
-    for (const p of pending) {
-      if (signal.aborted) break;
-      if ((this.nextTry.get(key(p.kind, p.day)) ?? 0) > now) continue;
-      const owner = `archive:${key(p.kind, p.day)}:${randomUUID()}`;
-      if (!(await this.acquire(owner, signal))) {
-        // 冷明細查詢佔著鎖:這一輪先停,下一輪(10 分鐘後)再試
-        this.d.log('info', '冷查詢鎖忙碌,歸檔延到下一輪');
-        break;
+    const todo = pending.filter((p) => (this.nextTry.get(key(p.kind, p.day)) ?? 0) <= now).slice(0, MAX_FILES_PER_TICK);
+    let diskLow = false;
+    try {
+      for (const [i, p] of todo.entries()) {
+        if (signal.aborted) break;
+        // 剩餘空間:暫存(WSL 磁碟,和 ClickHouse 同一顆)與 NAS(和其他服務共用)都要有餘裕
+        const free = Math.min(await this.free(this.o.staging), await this.free(this.o.dir));
+        if (free < MIN_FREE_BYTES) {
+          diskLow = true;
+          this.fail('剩餘空間', new Error(`暫存或 NAS 剩餘空間不足 ${Math.round(MIN_FREE_BYTES / 1024 ** 3)} GB,不歸檔`));
+          break;
+        }
+        if (i > 0) await sleep(this.d.pauseMs ?? PAUSE_MS, signal);
+        const owner = `archive:${key(p.kind, p.day)}:${randomUUID()}`;
+        if (!(await this.acquire(owner, signal))) {
+          // 冷明細查詢佔著鎖:這一輪先停,下一輪(10 分鐘後)再試(預約保留,netops-api 不接新的冷查詢)
+          this.d.log('info', '冷查詢鎖忙碌,歸檔延到下一輪');
+          break;
+        }
+        try {
+          const r = await this.withRefresh(owner, (s) => this.archiveOne(p.kind, p.day, AbortSignal.any([signal, s])));
+          this.nextTry.delete(key(p.kind, p.day));
+          this.redo.delete(key(p.kind, p.day));
+          this.status.archived++;
+          if (!this.status.lastOk[p.kind] || p.day > this.status.lastOk[p.kind]!) this.status.lastOk[p.kind] = p.day;
+          this.status.late = this.status.late.filter((k) => k !== key(p.kind, p.day));
+          this.d.log('info', p.stale ? '重新歸檔完成(來源列數有變)' : '歸檔完成', { kind: p.kind, day: p.day, rows: r.rows, bytes: r.bytes });
+        } catch (e) {
+          // 關機中止:不算失敗(下次啟動再做),不寫 failed
+          if (signal.aborted) break;
+          failed = true;
+          this.nextTry.set(key(p.kind, p.day), this.now() + RETRY_MS);
+          this.fail(`歸檔 ${p.kind} ${p.day}`, e);
+          this.d.log('warn', '歸檔失敗,1 小時後重試', { kind: p.kind, day: p.day, error: String((e as Error)?.message ?? e).slice(0, 300) });
+          // 重新歸檔失敗時正式檔沒有動,保留原本的 ok 紀錄
+          if (!p.stale)
+            await this.d.ch
+              .writeManifest([{ day: p.day, kind: p.kind, status: 'failed', rows: 0, bytes: 0, sha256: '', path: archiveRelPath(p.kind, p.day), error: brief(e), updatedAt: this.stamp(p.kind, p.day) }])
+              .catch(() => undefined);
+        } finally {
+          await this.d.lock.release(owner);
+        }
       }
-      try {
-        const r = await this.withRefresh(owner, (s) => this.archiveOne(p.kind, p.day, AbortSignal.any([signal, s])));
-        this.nextTry.delete(key(p.kind, p.day));
-        this.status.archived++;
-        if (!this.status.lastOk[p.kind] || p.day > this.status.lastOk[p.kind]!) this.status.lastOk[p.kind] = p.day;
-        this.status.late = this.status.late.filter((k) => k !== key(p.kind, p.day));
-        this.d.log('info', p.stale ? '重新歸檔完成(來源列數有變)' : '歸檔完成', { kind: p.kind, day: p.day, rows: r.rows, bytes: r.bytes });
-      } catch (e) {
-        failed = true;
-        this.nextTry.set(key(p.kind, p.day), this.now() + RETRY_MS);
-        this.fail(`歸檔 ${p.kind} ${p.day}`, e);
-        this.d.log('warn', '歸檔失敗,1 小時後重試', { kind: p.kind, day: p.day, error: brief(e) });
-        // 重新歸檔失敗時正式檔沒有動,保留原本的 ok 紀錄
-        if (!p.stale)
-          await this.d.ch
-            .writeManifest([{ day: p.day, kind: p.kind, status: 'failed', rows: 0, bytes: 0, sha256: '', path: archiveRelPath(p.kind, p.day), error: brief(e), updatedAt: this.now() }])
-            .catch(() => undefined);
-      } finally {
-        await this.d.lock.release(owner);
-      }
+    } finally {
+      await this.d.lock.unreserve().catch(() => undefined);
     }
 
     try {
@@ -235,15 +305,28 @@ export class Archiver {
       failed = true;
       this.fail('保留期限清理', e);
     }
-    this.status.state = this.status.late.length ? 'late' : failed ? 'failing' : 'ok';
+    this.status.state = this.status.late.length ? 'late' : diskLow ? 'disk-low' : failed ? 'failing' : 'ok';
+    // 全部正常時清掉上次的錯誤(心跳不留舊錯誤;code review #6)
+    if (this.status.state === 'ok') this.status.lastError = null;
+  }
+
+  private async free(dir: string): Promise<number> {
+    try {
+      return await (this.d.freeBytes ?? defaultFreeBytes)(dir);
+    } catch {
+      // 查不到(例如平台不支援)時不擋歸檔
+      return Number.POSITIVE_INFINITY;
+    }
   }
 
   private async acquire(owner: string, signal: AbortSignal): Promise<boolean> {
     // 等待時間用實際時間(this.now 可能是測試注入的固定時間)
     const until = Date.now() + (this.d.lockWaitMs ?? LOCK_WAIT_MS);
+    // 預約:netops-api 看到就不接新的冷明細(已在跑的跑完),歸檔不會一直排不到(資安審查 M1)
+    await this.d.lock.reserve(RESERVE_MS).catch(() => undefined);
     for (;;) {
       try {
-        if (await this.d.lock.acquire(owner)) return true;
+        if (await this.d.lock.acquire(owner, { ignoreReservation: true })) return true;
       } catch (e) {
         this.fail('冷查詢鎖', e);
       }
@@ -252,16 +335,20 @@ export class Archiver {
     }
   }
 
-  /** 執行期間每 30 秒延長鎖;鎖被別人拿走(過期)時中止這次歸檔 */
+  /** 執行期間每 30 秒延長鎖;鎖被別人拿走(過期),或延長一直失敗(Redis 斷線)到鎖可能已過期時,中止這次歸檔 */
   private async withRefresh<T>(owner: string, run: (signal: AbortSignal) => Promise<T>): Promise<T> {
     const lost = new AbortController();
+    let lastOk = Date.now();
     const timer = setInterval(() => {
       this.d.lock
         .refresh(owner)
         .then((ok) => {
-          if (!ok) lost.abort(new Error('冷查詢鎖已過期'));
+          if (ok) lastOk = Date.now();
+          else lost.abort(new Error('冷查詢鎖已過期'));
         })
-        .catch(() => undefined);
+        .catch(() => {
+          if (Date.now() - lastOk >= LOCK_LOST_MS) lost.abort(new Error('冷查詢鎖無法延長(Redis 無法連線)'));
+        });
     }, LOCK_REFRESH_MS);
     try {
       return await run(lost.signal);
@@ -282,11 +369,16 @@ export class Archiver {
     try {
       // 1) 匯出到本機暫存,同時算雜湊
       const hash = createHash('sha256');
+      const max = this.o.maxBytes;
+      let bytes = 0;
       const body = await this.d.ch.exportParquet(kind, day, signal);
       await pipeline(
         Readable.fromWeb(body as WebReadableStream<Uint8Array>),
         new Transform({
-          transform(c, _e, cb) {
+          transform(c: Buffer, _e, cb) {
+            bytes += c.length;
+            // 單一檔案上限:流量暴增時不塞滿暫存與 NAS(資安審查 M2)
+            if (bytes > max) return cb(new Error(`Parquet 超過上限 ${Math.round(max / 1024 ** 2)} MB`));
             hash.update(c);
             cb(null, c);
           },
@@ -296,20 +388,29 @@ export class Archiver {
       );
       const sha = hash.digest('hex');
       const { size } = await stat(local);
-      // 2) 搬到 NAS 的 .tmp,重讀比對雜湊
+      // 2) 搬到 NAS 的 .tmp(先刪再以 wx 建立:不跟隨既有的 symlink,資安審查 L2),重讀比對雜湊
       await mkdir(yearDir, { recursive: true });
-      await pipeline(createReadStream(local), createWriteStream(tmp), { signal });
+      await rm(tmp, { force: true });
+      await pipeline(createReadStream(local), createWriteStream(tmp, { flags: 'wx' }), { signal });
       if ((await sha256File(tmp)) !== sha) throw new Error('NAS 檔案雜湊和匯出時不一致');
       // 3) 列數核對:串流中途失敗時 HTTP 可能已回 200、檔案被截斷;ClickHouse 從唯讀掛載讀回 .tmp(壞檔會解析失敗)
       const expected = await this.d.ch.countDay(kind, day);
       const actual = await this.d.cold.parquetCount(kind, day, true);
       if (expected !== actual) throw new Error(`列數不一致:來源 ${expected}、Parquet ${actual}`);
-      // 4) 改名成正式檔(重新歸檔時覆蓋舊檔)、寫 .sha256、記 manifest
+      // 鎖已遺失(或關機)時不覆蓋正式檔:netops-api 可能正在讀
+      signal.throwIfAborted();
+      // 4) 改名成正式檔(重新歸檔時覆蓋舊檔)、寫 .sha256、記 manifest;改名後任何一步失敗,下一輪強制重做
       await rename(tmp, final);
-      await writeFile(`${final}.sha256`, `${sha}  ${name}\n`);
-      const entry: ManifestEntry = { day, kind, status: 'ok', rows: expected, bytes: size, sha256: sha, path: archiveRelPath(kind, day), error: '', updatedAt: this.now() };
-      await this.d.ch.writeManifest([entry]);
-      return entry;
+      try {
+        await rm(`${final}.sha256`, { force: true });
+        await writeFile(`${final}.sha256`, `${sha}  ${name}\n`, { flag: 'wx' });
+        const entry: ManifestEntry = { day, kind, status: 'ok', rows: expected, bytes: size, sha256: sha, path: archiveRelPath(kind, day), error: '', updatedAt: this.stamp(kind, day) };
+        await this.d.ch.writeManifest([entry]);
+        return entry;
+      } catch (e) {
+        this.redo.add(key(kind, day));
+        throw e;
+      }
     } finally {
       await rm(local, { force: true });
       await rm(tmp, { force: true }).catch(() => undefined);
@@ -321,17 +422,27 @@ export class Archiver {
     if (this.o.keepDays <= 0 || this.retentionDay === today) return;
     const cutoff = addDays(today, -this.o.keepDays);
     const expired: ManifestEntry[] = [];
-    for (const year of await readdir(this.o.dir)) {
-      if (!/^\d{4}$/.test(year) || year > cutoff.slice(0, 4)) continue;
-      const yd = path.join(this.o.dir, year);
-      if (!(await stat(yd)).isDirectory()) continue;
-      for (const name of await readdir(yd)) {
-        const p = parseArchiveName(name);
+    let errors = 0;
+    for (const year of await readdir(this.o.dir, { withFileTypes: true })) {
+      // 只看真的目錄(不跟隨 symlink;資安審查 L2)
+      if (!year.isDirectory() || !/^\d{4}$/.test(year.name) || year.name > cutoff.slice(0, 4)) continue;
+      const yd = path.join(this.o.dir, year.name);
+      if (!(await lstat(yd)).isDirectory()) continue;
+      for (const ent of await readdir(yd, { withFileTypes: true })) {
+        if (!ent.isFile()) continue;
+        const p = parseArchiveName(ent.name);
         if (!p || p.day >= cutoff) continue;
-        await rm(path.join(yd, name), { force: true });
-        if (p.ext === '') expired.push({ day: p.day, kind: p.kind, status: 'expired', rows: 0, bytes: 0, sha256: '', path: archiveRelPath(p.kind, p.day), error: '', updatedAt: this.now() });
+        try {
+          await rm(path.join(yd, ent.name), { force: true });
+        } catch {
+          // 單一檔案刪不掉不中斷整輪
+          errors++;
+          continue;
+        }
+        if (p.ext === '') expired.push({ day: p.day, kind: p.kind, status: 'expired', rows: 0, bytes: 0, sha256: '', path: archiveRelPath(p.kind, p.day), error: '', updatedAt: this.stamp(p.kind, p.day) });
       }
     }
+    if (errors) this.d.log('warn', '保留期限清理有檔案刪不掉', { errors });
     if (expired.length) {
       await this.d.ch.writeManifest(expired);
       this.d.log('info', '刪除超過保留期限的歸檔', { files: expired.length, before: cutoff });

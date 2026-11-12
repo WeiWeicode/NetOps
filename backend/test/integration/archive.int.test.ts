@@ -77,7 +77,7 @@ after(async () => {
 
 const lockClient = () => redis as unknown as ColdLockClient;
 const archiver = (now = Date.now()) =>
-  new Archiver({ ch, cold, lock: createColdLock(lockClient()), log, now: () => now, lockWaitMs: 2000 }, { dir: ARCHIVE_DIR, staging, keepDays: 14, alertDays: 2, ttlDays: { traffic: 3, threat: 3 } });
+  new Archiver({ ch, cold, lock: createColdLock(lockClient()), log, now: () => now, lockWaitMs: 2000, pauseMs: 0 }, { dir: ARCHIVE_DIR, staging, keepDays: 14, alertDays: 2, ttlDays: { traffic: 3, threat: 3 }, maxBytes: 1024 ** 3 });
 
 describe('C4 歸檔(真 ClickHouse)', () => {
   it('匯出一天:Parquet 列數 = 來源列數、雜湊和 .sha256 一致、manifest ok', async () => {
@@ -112,6 +112,13 @@ describe('C4 歸檔(真 ClickHouse)', () => {
     const thrCold = await createColdSlice(cold, { warn: () => undefined }).query('threat', { fromMs: H, toMs: H + HOUR, ip: IP, severity: 'high' }, 10, 'time', signal);
     assert.equal(thrHot.rows.length, 3);
     assert.deepEqual(thrCold, thrHot);
+  });
+
+  it('沒有資料的日子(0 列)也能歸檔、讀回 0 列(code review #5)', async () => {
+    const empty = addDays(TODAY, -40);
+    const e = await archiver().archiveOne('threat', empty, signal);
+    assert.equal(e.rows, 0);
+    assert.equal(await cold.parquetCount('threat', empty), 0);
   });
 
   it('netops_reader 不能用 file() 讀歸檔', async () => {

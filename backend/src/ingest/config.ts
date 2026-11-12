@@ -15,6 +15,7 @@
  *   INGEST_ARCHIVE_STAGING          本機暫存(預設 /var/lib/netops-ingest/staging,WSL 磁碟的 volume)
  *   INGEST_ARCHIVE_KEEP_DAYS        保留天數:測試區 / 本機預設 14;正式區預設 0(不刪),設定時至少 366(CQ12:Parquet 至少 1 年)
  *   INGEST_ARCHIVE_ALERT_DAYS       前一天起算第幾天還沒成功就告警(預設 min(25, TRAFFIC 保留天數 − 1))
+ *   INGEST_ARCHIVE_MAX_MB           單一 Parquet 上限(預設 4096 MB;平常一天 0.2–0.4 GB,流量暴增時不塞滿暫存與 NAS)
  *   CLICKHOUSE_COLD_USER / CLICKHOUSE_COLD_PASSWORD_FILE  讀回核對 Parquet 列數(netops_cold;只有它能用 file())
  *   NETOPS_TTL_TRAFFIC_DAYS / NETOPS_TTL_THREAT_DAYS      原始表保留天數(重試範圍;同 netops-api)
  */
@@ -42,6 +43,7 @@ export interface ArchiveConfig {
   keepDays: number;
   alertDays: number;
   ttlDays: Record<ArchiveKind, number>;
+  maxBytes: number;
   cold: { url: string; user: string; password: string };
 }
 
@@ -104,6 +106,9 @@ function loadArchive(env: NodeJS.ProcessEnv, gwEnv: GwEnv, chUrl: string): Archi
   const keepDays = int(env, 'INGEST_ARCHIVE_KEEP_DAYS', gwEnv === 'prod' ? 0 : 14, 0, 3650);
   // 正式區 Parquet 至少保留 1 年(CQ12)
   if (gwEnv === 'prod' && keepDays > 0 && keepDays < 366) throw new IngestConfigError(`正式區 INGEST_ARCHIVE_KEEP_DAYS 只能是 0(不刪)或至少 366(CQ12):${keepDays}`);
+  // 保留期限不能短於原始表保留:還在熱資料範圍的日子被刪檔標成 expired 後就不再歸檔(code review #9)
+  const maxTtl = Math.max(ttlDays.traffic, ttlDays.threat);
+  if (keepDays > 0 && keepDays < maxTtl) throw new IngestConfigError(`INGEST_ARCHIVE_KEEP_DAYS 不能少於原始表保留天數 ${maxTtl}:${keepDays}`);
   let password: string;
   try {
     password = readSecret(env, 'CLICKHOUSE_COLD_PASSWORD', gwEnv);
@@ -119,6 +124,7 @@ function loadArchive(env: NodeJS.ProcessEnv, gwEnv: GwEnv, chUrl: string): Archi
     keepDays,
     alertDays: int(env, 'INGEST_ARCHIVE_ALERT_DAYS', defaultAlertDays(ttlDays.traffic), 1, 3650),
     ttlDays,
+    maxBytes: int(env, 'INGEST_ARCHIVE_MAX_MB', 4096, 64, 20480) * 1024 * 1024,
     cold: { url: chUrl, user, password },
   };
 }

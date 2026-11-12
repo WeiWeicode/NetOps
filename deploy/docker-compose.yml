@@ -237,6 +237,8 @@ services:
       #   保留天數 NETOPS_ARCHIVE_KEEP_DAYS:測試區預設 14(NAS docker-folder 只剩約 18 GB);正式區 0 = 不刪(至少 1 年,CQ12)
       NETOPS_ARCHIVE_ENABLED: ${NETOPS_ARCHIVE_ENABLED:-1}
       INGEST_ARCHIVE_KEEP_DAYS: ${NETOPS_ARCHIVE_KEEP_DAYS:-}
+      # 單一 Parquet 上限(MB;平常一天 0.2–0.4 GB);暫存或 NAS 剩餘 < 2 GB 時不歸檔(心跳 archiveState=disk-low)
+      INGEST_ARCHIVE_MAX_MB: ${NETOPS_ARCHIVE_MAX_MB:-}
       CLICKHOUSE_COLD_USER: netops_cold
       CLICKHOUSE_COLD_PASSWORD_FILE: /run/secrets/ch_cold_password
     volumes:

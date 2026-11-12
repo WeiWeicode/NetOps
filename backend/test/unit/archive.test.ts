@@ -23,8 +23,8 @@ import {
   type ManifestEntry,
 } from '../../src/infra/clickhouse/archive.js';
 import { ClickHouseError } from '../../src/infra/clickhouse/index.js';
-import { createColdLock, type ColdLock } from '../../src/infra/redis/cold-lock.js';
-import { ARCHIVE_MARKER, archiveHeartbeatFields, Archiver, defaultAlertDays } from '../../src/ingest/archive.js';
+import { COLD_RESERVE_KEY, createColdLock, type ColdLock } from '../../src/infra/redis/cold-lock.js';
+import { ARCHIVE_MARKER, archiveHeartbeatFields, Archiver, brief, defaultAlertDays, MIN_FREE_BYTES } from '../../src/ingest/archive.js';
 import { IngestConfigError, loadIngestConfig } from '../../src/ingest/config.js';
 import { createColdSlice, missingDays } from '../../src/modules/pa-heat/cold.js';
 
@@ -79,25 +79,31 @@ function fakeCh(rows: Record<string, number> = {}) {
   return { ch, cold, manifest, exports, rows, parquetRows, setFailExport: (v: boolean) => (failExport = v) };
 }
 
-function memLock(): ColdLock & { held: () => string | null; hold: (v: string | null) => void } {
+function memLock(): ColdLock & { held: () => string | null; hold: (v: string | null) => void; reserved: () => boolean } {
   let held: string | null = null;
+  let reserved = false;
   const lock = createColdLock({
     set: async (_k, v) => (held ? null : ((held = v), 'OK')),
-    eval: async (script, _n, _k, v) => (held === v ? (script.includes('pexpire') ? 1 : ((held = null), 1)) : 0),
+    get: async () => (reserved ? '1' : null),
+    async eval(script, _n, k, v) {
+      if (k === COLD_RESERVE_KEY) return (reserved = script.includes("'set'")), 1;
+      return held === v ? (script.includes('pexpire') ? 1 : ((held = null), 1)) : 0;
+    },
     quit: async () => 'OK',
   });
-  return Object.assign(lock, { held: () => held, hold: (v: string | null) => (held = v) });
+  return Object.assign(lock, { held: () => held, hold: (v: string | null) => (held = v), reserved: () => reserved });
 }
 
 const logs: { level: string; msg: string }[] = [];
 const log = (level: 'info' | 'warn' | 'error', msg: string) => void logs.push({ level, msg });
 /** 2026-11-12 03:00 台灣時間 */
 const T0 = Date.parse('2026-11-12T03:00:00+08:00');
-const opts = (d: { dir: string; staging: string }, extra: Partial<{ keepDays: number; alertDays: number }> = {}) => ({
+const opts = (d: { dir: string; staging: string }, extra: Partial<{ keepDays: number; alertDays: number; maxBytes: number }> = {}) => ({
   ...d,
   keepDays: extra.keepDays ?? 14,
   alertDays: extra.alertDays ?? 2,
   ttlDays: { traffic: 3, threat: 3 } as Record<ArchiveKind, number>,
+  maxBytes: extra.maxBytes ?? 1024 * 1024,
 });
 const signal = new AbortController().signal;
 
@@ -133,7 +139,7 @@ describe('Archiver.archiveOne', () => {
   it('匯出 → 暫存 → NAS:正式檔、.sha256、manifest ok;暫存與 .tmp 清掉', async () => {
     const d = dirs();
     const f = fakeCh({ 'traffic:2026-11-11': 42 });
-    const a = new Archiver({ ch: f.ch, cold: f.cold, lock: memLock(), log, now: () => T0 }, opts(d));
+    const a = new Archiver({ ch: f.ch, cold: f.cold, lock: memLock(), log, pauseMs: 0, freeBytes: async () => Infinity, now: () => T0 }, opts(d));
     const e = await a.archiveOne('traffic', '2026-11-11', signal);
     const final = path.join(d.dir, '2026', 'pa_traffic_2026-11-11.parquet');
     const body = readFileSync(final);
@@ -155,7 +161,7 @@ describe('Archiver.archiveOne', () => {
     mkdirSync(path.join(d.dir, '2026'));
     writeFileSync(path.join(d.dir, '2026', 'pa_threat_2026-11-11.parquet'), 'old');
     f.parquetRows['threat:2026-11-11'] = 9;
-    const a = new Archiver({ ch: f.ch, cold: f.cold, lock: memLock(), log, now: () => T0 }, opts(d));
+    const a = new Archiver({ ch: f.ch, cold: f.cold, lock: memLock(), log, pauseMs: 0, freeBytes: async () => Infinity, now: () => T0 }, opts(d));
     await assert.rejects(a.archiveOne('threat', '2026-11-11', signal), /列數不一致:來源 10、Parquet 9/);
     assert.deepEqual(readdirSync(path.join(d.dir, '2026')), ['pa_threat_2026-11-11.parquet']);
     assert.equal(readFileSync(path.join(d.dir, '2026', 'pa_threat_2026-11-11.parquet'), 'utf8'), 'old');
@@ -167,7 +173,7 @@ describe('Archiver.tick', () => {
   it('沒有標記檔:不寫任何檔,狀態 nas-missing', async () => {
     const d = dirs(false);
     const f = fakeCh({ 'traffic:2026-11-11': 5 });
-    const a = new Archiver({ ch: f.ch, cold: f.cold, lock: memLock(), log, now: () => T0 }, opts(d));
+    const a = new Archiver({ ch: f.ch, cold: f.cold, lock: memLock(), log, pauseMs: 0, freeBytes: async () => Infinity, now: () => T0 }, opts(d));
     await a.tick(signal);
     assert.equal(a.status.state, 'nas-missing');
     assert.deepEqual(f.exports, []);
@@ -178,7 +184,7 @@ describe('Archiver.tick', () => {
   it('02:30 後處理前一天,並補原始表還完整的更早日子(TTL 3 天 → 前天、昨天);第二輪沒有要做的', async () => {
     const d = dirs();
     const f = fakeCh({ 'traffic:2026-11-10': 1, 'traffic:2026-11-11': 2, 'threat:2026-11-11': 3 });
-    const a = new Archiver({ ch: f.ch, cold: f.cold, lock: memLock(), log, now: () => T0 }, opts(d));
+    const a = new Archiver({ ch: f.ch, cold: f.cold, lock: memLock(), log, pauseMs: 0, freeBytes: async () => Infinity, now: () => T0 }, opts(d));
     await a.tick(signal);
     assert.deepEqual(f.exports, ['threat:2026-11-10', 'traffic:2026-11-10', 'threat:2026-11-11', 'traffic:2026-11-11']);
     assert.equal(a.status.state, 'ok');
@@ -194,7 +200,7 @@ describe('Archiver.tick', () => {
   it('02:30 前不處理前一天', async () => {
     const d = dirs();
     const f = fakeCh();
-    const a = new Archiver({ ch: f.ch, cold: f.cold, lock: memLock(), log, now: () => Date.parse('2026-11-12T02:29:00+08:00') }, opts(d));
+    const a = new Archiver({ ch: f.ch, cold: f.cold, lock: memLock(), log, pauseMs: 0, freeBytes: async () => Infinity, now: () => Date.parse('2026-11-12T02:29:00+08:00') }, opts(d));
     await a.tick(signal);
     assert.deepEqual(f.exports, ['threat:2026-11-10', 'traffic:2026-11-10']);
   });
@@ -203,7 +209,7 @@ describe('Archiver.tick', () => {
     const d = dirs();
     const f = fakeCh();
     let now = T0;
-    const a = new Archiver({ ch: f.ch, cold: f.cold, lock: memLock(), log, now: () => now }, opts(d, { alertDays: 2 }));
+    const a = new Archiver({ ch: f.ch, cold: f.cold, lock: memLock(), log, pauseMs: 0, freeBytes: async () => Infinity, now: () => now }, opts(d, { alertDays: 2 }));
     f.setFailExport(true);
     await a.tick(signal);
     assert.equal(f.manifest.get('traffic:2026-11-11')?.status, 'failed');
@@ -241,7 +247,7 @@ describe('Archiver.tick', () => {
     const d = dirs();
     const f = fakeCh({ 'traffic:2026-11-11': 5 });
     let now = T0;
-    const a = new Archiver({ ch: f.ch, cold: f.cold, lock: memLock(), log, now: () => now }, opts(d));
+    const a = new Archiver({ ch: f.ch, cold: f.cold, lock: memLock(), log, pauseMs: 0, freeBytes: async () => Infinity, now: () => now }, opts(d));
     await a.tick(signal);
     f.rows['traffic:2026-11-11'] = 7;
     now = T0 + 61 * 60_000;
@@ -255,10 +261,10 @@ describe('Archiver.tick', () => {
     mkdirSync(path.join(d.dir, '2026'));
     for (const n of ['pa_traffic_2026-10-28.parquet', 'pa_traffic_2026-10-28.parquet.sha256', 'pa_threat_2026-10-29.parquet', 'other.txt']) writeFileSync(path.join(d.dir, '2026', n), 'x');
     const f = fakeCh();
-    const keep0 = new Archiver({ ch: f.ch, cold: f.cold, lock: memLock(), log, now: () => T0 }, opts(d, { keepDays: 0 }));
+    const keep0 = new Archiver({ ch: f.ch, cold: f.cold, lock: memLock(), log, pauseMs: 0, freeBytes: async () => Infinity, now: () => T0 }, opts(d, { keepDays: 0 }));
     await keep0.retention('2026-11-12');
     assert.equal(readdirSync(path.join(d.dir, '2026')).length, 4);
-    const a = new Archiver({ ch: f.ch, cold: f.cold, lock: memLock(), log, now: () => T0 }, opts(d, { keepDays: 14 }));
+    const a = new Archiver({ ch: f.ch, cold: f.cold, lock: memLock(), log, pauseMs: 0, freeBytes: async () => Infinity, now: () => T0 }, opts(d, { keepDays: 14 }));
     await a.retention('2026-11-12');
     // 2026-11-12 − 14 天 = 10-29:10-28 刪除、10-29 保留
     assert.deepEqual(readdirSync(path.join(d.dir, '2026')).sort(), ['other.txt', 'pa_threat_2026-10-29.parquet']);
@@ -272,7 +278,7 @@ describe('Archiver.tick', () => {
     writeFileSync(path.join(d.staging, 'pa_traffic_2026-11-11.parquet.part'), 'x');
     writeFileSync(path.join(d.staging, 'keep.txt'), 'x');
     const f = fakeCh();
-    await new Archiver({ ch: f.ch, cold: f.cold, lock: memLock(), log }, opts(d)).cleanStaging();
+    await new Archiver({ ch: f.ch, cold: f.cold, lock: memLock(), log, pauseMs: 0, freeBytes: async () => Infinity }, opts(d)).cleanStaging();
     assert.deepEqual(readdirSync(d.staging), ['keep.txt']);
   });
 
@@ -341,7 +347,7 @@ describe('冷明細(netops-api,C4 / V-a 冷路由)', () => {
     const client: ColdFileClient = { parquetCount: async () => 0, manifest: async () => ok, rows: async <T>(sql: string) => (sqls.push(sql), [] as T[]) };
     const r = await createColdSlice(client, quiet).query('traffic', filter, 10, 'time', signal);
     assert.equal(r.summary.sessions, 0);
-    assert.ok(sqls.every((s) => /FROM \(SELECT \* REPLACE/.test(s)));
+    assert.ok(sqls.every((s) => /FROM \(SELECT toDateTime\(event_time, 'Asia\/Taipei'\) AS event_time/.test(s)));
     assert.ok(sqls.some((s) => /pa_threat_2026-11-02\.parquet/.test(s)));
 
     const fail = (code: number): ColdFileClient => ({ ...client, rows: async () => Promise.reject(new ClickHouseError('ClickHouse HTTP 500:secret path /var/lib', code, 500)) });
@@ -361,5 +367,62 @@ describe('冷明細(netops-api,C4 / V-a 冷路由)', () => {
     await lock.release('a');
     assert.equal(lock.held(), null);
     assert.equal(existsSync(tmpRoot), true);
+  });
+});
+
+describe('審查修正(C4)', () => {
+  it('剩餘空間不足:不匯出,狀態 disk-low', async () => {
+    const d = dirs();
+    const f = fakeCh({ 'traffic:2026-11-11': 1 });
+    const a = new Archiver({ ch: f.ch, cold: f.cold, lock: memLock(), log, pauseMs: 0, freeBytes: async () => MIN_FREE_BYTES - 1, now: () => T0 }, opts(d, { alertDays: 5 }));
+    await a.tick(signal);
+    assert.deepEqual(f.exports, []);
+    assert.equal(a.status.state, 'disk-low');
+  });
+
+  it('單一檔案超過上限:中止、不留檔案,記 failed', async () => {
+    const d = dirs();
+    const f = fakeCh({ 'traffic:2026-11-11': 1 });
+    const a = new Archiver({ ch: f.ch, cold: f.cold, lock: memLock(), log, pauseMs: 0, freeBytes: async () => Infinity, now: () => T0 }, opts(d, { maxBytes: 5 }));
+    await assert.rejects(a.archiveOne('traffic', '2026-11-11', signal), /超過上限/);
+    assert.deepEqual(readdirSync(d.staging), []);
+    assert.equal(existsSync(path.join(d.dir, '2026', 'pa_traffic_2026-11-11.parquet')), false);
+  });
+
+  it('一輪最多 6 個檔;歸檔時預約,結束後清掉;預約期間 netops-api 拿不到鎖', async () => {
+    const d = dirs();
+    const f = fakeCh();
+    const lock = memLock();
+    const a = new Archiver({ ch: f.ch, cold: f.cold, lock, log, pauseMs: 0, freeBytes: async () => Infinity, now: () => T0 }, { ...opts(d), ttlDays: { traffic: 10, threat: 10 } });
+    await a.tick(signal);
+    assert.equal(f.exports.length, 6);
+    assert.equal(lock.reserved(), false);
+    await lock.reserve(60_000);
+    assert.equal(await lock.acquire('api'), false);
+    assert.equal(await lock.acquire('ingest', { ignoreReservation: true }), true);
+  });
+
+  it('心跳 / manifest 的錯誤訊息不帶檔案路徑;fs 錯誤只留代碼', () => {
+    assert.equal(brief(Object.assign(new Error("EACCES: permission denied, open '/archive/2026/x.parquet.tmp'"), { code: 'EACCES' })), '檔案系統錯誤 EACCES');
+    assert.equal(brief(new Error('Cannot read /var/lib/clickhouse/user_files/archive/2026/a.parquet')), 'Cannot read <path>');
+  });
+
+  it('保留天數不能少於原始表保留', () => {
+    const pw = path.join(tmpRoot, 'pw2');
+    writeFileSync(pw, 'x');
+    const env = { GW_ENV: 'test', REDIS_URL: 'redis://r:6379/0', CLICKHOUSE_URL: 'http://ch:8123', CLICKHOUSE_USER: 'netops_writer', CLICKHOUSE_PASSWORD_FILE: pw, NETOPS_ARCHIVE_ENABLED: '1', CLICKHOUSE_COLD_PASSWORD_FILE: pw };
+    assert.throws(() => loadIngestConfig({ ...env, INGEST_ARCHIVE_KEEP_DAYS: '2' }), /不能少於/);
+    assert.equal(loadIngestConfig(env).archive!.maxBytes, 4096 * 1024 * 1024);
+  });
+
+  it('manifest 的 updated_at 遞增(時鐘回跳時仍比上一筆新)', async () => {
+    const d = dirs();
+    const f = fakeCh({ 'traffic:2026-11-11': 1 });
+    let now = T0;
+    const a = new Archiver({ ch: f.ch, cold: f.cold, lock: memLock(), log, pauseMs: 0, freeBytes: async () => Infinity, now: () => now }, opts(d));
+    const e1 = await a.archiveOne('traffic', '2026-11-11', signal);
+    now = T0 - 60_000;
+    const e2 = await a.archiveOne('traffic', '2026-11-11', signal);
+    assert.ok(e2.updatedAt > e1.updatedAt);
   });
 });

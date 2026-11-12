@@ -20,6 +20,15 @@ export const MANIFEST_TABLE = 'netops.pa_archive_manifest';
 /** ClickHouse user_files 底下的掛載目錄(唯讀) */
 export const USER_FILES_DIR = 'archive';
 const IP_COLS = ['src', 'dst', 'nat_src', 'nat_dst'] as const;
+/**
+ * 冷查詢讀回的欄位(明列,不用 *):匯出是整張表(SELECT *),之後表加欄位時新舊檔的欄位不同,
+ * 跨日 UNION ALL 用固定清單才對得上(code review #3)。要涵蓋 heat.ts runSlice 用到的欄位(TRAFFIC_FIELDS / THREAT_FIELDS 與條件);
+ * 新增欄位且冷查詢要用時,舊檔沒有該欄位 → 要重新歸檔或在這裡補預設值
+ */
+const COLD_COLUMNS: Record<'traffic' | 'threat', readonly string[]> = {
+  traffic: ['event_time', 'subtype', 'src', 'dst', 'nat_src', 'nat_dst', 'rule', 'src_user', 'app', 'from_zone', 'to_zone', 'in_if', 'out_if', 'sport', 'dport', 'nat_dport', 'proto', 'action', 'bytes', 'bytes_sent', 'bytes_recv', 'packets', 'session_start', 'elapsed', 'category', 'src_country', 'dst_country', 'end_reason', 'app_risk', 'app_category', 'app_subcat', 'app_tech', 'src_host', 'dst_host'],
+  threat: ['event_time', 'log_type', 'subtype', 'src', 'dst', 'nat_src', 'nat_dst', 'rule', 'src_user', 'app', 'from_zone', 'to_zone', 'dport', 'proto', 'action', 'url', 'name', 'category', 'severity', 'direction', 'src_country', 'dst_country', 'repeat_count', 'thr_category', 'file_digest', 'file_type'],
+};
 
 export type ArchiveStatus = 'ok' | 'failed' | 'expired';
 export interface ManifestEntry {
@@ -88,8 +97,11 @@ export function exportSql(kind: ArchiveKind): string {
 export function coldSource(kind: ArchiveKind, days: readonly string[]): string {
   if (!days.length) throw new Error('沒有指定日期');
   const k = ARCHIVE_KINDS[kind];
-  const replace = [...IP_COLS.map((c) => `toIPv6(${c}) AS ${c}`), ...k.times.map((c) => `toDateTime(${c}, 'Asia/Taipei') AS ${c}`)].join(', ');
-  const one = (day: string) => `SELECT * REPLACE (${replace}) FROM file('${USER_FILES_DIR}/${archiveRelPath(kind, mustDay(day))}', 'Parquet')`;
+  const times: readonly string[] = k.times;
+  const cols = COLD_COLUMNS[kind]
+    .map((c) => ((IP_COLS as readonly string[]).includes(c) ? `toIPv6(${c}) AS ${c}` : times.includes(c) ? `toDateTime(${c}, 'Asia/Taipei') AS ${c}` : c))
+    .join(', ');
+  const one = (day: string) => `SELECT ${cols} FROM file('${USER_FILES_DIR}/${archiveRelPath(kind, mustDay(day))}', 'Parquet')`;
   return `(${days.map(one).join(' UNION ALL ')})`;
 }
 
@@ -169,7 +181,7 @@ export function createArchiveWriterClient(cfg: ClickHouseConfig, fetchImpl: type
   return {
     async exportParquet(kind, day, signal) {
       const settings = {
-        max_threads: '1',
+        // max_threads 不能帶:netops_writer 的 profile 把它設成 const(2),改了會被拒絕(code review)
         max_execution_time: String(EXPORT_MAX_SECONDS),
         output_format_parquet_compression_method: 'zstd',
         // row group 小一點:ClickHouse 寫 Parquet 時整個 row group 放在記憶體(預設 100 萬列,C1 實測匯出 407 MiB)

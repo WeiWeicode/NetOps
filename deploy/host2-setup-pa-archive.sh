@@ -14,11 +14,16 @@ ENV_NAME=${GW_ENV:-test}
 case "$ENV_NAME" in test|prod) ;; *) echo "GW_ENV 只能是 test / prod:$ENV_NAME" >&2; exit 2 ;; esac
 DIR="$MNT/giga-netops/$ENV_NAME/pa-archive"
 
+U1000="$(getent passwd 1000 | cut -d: -f1)"
+[ -n "$U1000" ] || { echo "找不到 uid 1000 的使用者(netops-ingest 以 uid 1000 寫入)" >&2; exit 1; }
 mountpoint -q "$MNT" || { echo "$MNT 沒有掛載 NAS:先執行 giga-file-service 的 file-api/deploy/host2-mount-nas.sh(或 sudo mount $MNT)" >&2; exit 1; }
 df -h "$MNT" | tail -n 1
+# 不跟隨 symlink:目錄或標記檔是 symlink 時停止(資安審查 L6)
+for p in "$MNT/giga-netops" "$MNT/giga-netops/$ENV_NAME" "$DIR" "$DIR/.giga-netops-archive"; do
+  [ ! -L "$p" ] || { echo "$p 是 symlink,停止" >&2; exit 1; }
+done
 mkdir -p "$DIR"
 touch "$DIR/.giga-netops-archive"
-U1000="$(getent passwd 1000 | cut -d: -f1)"
 # 寫入測試(建立後刪除),確認 netops-ingest 使用的 uid 1000 可寫
 su -s /bin/sh -c "touch '$DIR/.write-test' && rm '$DIR/.write-test'" "$U1000" \
   && echo "uid 1000 可寫入 $DIR" || { echo "uid 1000 無法寫入 $DIR(檢查 NAS 帳號權限)" >&2; exit 1; }

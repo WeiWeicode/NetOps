@@ -4,21 +4,32 @@
  * C4 的冷 Log 明細查詢與每天的歸檔匯出共用同一把鎖。鍵只在這裡組(AGENT.md §7.2)。
  * C4:netops-api(冷明細)與 netops-ingest(每天歸檔匯出、讀回核對)各以 connectColdLock 建立連線。
  * 歸檔一天可能超過 TTL(120 秒):持有者每 30 秒 refresh 延長(值相同才延長)
+ *   netops:cold:archive-wanted  netops-ingest 等鎖時的預約(PX 20 分鐘,歸檔一輪結束時刪除):netops-api 看到就不接新的冷明細(回 429),
+ *                               使用者連續送冷查詢也不會讓歸檔一直排不到、拖到資料被 TTL 刪除(資安審查 M1)
  */
 import { Redis } from 'ioredis';
 export const COLD_LOCK_KEY = 'netops:cold:lock';
 /** 鎖的存活時間:冷工作執行上限 120 秒 */
 export const COLD_LOCK_TTL_MS = 120_000;
+export const COLD_RESERVE_KEY = 'netops:cold:archive-wanted';
 
 export interface ColdLockClient {
   set(key: string, value: string, px: 'PX', ms: number, nx: 'NX'): Promise<string | null>;
   eval(script: string, numKeys: number, ...args: (string | number)[]): Promise<unknown>;
+  /** 讀預約鍵(沒有時不檢查預約) */
+  get?(key: string): Promise<string | null>;
   quit(): Promise<unknown>;
 }
 
 export interface ColdLock {
-  /** 拿到鎖回 true;已有冷查詢回 false。Redis 異常時丟錯(呼叫端當成忙碌,不回 5xx) */
-  acquire(owner: string): Promise<boolean>;
+  /**
+   * 拿到鎖回 true;已有冷查詢、或歸檔已預約(netops-api)回 false。Redis 異常時丟錯(呼叫端當成忙碌,不回 5xx)。
+   * ignoreReservation:netops-ingest 歸檔自己用
+   */
+  acquire(owner: string, opts?: { ignoreReservation?: boolean }): Promise<boolean>;
+  /** 預約(netops-ingest 等鎖時) */
+  reserve(ms: number): Promise<void>;
+  unreserve(): Promise<void>;
   /** 延長自己的鎖(值相同才延長 TTL);鎖已不是自己的回 false。Redis 異常時丟錯 */
   refresh(owner: string): Promise<boolean>;
   /** 只釋放自己的鎖(值相同才刪);失敗不丟錯(鎖會在 TTL 後過期) */
@@ -32,8 +43,15 @@ const REFRESH = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call
 
 export function createColdLock(client: ColdLockClient): ColdLock {
   return {
-    async acquire(owner) {
+    async acquire(owner, opts) {
+      if (!opts?.ignoreReservation && client.get && (await client.get(COLD_RESERVE_KEY))) return false;
       return (await client.set(COLD_LOCK_KEY, owner, 'PX', COLD_LOCK_TTL_MS, 'NX')) === 'OK';
+    },
+    async reserve(ms) {
+      await client.eval("redis.call('set', KEYS[1], '1', 'PX', ARGV[1]) return 1", 1, COLD_RESERVE_KEY, Math.max(1000, Math.floor(ms)));
+    },
+    async unreserve() {
+      await client.eval("return redis.call('del', KEYS[1])", 1, COLD_RESERVE_KEY);
     },
     async refresh(owner) {
       return Number(await client.eval(REFRESH, 1, COLD_LOCK_KEY, owner, COLD_LOCK_TTL_MS)) === 1;

@@ -27,6 +27,17 @@ const to = defineModel<string>('to', { default: '' });
 const id = useId();
 const open = ref(false);
 const root = ref<HTMLElement | null>(null);
+const panel = ref<HTMLElement | null>(null);
+const control = ref<HTMLElement | null>(null);
+/** 面板放在 body(Teleport):卡片的 backdrop-filter 會形成新的堆疊,面板放在卡片裡會被後面的卡片蓋住 */
+const pos = ref<Record<string, string>>({});
+function place() {
+  const r = control.value?.getBoundingClientRect();
+  if (!r) return;
+  const width = Math.min(420, window.innerWidth - 32);
+  const left = Math.max(16, Math.min(r.left, window.innerWidth - width - 16));
+  pos.value = { top: `${r.bottom + 6}px`, left: `${left}px`, width: `${width}px` };
+}
 const draft = ref<DateRange>({ from: '', to: '' });
 const inputType = computed(() => (props.mode === 'date' ? 'date' : 'datetime-local'));
 const presets = computed(() => rangePresets(new Date(), props.mode, props.maxDays, props.coverage));
@@ -36,7 +47,10 @@ const minMax = computed(() => (props.mode === 'date' && props.coverage ? { min: 
 
 function toggle() {
   if (props.disabled) return;
-  if (!open.value) draft.value = { from: from.value, to: to.value };
+  if (!open.value) {
+    draft.value = { from: from.value, to: to.value };
+    place();
+  }
   open.value = !open.value;
 }
 function apply(r: DateRange = draft.value) {
@@ -45,17 +59,30 @@ function apply(r: DateRange = draft.value) {
   to.value = r.to;
   open.value = false;
 }
-function onDoc(e: MouseEvent) {
-  if (open.value && root.value && !root.value.contains(e.target as Node)) open.value = false;
+function onDoc(e: Event) {
+  const t = e.target as Node;
+  if (open.value && !root.value?.contains(t) && !panel.value?.contains(t)) open.value = false;
 }
-watch(open, (v) => (v ? document.addEventListener('mousedown', onDoc) : document.removeEventListener('mousedown', onDoc)));
-onBeforeUnmount(() => document.removeEventListener('mousedown', onDoc));
+/** 捲動或改變視窗大小:重新定位 */
+const onMove = () => open.value && place();
+watch(open, (v) => {
+  const fn = v ? 'addEventListener' : 'removeEventListener';
+  document[fn]('mousedown', onDoc);
+  window[fn]('scroll', onMove, true);
+  window[fn]('resize', onMove);
+});
+onBeforeUnmount(() => {
+  document.removeEventListener('mousedown', onDoc);
+  window.removeEventListener('scroll', onMove, true);
+  window.removeEventListener('resize', onMove);
+});
 </script>
 
 <template>
   <div ref="root" class="drf" :class="{ invalid: !!error, disabled }" @keydown.esc="open = false">
     <span class="lbl" :id="`${id}-l`">{{ label }}</span>
     <button
+      ref="control"
       type="button"
       class="control"
       :aria-labelledby="`${id}-l ${id}-v`"
@@ -70,8 +97,9 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', onDoc));
     </button>
     <span v-if="error" class="err">{{ error }}</span>
 
+    <Teleport to="body">
     <Transition name="drf-pop">
-      <div v-if="open" :id="`${id}-p`" class="panel" role="dialog" :aria-label="`選擇${label}`">
+      <div v-if="open" :id="`${id}-p`" ref="panel" class="drf-panel" :style="pos" role="dialog" :aria-label="`選擇${label}`" @keydown.esc="open = false">
         <div class="presets">
           <button v-for="p in presets" :key="p.key" type="button" class="chip" :disabled="p.disabled" :title="p.disabled ? '超過保留期限' : ''" @click="apply(p)">
             {{ p.label }}
@@ -95,6 +123,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', onDoc));
         </div>
       </div>
     </Transition>
+    </Teleport>
   </div>
 </template>
 
@@ -159,12 +188,9 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', onDoc));
   font-size: var(--fs-xs);
   color: var(--c-danger);
 }
-.panel {
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 0;
-  z-index: 30;
-  width: min(420px, calc(100vw - 32px));
+.drf-panel {
+  position: fixed;
+  z-index: 1000;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -246,13 +272,12 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', onDoc));
     min-width: 0;
     width: 100%;
   }
-  .panel {
-    position: fixed;
-    left: 16px;
+  .drf-panel {
+    left: 16px !important;
     right: 16px;
-    top: auto;
+    top: auto !important;
     bottom: 16px;
-    width: auto;
+    width: auto !important;
   }
   .inputs {
     grid-template-columns: 1fr;

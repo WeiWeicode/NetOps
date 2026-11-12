@@ -64,8 +64,8 @@ NetOps/
 │  │  ├─ layouts/           AppLayout(兩層側欄、頂列)、TabbedPage
 │  │  ├─ router.ts          選單群組、功能頁、一般連結、路由守衛(應用 / 頁面權限)
 │  │  ├─ api/               gateway.ts(web-kit 包裝、download())、perms.ts(權限代碼)、ftp / pa / paEvents / ad / kb.ts(/api/netops/*,docs/API.md)、jobs.ts(工作狀態)、format.ts(顯示格式)
-│  │  ├─ composables/       apps、guard(守衛判斷)、menu、session、theme;useJob(工作模式)、usePolling(背景狀態輪詢)、searchQuery(明細查詢網址條件)、markdown(marked + DOMPurify)、ftpFiles、adEvents、paDashboard、dates
-│  │  ├─ components/        TopList(排行清單,安全事件與流量總覽共用)
+│  │  ├─ composables/       apps、guard(守衛判斷)、menu、session、theme;useJob(工作模式)、usePolling(背景狀態輪詢)、searchQuery(明細查詢網址條件)、markdown(marked + DOMPurify)、ftpFiles、adEvents、paDashboard、dates、dateRange(日期區間欄位的快捷選項與檢查,C3)
+│  │  ├─ components/        TopList(排行清單,安全事件與流量總覽共用)、DateRangeField(單一欄位選起訖,總覽 / 安全事件 / 明細共用)
 │  │  ├─ config/links.ts    舊版 NetOps(AI 問答、AI 分析、知識庫 AI 功能)與 Veeam 連結(D11、D17、D18)
 │  │  └─ pages/             firewall/(流量總覽、安全事件、明細查詢、FTP Log 檔案)、ad/(事件總覽、明細查詢、FTP Log 檔案)、knowledge/;Forbidden、NotFound、Unavailable
 │  ├─ mock/                 本機假 Gateway(gateway.ts;MOCK=admin|viewer|noapp|anon,只在 dev,不進建置)與各模組假 API(ftp、pa、paEvents、paLog、ad、kb)

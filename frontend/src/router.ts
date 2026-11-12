@@ -85,6 +85,34 @@ const PAGES: PageDef[] = [
     view: page(() => import('./pages/firewall/Dashboard.vue')),
   },
   {
+    // V-b1:畫面由 Gemini 在 V-b2 組裝(HANDOFF-GEMINI-VIZ §3.1);選單排序以 BFF 為準(gateway-rbac.yaml sort 12)
+    path: 'firewall/heatmap',
+    meta: {
+      permission: NETOPS.paHeatmap,
+      requires: [API.paRead],
+      title: '活動熱力圖',
+      subtitle: 'PA-560 Heatmap',
+      icon: 'activity',
+      group: 'firewall',
+      description: '年 / 月 / 日熱力圖(威脅等級、總流量、阻擋數);點格子看該時段明細',
+    },
+    view: page(() => import('./pages/firewall/Heatmap.vue')),
+  },
+  {
+    // V-b1:畫面由 Gemini 在 V-b2 組裝(HANDOFF-GEMINI-VIZ §3.3);sort 15。ECharts 只在這頁動態載入(D40)
+    path: 'firewall/insight',
+    meta: {
+      permission: NETOPS.paInsight,
+      requires: [API.paRead],
+      title: '分析儀表板',
+      subtitle: 'PA-560 Insight',
+      icon: 'dashboard',
+      group: 'firewall',
+      description: '流量與安全威脅圖表(趨勢、桑基圖、Top 10、國家地圖);點圖表看該時段明細',
+    },
+    view: page(() => import('./pages/firewall/Insight.vue')),
+  },
+  {
     path: 'firewall/events',
     meta: {
       permission: NETOPS.paEvents,

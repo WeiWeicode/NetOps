@@ -242,3 +242,29 @@
   --field: #09161f;
   --shadow-lg: 0 16px 40px rgb(0 0 0 / 0.45);
 }
+
+/* ───── 熱力圖、儀表板(V-b1;VIZ-RULES-DESIGN §6.6、HANDOFF-GEMINI-VIZ §6)─────
+   名稱由 Claude 定;下面只是起點(由既有色 token 混出,明暗自動跟著變),四種組合的實際色值與對比由 Gemini 調整。 */
+:root {
+  --heat-empty: var(--line);
+  --heat-traffic-1: color-mix(in srgb, var(--c-primary) 25%, transparent);
+  --heat-traffic-2: color-mix(in srgb, var(--c-primary) 50%, transparent);
+  --heat-traffic-3: color-mix(in srgb, var(--c-primary) 75%, transparent);
+  --heat-traffic-4: var(--c-primary);
+  --heat-deny-1: color-mix(in srgb, var(--c-warning) 25%, transparent);
+  --heat-deny-2: color-mix(in srgb, var(--c-warning) 50%, transparent);
+  --heat-deny-3: color-mix(in srgb, var(--c-warning) 75%, transparent);
+  --heat-deny-4: var(--c-warning);
+  --heat-threat-1: var(--c-info);
+  --heat-threat-2: var(--c-warning);
+  --heat-threat-3: var(--c-danger);
+  --heat-threat-4: color-mix(in srgb, var(--c-danger) 70%, black);
+  --heat-ad-1: color-mix(in srgb, var(--c-violet) 25%, transparent);
+  --heat-ad-2: color-mix(in srgb, var(--c-violet) 50%, transparent);
+  --heat-ad-3: color-mix(in srgb, var(--c-violet) 75%, transparent);
+  --heat-ad-4: var(--c-violet);
+  --glow-critical: color-mix(in srgb, var(--c-danger) 55%, transparent);
+  --glow-high: color-mix(in srgb, var(--c-warning) 55%, transparent);
+  --badge-hot: var(--c-warning);
+  --badge-cold: var(--c-cyan);
+}

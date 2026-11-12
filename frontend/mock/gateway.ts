@@ -17,6 +17,7 @@ import { handlePa } from './pa.ts';
 import { handlePaEvents } from './paEvents.ts';
 import { handlePaLive, streamPaLive } from './paLive.ts';
 import type { MockCtx } from './types.ts';
+import { handleViz } from './viz.ts';
 
 type Role = 'admin' | 'viewer' | 'noapp' | 'anon';
 type LoggedIn = Exclude<Role, 'anon'>;
@@ -29,6 +30,9 @@ const MENUS = [
   { code: 'netops.pa-live.read', name: '即時監控', kind: 'menu', parentCode: 'netops.group.firewall', sort: 5, icon: null },
   { code: 'netops.pa-live.manage', name: '測試區暫停 / 繼續收集器', kind: 'button', parentCode: 'netops.pa-live.read', sort: 10, icon: null },
   { code: 'netops.pa-dashboard.read', name: '流量總覽', kind: 'menu', parentCode: 'netops.group.firewall', sort: 10, icon: null },
+  // V-b1:活動熱力圖、分析儀表板(gateway-rbac.yaml sort 12、15)
+  { code: 'netops.pa-heatmap.read', name: '活動熱力圖', kind: 'menu', parentCode: 'netops.group.firewall', sort: 12, icon: null },
+  { code: 'netops.pa-insight.read', name: '分析儀表板', kind: 'menu', parentCode: 'netops.group.firewall', sort: 15, icon: null },
   { code: 'netops.pa-events.read', name: '安全事件', kind: 'menu', parentCode: 'netops.group.firewall', sort: 20, icon: null },
   { code: 'netops.pa-search.read', name: 'Log 明細查詢', kind: 'menu', parentCode: 'netops.group.firewall', sort: 30, icon: null },
   { code: 'netops.pa-files.read', name: 'FTP Log 檔案', kind: 'menu', parentCode: 'netops.group.firewall', sort: 40, icon: null },
@@ -93,7 +97,7 @@ async function readBody(req: IncomingMessage): Promise<unknown> {
 }
 
 /** 各模組的假 API(依序嘗試,處理了就回 true) */
-const HANDLERS: ((ctx: MockCtx) => boolean)[] = [handleAi, handleFtp, handleAd, handlePaEvents, handlePa, handlePaLog, handleKb, handlePaLive];
+const HANDLERS: ((ctx: MockCtx) => boolean)[] = [handleViz, handleAi, handleFtp, handleAd, handlePaEvents, handlePa, handlePaLog, handleKb, handlePaLive];
 const fail = (res: ServerResponse, status: number, code: string, message: string) => send(res, status, { code, message, requestId: rid() });
 
 export function mockGateway(role: string | undefined): Plugin | null {

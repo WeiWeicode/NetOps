@@ -2,6 +2,12 @@
 
 > `backend/`、`deploy/` 的修改;新紀錄加在最上方,格式見 `AGENT.md` §11。
 
+## 2026-11-12 C5 PA 精準查詢
+- 工作項目:C5(PA-LOG-CLICKHOUSE-GUIDE §9;D31、CQ6、CQ7;E4:15 分鐘、500 筆、60 秒、一次一個、管理平面 CPU > 50% 不送)
+- 內容:① `pa-collector/netops_pa/pa_query.py`:查詢執行者(`PA_QUERY_ENABLED`,預設關閉)。從 Redis 取工作、確認名額、參數再驗、送出前取樣管理平面 CPU、XML API `type=log`(每 2 秒起逐次加到 5 秒輪詢,60 秒逾時送 `action=finish`)或 Session Browser(`show session all filter`)、結果寫回 Redis、釋放名額、設全域間隔。自寫最小 XML API 用戶端:API Key 放 `X-PAN-KEY` 標頭(pan-python 的 `log()` 逾時不取消 PA 上的工作)。只送唯讀請求(D22)。② `config.py` 加 `QueryConfig`(`PA_QUERY_MAX_MGMT_CPU` 上限 50,實測前不放寬);`keys.py` 加 `netops:paq:*`;`__main__.py` 啟動執行者、心跳 `queryEnabled`。③ `backend/src/infra/redis/pa-query.ts`(名額 SET NX、冷卻、建立工作失敗時歸還)、`modules/pa-query/`(送出 / 狀態 / 結果 API,429 帶 `Retry-After`)、`openapi.ts` 權限 `netops.pa-query.read`。④ `deploy/gateway-rbac.yaml` 按鈕 `netops.pa-live.query`(只加進 netops-admin);`docker-compose.yml` 傳 `PA_QUERY_ENABLED`、`PA_QUERY_MAX_MGMT_CPU`;`host2-set-pa-secrets.sh` 補 `PA_QUERY_ENABLED=0`
+- 檔案:`pa-collector/netops_pa/{pa_query,config,keys,__main__}.py`、`pa-collector/tests/{test_pa_query,test_config}.py`、`backend/src/{app,openapi}.ts`、`backend/src/infra/redis/pa-query.ts`、`backend/src/modules/pa-query/`、`backend/test/{unit/pa-query.test.ts,helpers.ts}`、`deploy/{gateway-rbac.yaml,docker-compose.yml,host2-set-pa-secrets.sh}`
+- 驗證:pa-collector `ruff check`、`pytest`(本機 Python 3.14);backend `npm run typecheck`、`npm test`;`check-scenarios.mjs`;CI 見 MR
+
 ## 2026-11-11 V-a 熱力圖資料層:彙總表、熱力圖與時段明細 API
 - 工作項目:V-a(第 1–4、6 步;第 5 步冷路由等 C4)(ARCHITECTURE D34、D35;VIZ-RULES-DESIGN §3、§4.2、§4.3)
 - 內容:① `deploy/clickhouse/schema.sql`:`pa_heat_5m` / `_1h` / `_1d`(AggregatingMergeTree,總數 + topK Top IP)與 6 個物化檢視(TRAFFIC、威脅 × 3 粒度;威脅只算 `log_type = threat` 筆數);`apply-schema.sh` 加 `{{TTL_HEAT_*}}`(正式區 1 年 / 5 年 / 5 年,測試區 3 天)與 `YEAR` 單位。② `migrations/003`:`pa_traffic_hourly_src` 加 `bytes_sent`、`bytes_recv` 並 `MODIFY QUERY`(新安裝的 `schema.sql` 直接含)。③ `rebuild-day.sh`:重建一天的全部彙總(上線回填、補漏後);`dedupe-day.sh` 改呼叫它並比對熱力圖。④ `infra/clickhouse/heat.ts`(熱力圖、時段明細查詢;`reader.ts` 只把欄位對照與 `paramText` 等改成 export)、`infra/redis/cold-lock.ts`(冷查詢鎖,C4 接上)、`infra/redis/cache.ts` 加 `longTtl`(上限 1 小時,預設仍 60 秒)、`config.ts` 加 `paTtlDays`(`NETOPS_TTL_TRAFFIC_DAYS` / `_THREAT_DAYS`,預設依部署區)。⑤ `modules/pa-heat/`:`GET /v1/pa/heatmap`、`GET /v1/pa/slice`、`GET|DELETE /v1/pa/slices/{id}`

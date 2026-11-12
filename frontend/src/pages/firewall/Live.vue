@@ -14,6 +14,7 @@ import { fmtNum, fmtShort, fmtSize, fmtTime } from '@/api/format';
 import { LOG_TYPES, paLive, type LiveLog, type LogType, type PaLiveSnapshot, type PaLiveTop } from '@/api/paLive';
 import type { Column } from '@/ui/components/GTable.vue';
 import TopList from '@/components/TopList.vue';
+import PaQueryPanel from '@/components/PaQueryPanel.vue';
 import { collectorBadges, collectorView, controlView, fmtBps, interfaceView, latestSnapTime, logSource, parseFilter, useLiveStream } from '@/composables/paLive';
 import { usePolling } from '@/composables/usePolling';
 
@@ -412,6 +413,8 @@ function refresh() {
     </GCard>
 
     <!-- 即時 log -->
+    <!-- C5 PA 精準查詢:只有 netops.pa-live.query(netops-admin)看得到;元件內自己判斷權限 -->
+    <PaQueryPanel />
     <GCard title="即時 log" icon="radio">
       <template #actions>
         <GButton size="sm" :icon="stream.paused.value ? 'play' : 'pause'" @click="stream.setPaused(!stream.paused.value)">{{ stream.paused.value ? '繼續' : '暫停' }}</GButton>

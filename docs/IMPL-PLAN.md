@@ -255,6 +255,8 @@ D13:骨架直接留用;AI 不在這次範圍,不做串流驗證(D7、D17)。
 
 ## C5 PA 精準查詢(已核准)
 
+**狀態:實作完成、MR 待合併(`feature/c5-pa-precise-query`)**;測試區預設關閉,合併後由主討論串安排小範圍實測(單一 IP、15 分鐘、看管理平面 CPU)。熱力圖 / 儀表板的「查詢即時連線」按鈕等 V-b1(!78)合併後再接(`useLivePaQuery` 改用 `usePaQuery`)。
+
 1. `netops-pa` 查詢執行者(視窗 ≤ 15 分鐘、`nlogs` ≤ 500、逾時 60 秒、全域鎖;送出前管理平面 CPU > 50% 不送,E4 結果)。
 2. `netops-api` 送出 / 結果 API(冷卻、429)、權限 `netops.pa-query.read`、按鈕節點 `netops.pa-live.query`,**只給 `netops-admin`**(CQ7);即時監控頁加按鈕;Session Browser。
 

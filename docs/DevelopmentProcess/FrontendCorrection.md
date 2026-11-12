@@ -2,6 +2,12 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。範圍:`frontend/`。
 
+## 2026-11-12 C5 PA 精準查詢(邏輯層與最小介面)
+- 工作項目:C5
+- 內容:`api/paQuery.ts`、`composables/usePaQuery.ts`(按鈕權限才呼叫 API、送出 → 每 2 秒輪詢最多 90 秒、429 倒數、rejected / failed)、`components/PaQueryPanel.vue`(即時監控頁的樸素版,正式畫面交 Gemini,HANDOFF-GEMINI-VIZ §10)、`perms.ts` 加 `UI.paLiveQuery`、`API.paQueryRead`;假 Gateway `mock/paQuery.ts` 與 admin 的按鈕權限
+- 檔案:`frontend/src/{api/paQuery.ts,api/perms.ts,composables/usePaQuery.ts,components/PaQueryPanel.vue,pages/firewall/Live.vue}`、`frontend/mock/{paQuery,gateway}.ts`、`frontend/test/paQuery.test.ts`
+- 驗證:`vue-tsc`、`npm test`(122 通過);`MOCK=admin` 瀏覽器:即時監控頁送出 Session 查詢,約 3 秒後顯示 6 筆
+
 ## 2026-11-10 R1:即時 log 串流上限提高,前端不修改
 - 工作項目:R1(對應 BackendCorrection 同日紀錄)
 - 內容:評估 `composables/paLive.ts` 的 `mergeLogs`(最多 500 筆、依 `type:id` 去重)與 `Live.vue`:每個 `logs` 事件(最多 200 筆)只更新一次 `shallowRef`,每秒 100+ 筆不需改動;未修改任何前端檔案。

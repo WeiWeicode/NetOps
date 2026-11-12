@@ -2,6 +2,11 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。
 
+## 2026-11-12 C5 PA 精準查詢
+- 工作項目:C5(D31、CQ6、CQ7;E4 結果)
+- 內容:PA 精準查詢 API(`/pa-query/status`、`/pa-query/jobs`)、權限 `netops.pa-query.read`(只給 netops-admin)、按鈕 `netops.pa-live.query`;API.md §2、§3.3、§8;Gherkin `pa-query/query.feature`;PA-LIVE-PLAN §4 鍵表;HANDOFF-GEMINI-VIZ §10
+- 檔案:`docs/{API,IMPL-PLAN,PA-LIVE-PLAN,PROJECT-MAP,HANDOFF-GEMINI-VIZ}.md`、`docs/Gherkin/`
+
 ## 2026-11-11 V-a 熱力圖資料層
 - 工作項目:V-a(第 1–4、6 步;第 5 步冷路由等 C4)
 - 內容:活動熱力圖 API(年 / 月 / 日,traffic / deny / threat,`ad` 回 409 預留)與時段明細 API(30 秒同步、超過轉工作、熱 / 冷分界;冷歸檔未提供回 409 `NETOPS_COLD_ARCHIVE_DISABLED`,冷查詢鎖 429 介面已保留);API.md §4.4、§8;Gherkin `pa/heatmap.feature`;PA-LIVE-PLAN §4 加 `netops:cold:lock`、快取 `pa-heat` / `pa-slice`

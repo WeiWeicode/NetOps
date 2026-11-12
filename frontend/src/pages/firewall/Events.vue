@@ -12,6 +12,8 @@ import { can, describeError } from '@/api/gateway';
 import { fmtNum, fmtShort, fmtTime } from '@/api/format';
 import { paEvents, type PaEventOverview, type PaEventType } from '@/api/paEvents';
 import TopList from '@/components/TopList.vue';
+import DateRangeField from '@/components/DateRangeField.vue';
+import { coverageText } from '@/composables/dateRange';
 import { checkDayRange } from '@/composables/dates';
 import { UI } from '@/api/perms';
 import { askLink } from '@/composables/aiChat';
@@ -106,11 +108,15 @@ onBeforeUnmount(() => clearTimeout(debounce));
 const incomplete = computed(() => {
   const d = data.value;
   if (!d) return '';
-  const why = [
-    d.import.busy ? '分析進行中' : '',
-    d.missing ? `${d.missing} 個已分析的檔案讀不到摘要` : '',
-    d.import.failed ? `${d.import.failed} 個檔案分析失敗` : '',
-  ];
+  // ClickHouse 類型(C3 D43):排行來自每小時摘要;FTP 類型(解密、GlobalProtect、User-ID):已分析的檔案
+  const why =
+    d.source === 'clickhouse'
+      ? [
+          d.topsState === 'not-ready' ? '服務剛啟動,統計還在建立' : '',
+          d.topsState === 'stale' ? '統計太久沒更新(ClickHouse 可能停止)' : '',
+          d.missing ? `${d.missing} 小時的統計還沒建好` : '',
+        ]
+      : [d.import.busy ? '分析進行中' : '', d.missing ? `${d.missing} 個已分析的檔案讀不到摘要` : '', d.import.failed ? `${d.import.failed} 個檔案分析失敗` : ''];
   return why.filter(Boolean).join('、');
 });
 
@@ -167,11 +173,12 @@ onMounted(refresh);
       <div class="stack" style="--gap: 12px">
         <GSegmented v-model="type" size="sm" :options="typeOptions" class="types" />
         <div class="filters">
-          <GInput v-model="range.from" type="date" label="開始日期" :disabled="!current?.days.length" class="date" />
-          <GInput v-model="range.to" type="date" label="結束日期" :disabled="!current?.days.length" class="date" />
+          <DateRangeField v-model:from="range.from" v-model:to="range.to" :max-days="MAX_DAYS" :coverage="current?.coverage" :disabled="!current?.days.length" class="date" />
           <p class="small muted hint">
-            <template v-if="data?.timeMin">{{ data.label }}:{{ fmtTime(data.timeMin) }} ~ {{ fmtTime(data.timeMax) }},{{ data.files }} 個 log 檔</template>
-            <template v-if="current?.days.length"> · 已分析 {{ current.days.at(-1) }} ~ {{ current.days[0] }}({{ current.days.length }} 天)</template>
+            <template v-if="data?.timeMin"
+              >{{ data.label }}:{{ fmtTime(data.timeMin) }} ~ {{ fmtTime(data.timeMax) }},{{ data.files }} {{ data.source === 'clickhouse' ? '小時有資料' : '個 log 檔' }}</template
+            >
+            <template v-if="current?.days.length"> · {{ coverageText(current.coverage) }}</template>
           </p>
         </div>
         <p v-if="rangeError" class="small c-danger err">{{ rangeError }}</p>
@@ -180,6 +187,10 @@ onMounted(refresh);
 
     <GCard v-if="!typesLoading && !typesError && !types.length">
       <GEmpty icon="shield-alert" title="沒有設定其他類型 log 的 FTP 目錄" description="請系統負責人在 netops-api 設定威脅、URL 等 log 的 FTP 目錄" />
+    </GCard>
+    <GAlert v-if="current?.unavailable" tone="danger" title="PA log 資料庫暫時無法使用">{{ current.label }} 的資料在 ClickHouse,目前連不上,請稍後再試。</GAlert>
+    <GCard v-else-if="current && !current.days.length && !typesLoading && current.source === 'clickhouse'">
+      <GEmpty icon="shield-alert" :title="`還沒有${current.label} log 的資料`" description="PA-560 轉送的 log 會即時寫進 ClickHouse;收到第一筆後這裡就會有資料。" />
     </GCard>
     <GCard v-else-if="current && !current.days.length && !typesLoading">
       <GEmpty
@@ -203,7 +214,8 @@ onMounted(refresh);
 
     <template v-if="data && current?.days.length">
       <GAlert v-if="loadError" tone="danger">重新載入失敗,以下是上次的結果:{{ describeError(loadError) }}</GAlert>
-      <GAlert v-if="incomplete" tone="warning" title="結果不完整">{{ incomplete }};統計只含已分析的檔案,沒有出現不代表沒有發生。</GAlert>
+      <GAlert v-if="data.partial && data.coverage" tone="info" title="期間有一部分超過保留期限">{{ data.coverage.from }} 之前沒有資料,統計只含 {{ data.coverage.from }} 起。</GAlert>
+      <GAlert v-if="incomplete" tone="warning" title="結果不完整">{{ incomplete }};沒有出現不代表沒有發生。</GAlert>
 
       <!-- KPI -->
       <div class="grid kpis">
@@ -257,7 +269,8 @@ onMounted(refresh);
   align-items: flex-end;
 }
 .date {
-  width: 180px;
+  width: 300px;
+  max-width: 100%;
 }
 .hint {
   margin: 0 0 8px;
@@ -287,7 +300,7 @@ onMounted(refresh);
 }
 @media (max-width: 760px) {
   .date {
-    flex: 1 1 140px;
+    flex: 1 1 100%;
     width: auto;
   }
   .tops {

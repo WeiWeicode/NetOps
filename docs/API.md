@@ -1,7 +1,7 @@
 # NetOps API
 
 > `netops-api` 的對外介面:前端(F1)照本文件串接。決策見 [ARCHITECTURE.md](ARCHITECTURE.md),工作項目見 [IMPL-PLAN.md](IMPL-PLAN.md)。
-> **狀態:B1 定稿;C3 `feature/clickhouse-c3-query` 加 §4.1、§4.2 的 `source`(ClickHouse),`feature/clickhouse-c3-detail` 加 §4.3 的 `source`,`feature/clickhouse-c3-reconcile` 加 §5.3 對帳與補漏;V-a `feature/viz-a-heatmap-data` 加 §4.4 熱力圖與時段明細;B2-pa 已實作 §4.1、§5.1;B2-ad 已實作 §4.2、§5.2、§6;B2-kb 已實作 §7;B2-logs 已實作 §4.3(B2 全部完成);A1(AI 搬移)第 2 批 `feature/a1-ai-api` 實作 §10**。各模組在 B2 分批實作,「批次」欄是預定交付的 MR;實作與本文件不同時,以 MR 描述的「API 變更」為準並同步更新本文件。
+> **狀態:B1 定稿;C3 `feature/clickhouse-c3-query` 加 §4.1、§4.2 的 `source`(ClickHouse),`feature/clickhouse-c3-detail` 加 §4.3 的 `source`,`feature/clickhouse-c3-reconcile` 加 §5.3 對帳與補漏;V-a `feature/viz-a-heatmap-data` 加 §4.4 熱力圖與時段明細;`feature/clickhouse-c3-ch-only`(D43)§4.1–§4.3 只查 ClickHouse、對帳 01:00;B2-pa 已實作 §4.1、§5.1;B2-ad 已實作 §4.2、§5.2、§6;B2-kb 已實作 §7;B2-logs 已實作 §4.3(B2 全部完成);A1(AI 搬移)第 2 批 `feature/a1-ai-api` 實作 §10**。各模組在 B2 分批實作,「批次」欄是預定交付的 MR;實作與本文件不同時,以 MR 描述的「API 變更」為準並同步更新本文件。
 > 欄位的完整定義以服務的 `/openapi.json` 為準(上架時匯入 Gateway);本文件寫路徑、權限、請求與回應格式。
 
 ---
@@ -156,13 +156,15 @@ PA 匯入在背景佇列執行;同步、分析只是送進佇列,畫面輪詢狀
 | GET | `/api/netops/pa/overview?from&to&top&source` | `netops.pa.read` | `GET /palog/summary` |
 | GET | `/api/netops/pa/options?from&to&source` | `netops.pa.read` | `GET /palog/options` |
 
-**資料來源(C3,`source`)**:`ftp`(已分析的 FTP 檔案摘要,舊做法)、`clickhouse`(ClickHouse,ARCHITECTURE D29、D42)、`auto`(期間開始不早於 ClickHouse 最早一小時才用 ClickHouse,否則 FTP)。省略時依設定 `NETOPS_PA_OVERVIEW_SOURCE`(預設 `auto`)。回應的 `source` 是實際使用的來源。
-- `auto` 時 ClickHouse 失敗改用 FTP(服務日誌記 warn);指定 `clickhouse` 而 ClickHouse 無法使用或未設定時回 503 `NETOPS_CLICKHOUSE_UNAVAILABLE`。
-- ClickHouse 來源:`rows`、`allow`、`block`、`bytes`、`hours`、`actions` 來自每小時彙總表(含進行中的小時);`top`、`topBytes`、`scan`、`sent`、`recv`、`subtypes`、`timeMin`、`timeMax` 來自 ClickHouse 每小時摘要(和 FTP 摘要同一份核心邏輯),**只算到 `topsUntil`**(最後一個已結束、已建好摘要的小時的結束時間;背景每 5 分鐘建,小時結束 3 分鐘後才建)。`files` 為有資料的小時數,`missing` 為已結束、有資料但摘要還沒建好(或筆數變了待重建)的小時數;`import` 為摘要建立狀態(`busy` 建立中、`failed` 1 = 上一輪失敗)。
-- 同樣的參數 60 秒內重複查詢走 Redis 快取(CQ11),所以結果最多晚 60 秒。
-- 和 FTP 來源的差異:FTP 每個檔案只留前 300 名再合併,ClickHouse 每小時只留前 300 名再合併(排行尾端的數字可能不同);疑似掃描的不同目的 / Port 數取各小時最大值(同 FTP 取各檔案最大值)。
+**資料來源(C3,ARCHITECTURE D29、D42、D43)**:**只查 ClickHouse**(2026-11-11 需求方決定捨棄 FTP 查詢路徑、不再並行 2 週)。`source` 參數保留只為相容,只接受 `clickhouse`(或省略);`ftp`、`auto` 已移除,帶了回 400。回應的 `source` 固定 `clickhouse`。
+- ClickHouse 無法使用或未設定回 503 `NETOPS_CLICKHOUSE_UNAVAILABLE`(不再改用 FTP)。
+- **保留期限**:回應 `coverage` = ClickHouse 實際有 TRAFFIC 的日期範圍 `{ from, to }`(正式區保留 30 天);期間有一部分在 `coverage.from` 之前時 `partial: true`;期間**整個**在之前回 404 `NETOPS_PA_OUT_OF_RETENTION`(訊息含有資料的範圍),不回 0。
+- `rows`、`allow`、`block`、`bytes`、`hours`、`actions` 來自每小時彙總表(含進行中的小時);`top`、`topBytes`、`scan`、`sent`、`recv`、`subtypes`、`timeMin`、`timeMax` 來自 ClickHouse 每小時摘要(和舊版 FTP 摘要同一份核心邏輯),**只算到 `topsUntil`**(最後一個已結束、已建好摘要的小時的結束時間;背景每 5 分鐘建,小時結束 3 分鐘後才建)。`topsState`:`ok`、`not-ready`(服務剛啟動,摘要建立中)、`stale`(太久沒更新,ClickHouse 可能停止),不是 `ok` 時排行不完整。`files` 為有資料的小時數,`missing` 為已結束、有資料但摘要還沒建好(或筆數變了待重建)的小時數;`import` 為摘要建立狀態(`busy` 建立中、`failed` 1 = 上一輪失敗)。
+- 同樣的參數 60 秒內重複查詢走 Redis 快取(CQ11),所以結果最多晚 60 秒;`topsState` 不是 `ok` 的結果不快取。有資料的日期另在程序內記 2 分鐘。
+- `partial`:TRAFFIC 以 ClickHouse 最早一小時判斷(最早那天可能只從中午才有資料),威脅類以天判斷。`/pa/options` 超過保留期限同樣回 404。
+- 和舊版 FTP 摘要的差異:FTP 每個檔案只留前 300 名再合併,ClickHouse 每小時只留前 300 名再合併(排行尾端的數字可能不同)。
 
-**`GET /pa/days`**:有資料的日期(依 log 內的資料時間,不是檔名日期),新的在前。
+**`GET /pa/days`**:ClickHouse 有 TRAFFIC 的日期(新的在前);`files` 沿用舊欄位名稱,意思改為**有資料的小時數**;另有 `coverage`(有資料的範圍,沒有資料為 null)。畫面用它顯示可查的範圍(取代舊的「已分析 … 天」)。
 
 ```jsonc
 { "days": [ { "day": "2026-11-02", "files": 6, "rows": 1830000 } ], "import": { /* ImportStatus,不含 running */ } }
@@ -207,7 +209,7 @@ PA 匯入在背景佇列執行;同步、分析只是送進佇列,畫面輪詢狀
 
 `type`:`threat`、`url`、`data`、`wildfire`、`decryption`、`globalprotect`、`userid`(只列出有設定 FTP 目錄的類型)。
 
-**資料來源(C3)**:`overview` 多一個 `source` 參數,規則同 §4.1。`threat`、`url`、`data`、`wildfire` 可查 ClickHouse(全部來自 ClickHouse 每小時摘要,只到 `topsUntil`;`files` 為有摘要的小時數);`decryption`、`globalprotect`、`userid` 不進 ClickHouse,一律 FTP。回應多 `source`、`topsUntil`。
+**資料來源(C3,D43)**:`threat`、`url`、`data`、`wildfire` **只查 ClickHouse**(全部來自 ClickHouse 每小時摘要,只到 `topsUntil`;`files` 為有摘要的小時數;`coverage`、`partial`、`topsState` 與 404 `NETOPS_PA_OUT_OF_RETENTION`、503 規則同 §4.1;正式區威脅類保留 90 天);`decryption`、`globalprotect`、`userid` 不進 ClickHouse(AGENT.md §7.2),仍是 FTP 已分析的摘要(`source: "ftp"`)。`types` 回應每個類型多 `source` 與 `coverage`(`dir` 照舊),ClickHouse 類型的 `days` 為 ClickHouse 有資料的日期、**`files` 意思改為有資料的小時數**;ClickHouse 無法使用時這幾個類型 `unavailable: true`,解密等 FTP 類型照常列出。
 
 ```jsonc
 // GET /pa-events/types
@@ -229,11 +231,11 @@ PA 匯入在背景佇列執行;同步、分析只是送進佇列,畫面輪詢狀
 
 ### 4.3 Log 明細查詢與匯出(工作模式,D6)— 批次 `feature/netops-b2-logs`
 
-舊版 `POST /palog/search` 同步等待最長 180 秒,超過路由上限,改成工作模式。查詢依時間挑出已分析的檔案,從 FTP 串流逐列篩選,原始 log 不落地;找到上限筆數或超過掃描秒數就停止。
+舊版 `POST /palog/search` 同步等待最長 180 秒,超過路由上限,改成工作模式。**C3 起只查 ClickHouse 的 TRAFFIC 原始 log**(D43,捨棄 FTP 掃描),依時間由舊到新取前 `limit` 筆。
 
-**資料來源(C3,`source`)**:`ftp`(上述 FTP 掃描)、`clickhouse`(ClickHouse 原始 log,期間最長 30 天,只用關鍵字 `q`、沒有其他條件時最長 1 天(超過回 400,`details` 指出 `q`);依時間由舊到新取前 `limit` 筆;執行上限 50 秒,全系統同時 2 個、每人 1 個,不佔 FTP 連線)、`auto`(期間開始不早於 ClickHouse 最早一小時、且不超過 30 天才用 ClickHouse,否則 FTP;ClickHouse 連不上時改走 FTP)。省略時依設定 `NETOPS_PA_DETAIL_SOURCE`:**預設 `ftp`**,FTP 與 ClickHouse 並行對帳 2 週沒有未處理缺口後由需求方改成 `auto`(CQ10、D33)。
-- ClickHouse 來源:條件語意同 FTP(IP 完全相同 / CIDR / 萬用字元並比對 NAT、Port、動作…);`q` 比對主要文字欄位(IP、Port、類型、協定、規則、使用者、App、區域、動作、URL 類別、國家、結束原因、主機名稱)串起來的字串,不是整列原始 CSV(數字欄位如位元組、Session ID 不在比對範圍)。IP 比對以位址值比較:IPv6 的 CIDR 用真正的範圍(FTP 版以字串字首比對),`::1` 與 `0:0:0:1` 視為相同(FTP 版比字串)。指定 `clickhouse` 而期間內 ClickHouse 沒有 log 回 404 `NETOPS_PA_NO_DATA`(`auto` 改走 FTP);指定 `clickhouse` 超過 30 天回 400;指定 `clickhouse` 而連不上回 503 `NETOPS_CLICKHOUSE_UNAVAILABLE`;執行中失敗或超過 50 秒時工作 `failed`,`error.code` 為 `NETOPS_CLICKHOUSE_UNAVAILABLE`。
-- 結果 `result.source` 為實際來源;ClickHouse 來源的 `files`、`filesScanned` 為 0,`scanned` 為 ClickHouse 讀過的列數,`stopReason` 為 `''` 或 `limit`;`progress` 只有 `{ found: 0 }`。
+**ClickHouse 明細(C3,D43)**:期間最長 30 天;只用關鍵字 `q`、沒有其他條件時最長 1 天(超過回 400,`details` 指出 `q`);執行上限 50 秒,全系統同時 2 個、每人 1 個。`source` 只接受 `clickhouse`(或省略)。期間整個超過保留期限回 404 `NETOPS_PA_OUT_OF_RETENTION`;期間內沒有 log 回 404 `NETOPS_PA_NO_DATA`;ClickHouse 連不上回 503 `NETOPS_CLICKHOUSE_UNAVAILABLE`;執行中失敗或超過 50 秒時工作 `failed`,`error.code` 為 `NETOPS_CLICKHOUSE_UNAVAILABLE`。
+- 條件語意同舊版(IP 完全相同 / CIDR / 萬用字元並比對 NAT、Port、動作…);`q` 比對主要文字欄位(IP、Port、類型、協定、規則、使用者、App、區域、動作、URL 類別、國家、結束原因、主機名稱)串起來的字串,不是整列原始 CSV(數字欄位如位元組、Session ID 不在比對範圍)。IP 以位址值比較:IPv6 的 CIDR 用真正的範圍,`::1` 與 `0:0:0:1` 視為相同。
+- 結果 `result.source` 固定 `clickhouse`;`files`、`filesScanned` 為 0(舊欄位),`scanned` 為 ClickHouse 讀過的列數,`stopReason` 為 `''` 或 `limit`,`coverage`、`partial` 同 §4.1(`partial` 時匯出檔名結尾加「_部分期間超過保留期限」);`progress` 只有 `{ found: 0 }`。
 
 | 方法 | 路徑 | 權限 | 說明 |
 | --- | --- | --- | --- |
@@ -416,7 +418,7 @@ FTP 唯讀(AGENT.md §7.4):「刪除分析結果」只刪本系統的摘要,不�
 
 ### 5.3 FTP 與 ClickHouse 對帳、補漏(C3)— 批次 `feature/clickhouse-c3-reconcile`
 
-ARCHITECTURE D33、手冊 `PA-LOG-CLICKHOUSE-GUIDE.md` §11、§12 CQ10:FTP 降為對帳與補漏的來源;並行對帳 2 週沒有未處理缺口後,需求方把明細來源 `NETOPS_PA_DETAIL_SOURCE` 改成 `auto`(§4.3)。
+ARCHITECTURE D33、D43、手冊 `PA-LOG-CLICKHOUSE-GUIDE.md` §11:FTP 只做對帳與補漏(查詢只用 ClickHouse,2026-11-11 起不再並行 2 週)。
 
 | 方法 | 路徑 | 權限 | 說明 |
 | --- | --- | --- | --- |
@@ -427,7 +429,7 @@ ARCHITECTURE D33、手冊 `PA-LOG-CLICKHOUSE-GUIDE.md` §11、§12 CQ10:FTP 降�
 
 - **對帳**:每小時比 FTP 摘要的筆數(已分析的 FTP 檔的每小時統計,不另外讀 FTP)與 ClickHouse 每小時彙總的筆數。差異 = (FTP − ClickHouse) / FTP;> 0.5% 為 `gap`、< −0.5% 為 `excess`(可能重複)、FTP 沒有該小時為 `ftp-missing`、其他 `ok`。ClickHouse 開始收資料之前的小時、以及開始的那一小時(通常只收到一部分)不比。FTP 的筆數是各匯出檔摘要的加總;若 PA 匯出檔時間範圍互相重疊會把 FTP 算多(補漏時依 seqno 去重,補不出列、缺口仍在),此時請人工確認。
 - 一天的 `status`:`ok`、`gap`(有缺口)、`pending`(FTP 這一天的匯出檔還沒同步分析完:隔天也要有已分析的檔案、沒有讀不到的摘要、沒有在分析中;不判斷缺口)、`not-covered`(ClickHouse 這天沒有資料)。
-- 每天台灣時間 `NETOPS_RECON_HOUR`(預設 6,-1 = 不自動)自動對帳前 3 天並存檔;有缺口時服務日誌記 warn。FTP 檔要先同步分析(測試區 `FTP_SYNC_MINUTES` 預設 0,需求方在「FTP Log 檔案」手動同步或設定自動同步)。
+- 每天台灣時間 `NETOPS_RECON_HOUR`(預設 **1**,-1 = 不自動)起自動對帳前 3 天並存檔;有缺口時服務日誌記 warn。**對帳要的 FTP 分析由對帳流程自己確保**:FTP 檔還沒分析完時先同步(只排 TRAFFIC 檔,30 分鐘最多一次),之後每 10 分鐘再試,直到不是 `pending`。PA 前一天的匯出檔實際約 **07:45** 才出現在 FTP,所以前一天通常 07:45 之後才對得到帳(01:00–07:45 為 `pending`)。
 - **補漏**:`netops-ingest` 一次做一個工作,逐小時查 ClickHouse 已有的 seqno,從 FTP 逐列讀涵蓋該小時的 TRAFFIC CSV,**只補寫 seqno 不在 ClickHouse 的列**(`source = 'ftp'`;不刪除、不覆蓋既有資料;沒有 seqno 的列無法去重,略過並計數)。每小時彙總由物化檢視自動補上,總覽的每小時摘要偵測到筆數變了會重建。佇列最多 10 個工作。
 - `hours`(選填):只補其中幾個缺口小時(ISO 8601 含時區);不是缺口的小時忽略。
 
@@ -623,11 +625,12 @@ AI 相關(語意搜尋、向量同步、外部 IP 自動學習)見 §10.2(A1)。
 | 422 | `NETOPS_EXPORT_TOO_LARGE` | 匯出筆數超過上限 |
 | 502 | `NETOPS_FTP_UNAVAILABLE` | FTP 連線或讀取失敗。訊息為「動作 + FTP 路徑:原因」,原因只有分類(連線逾時、拒絕連線、找不到主機、連線中斷、TLS 憑證驗證失敗、帳號或密碼錯誤(FTP 530)、檔案或目錄不存在,或沒有權限(FTP 550)…),不含 FTP 主機、port 與原始錯誤;原始錯誤只寫服務日誌。匯入狀態的 `lastSyncError`、檔案的 `error`、工作的 `error.message` 同樣規則 |
 | 503 | `NETOPS_FTP_NOT_CONFIGURED` | 未設定 FTP(只會在 dev) |
+| 404 | `NETOPS_PA_OUT_OF_RETENTION` | 期間整個超過 ClickHouse 保留期限(訊息含目前有資料的範圍;§4.1–§4.3) |
 | 409 | `NETOPS_RECON_PENDING` | 這一天的 FTP 檔還沒同步分析完,不能補漏(§5.3) |
 | 409 | `NETOPS_BACKFILL_NOTHING` | 這一天沒有需要補漏的小時(§5.3) |
 | 409 | `NETOPS_BACKFILL_BUSY` | 補漏佇列已滿(§5.3) |
 | 404 | `NETOPS_BACKFILL_NOT_FOUND` | 補漏工作不存在或已超過 7 天(§5.3) |
-| 503 | `NETOPS_CLICKHOUSE_UNAVAILABLE` | 指定 `source=clickhouse` 而 ClickHouse 連不上、查詢失敗或未設定(C3,§4.1);熱力圖與時段明細(§4.4)一律查 ClickHouse,同樣回這個代碼。只影響用到 ClickHouse 的 API。原始錯誤只寫服務日誌 |
+| 503 | `NETOPS_CLICKHOUSE_UNAVAILABLE` | ClickHouse 連不上、查詢失敗或未設定(C3,§4.1–§4.3;不再改用 FTP);熱力圖與時段明細(§4.4)同樣回這個代碼。只影響用到 ClickHouse 的 API。原始錯誤只寫服務日誌 |
 | 409 | `NETOPS_HEATMAP_METRIC_UNAVAILABLE` | 熱力圖指標尚未開放(`ad`,AD 階段 V-d;§4.4) |
 | 422 | `NETOPS_HEATMAP_OUT_OF_RETENTION` | 熱力圖日視圖超過 5 分鐘彙總保留(1 年);`details.earliest`(§4.4) |
 | 409 | `NETOPS_COLD_ARCHIVE_DISABLED` | 時段明細早於原始表保留、要讀冷歸檔,冷歸檔(C4)尚未提供;`details.hotFrom`(§4.4)。設定狀態,不用 5xx |

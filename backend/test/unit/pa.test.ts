@@ -122,53 +122,30 @@ describe('同一批假 log:舊版與新版摘要完全一致', () => {
     assert.deepEqual(strip(actual), strip(expected as Record<string, unknown>));
   });
 
-  it('總覽 = 舊版 mergeSummaries(時間改 ISO 8601 +08:00)', async () => {
-    const { mergeSummaries } = await legacy('palog.js');
-    const idx = index();
-    const sums = Object.values(idx as Record<string, { summary: string; timeMin: string }>)
+  it('合併摘要 = 舊版 mergeSummaries(總覽改查 ClickHouse 後,每小時摘要仍用同一份核心合併)', async () => {
+    const { mergeSummaries: legacyMerge } = await legacy('palog.js');
+    const { mergeSummaries } = await import('../../src/modules/pa/core/palog.js');
+    const sums = Object.values(index() as Record<string, { summary: string; timeMin: string }>)
       .sort((a, b) => a.timeMin.localeCompare(b.timeMin))
       .map((st) => JSON.parse(fs.readFileSync(path.join(t.dataDir, 'palogs/summaries', st.summary), 'utf8')));
-    const m = mergeSummaries(sums, 15);
-    m.hours = m.hours.filter((h: { hour: string }) => h.hour.slice(0, 10) >= '2026/11/01' && h.hour.slice(0, 10) <= '2026/11/02');
-    const res = await t.call({ url: '/v1/pa/overview?from=2026-11-01&to=2026-11-02&top=15' });
-    assert.equal(res.statusCode, 200, res.body);
-    const o = res.json();
-    for (const k of ['rows', 'allow', 'block', 'bytes', 'sent', 'recv', 'actions', 'subtypes', 'top', 'topBytes', 'scan']) assert.deepEqual(o[k], m[k], k);
-    assert.equal(o.files, 3);
-    assert.equal(o.missing, 0);
-    assert.deepEqual(o.import, { busy: false, failed: 0 });
-    assert.equal(o.from, '2026-11-01');
-    assert.equal(o.timeMin, `${m.timeMin.replace(/\//g, '-').replace(' ', 'T')}+08:00`);
-    assert.deepEqual(
-      o.hours,
-      m.hours.map((h: { hour: string }) => ({ ...h, hour: `${h.hour.replace(/\//g, '-').replace(' ', 'T')}:00:00+08:00` })),
-    );
-    assert.ok(o.scan.some((s: { src: string }) => s.src === '203.0.113.66'), '假 log 的掃描來源要被找出來');
+    const m = legacyMerge(sums, 15);
+    assert.deepEqual(mergeSummaries(sums, 15), m);
+    assert.ok(m.scan.some((s: { src: string }) => s.src === '203.0.113.66'), '假 log 的掃描來源要被找出來');
   });
 });
 
-describe('PA API', () => {
-  it('有資料的日期(新的在前)與篩選選項', async () => {
-    const days = (await t.call({ url: '/v1/pa/days' })).json();
-    assert.deepEqual(days.days.map((d: { day: string }) => d.day), ['2026-11-02', '2026-11-01']);
-    assert.equal(days.import.busy, false);
-    assert.equal(days.import.running, undefined);
-    const opt = (await t.call({ url: '/v1/pa/options?from=2026-11-01&to=2026-11-02' })).json();
-    assert.ok(opt.apps.includes('ssl'));
-    assert.ok(opt.zones.includes('trust') && opt.zones.includes('untrust'));
-    assert.ok(opt.rules.includes('Allow, Internal "Core"'));
-    assert.ok(opt.actions.includes('allow'));
-  });
-
-  it('沒有資料的期間回 files 0;日期格式錯誤回 400', async () => {
-    const empty = (await t.call({ url: '/v1/pa/overview?from=2020-01-01' })).json();
-    assert.equal(empty.files, 0);
-    assert.equal(empty.rows, 0);
+describe('PA API(C3:只查 ClickHouse)', () => {
+  it('沒有設定 ClickHouse 時總覽、日期、篩選選項回 503(不再改讀 FTP 摘要);日期格式錯誤仍回 400', async () => {
+    for (const url of ['/v1/pa/days', '/v1/pa/overview?from=2026-11-01', '/v1/pa/options?from=2026-11-01']) {
+      const res = await t.call({ url });
+      assert.equal(res.statusCode, 503, url);
+      assert.equal(res.json().code, 'NETOPS_CLICKHOUSE_UNAVAILABLE');
+    }
     const bad = await t.call({ url: '/v1/pa/overview?from=2026/11/01' });
     assert.equal(bad.statusCode, 400);
     assert.equal(bad.json().code, 'VALIDATION_FAILED');
-    const rev = await t.call({ url: '/v1/pa/overview?from=2026-11-02&to=2026-11-01' });
-    assert.equal(rev.statusCode, 400);
+    // ftp / auto 已移除
+    assert.equal((await t.call({ url: '/v1/pa/overview?from=2026-11-01&source=ftp' })).statusCode, 400);
   });
 
   it('沒有內部 Token 回 401', async () => {
@@ -178,7 +155,7 @@ describe('PA API', () => {
 
   it('回應不含本機資料目錄的路徑或摘要檔名', async () => {
     const st = index()[TRAFFIC[0]!];
-    for (const url of ['/v1/pa/days', '/v1/pa/overview?from=2026-11-01', '/v1/ftp/pa/files', '/v1/ftp/pa/status']) {
+    for (const url of ['/v1/ftp/pa/files', '/v1/ftp/pa/status']) {
       const body = (await t.call({ url })).body;
       assert.ok(!body.includes(t.dataDir) && !body.includes(st.summary) && !body.includes('.tsv.gz'), url);
     }
@@ -241,14 +218,6 @@ describe('FTP Log 檔案 API(PA)', () => {
     assert.ok(ftp.files.has(p));
     const f = (await t.call({ url: '/v1/ftp/pa/files' })).json().items.find((x: { path: string }) => x.path === p);
     assert.equal(f.state, 'new');
-  });
-
-  it('摘要檔遺失時總覽標出 missing(結果不完整,不是沒有流量)', async () => {
-    // 還沒被總覽讀過(不在快取)的檔案:同步測試加入的 11/03
-    const st = index()['/PA-560_traffic_2026_11_04_last_calendar_day_0.csv'];
-    fs.rmSync(path.join(t.dataDir, 'palogs/summaries', st.summary));
-    const o = (await t.call({ url: '/v1/pa/overview?from=2026-11-03' })).json();
-    assert.equal(o.missing, 1);
   });
 
   it('標頭不對的檔案:標成 error 並中斷 FTP 傳輸,不影響後面的檔案', async () => {

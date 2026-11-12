@@ -51,7 +51,7 @@ describe('trafficWhere(明細條件 → SQL)', () => {
   });
 });
 
-describe('明細 API 來源切換', () => {
+describe('明細 API(只查 ClickHouse)', () => {
   let t: TestApp;
   let reader: FakeReader;
   before(async () => {
@@ -68,8 +68,8 @@ describe('明細 API 來源切換', () => {
   }
   const range = { from: '2026-11-11T00:00:00+08:00', to: '2026-11-11T00:59:00+08:00' };
 
-  it('source=clickhouse:結果格式同 FTP,依時間由舊到新;分頁、匯出、取消可用', async () => {
-    const res = await submit({ ...range, src: '10.10.1.1', source: 'clickhouse' });
+  it('結果格式同舊版(欄位、分頁、匯出、取消),依時間由舊到新', async () => {
+    const res = await submit({ ...range, src: '10.10.1.1' });
     assert.equal(res.statusCode, 202, res.body);
     const job = await done(res.json().id);
     assert.equal(job.status, 'done');
@@ -91,46 +91,56 @@ describe('明細 API 來源切換', () => {
   });
 
   it('超過筆數上限:stopReason limit', async () => {
-    const job = await done((await submit({ ...range, source: 'clickhouse', limit: 5 })).json().id);
+    const job = await done((await submit({ ...range, limit: 5 })).json().id);
     assert.equal(job.result.total, 5);
     assert.equal(job.result.stopReason, 'limit');
   });
 
-  it('預設來源 ftp(並行 2 週);auto 在 ClickHouse 範圍內才查 ClickHouse', async () => {
-    // 假 FTP 沒有檔案 → FTP 來源回 404
-    const ftp = await submit(range);
-    assert.equal(ftp.statusCode, 404);
-    assert.equal(ftp.json().code, 'NETOPS_PA_NO_DATA');
-    const auto = await submit({ ...range, source: 'auto' });
-    assert.equal(auto.statusCode, 202);
-    assert.equal((await done(auto.json().id)).result.source, 'clickhouse');
-    // 期間開始早於 ClickHouse 最早一小時 → FTP
-    assert.equal((await submit({ from: '2026-11-10T23:00:00+08:00', to: range.to, source: 'auto' })).statusCode, 404);
-  });
-
-  it('ClickHouse 超過 30 天回 400;期間沒有資料回 404;連不上:指定 503、auto 改走 FTP', async () => {
-    assert.equal((await submit({ from: '2026-10-11T00:00:00+08:00', to: '2026-11-11T00:00:00+08:00', source: 'clickhouse' })).statusCode, 400);
-    // 只有關鍵字、超過 1 天:ClickHouse 回 400
-    const q = await submit({ from: '2026-11-09T00:00:00+08:00', to: '2026-11-11T00:00:00+08:00', q: 'fin', source: 'clickhouse' });
+  it('超過 30 天、只用關鍵字超過 1 天回 400;超過保留期限、期間沒有資料回 404;連不上回 503;source 只接受 clickhouse', async () => {
+    assert.equal((await submit({ from: '2026-10-11T00:00:00+08:00', to: '2026-11-11T00:00:00+08:00' })).statusCode, 400);
+    const q = await submit({ from: '2026-11-09T00:00:00+08:00', to: '2026-11-11T00:00:00+08:00', q: 'fin' });
     assert.equal(q.statusCode, 400);
     assert.equal(q.json().details[0].field, 'q');
-    const none = await submit({ from: '2026-11-11T05:00:00+08:00', to: '2026-11-11T06:00:00+08:00', source: 'clickhouse' });
+    const old = await submit({ from: '2026-10-01T00:00:00+08:00', to: '2026-10-01T01:00:00+08:00' });
+    assert.equal(old.statusCode, 404);
+    assert.equal(old.json().code, 'NETOPS_PA_OUT_OF_RETENTION');
+    const none = await submit({ from: '2026-11-11T05:00:00+08:00', to: '2026-11-11T06:00:00+08:00' });
     assert.equal(none.statusCode, 404);
-    assert.match(none.json().message, /ClickHouse/);
-    // auto:ClickHouse 沒有資料改走 FTP(假 FTP 也沒有 → FTP 的 404 訊息)
-    const autoNone = await submit({ from: '2026-11-11T05:00:00+08:00', to: '2026-11-11T06:00:00+08:00', source: 'auto' });
-    assert.equal(autoNone.statusCode, 404);
-    assert.match(autoNone.json().message, /FTP/);
+    assert.equal(none.json().code, 'NETOPS_PA_NO_DATA');
+    assert.equal((await submit({ ...range, source: 'ftp' })).statusCode, 400);
     reader.failing = true;
     try {
-      const res = await submit({ ...range, source: 'clickhouse' });
+      const res = await submit(range);
       assert.equal(res.statusCode, 503);
       assert.equal(res.json().code, 'NETOPS_CLICKHOUSE_UNAVAILABLE');
       assert.ok(!res.body.includes('ECONNREFUSED'));
-      // auto:改走 FTP(假 FTP 沒有檔案 → 404)
-      assert.equal((await submit({ ...range, source: 'auto' })).statusCode, 404);
     } finally {
       reader.failing = false;
+    }
+  });
+
+  it('期間有一部分在資料之前:結果標 partial,匯出檔名標出來', async () => {
+    const job = await done((await submit({ from: '2026-11-10T23:00:00+08:00', to: '2026-11-11T00:30:00+08:00' })).json().id);
+    assert.equal(job.result.partial, true);
+    assert.deepEqual(job.result.coverage, { from: '2026-11-11', to: '2026-11-11' });
+    const csv = await t.call({ url: `/v1/pa/log-searches/${job.id}/export` });
+    assert.match(decodeURIComponent(String(csv.headers['content-disposition'])), /部分期間超過保留期限/);
+  });
+
+  it('每人同時最多 1 個明細查詢', async () => {
+    const orig = reader.searchTraffic;
+    let release!: () => void;
+    reader.searchTraffic = (...a) => new Promise((r) => (release = () => r(orig(...a))));
+    try {
+      const first = await submit(range, 'S200001');
+      assert.equal(first.statusCode, 202);
+      const second = await submit(range, 'S200001');
+      assert.equal(second.statusCode, 409);
+      assert.equal(second.json().code, 'NETOPS_JOB_LIMIT_EXCEEDED');
+    } finally {
+      await new Promise((r) => setTimeout(r, 20));
+      release?.();
+      reader.searchTraffic = orig;
     }
   });
 
@@ -140,7 +150,7 @@ describe('明細 API 來源切換', () => {
       throw new (await import('../../src/infra/clickhouse/index.js')).ClickHouseError('x', 241, 500);
     };
     try {
-      const job = await done((await submit({ ...range, source: 'clickhouse' })).json().id);
+      const job = await done((await submit(range)).json().id);
       assert.equal(job.status, 'failed');
       assert.equal(job.error.code, 'NETOPS_CLICKHOUSE_UNAVAILABLE');
     } finally {

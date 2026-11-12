@@ -150,8 +150,18 @@ describe('對帳與補漏 API', () => {
     assert.equal((await t.call({ method: 'POST', url: '/v1/ftp/pa/analyses', payload: { items } })).statusCode, 200);
     await waitFor(async () => !(await t.call({ url: '/v1/ftp/pa/status' })).json().traffic.busy);
     // FTP 摘要的每小時筆數 → 假 ClickHouse 每小時彙總
-    const ov = (await t.call({ url: '/v1/pa/overview?from=2026-11-02&source=ftp' })).json();
-    chHours = new Map(ov.hours.map((h: { hour: string; n: number }) => [Date.parse(h.hour), h.n - (h.hour.startsWith('2026-11-02T01') ? 10 : 0)]));
+    // FTP 摘要的每小時筆數(直接讀已分析的摘要;C3 起總覽不再讀 FTP)
+    const idx = t.app.store.pa.loadIndex<{ summary?: string }>();
+    const ftpHours = new Map<number, number>();
+    for (const st of Object.values(idx.files)) {
+      const sum = st.summary ? t.app.store.pa.readSummary<{ hours: Record<string, { n: number }> }>(st.summary) : null;
+      for (const [h, v] of Object.entries(sum?.hours ?? {})) {
+        if (!h.startsWith('2026/11/02')) continue;
+        const ms = Date.parse(`${h.slice(0, 10).replace(/\//g, '-')}T${h.slice(11, 13)}:00:00+08:00`);
+        ftpHours.set(ms, (ftpHours.get(ms) ?? 0) + v.n);
+      }
+    }
+    chHours = new Map([...ftpHours].map(([h, n]) => [h, n - (h === Date.parse('2026-11-02T01:00:00+08:00') ? 10 : 0)]));
     reader.trafficHours = async (from, to) => [...chHours].filter(([h]) => h >= from && h < to).map(([hour, n]) => ({ hour, action: 'allow', n, bytes: 0 }));
     reader.earliestTrafficHour = async () => Date.parse('2026-11-02T00:00:00+08:00');
     await t.app.chSummary!.runOnce();
@@ -218,5 +228,85 @@ describe('對帳與補漏 API', () => {
     } finally {
       await t2.close();
     }
+  });
+});
+
+describe('自動對帳(01:00 起,自己同步 FTP)', () => {
+  const day = (d: string) => Date.parse(`${d}T00:00:00+08:00`);
+  /** 假 TRAFFIC 匯入:files 依日期回已分析的檔(有 23:50 以後的檔才算完整) */
+  function fakeTraffic() {
+    const f = {
+      complete: new Set<string>(),
+      syncs: 0,
+      syncFails: false,
+      filesInRange: (from: string) => (f.complete.has(from.slice(0, 10)) ? [{ path: `/${from.slice(0, 10)}.csv`, summary: 's', timeMin: `${from.slice(0, 10)} 00:00:00`, timeMax: `${from.slice(0, 10)} 23:59:59` }] : []),
+      readSummary: () => ({ hours: {} }),
+      status: () => ({ busy: false }),
+      sync: async () => {
+        f.syncs++;
+        if (f.syncFails) throw new Error('ftp down');
+        return { found: 0, added: 0 };
+      },
+    };
+    return f;
+  }
+  async function setup(nowMs: () => number) {
+    const traffic = fakeTraffic();
+    const reader = createFakeReader();
+    reader.trafficHours = async (from) => [{ hour: from + 3 * 3600_000, action: 'allow', n: 0, bytes: 0 }];
+    reader.earliestTrafficHour = async () => day('2026-11-01');
+    const dir = (await import('node:fs')).mkdtempSync((await import('node:path')).join((await import('node:os')).tmpdir(), 'netops-recon-'));
+    const { createStore } = await import('../../src/infra/store/index.js');
+    const { createChSummaryBuilder } = await import('../../src/modules/pa/ch-summary.js');
+    const { createReconciler } = await import('../../src/modules/pa/reconcile.js');
+    const store = createStore(dir).pa;
+    const builder = createChSummaryBuilder({ reader, store, log: { info() {}, warn() {} }, days: 30, minutes: 0, now: nowMs });
+    const r = createReconciler({ traffic: traffic as never, reader, builder, store, log: { info() {}, warn() {} }, hour: 1, now: nowMs });
+    return { traffic, r, store };
+  }
+
+  it('01:00 前不跑;FTP 不完整時同步一次並標 pending,30 分鐘內不重複同步;完整後不再重試;同步失敗不影響對帳', async () => {
+    let now = Date.parse('2026-11-12T00:30:00+08:00');
+    const { traffic, r, store } = await setup(() => now);
+    const tick = async () => {
+      r.start();
+      r.stop();
+      await new Promise((ok) => setTimeout(ok, 20));
+    };
+    await tick();
+    assert.equal(traffic.syncs, 0);
+    assert.equal(store.readRecon('20261111'), null);
+
+    now = Date.parse('2026-11-12T01:00:00+08:00');
+    await tick();
+    assert.equal(traffic.syncs, 1);
+    assert.equal((store.readRecon('20261111') as { status: string }).status, 'pending');
+
+    now += 10 * 60_000;
+    await tick();
+    assert.equal(traffic.syncs, 1, '30 分鐘內不重複同步');
+
+    // 01:40 同步失敗:仍照常對帳(還是 pending)
+    traffic.syncFails = true;
+    now = Date.parse('2026-11-12T01:40:00+08:00');
+    const before = (store.readRecon('20261111') as { checkedAt: string }).checkedAt;
+    await tick();
+    assert.equal(traffic.syncs, 2);
+    assert.notEqual((store.readRecon('20261111') as { checkedAt: string }).checkedAt, before);
+
+    // 07:45 FTP 檔到了(已分析完整):不用再同步,前一天對帳完成
+    traffic.complete.add('2026/11/11');
+    traffic.complete.add('2026/11/10');
+    traffic.complete.add('2026/11/09');
+    now = Date.parse('2026-11-12T07:50:00+08:00');
+    await tick();
+    assert.equal(traffic.syncs, 2);
+    assert.notEqual((store.readRecon('20261111') as { status: string }).status, 'pending');
+    const checked = (store.readRecon('20261111') as { checkedAt: string }).checkedAt;
+
+    // 已完成的日子不再重試
+    now += 10 * 60_000;
+    await tick();
+    assert.equal((store.readRecon('20261111') as { checkedAt: string }).checkedAt, checked);
   });
 });

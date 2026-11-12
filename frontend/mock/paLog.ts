@@ -80,6 +80,7 @@ function view(s: Search) {
     result:
       s.status === 'done'
         ? {
+            source: 'clickhouse',
             from: s.body.from,
             to: s.body.to,
             total: s.rows.length,
@@ -88,8 +89,7 @@ function view(s: Search) {
             filesScanned: files,
             scanned: 260_000,
             seconds: 3.9,
-            // 關鍵字 timeout 模擬掃描逾時(結果不完整)
-            stopReason: s.body.q === 'timeout' ? 'timeout' : '',
+            stopReason: '',
           }
         : null,
   };

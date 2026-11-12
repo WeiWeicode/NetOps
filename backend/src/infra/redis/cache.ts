@@ -12,12 +12,20 @@ export interface CacheClient {
   quit(): Promise<unknown>;
 }
 
+export interface CacheOptions<T> {
+  /** TTL 上限改為 1 小時(預設 60 秒) */
+  longTtl?: boolean;
+  /** 回 false 的結果不存快取 */
+  keep?: (v: T) => boolean;
+}
+
 export interface DashboardCache {
   /**
    * 有快取回快取,否則 load() 後存 ttlSec 秒;name 只能是程式內的常數名稱。
    * TTL 上限預設 60 秒(CQ11);longTtl 時上限 1 小時(V-a 已結束期間的熱力圖,docs/VIZ-RULES-DESIGN.md §4.2)
+   * keep 回 false 的結果不存快取(C3:排行還沒建好的總覽)
    */
-  cached<T>(name: string, params: object, ttlSec: number, load: () => Promise<T>, opts?: { longTtl?: boolean }): Promise<T>;
+  cached<T>(name: string, params: object, ttlSec: number, load: () => Promise<T>, opts?: CacheOptions<T>): Promise<T>;
   close(): Promise<void>;
 }
 
@@ -33,7 +41,7 @@ export function createDashboardCache(client: CacheClient | null): DashboardCache
   /** 同一個鍵正在計算時共用同一個 Promise(冷快取時同時多個請求只算一次;資安審查 M2) */
   const inflight = new Map<string, Promise<unknown>>();
 
-  async function compute(key: string, ttlSec: number, load: () => Promise<unknown>, maxSec: number): Promise<unknown> {
+  async function compute(key: string, ttlSec: number, load: () => Promise<unknown>, maxSec: number, keep?: (v: never) => boolean): Promise<unknown> {
     if (client) {
         try {
           const hit = await client.get(key);
@@ -43,7 +51,7 @@ export function createDashboardCache(client: CacheClient | null): DashboardCache
         }
       }
       const value = await load();
-      if (client) {
+      if (client && (!keep || keep(value as never))) {
         try {
           await client.set(key, JSON.stringify(value), 'EX', Math.min(Math.max(ttlSec, 1), maxSec));
         } catch {
@@ -54,11 +62,11 @@ export function createDashboardCache(client: CacheClient | null): DashboardCache
   }
 
   return {
-    async cached<T>(name: string, params: object, ttlSec: number, load: () => Promise<T>, opts: { longTtl?: boolean } = {}): Promise<T> {
+    async cached<T>(name: string, params: object, ttlSec: number, load: () => Promise<T>, opts: CacheOptions<T> = {}): Promise<T> {
       const key = cacheKey(name, params);
       const running = inflight.get(key);
       if (running) return running as Promise<T>;
-      const p = compute(key, ttlSec, load, opts.longTtl ? 3600 : 60);
+      const p = compute(key, ttlSec, load, opts.longTtl ? 3600 : 60, opts.keep as ((v: never) => boolean) | undefined);
       inflight.set(key, p);
       try {
         return (await p) as T;

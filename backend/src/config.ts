@@ -85,16 +85,14 @@ export interface Config {
   ai: AiConfig;
   /** PA 即時監控的 netops-redis(R1,只讀);dev 未設定時為 null(即時監控回 424 / unavailable),test / prod 必填 */
   redisUrl: string | null;
-  /** netops-clickhouse 唯讀查詢(C3,帳號 netops_reader);未設定 CLICKHOUSE_URL 時為 null(一律查 FTP) */
-  clickhouse: { url: string; user: string; password: string; timeoutMs: number } | null;
   /**
-   * PA 查詢來源(C3,手冊 §12 CQ10):ftp = 舊做法(FTP 摘要 / 掃描);clickhouse = 一律查 ClickHouse;
-   * auto = 期間在 ClickHouse 已有資料的範圍內才查 ClickHouse,否則 FTP。總覽預設 auto;明細並行對帳 2 週後才改(預設 ftp)
+   * netops-clickhouse 唯讀查詢(C3,帳號 netops_reader)。PA 總覽、安全事件、明細只查 ClickHouse(ARCHITECTURE D43),
+   * test / prod 必填;dev 未設定時為 null(這些 API 回 503)
    */
-  paSource: { overview: PaSource; detail: PaSource };
+  clickhouse: { url: string; user: string; password: string; timeoutMs: number } | null;
   /** ClickHouse 每小時摘要(總覽排行用):保留 / 補建幾天、每幾分鐘檢查一次(0 = 不建) */
   chSummary: { days: number; minutes: number };
-  /** FTP 與 ClickHouse 每日對帳(C3,CQ10):每天幾點(台灣時間)對帳前 3 天;-1 = 不自動(仍可手動) */
+  /** FTP 與 ClickHouse 每日對帳(C3,D43):每天幾點(台灣時間)開始對帳前 3 天,FTP 檔還沒有時之後每 10 分鐘再試;-1 = 不自動(仍可手動) */
   reconHour: number;
   /**
    * ClickHouse 原始表保留天數(V-a 時段明細的熱 / 冷分界,docs/VIZ-RULES-DESIGN.md §4.3.1)。要和 deploy/clickhouse/apply-schema.sh 一致:
@@ -105,19 +103,16 @@ export interface Config {
   clickhouseCold: { url: string; user: string; password: string; timeoutMs: number } | null;
 }
 
-export const PA_SOURCES = ['ftp', 'clickhouse', 'auto'] as const;
-export type PaSource = (typeof PA_SOURCES)[number];
-
-function paSource(env: NodeJS.ProcessEnv, key: string, fallback: PaSource): PaSource {
-  const raw = str(env, key, fallback).toLowerCase();
-  if (!(PA_SOURCES as readonly string[]).includes(raw)) throw new GatewayEnvError(`${key} 只能是 ${PA_SOURCES.join(' / ')}:${raw}`);
-  return raw as PaSource;
-}
-
-/** CLICKHOUSE_URL 有設定時,密碼(CLICKHOUSE_PASSWORD_FILE)必填;帳號預設 netops_reader(唯讀,手冊 §10.2) */
+/**
+ * CLICKHOUSE_URL:test / prod 必填(PA 查詢只用 ClickHouse);有設定時密碼(CLICKHOUSE_PASSWORD_FILE)必填;
+ * 帳號預設 netops_reader(唯讀,手冊 §10.2)
+ */
 function loadClickHouse(env: NodeJS.ProcessEnv, gwEnv: GwEnv): Config['clickhouse'] {
   const u = url(env, 'CLICKHOUSE_URL');
-  if (!u) return null;
+  if (!u) {
+    if (gwEnv !== 'dev') throw new GatewayEnvError(`${gwEnv} 缺少必要設定:CLICKHOUSE_URL`);
+    return null;
+  }
   const password = readSecret(env, 'CLICKHOUSE_PASSWORD', gwEnv);
   if (!password) throw new GatewayEnvError('有設定 CLICKHOUSE_URL 時必須設定 CLICKHOUSE_PASSWORD_FILE');
   const user = str(env, 'CLICKHOUSE_USER', 'netops_reader');
@@ -291,11 +286,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, cwd?: string): 
     ai: loadAi(env, gateway.gwEnv),
     redisUrl: loadRedisUrl(env, gateway.gwEnv),
     clickhouse: loadClickHouse(env, gateway.gwEnv),
-    paSource: { overview: paSource(env, 'NETOPS_PA_OVERVIEW_SOURCE', 'auto'), detail: paSource(env, 'NETOPS_PA_DETAIL_SOURCE', 'ftp') },
     // 正式區 TRAFFIC 保留 30 天(CQ12);測試區 TTL 3 天,多的天數只是查不到
     chSummary: { days: int(env, 'NETOPS_CH_SUMMARY_DAYS', 30, 1, 92), minutes: int(env, 'NETOPS_CH_SUMMARY_MINUTES', 5, 0, 60) },
-    // FTP 前一天的匯出檔約 00:00–01:00 產生,同步分析後才能對帳;預設 06:00
-    reconHour: int(env, 'NETOPS_RECON_HOUR', 6, -1, 23),
+    // 需求方 2026-11-11 決定 01:00 開始;PA 前一天的匯出檔實測約 07:45 才出現在 FTP,在那之前每 10 分鐘再試(reconcile.ts)
+    reconHour: int(env, 'NETOPS_RECON_HOUR', 1, -1, 23),
     paTtlDays: loadPaTtlDays(env, gateway.gwEnv),
     clickhouseCold: loadClickHouseCold(env, gateway.gwEnv),
   };

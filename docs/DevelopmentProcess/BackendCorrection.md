@@ -2,6 +2,12 @@
 
 > `backend/`、`deploy/` 的修改;新紀錄加在最上方,格式見 `AGENT.md` §11。
 
+## 2026-11-12 V-b1 測試:儀表板並行上限測試不再卡住 CI
+- 工作項目:V-b1(CI pipeline 901 job 2776 卡在 `test/unit/pa-insight.test.ts`)
+- 內容:「全系統同時 2 個」測試原本固定等 30ms 再送第 3 個請求;CI 慢的時候前兩個還沒佔到名額,429 斷言失敗,`release()` 沒執行,前兩個請求永遠卡在 gate,`finally` 的 `close()` 等不到請求結束,`node --test` 不會結束。改成等兩個實際計算都進到 `insightFlows` 再送(最多等 5 秒,計時器 `unref`),`finally` 先 `release()` 再 `close()`
+- 檔案:`backend/test/unit/pa-insight.test.ts`
+- 驗證:`npx tsx --test test/unit/pa-insight.test.ts`(8 通過,4.6 秒自己結束);故意改壞斷言時回 1 個失敗並結束、不再卡住;`npm test`(296 通過,15 秒)
+
 ## 2026-11-12 V-b1 分析儀表板 API、畫面節點
 - 工作項目:V-b1 第 1、2 步(VIZ-RULES-DESIGN §4.4、§4.8)
 - 內容:① `GET /v1/pa/insight/traffic`(趨勢、桑基、Top 10 頻寬 IP、Top 10 App、Allow vs Deny)、`/v1/pa/insight/threat`(計分卡含前一期、時序、國家 ISO2、內網來源 RFC 1918、Top 10 威脅名稱;伺服器網段 V-c 前回 null + notes),最長 90 天,快取含今天 60 秒、其他 10 分鐘。② `infra/clickhouse/heat.ts` 加 6 個查詢(`pa_traffic_hourly_app` / `_src`、`pa_threat_logs` 的 log_type 排序鍵);`reader.ts` 加表常數 `hourlySrc`。③ `modules/pa-insight/countries.ts`:PA 國家英文全名 → ISO2(i18n-iso-countries 名稱 + PAN-OS 寫法,測試區實際值已比對)。④ `deploy/gateway-rbac.yaml`:選單 `netops.pa-heatmap.read`(sort 12)、`netops.pa-insight.read`(sort 15),includes `netops.pa.read`、`netops.pa-log.read`,加進 netops-admin、netops-viewer。⑤ 時段明細 429 另帶 `details.retryAfter`(前端讀不到回應標頭)

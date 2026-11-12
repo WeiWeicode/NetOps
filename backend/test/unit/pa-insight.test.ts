@@ -123,12 +123,23 @@ describe('GET /v1/pa/insight/*', () => {
   it('實際計算全系統同時 2 個:第 3 個(不同期間)回 429 + Retry-After;快取命中不受限', async () => {
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
-    const slow = { ...fakeReader(), insightFlows: async () => (await gate, []) } as HeatReader;
+    // 兩個實際計算都佔到名額(進到 insightFlows)再送第 3 個;不靠固定等待時間(CI 慢的時候 30ms 不夠)
+    let entered = 0;
+    let bothIn!: () => void;
+    const both = new Promise<void>((r) => (bothIn = r));
+    const slow = {
+      ...fakeReader(),
+      insightFlows: async () => {
+        if (++entered === 2) bothIn();
+        await gate;
+        return [];
+      },
+    } as HeatReader;
     const t2 = await createTestApp({ ftp: createFakeFtp(), heat: { reader: slow, now: () => NOW } });
     try {
       const a = t2.call({ url: '/v1/pa/insight/traffic?from=2026-11-01&to=2026-11-02' });
       const b = t2.call({ url: '/v1/pa/insight/traffic?from=2026-11-03&to=2026-11-04' });
-      await new Promise((r) => setTimeout(r, 30));
+      await Promise.race([both, new Promise((_, rej) => setTimeout(() => rej(new Error('兩個實際計算沒有在 5 秒內開始')), 5000).unref())]);
       const c = await t2.call({ url: '/v1/pa/insight/traffic?from=2026-11-05&to=2026-11-06' });
       assert.equal(c.statusCode, 429);
       assert.equal(c.json().code, 'NETOPS_INSIGHT_BUSY');
@@ -137,6 +148,8 @@ describe('GET /v1/pa/insight/*', () => {
       assert.deepEqual([(await a).statusCode, (await b).statusCode], [200, 200]);
       assert.equal((await t2.call({ url: '/v1/pa/insight/traffic?from=2026-11-05&to=2026-11-06' })).statusCode, 200);
     } finally {
+      // 斷言失敗時也要放行:否則 a、b 永遠卡在 gate,close() 等不到請求結束,node --test 不會結束(CI job 2776 卡死)
+      release();
       await t2.close();
     }
   });

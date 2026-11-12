@@ -5,7 +5,7 @@
  *   邏輯在 composables/dateRange.ts;樣式用主題 token(深淺主題),窄螢幕面板佔滿寬度;
  *   動畫依全域 prefers-reduced-motion 規則關閉(ui/styles/base.css)。
  */
-import { computed, onBeforeUnmount, ref, useId, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, ref, useId, watch } from 'vue';
 import { coverageText, rangeError, rangeLabel, rangePresets, type DateRange, type RangeMode } from '@/composables/dateRange';
 
 const props = withDefaults(
@@ -40,31 +40,64 @@ function place() {
 }
 const draft = ref<DateRange>({ from: '', to: '' });
 const inputType = computed(() => (props.mode === 'date' ? 'date' : 'datetime-local'));
-const presets = computed(() => rangePresets(new Date(), props.mode, props.maxDays, props.coverage));
+/** 打開面板時更新「現在」(頁面開著跨午夜時,快捷選項不會停在舊的一天) */
+const now = ref(new Date());
+const presets = computed(() => rangePresets(now.value, props.mode, props.maxDays, props.coverage));
 const draftError = computed(() => rangeError(draft.value, props.maxDays));
 const text = computed(() => rangeLabel({ from: from.value, to: to.value }, props.mode) || '請選擇期間');
-const minMax = computed(() => (props.mode === 'date' && props.coverage ? { min: props.coverage.from, max: props.coverage.to } : {}));
+// 只設最早可選的日期:「今天」可能還沒進 coverage(資料晚到),不設上限
+const minMax = computed(() => (props.mode === 'date' && props.coverage ? { min: props.coverage.from } : {}));
+const FOCUSABLE = 'button:not([disabled]), input:not([disabled])';
 
 function toggle() {
   if (props.disabled) return;
-  if (!open.value) {
-    draft.value = { from: from.value, to: to.value };
-    place();
-  }
-  open.value = !open.value;
+  if (open.value) return close();
+  draft.value = { from: from.value, to: to.value };
+  now.value = new Date();
+  place();
+  open.value = true;
+  // 鍵盤使用者:打開後焦點移到面板第一個可操作的元素(程式碼審查 #1)
+  void nextTick(() => panel.value?.querySelector<HTMLElement>(FOCUSABLE)?.focus());
+}
+/** 關閉;焦點原本在面板內時回到欄位按鈕 */
+function close() {
+  const inPanel = !!panel.value && panel.value.contains(document.activeElement);
+  open.value = false;
+  if (inPanel) void nextTick(() => control.value?.focus());
 }
 function apply(r: DateRange = draft.value) {
   if (rangeError(r, props.maxDays)) return;
   from.value = r.from;
   to.value = r.to;
-  open.value = false;
+  close();
+}
+/** 面板內 Tab 循環(對話框不讓焦點跑到頁面後面);Esc 關閉 */
+function onPanelKey(e: KeyboardEvent) {
+  if (e.key === 'Escape') {
+    e.stopPropagation();
+    return close();
+  }
+  if (e.key !== 'Tab' || !panel.value) return;
+  const list = [...panel.value.querySelectorAll<HTMLElement>(FOCUSABLE)];
+  const first = list[0];
+  const last = list.at(-1);
+  if (e.shiftKey && document.activeElement === first) {
+    e.preventDefault();
+    last?.focus();
+  } else if (!e.shiftKey && document.activeElement === last) {
+    e.preventDefault();
+    first?.focus();
+  }
 }
 function onDoc(e: Event) {
   const t = e.target as Node;
   if (open.value && !root.value?.contains(t) && !panel.value?.contains(t)) open.value = false;
 }
 /** 捲動或改變視窗大小:重新定位 */
-const onMove = () => open.value && place();
+const onMove = (e?: Event) => {
+  // 面板自己捲動不用重新定位
+  if (open.value && !(e?.target instanceof Node && panel.value?.contains(e.target))) place();
+};
 watch(open, (v) => {
   const fn = v ? 'addEventListener' : 'removeEventListener';
   document[fn]('mousedown', onDoc);
@@ -79,15 +112,16 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div ref="root" class="drf" :class="{ invalid: !!error, disabled }" @keydown.esc="open = false">
+  <div ref="root" class="drf" :class="{ invalid: !!error, disabled }" @keydown.esc="close">
     <span class="lbl" :id="`${id}-l`">{{ label }}</span>
     <button
       ref="control"
       type="button"
       class="control"
       :aria-labelledby="`${id}-l ${id}-v`"
+      aria-haspopup="dialog"
       :aria-expanded="open"
-      :aria-controls="`${id}-p`"
+      :aria-controls="open ? `${id}-p` : undefined"
       :disabled="disabled"
       @click="toggle"
     >
@@ -99,7 +133,7 @@ onBeforeUnmount(() => {
 
     <Teleport to="body">
     <Transition name="drf-pop">
-      <div v-if="open" :id="`${id}-p`" ref="panel" class="drf-panel" :style="pos" role="dialog" :aria-label="`選擇${label}`" @keydown.esc="open = false">
+      <div v-if="open" :id="`${id}-p`" ref="panel" class="drf-panel" :style="pos" role="dialog" :aria-label="`選擇${label}`" @keydown="onPanelKey">
         <div class="presets">
           <button v-for="p in presets" :key="p.key" type="button" class="chip" :disabled="p.disabled" :title="p.disabled ? '超過保留期限' : ''" @click="apply(p)">
             {{ p.label }}
@@ -118,7 +152,7 @@ onBeforeUnmount(() => {
         <p class="small muted">{{ coverageText(coverage) }} · 最長 {{ maxDays }} 天</p>
         <p v-if="draftError && (draft.from || draft.to)" class="small c-danger">{{ draftError }}</p>
         <div class="actions">
-          <GButton size="sm" @click="open = false">取消</GButton>
+          <GButton size="sm" @click="close">取消</GButton>
           <GButton size="sm" variant="primary" :disabled="!!draftError" @click="apply()">套用</GButton>
         </div>
       </div>
@@ -191,6 +225,8 @@ onBeforeUnmount(() => {
 .drf-panel {
   position: fixed;
   z-index: 1000;
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
   display: flex;
   flex-direction: column;
   gap: 12px;

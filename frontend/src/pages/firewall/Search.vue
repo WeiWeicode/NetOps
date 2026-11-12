@@ -140,8 +140,10 @@ function reset() {
 const stopText = computed(() => {
   const r = result.value;
   if (!r) return '';
-  if (r.partial && r.coverage) return `期間有一部分超過保留期限:${r.coverage.from} 之前沒有資料`;
-  if (r.stopReason === 'limit') return `已達上限 ${fmtNum(r.limit)} 筆,後面還有資料,請縮小時間或加條件`;
+  const partial = r.partial && r.coverage ? `期間有一部分超過保留期限:${r.coverage.from} 之前沒有資料` : '';
+  // 兩種提示都要看得到(程式碼審查 #9)
+  if (r.stopReason === 'limit') return [`已達上限 ${fmtNum(r.limit)} 筆,後面還有資料,請縮小時間或加條件`, partial].filter(Boolean).join(';');
+  if (partial) return partial;
   if (r.stopReason === 'timeout') return `掃描超過時間上限或等不到 FTP 連線,只查了 ${r.filesScanned} / ${r.files} 個檔案,結果不完整;請縮小時間或加條件`;
   if (r.stopReason === 'closed') return `服務正在關閉,只查了 ${r.filesScanned} / ${r.files} 個檔案,結果不完整;請稍後重新查詢`;
   if (r.stopReason === 'error') return `讀取 FTP 時發生錯誤,只查了 ${r.filesScanned} / ${r.files} 個檔案,結果不完整;請稍後重新查詢`;
@@ -185,6 +187,11 @@ const localMinute = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${
 onMounted(async () => {
   const q = route.query;
   Object.assign(form, pickQuery(q, PA_SEARCH_KEYS, { proto: (v) => /^[a-z0-9-]{1,16}$/i.test(v), port: isPorts }));
+  // 資料範圍一律先載入(網址帶條件進來時也要顯示可查範圍;程式碼審查 #2),失敗只影響提示
+  const days = pa.days().then(
+    (r) => ((coverage.value = r.coverage), r),
+    (e) => (toast.fromError(e, '無法取得有資料的日期'), null),
+  );
   const from = toLocalInput(q.from);
   if (from) {
     Object.assign(form, { from, to: toLocalInput(q.to || q.from, true) || toLocalInput(q.from, true) });
@@ -193,15 +200,12 @@ onMounted(async () => {
     return;
   }
   // 預設:最新一天有資料的最後一小時(今天則是最近 1 小時)
-  try {
-    const r = await pa.days();
-    coverage.value = r.coverage;
-    const day = r.days[0]?.day;
+  {
+    const r = await days;
+    const day = r?.days[0]?.day;
     if (!day) return;
     const end = new Date(Math.min(new Date(`${day}T23:59:00`).getTime(), Date.now()));
     Object.assign(form, { from: localMinute(new Date(end.getTime() - 59 * 60_000)), to: localMinute(end) });
-  } catch (e) {
-    toast.fromError(e, '無法取得有資料的日期');
   }
 });
 

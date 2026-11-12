@@ -58,6 +58,22 @@ describe('DateRangeField', () => {
     w.unmount();
   });
 
+  it('鍵盤:打開後焦點在面板第一個可用元素;面板內按 Esc 關閉並回到欄位', async () => {
+    const w = make();
+    await w.find('.control').trigger('click');
+    await w.vm.$nextTick();
+    await w.vm.$nextTick();
+    const panel = document.querySelector('.drf-panel')!;
+    expect(panel.contains(document.activeElement)).toBe(true);
+    expect(w.find('.control').attributes('aria-haspopup')).toBe('dialog');
+    (document.activeElement as HTMLElement).dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await w.vm.$nextTick();
+    await w.vm.$nextTick();
+    expect(document.querySelector('.drf-panel')).toBeNull();
+    expect(document.activeElement).toBe(w.find('.control').element);
+    w.unmount();
+  });
+
   it('時間模式用 datetime-local;停用時打不開', async () => {
     const w = make({ mode: 'datetime', from: '2026-11-12T08:00', to: '2026-11-12T09:00', maxDays: 30 });
     expect(w.find('.control').text()).toContain('2026-11-12 08:00 ~ 09:00');

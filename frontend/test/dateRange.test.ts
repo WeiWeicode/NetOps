@@ -40,7 +40,9 @@ describe('dateRange', () => {
     expect(rangeError({ from: '2026-11-12', to: '2026-11-11' }, 30)).toBe('開始不可晚於結束');
     expect(rangeError({ from: '2026-10-01', to: '2026-11-12' }, 30)).toBe('期間最長 30 天');
     expect(rangeError({ from: '2026-11-01', to: '2026-11-12' }, 30)).toBe('');
+    // 時間模式看實際經過的時間(同明細頁與後端)
     expect(rangeError({ from: '2026-10-13T00:00', to: '2026-11-12T00:00' }, 30)).toBe('');
+    expect(rangeError({ from: '2026-10-13T00:00', to: '2026-11-12T00:01' }, 30)).toBe('期間最長 30 天');
   });
 
   it('資料範圍說明', () => {

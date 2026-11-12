@@ -55,8 +55,9 @@ export function rangeLabel(r: DateRange, mode: RangeMode): string {
 export function rangeError(r: DateRange, maxDays: number): string {
   if (!r.from || !r.to) return '請選擇開始與結束';
   if (r.from > r.to) return '開始不可晚於結束';
-  const days = daysBetween(r.from.slice(0, 10), r.to.slice(0, 10));
-  if (days > maxDays + (r.from.length > 10 ? 1 : 0)) return `期間最長 ${maxDays} 天`;
+  // 日期模式:含兩端的天數;時間模式:實際經過的時間(和明細頁、後端同一個算法;程式碼審查 #3)
+  const tooLong = r.from.length > 10 ? new Date(r.to).getTime() - new Date(r.from).getTime() > maxDays * 86_400_000 : daysBetween(r.from, r.to) > maxDays;
+  if (tooLong) return `期間最長 ${maxDays} 天`;
   return '';
 }
 

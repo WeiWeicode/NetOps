@@ -6,6 +6,7 @@
 ## 2026-11-11 C3:日期區間欄位、顯示 ClickHouse 可查範圍
 - 工作項目:C3(ARCHITECTURE D43;需求方 2026-11-11 要求日期改單一區間欄位)
 - 內容:新增 `components/DateRangeField.vue`(點欄位開面板:快捷選項今天 / 昨天 / 最近 7、30 天,明細為最近 1 / 24 小時、今天、昨天;手動輸入按「套用」才更新;整個在資料範圍之前的快捷選項停用;面板 Teleport 到 body,避免被卡片的 backdrop-filter 堆疊蓋住;窄螢幕固定在底部;動畫依全域 prefers-reduced-motion 關閉)與 `composables/dateRange.ts`。流量總覽、安全事件、Log 明細改用區間欄位;「已分析 … 天」改成 ClickHouse 可查範圍;期間有一部分超過保留期限、排行還在建立時提示;移除 FTP 文案(FTP 類型的安全事件與 FTP Log 檔案頁照舊)。`api/pa.ts`、`api/paEvents.ts` 型別對齊後端(coverage、partial、topsState;明細上限 30 天)。本機假 Gateway(`mock/`)對齊新回應。
+- 審查修正(`code-reviewer` 2026-11-12):面板打開後焦點移到面板內、Tab 在面板內循環、Esc / 套用 / 取消後焦點回到欄位(`aria-haspopup`、只在打開時綁 `aria-controls`);明細頁網址帶條件進來時也載入可查範圍;時間模式的天數上限改用實際經過時間(和明細頁、後端一致);快捷選項的「現在」在打開時更新;只設最早可選日期;面板加最大高度可捲動;面板內捲動不重新定位;明細「已達上限」與「部分超過保留期限」同時顯示。
 - 檔案:`frontend/src/{components/DateRangeField.vue,composables/dateRange.ts,api/pa.ts,api/paEvents.ts,pages/firewall/{Dashboard,Events,Search}.vue,router.ts}`、`frontend/mock/{pa,paEvents,paLog}.ts`、`frontend/test/{dateRange,dateRange.mount}.test.ts`
 - 驗證:`npm run typecheck`、`npm test`(125 通過);`MOCK=admin npm run dev` 以瀏覽器確認:桌面深色、375px 淺色(面板固定在底部、沒有橫向捲動)、快捷選項套用後重新查詢
 

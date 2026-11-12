@@ -16,6 +16,8 @@ WORKDIR /app
 COPY --from=build /app/node_modules node_modules/
 COPY --from=build /app/dist dist/
 COPY package.json ./
+# netops-ingest 冷歸檔的本機暫存(C4;Compose 掛 named volume,第一次掛載時沿用這裡的擁有者 node)
+RUN mkdir -p /var/lib/netops-ingest/staging && chown -R node:node /var/lib/netops-ingest
 USER node
 EXPOSE 51292
 HEALTHCHECK --interval=10s --timeout=3s --retries=5 CMD wget -qO- http://127.0.0.1:51292/healthz >/dev/null || exit 1

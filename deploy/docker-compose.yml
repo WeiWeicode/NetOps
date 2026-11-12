@@ -19,6 +19,9 @@
 #   docker compose --env-file <netops.env> -f deploy/docker-compose.yml --profile publish run --rm spa-netops rollback netops    # 回滾到上一版
 # PA log ClickHouse(C1):netops-clickhouse 只在內部網路;帳號檔由 deploy/host2-set-clickhouse-secrets.sh 產生,建表 deploy/clickhouse/apply-schema.sh
 # PA log 寫入管線(C2):netops-ingest(netops-api 同映像、不同進入點)讀 netops-redis 的 Stream,批次寫 netops-clickhouse
+# 冷資料 Parquet 歸檔(C4):netops-ingest 每天 02:30 匯出前一天到 NAS(NETOPS_ARCHIVE_HOST_DIR,預設 /mnt/nas-docker/giga-netops/<GW_ENV>/pa-archive;
+#   目錄與標記檔由 deploy/host2-setup-pa-archive.sh 建立),netops-clickhouse 唯讀掛載同一目錄給冷明細查詢(file(),帳號 netops_cold)。
+#   NETOPS_ARCHIVE_ENABLED=0 時不歸檔、冷明細回 409。NAS 晚於容器掛上時,netops-ingest 與 netops-clickhouse 要重建(CI 部署每次都會)
 # 知識庫 NAS 備份(ARCHITECTURE Q3):netops-kb-backup 每天打包資料目錄的 knowledge/ 到 NAS(deploy/kb-backup/backup.sh;目錄與標記檔由 deploy/host2-setup-kb-backup.sh 建立)
 name: giganexus-netops-${GW_ENV:?GW_ENV 必須設定(test / prod)}
 
@@ -84,9 +87,13 @@ services:
       # ClickHouse 每小時摘要(總覽排行):保留天數同 ClickHouse TRAFFIC(正式區 30 天;測試區 TTL 3 天,多的天數沒有資料)
       NETOPS_CH_SUMMARY_DAYS: ${NETOPS_CH_SUMMARY_DAYS:-30}
       NETOPS_CH_SUMMARY_MINUTES: ${NETOPS_CH_SUMMARY_MINUTES:-5}
+      # 冷明細(C4 / V-a 冷路由):時段明細早於原始表保留的部分讀 NAS Parquet(netops_cold 才能用 file());0 = 不開放(回 409)
+      NETOPS_ARCHIVE_ENABLED: ${NETOPS_ARCHIVE_ENABLED:-1}
+      CLICKHOUSE_COLD_USER: netops_cold
+      CLICKHOUSE_COLD_PASSWORD_FILE: /run/secrets/ch_cold_password
     volumes:
       - ${NETOPS_DATA_HOST_DIR:?NETOPS_DATA_HOST_DIR 必須設定}:/data
-    secrets: [gw_api_key, monitor_api_key, ftp_password, qdrant_api_key, ch_reader_password]
+    secrets: [gw_api_key, monitor_api_key, ftp_password, qdrant_api_key, ch_reader_password, ch_cold_password]
     networks:
       gateway:
         aliases: [netops-api]
@@ -140,10 +147,13 @@ services:
   #   帳號:default 只允許容器內本機(管理用 docker exec);應用程式帳號 netops_writer / reader / cold 定義在主機機密檔
   #         ${NETOPS_SECRETS_DIR}/clickhouse/netops-users.xml(只含密碼雜湊;deploy/host2-set-clickhouse-secrets.sh 由本人執行)
   #   以映像內建的 clickhouse 使用者(uid 101)執行,不需要任何 capability;資料可由 FTP 重建,不另外備份(手冊 §13)
+  #   冷歸檔(C4):NAS 的 pa-archive 唯讀掛在 user_files/archive(file() 只能讀 user_files 底下);主機的 cifs 掛載是 uid / gid 1000、
+  #     檔案 0640、目錄 0750,所以加入群組 1000 才讀得到(只加群組,不改使用者;其他掛載的檔案都是 101 擁有)
   netops-clickhouse:
     image: clickhouse/clickhouse-server:26.3.62.3
     restart: unless-stopped
     user: "101:101"
+    group_add: ["1000"]
     read_only: true
     tmpfs: [/tmp]
     mem_limit: ${NETOPS_CH_MEM_LIMIT:-1536m}
@@ -167,6 +177,8 @@ services:
         target: /etc/clickhouse-server/users.d/zz-netops-users.xml
         read_only: true
         bind: { create_host_path: false }
+      # NAS 沒掛上時 Docker 會建本機空目錄(ClickHouse 照常啟動,冷明細回 404);寫入不受影響
+      - ${NETOPS_ARCHIVE_HOST_DIR:-/mnt/nas-docker/giga-netops/${GW_ENV}/pa-archive}:/var/lib/clickhouse/user_files/archive:ro
     # 關閉前讓背景合併與緩衝寫完
     stop_grace_period: 60s
     healthcheck:
@@ -220,7 +232,19 @@ services:
       FTP_PASSWORD_FILE: /run/secrets/ftp_password
       FTP_ROOT: ${FTP_ROOT:-}
       FTP_LOG_DIR: ${FTP_LOG_DIR:-}
-    secrets: [ch_writer_password, ftp_password]
+      # 冷歸檔(C4,手冊 §8):每天 02:30 匯出前一天的 TRAFFIC 與威脅類 Parquet → 本機暫存 → NAS(/archive),SHA-256、manifest、
+      #   失敗每小時重試到資料被 TTL 刪除前(D+25 心跳告警 archiveState=late);讀回核對列數用 netops_cold;和冷明細共用冷查詢鎖
+      #   保留天數 NETOPS_ARCHIVE_KEEP_DAYS:測試區預設 14(NAS docker-folder 只剩約 18 GB);正式區 0 = 不刪(至少 1 年,CQ12)
+      NETOPS_ARCHIVE_ENABLED: ${NETOPS_ARCHIVE_ENABLED:-1}
+      INGEST_ARCHIVE_KEEP_DAYS: ${NETOPS_ARCHIVE_KEEP_DAYS:-}
+      CLICKHOUSE_COLD_USER: netops_cold
+      CLICKHOUSE_COLD_PASSWORD_FILE: /run/secrets/ch_cold_password
+    volumes:
+      # NAS 歸檔目錄(只掛自己的目錄,不掛整個 /mnt/nas-docker);沒有標記檔 .giga-netops-archive 時不寫入
+      - ${NETOPS_ARCHIVE_HOST_DIR:-/mnt/nas-docker/giga-netops/${GW_ENV}/pa-archive}:/archive
+      # 匯出暫存(WSL 磁碟;一天約 0.2–0.4 GB,完成後刪除)。映像預先建立目錄(node 擁有),volume 第一次掛載時沿用擁有者
+      - netops_ingest_staging:/var/lib/netops-ingest/staging
+    secrets: [ch_writer_password, ftp_password, ch_cold_password]
     # 映像的 HEALTHCHECK 是 netops-api 的 /healthz,這裡換掉
     healthcheck:
       test: ["CMD", "node", "-e", "process.exit(Date.now() - require('fs').statSync('/tmp/netops-ingest.alive').mtimeMs < 120000 ? 0 : 1)"]
@@ -348,6 +372,9 @@ secrets:
   # netops-api 唯讀查詢 ClickHouse(C3;同一支腳本已產生)
   ch_reader_password:
     file: ${NETOPS_SECRETS_DIR}/ch_reader_password
+  # 冷明細與歸檔讀回核對(C4,netops_cold;同一支腳本在 C1 已產生)
+  ch_cold_password:
+    file: ${NETOPS_SECRETS_DIR}/ch_cold_password
   # 建置用:GitLab npm Registry 讀取 Token(環境變數 GITLAB_NPM_TOKEN;CI 由主機機密檔讀入)
   npm_token:
     environment: GITLAB_NPM_TOKEN
@@ -357,6 +384,8 @@ volumes:
   netops_redis_data:
   # netops-clickhouse 資料(C1;測試區 TTL 3 天,約 1–2 GB)
   netops_ch_data:
+  # netops-ingest 冷歸檔的本機暫存(C4)
+  netops_ingest_staging:
   # Gateway Nginx 唯讀掛載的 SPA volume(Gateway DEPLOYMENT.md §3.4)
   gw_www:
     external: true

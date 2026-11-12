@@ -87,7 +87,10 @@ export function threatWhere(f: SliceFilter): { where: string[]; params: Record<s
   return { where, params };
 }
 
-export function createHeatReader(cfg: ClickHouseConfig, fetchImpl: typeof fetch = fetch): HeatReader {
+/** 唯讀查詢的 HTTP 呼叫(param_*、執行上限 ≤ 50 秒、請求中斷時 ClickHouse 也停止);熱查詢與冷查詢(cold)共用 */
+export type RowsFn = <T>(sql: string, params: Record<string, Param>, maxSeconds: number, signal?: AbortSignal) => Promise<T[]>;
+
+export function queryRunner(cfg: ClickHouseConfig, fetchImpl: typeof fetch = fetch): RowsFn {
   const base = clickHouseBase(cfg.url);
   const timeoutMs = cfg.timeoutMs ?? 30_000;
   const headers = { 'X-ClickHouse-User': cfg.user, 'X-ClickHouse-Key': cfg.password, 'Content-Type': 'text/plain; charset=utf-8' };
@@ -124,6 +127,11 @@ export function createHeatReader(cfg: ClickHouseConfig, fetchImpl: typeof fetch 
     }
   }
 
+  return rows;
+}
+
+export function createHeatReader(cfg: ClickHouseConfig, fetchImpl: typeof fetch = fetch): HeatReader {
+  const rows = queryRunner(cfg, fetchImpl);
   const num = (v: unknown) => Number(v ?? 0) || 0;
 
   return {
@@ -159,78 +167,94 @@ export function createHeatReader(cfg: ClickHouseConfig, fetchImpl: typeof fetch 
       const r = await rows<{ t: number; n: number }>(`SELECT toUnixTimestamp(min(bucket)) AS t, count() AS n FROM ${HEAT_TABLES[grain]}`, {}, 20, signal);
       return num(r[0]?.n) > 0 && num(r[0]?.t) > 0 ? num(r[0]?.t) * 1000 : null;
     },
-    async slice(type, f, rowsLimit, sort, maxSeconds, signal) {
-      const isTraffic = type === 'traffic';
-      const table = isTraffic ? READ_TABLES.traffic : READ_TABLES.threat;
-      const { where, params } = isTraffic ? trafficWhere(f) : threatWhere(f);
-      const w = where.join(' AND ');
-      const q = <T>(sql: string, extra: Record<string, Param> = {}) => rows<T>(sql, { ...params, ...extra }, maxSeconds, signal);
-      // 別名一律不和欄位同名:ClickHouse 的 WHERE 會先解析成 SELECT 的別名(例:ipText('src') AS src 會讓 src 條件變成字串比較)
-      const topBy = async (expr: string): Promise<SliceData['top'][string]> =>
-        isTraffic
-          ? (
-              await q<{ k: string; n: number; bt: number }>(
-                `SELECT ${expr} AS k, count() AS n, sum(bytes) AS bt FROM ${table} WHERE ${w} GROUP BY k ORDER BY bt DESC, n DESC, k LIMIT ${TOP_N}`,
-              )
-            ).map((x) => ({ key: String(x.k ?? ''), sessions: num(x.n), bytes: num(x.bt) }))
-          : (await q<{ k: string; n: number }>(`SELECT ${expr} AS k, count() AS n FROM ${table} WHERE ${w} GROUP BY k ORDER BY n DESC, k LIMIT ${TOP_N}`)).map((x) => ({
-              key: String(x.k ?? ''),
-              count: num(x.n),
-            }));
+    slice: (type, f, rowsLimit, sort, maxSeconds, signal) => runSlice(rows, { traffic: READ_TABLES.traffic, threat: READ_TABLES.threat }, type, f, rowsLimit, sort, maxSeconds, signal),
+  };
+}
 
-      // 威脅嚴重度:TRAFFIC 明細也附上同時段、同 IP 條件的威脅數(抽屜摘要列;只帶 IP 條件)
-      const thrFilter: SliceFilter = isTraffic ? { fromMs: f.fromMs, toMs: f.toMs, ip: f.ip, src: f.src, dst: f.dst } : f;
-      const tw = threatWhere(thrFilter);
-      // 查詢依序執行(不並行):一個時段明細最多同時佔 ClickHouse 1 個查詢名額(資安審查 M1)
-      const sevP = () => rows<{ c: number; h: number; m: number; l: number; i: number }>(
-        `SELECT ${SEVERITIES.map((s, i) => `countIf(severity = '${s}') AS ${'chmli'[i]}`).join(', ')} FROM ${READ_TABLES.threat} WHERE ${tw.where.join(' AND ')}`,
-        tw.params,
-        maxSeconds,
-        signal,
-      );
-      const sumP = () =>
-        isTraffic
-        ? q<{ s: number; b: number; bs: number; br: number; d: number }>(
-            `SELECT count() AS s, sum(bytes) AS b, sum(bytes_sent) AS bs, sum(bytes_recv) AS br, countIf(action != 'allow') AS d FROM ${table} WHERE ${w}`,
+/**
+ * 時段明細(熱 / 冷共用):tables 是原始表名(熱)或 Parquet 子查詢(冷,archive.ts coldSource);條件與欄位運算式相同。
+ * 查詢依序執行(不並行):一個時段明細最多同時佔 ClickHouse 1 個查詢名額(資安審查 M1)
+ */
+export async function runSlice(
+  rows: RowsFn,
+  tables: { traffic: string; threat: string },
+  type: SliceType,
+  f: SliceFilter,
+  rowsLimit: number,
+  sort: 'time' | 'bytes',
+  maxSeconds: number,
+  signal?: AbortSignal,
+): Promise<SliceData> {
+  const num = (v: unknown) => Number(v ?? 0) || 0;
+  const isTraffic = type === 'traffic';
+  const table = isTraffic ? tables.traffic : tables.threat;
+  const { where, params } = isTraffic ? trafficWhere(f) : threatWhere(f);
+  const w = where.join(' AND ');
+  const q = <T>(sql: string, extra: Record<string, Param> = {}) => rows<T>(sql, { ...params, ...extra }, maxSeconds, signal);
+  // 別名一律不和欄位同名:ClickHouse 的 WHERE 會先解析成 SELECT 的別名(例:ipText('src') AS src 會讓 src 條件變成字串比較)
+  const topBy = async (expr: string): Promise<SliceData['top'][string]> =>
+    isTraffic
+      ? (
+          await q<{ k: string; n: number; bt: number }>(
+            `SELECT ${expr} AS k, count() AS n, sum(bytes) AS bt FROM ${table} WHERE ${w} GROUP BY k ORDER BY bt DESC, n DESC, k LIMIT ${TOP_N}`,
           )
-        : q<{ s: number; d: number }>(`SELECT count() AS s, countIf(action != 'allow') AS d FROM ${table} WHERE ${w}`);
-      const fields = isTraffic ? TRAFFIC_FIELDS : THREAT_FIELDS;
-      const order = sort === 'bytes' && isTraffic ? 'bytes DESC, event_time DESC' : 'event_time DESC';
-      const rowsP = () =>
-        rowsLimit
-        ? q<Record<string, string | number>>(`SELECT ${fields.map(([, e], i) => `${e} AS f${i}`).join(', ')} FROM ${table} WHERE ${w} ORDER BY ${order} LIMIT {lim:UInt16}`, { lim: rowsLimit + 1 }).then(
-            (list) => list.map((r) => Object.fromEntries(fields.map(([k], i) => [k, r[`f${i}`] ?? ''])) as LogRecord),
-          )
-        : Promise.resolve([] as LogRecord[]);
-      const topsP = async (): Promise<SliceData['top']> => {
-        if (isTraffic) return { src: await topBy(ipText('src')), dst: await topBy(ipText('dst')), app: await topBy('app'), dport: await topBy('toString(dport)'), dstCountry: await topBy('dst_country') };
-        const name = (await q<{ k: string; sv: string; n: number }>(`SELECT name AS k, any(severity) AS sv, count() AS n FROM ${table} WHERE ${w} GROUP BY k ORDER BY n DESC, k LIMIT ${TOP_N}`)).map((x) => ({
+        ).map((x) => ({ key: String(x.k ?? ''), sessions: num(x.n), bytes: num(x.bt) }))
+      : (await q<{ k: string; n: number }>(`SELECT ${expr} AS k, count() AS n FROM ${table} WHERE ${w} GROUP BY k ORDER BY n DESC, k LIMIT ${TOP_N}`)).map((x) => ({
           key: String(x.k ?? ''),
-          severity: x.sv === 'informational' ? 'info' : x.sv,
           count: num(x.n),
         }));
-        return { name, src: await topBy(ipText('src')), dst: await topBy(ipText('dst')), srcCountry: await topBy('src_country') };
-      };
-      const sev = await sevP();
-      const sum = await sumP();
-      const list = await rowsP();
-      const top = await topsP();
-      const s = sum[0] as { s?: number; b?: number; bs?: number; br?: number; d?: number } | undefined;
-      const t = sev[0];
-      const more = list.length > rowsLimit;
-      return {
-        summary: {
-          sessions: num(s?.s),
-          bytes: num(s?.b),
-          sent: num(s?.bs),
-          recv: num(s?.br),
-          deny: num(s?.d),
-          threats: { critical: num(t?.c), high: num(t?.h), medium: num(t?.m), low: num(t?.l), info: num(t?.i) },
-        },
-        top,
-        rows: more ? list.slice(0, rowsLimit) : list,
-        more,
-      };
+
+  // 威脅嚴重度:TRAFFIC 明細也附上同時段、同 IP 條件的威脅數(抽屜摘要列;只帶 IP 條件)
+  const thrFilter: SliceFilter = isTraffic ? { fromMs: f.fromMs, toMs: f.toMs, ip: f.ip, src: f.src, dst: f.dst } : f;
+  const tw = threatWhere(thrFilter);
+  // 查詢依序執行(不並行):一個時段明細最多同時佔 ClickHouse 1 個查詢名額(資安審查 M1)
+  const sevP = () => rows<{ c: number; h: number; m: number; l: number; i: number }>(
+    `SELECT ${SEVERITIES.map((s, i) => `countIf(severity = '${s}') AS ${'chmli'[i]}`).join(', ')} FROM ${tables.threat} WHERE ${tw.where.join(' AND ')}`,
+    tw.params,
+    maxSeconds,
+    signal,
+  );
+  const sumP = () =>
+    isTraffic
+    ? q<{ s: number; b: number; bs: number; br: number; d: number }>(
+        `SELECT count() AS s, sum(bytes) AS b, sum(bytes_sent) AS bs, sum(bytes_recv) AS br, countIf(action != 'allow') AS d FROM ${table} WHERE ${w}`,
+      )
+    : q<{ s: number; d: number }>(`SELECT count() AS s, countIf(action != 'allow') AS d FROM ${table} WHERE ${w}`);
+  const fields = isTraffic ? TRAFFIC_FIELDS : THREAT_FIELDS;
+  const order = sort === 'bytes' && isTraffic ? 'bytes DESC, event_time DESC' : 'event_time DESC';
+  const rowsP = () =>
+    rowsLimit
+    ? q<Record<string, string | number>>(`SELECT ${fields.map(([, e], i) => `${e} AS f${i}`).join(', ')} FROM ${table} WHERE ${w} ORDER BY ${order} LIMIT {lim:UInt16}`, { lim: rowsLimit + 1 }).then(
+        (list) => list.map((r) => Object.fromEntries(fields.map(([k], i) => [k, r[`f${i}`] ?? ''])) as LogRecord),
+      )
+    : Promise.resolve([] as LogRecord[]);
+  const topsP = async (): Promise<SliceData['top']> => {
+    if (isTraffic) return { src: await topBy(ipText('src')), dst: await topBy(ipText('dst')), app: await topBy('app'), dport: await topBy('toString(dport)'), dstCountry: await topBy('dst_country') };
+    const name = (await q<{ k: string; sv: string; n: number }>(`SELECT name AS k, any(severity) AS sv, count() AS n FROM ${table} WHERE ${w} GROUP BY k ORDER BY n DESC, k LIMIT ${TOP_N}`)).map((x) => ({
+      key: String(x.k ?? ''),
+      severity: x.sv === 'informational' ? 'info' : x.sv,
+      count: num(x.n),
+    }));
+    return { name, src: await topBy(ipText('src')), dst: await topBy(ipText('dst')), srcCountry: await topBy('src_country') };
+  };
+  const sev = await sevP();
+  const sum = await sumP();
+  const list = await rowsP();
+  const top = await topsP();
+  const s = sum[0] as { s?: number; b?: number; bs?: number; br?: number; d?: number } | undefined;
+  const t = sev[0];
+  const more = list.length > rowsLimit;
+  return {
+    summary: {
+      sessions: num(s?.s),
+      bytes: num(s?.b),
+      sent: num(s?.bs),
+      recv: num(s?.br),
+      deny: num(s?.d),
+      threats: { critical: num(t?.c), high: num(t?.h), medium: num(t?.m), low: num(t?.l), info: num(t?.i) },
     },
+    top,
+    rows: more ? list.slice(0, rowsLimit) : list,
+    more,
   };
 }

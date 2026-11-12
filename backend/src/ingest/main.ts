@@ -13,6 +13,9 @@ import { COUNTERS, sleep, Writer } from './writer.js';
 import { createFtp } from '../infra/ftp/index.js';
 import { connectBackfillQueue } from '../infra/redis/backfill.js';
 import { backfillLoop } from './backfill.js';
+import { createArchiveWriterClient, createColdFileClient } from '../infra/clickhouse/archive.js';
+import { connectColdLock } from '../infra/redis/cold-lock.js';
+import { archiveHeartbeatFields, archiveLoop, Archiver } from './archive.js';
 
 export const HEARTBEAT_MS = 10_000;
 /** 健康檢查:主迴圈每次推進都更新(Compose healthcheck 看 2 分鐘內有沒有更新) */
@@ -23,9 +26,10 @@ const log = (level: 'info' | 'warn' | 'error', msg: string, extra: Record<string
   console.log(JSON.stringify({ level, time: new Date().toISOString(), service: 'netops-ingest', msg, ...extra }));
 
 /** 心跳欄位(全部字串);netops-api 的 /readyz 與畫面在 C3 讀 */
-export function heartbeatFields(w: Writer, cfg: Pick<IngestConfig, 'gwEnv' | 'release'>, startedAt: string, now = Date.now()): Record<string, string> {
+export function heartbeatFields(w: Writer, cfg: Pick<IngestConfig, 'gwEnv' | 'release'>, startedAt: string, now = Date.now(), archiver: Archiver | null = null): Record<string, string> {
   const s = w.status;
   const f: Record<string, string> = {
+    ...archiveHeartbeatFields(archiver),
     updatedAt: new Date(now).toISOString(),
     startedAt,
     release: cfg.release,
@@ -72,6 +76,15 @@ async function main(): Promise<void> {
   const ch = createClickHouseWriter(cfg.clickhouse);
   const writer = new Writer(redis, ch, { batchMs: cfg.batchMs, batchMax: cfg.batchMax });
   const stop = new AbortController();
+  // 冷歸檔(C4):NETOPS_ARCHIVE_ENABLED=1 才執行;匯出用 netops_writer(長時間串流,不設一般請求逾時),讀回核對用 netops_cold
+  const coldLock = cfg.archive ? connectColdLock(cfg.redisUrl) : null;
+  const archiver =
+    cfg.archive && coldLock
+      ? new Archiver(
+          { ch: createArchiveWriterClient({ ...cfg.clickhouse, timeoutMs: 120_000 }), cold: createColdFileClient({ ...cfg.archive.cold, timeoutMs: 120_000 }), lock: coldLock, log },
+          cfg.archive,
+        )
+      : null;
   for (const sig of ['SIGTERM', 'SIGINT'] as const) process.once(sig, () => stop.abort());
 
   const touch = () => {
@@ -91,7 +104,7 @@ async function main(): Promise<void> {
       writer.status.fail('redis', e);
     }
     try {
-      await redis.writeHeartbeat(heartbeatFields(writer, cfg, startedAt));
+      await redis.writeHeartbeat(heartbeatFields(writer, cfg, startedAt, Date.now(), archiver));
     } catch (e) {
       writer.status.fail('redis', e);
     }
@@ -119,6 +132,8 @@ async function main(): Promise<void> {
   const backfillQueue = cfg.ftp ? connectBackfillQueue(cfg.redisUrl) : null;
   const backfill = backfillQueue && cfg.ftp ? backfillLoop({ ch, ftp: createFtp(cfg.ftp), queue: backfillQueue, log, signal: stop.signal, rules: { logDir: cfg.ftp.logDir, pattern: cfg.ftp.pattern } }) : Promise.resolve();
   log('info', cfg.ftp ? 'FTP 補漏已啟用' : '沒有設定 FTP_HOST,不執行 FTP 補漏');
+  const archiving = archiver ? archiveLoop(archiver, stop.signal, log) : Promise.resolve();
+  log('info', cfg.archive ? '冷歸檔已啟用' : 'NETOPS_ARCHIVE_ENABLED 不是 1,不執行冷歸檔', cfg.archive ? { keepDays: cfg.archive.keepDays, alertDays: cfg.archive.alertDays } : {});
 
   // 主迴圈:Redis 錯誤(連線中斷)時退避後重來;重來會先補待處理清單
   for (let attempt = 0; !stop.signal.aborted; ) {
@@ -137,6 +152,8 @@ async function main(): Promise<void> {
   clearInterval(timer);
   await backfill;
   await backfillQueue?.close();
+  await archiving;
+  await coldLock?.close();
   await beat();
   await redis.quit();
   log('info', 'netops-ingest 已停止', { counts: writer.status.counts });

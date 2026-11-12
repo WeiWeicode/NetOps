@@ -122,6 +122,7 @@ const sleep = (ms: number, signal: AbortSignal) =>
   new Promise<void>((r) => {
     if (signal.aborted || ms <= 0) return r();
     const t = setTimeout(r, ms);
+    t.unref();
     signal.addEventListener('abort', () => (clearTimeout(t), r()), { once: true });
   });
 const minutesOfDay = (ms: number) => Math.floor(((ms + TZ_MS) % DAY_MS) / 60_000);
@@ -331,7 +332,7 @@ export class Archiver {
         this.fail('冷查詢鎖', e);
       }
       if (Date.now() >= until || signal.aborted) return false;
-      await new Promise((r) => setTimeout(r, Math.min(5_000, this.d.lockWaitMs ?? 5_000)));
+      await new Promise((r) => setTimeout(r, Math.min(5_000, this.d.lockWaitMs ?? 5_000)).unref());
     }
   }
 
@@ -350,6 +351,7 @@ export class Archiver {
           if (Date.now() - lastOk >= LOCK_LOST_MS) lost.abort(new Error('冷查詢鎖無法延長(Redis 無法連線)'));
         });
     }, LOCK_REFRESH_MS);
+    timer.unref();
     try {
       return await run(lost.signal);
     } finally {

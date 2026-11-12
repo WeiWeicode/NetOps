@@ -234,7 +234,7 @@ describe('Archiver.tick', () => {
     const f = fakeCh({ 'traffic:2026-11-11': 1 });
     const lock = memLock();
     lock.hold('someone');
-    const a = new Archiver({ ch: f.ch, cold: f.cold, lock, log, now: () => T0, lockWaitMs: 1 }, opts(d));
+    const a = new Archiver({ ch: f.ch, cold: f.cold, lock, log, pauseMs: 0, freeBytes: async () => Infinity, now: () => T0, lockWaitMs: 1 }, opts(d));
     await a.tick(signal);
     assert.deepEqual(f.exports, []);
     lock.hold(null);

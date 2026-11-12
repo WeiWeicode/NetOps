@@ -1,10 +1,10 @@
 <script setup lang="ts">
 /**
  * 防火牆 › Log 明細查詢(docs/API.md §4.3;舊版 src/views/PaSearch.vue):
- *   依時間挑出已分析的檔案,後端從 FTP 串流逐列篩選(原始 log 不落地)。改成工作模式(ARCHITECTURE D6):
+ *   C3 D43 起後端只查 ClickHouse(保留 30 天)。工作模式(ARCHITECTURE D6):
  *   送出 → 每 1.5 秒查詢進度 → 完成後分頁讀取結果(每頁 50 筆)、匯出 CSV(後端產生)。可隨時停止;離開頁面自動取消。
  *   流量總覽點選會帶 ?from=&to=&src=… 進來並自動查詢;網址條件只收白名單與格式正確的值(composables/searchQuery.ts)。
- *   期間最長 31 天;目的 Port 只能是數字與逗號(後端同樣檢查)。
+ *   期間最長 30 天(只用關鍵字最長 1 天);目的 Port 只能是數字與逗號(後端同樣檢查)。
  */
 import { computed, onMounted, reactive, ref, shallowRef, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
@@ -24,6 +24,9 @@ import {
 } from '@/api/pa';
 import { cameFromApp, isPorts, localToIso, pickQuery, toLocalInput } from '@/composables/searchQuery';
 import { useJob } from '@/composables/useJob';
+import DateRangeField from '@/components/DateRangeField.vue';
+import { coverageText } from '@/composables/dateRange';
+import type { Coverage } from '@/api/pa';
 import { toast } from '@/ui';
 
 const PAGE_SIZE = 50;
@@ -35,6 +38,8 @@ const form = reactive<Record<PaSearchKey, string> & { from: string; to: string }
   to: '',
   ...(Object.fromEntries(PA_SEARCH_KEYS.map((k) => [k, ''])) as Record<PaSearchKey, string>),
 });
+/** ClickHouse 實際有資料的範圍(C3 D43) */
+const coverage = ref<Coverage | null>(null);
 const formError = computed(() => {
   if (!form.from || !form.to) return '請選擇查詢時間';
   if (form.from > form.to) return '開始時間不可晚於結束時間';
@@ -135,7 +140,10 @@ function reset() {
 const stopText = computed(() => {
   const r = result.value;
   if (!r) return '';
-  if (r.stopReason === 'limit') return `已達上限 ${fmtNum(r.limit)} 筆,後面還有資料,請縮小時間或加條件`;
+  const partial = r.partial && r.coverage ? `期間有一部分超過保留期限:${r.coverage.from} 之前沒有資料` : '';
+  // 兩種提示都要看得到(程式碼審查 #9)
+  if (r.stopReason === 'limit') return [`已達上限 ${fmtNum(r.limit)} 筆,後面還有資料,請縮小時間或加條件`, partial].filter(Boolean).join(';');
+  if (partial) return partial;
   if (r.stopReason === 'timeout') return `掃描超過時間上限或等不到 FTP 連線,只查了 ${r.filesScanned} / ${r.files} 個檔案,結果不完整;請縮小時間或加條件`;
   if (r.stopReason === 'closed') return `服務正在關閉,只查了 ${r.filesScanned} / ${r.files} 個檔案,結果不完整;請稍後重新查詢`;
   if (r.stopReason === 'error') return `讀取 FTP 時發生錯誤,只查了 ${r.filesScanned} / ${r.files} 個檔案,結果不完整;請稍後重新查詢`;
@@ -179,6 +187,11 @@ const localMinute = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${
 onMounted(async () => {
   const q = route.query;
   Object.assign(form, pickQuery(q, PA_SEARCH_KEYS, { proto: (v) => /^[a-z0-9-]{1,16}$/i.test(v), port: isPorts }));
+  // 資料範圍一律先載入(網址帶條件進來時也要顯示可查範圍;程式碼審查 #2),失敗只影響提示
+  const days = pa.days().then(
+    (r) => ((coverage.value = r.coverage), r),
+    (e) => (toast.fromError(e, '無法取得有資料的日期'), null),
+  );
   const from = toLocalInput(q.from);
   if (from) {
     Object.assign(form, { from, to: toLocalInput(q.to || q.from, true) || toLocalInput(q.from, true) });
@@ -186,14 +199,13 @@ onMounted(async () => {
     if (cameFromApp()) search();
     return;
   }
-  // 預設:最新一天有資料的最後一小時(同舊版)
-  try {
-    const day = (await pa.days()).days[0]?.day;
+  // 預設:最新一天有資料的最後一小時(今天則是最近 1 小時)
+  {
+    const r = await days;
+    const day = r?.days[0]?.day;
     if (!day) return;
-    const end = new Date(`${day}T23:59:00`);
+    const end = new Date(Math.min(new Date(`${day}T23:59:00`).getTime(), Date.now()));
     Object.assign(form, { from: localMinute(new Date(end.getTime() - 59 * 60_000)), to: localMinute(end) });
-  } catch (e) {
-    toast.fromError(e, '無法取得已分析的日期');
   }
 });
 
@@ -219,8 +231,7 @@ const asRow = (r: unknown) => r as PaLogRow;
     <GCard padding="sm">
       <form class="stack" style="--gap: 12px" @submit.prevent="search">
         <div class="filters">
-          <GInput v-model="form.from" type="datetime-local" label="開始時間" class="dt" />
-          <GInput v-model="form.to" type="datetime-local" label="結束時間" class="dt" />
+          <DateRangeField v-model:from="form.from" v-model:to="form.to" mode="datetime" label="查詢時間" :max-days="PA_SEARCH_MAX_DAYS" :coverage="coverage" class="dt" />
           <GInput v-model="form.src" label="來源 IP" placeholder="10.10.124.* 或 /16" clearable class="md" />
           <GInput v-model="form.dst" label="目的 IP" clearable class="md" />
           <GInput v-model="form.ip" label="任一方 IP" clearable class="md" />
@@ -233,10 +244,10 @@ const asRow = (r: unknown) => r as PaLogRow;
           <GSelect v-model="form.toZone" label="目的區域" :options="opts(options.zones, form.toZone)" placeholder="全部" class="sm" />
           <GInput v-model="form.user" label="使用者" clearable class="sm" />
           <GInput v-model="form.country" label="國家" placeholder="China" clearable class="sm" />
-          <GInput v-model="form.q" label="關鍵字" placeholder="整列文字包含" clearable class="md" />
+          <GInput v-model="form.q" label="關鍵字" placeholder="IP、App、規則等欄位包含" clearable class="md" />
         </div>
         <div class="filters">
-          <span class="xs faint">從 FTP 即時讀取;時間越短、條件越多越快。IP 可輸入 10.10.124.18、10.10.124.*、10.10.0.0/16</span>
+          <span class="xs faint">查 ClickHouse({{ coverageText(coverage) }},最長 {{ PA_SEARCH_MAX_DAYS }} 天;只用關鍵字最長 1 天)。IP 可輸入 10.10.124.18、10.10.124.*、10.10.0.0/16</span>
           <div class="spacer" />
           <span v-if="formError && (form.from || form.to)" class="small c-danger">{{ formError }}</span>
           <GButton icon="reset" @click="reset">清除條件</GButton>
@@ -253,15 +264,11 @@ const asRow = (r: unknown) => r as PaLogRow;
       <div class="pad stack" style="--gap: 8px">
         <p v-if="job.running.value" class="small status">
           <span class="spin" aria-hidden="true" />
-          從 FTP 讀取中…
-          <template v-if="progress"
-            >已掃描 {{ progress.filesScanned }} / {{ progress.files }} 個檔案、{{ fmtNum(progress.rows) }} 列,找到 {{ fmtNum(progress.found) }} 筆</template
-          >
-          <template v-else>(匯入進行中時會排隊等候 FTP 連線)</template>
+          查詢中…(其他人的查詢較多時會排隊)
         </p>
         <p v-else-if="result" class="small muted">
           <strong class="text">符合 {{ fmtNum(result.total) }} 筆</strong>
-          · 掃描 {{ fmtNum(result.scanned) }} 列 · {{ result.filesScanned }} / {{ result.files }} 個檔案 · {{ result.seconds }} 秒
+          · 讀取 {{ fmtNum(result.scanned) }} 列 · {{ result.seconds }} 秒
         </p>
         <p v-else-if="job.job.value?.status === 'cancelled'" class="small muted">已停止查詢</p>
         <p v-else-if="!job.error.value" class="small muted">選擇時間與條件後按「查詢」</p>
@@ -323,7 +330,8 @@ const asRow = (r: unknown) => r as PaLogRow;
   align-items: flex-end;
 }
 .dt {
-  width: 210px;
+  width: 340px;
+  max-width: 100%;
 }
 .sm {
   width: 130px;

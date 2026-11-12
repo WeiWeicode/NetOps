@@ -120,7 +120,8 @@ describe('GET /v1/pa/insight/*', () => {
     assert.equal((await t.call({ url: '/v1/pa/insight/traffic?from=2021-01-01&to=2021-01-02' })).statusCode, 400);
   });
 
-  it('實際計算全系統同時 2 個:第 3 個(不同期間)回 429 + Retry-After;快取命中不受限', async () => {
+  // 卡住時直接失敗,不掛住 runner
+  it('實際計算全系統同時 2 個:第 3 個(不同期間)回 429 + Retry-After;快取命中不受限', { timeout: 20_000 }, async () => {
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
     // 兩個實際計算都佔到名額(進到 insightFlows)再送第 3 個;不靠固定等待時間(CI 慢的時候 30ms 不夠)

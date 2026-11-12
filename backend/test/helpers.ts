@@ -54,6 +54,8 @@ export async function createTestApp({
   const jwk = { ...(await exportJWK(publicKey)), kid: 'test', alg: 'ES256', use: 'sig' };
   const jwks = http.createServer((_req, res) => res.setHeader('content-type', 'application/json').end(JSON.stringify({ keys: [jwk] })));
   await new Promise<void>((r) => jwks.listen(0, '127.0.0.1', r));
+  // 測試用的 JWKS server 不讓程序一直活著:某個測試卡住、close() 沒跑到時,node --test 仍能結束並回報失敗(CI job 2776)
+  jwks.unref();
   const jwksUrl = `http://127.0.0.1:${(jwks.address() as AddressInfo).port}/.well-known/jwks.json`;
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'netops-test-'));
   const config = loadConfig({ GW_ENV: 'dev', SERVICE_CODE: 'netops-api', GW_JWKS_URL: jwksUrl, LOG_LEVEL: 'silent', NETOPS_DATA_DIR: dataDir, FTP_HOST: 'fake-ftp', ...env });
@@ -72,8 +74,9 @@ export async function createTestApp({
       return app.inject({ method, url, payload: payload as never, headers: { 'x-internal-token': await token(emp), 'x-request-id': 'req-test' } });
     },
     async close() {
-      await app.close();
       jwks.close();
+      jwks.closeAllConnections();
+      await app.close();
       fs.rmSync(dataDir, { recursive: true, force: true });
     },
   } as TestApp;

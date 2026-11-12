@@ -3,10 +3,11 @@
 > `backend/`、`deploy/` 的修改;新紀錄加在最上方,格式見 `AGENT.md` §11。
 
 ## 2026-11-12 V-b1 測試:儀表板並行上限測試不再卡住 CI
-- 工作項目:V-b1(CI pipeline 901 job 2776 卡在 `test/unit/pa-insight.test.ts`)
-- 內容:「全系統同時 2 個」測試原本固定等 30ms 再送第 3 個請求;CI 慢的時候前兩個還沒佔到名額,429 斷言失敗,`release()` 沒執行,前兩個請求永遠卡在 gate,`finally` 的 `close()` 等不到請求結束,`node --test` 不會結束。改成等兩個實際計算都進到 `insightFlows` 再送(最多等 5 秒,計時器 `unref`),`finally` 先 `release()` 再 `close()`
-- 檔案:`backend/test/unit/pa-insight.test.ts`
-- 驗證:`npx tsx --test test/unit/pa-insight.test.ts`(8 通過,4.6 秒自己結束);故意改壞斷言時回 1 個失敗並結束、不再卡住;`npm test`(296 通過,15 秒)
+- 工作項目:V-b1(CI pipeline 901 job 2776 卡在 `test/unit/pa-insight.test.ts` 超過 10 分鐘,最後 Force cancel)
+- 根因(本機重現):兩件事加在一起。① 「全系統同時 2 個」測試固定等 30ms 就送第 3 個請求;機器慢時第 3 個比前兩個先進到計算,也卡在測試的 gate 上,`await` 永遠不回來,`finally` 的 `close()` 不會執行。② 測試沒有逾時,而測試 app 的 JWKS server(127.0.0.1)只有 `close()` 會關;它一直 listen,`node --test` 就一直等。實測:一個請求永遠卡住時,舊 helper 有沒有加測試逾時都卡住;新 helper 加逾時 6 秒內失敗結束
+- 修正:① 等兩個實際計算都進到 `insightFlows` 再送第 3 個(最多等 5 秒,計時器 `unref`),`finally` 先 `release()` 再 `close()`;這個測試逾時 20 秒。② `test/helpers.ts`:JWKS server `unref()`,`close()` 先關 JWKS(含 `closeAllConnections`)再關 app。③ `npm test` 加 `--test-timeout=60000`:任何測試卡住都會失敗,不會佔住 runner。沒有改門檻或跳過測試
+- 檔案:`backend/test/unit/pa-insight.test.ts`、`backend/test/helpers.ts`、`backend/package.json`(test script)
+- 驗證:`npx tsx --test test/unit/pa-insight.test.ts` 4 個同時跑 × 18 輪(72 次)都自己結束、沒有卡住;故意改壞斷言時回失敗並結束;`npm test` 全過
 
 ## 2026-11-12 V-b1 分析儀表板 API、畫面節點
 - 工作項目:V-b1 第 1、2 步(VIZ-RULES-DESIGN §4.4、§4.8)

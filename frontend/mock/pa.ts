@@ -8,7 +8,8 @@ const ymd = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.ge
 const DAYS = Array.from({ length: 7 }, (_, i) => {
   const d = new Date();
   d.setDate(d.getDate() - i - 1);
-  return { day: ymd(d), files: 4, rows: 1_830_000 - i * 12_345 };
+  // C3 D43:files 為 ClickHouse 有資料的小時數
+  return { day: ymd(d), files: 24, rows: 1_830_000 - i * 12_345 };
 });
 const MB = 1024 * 1024;
 
@@ -206,7 +207,7 @@ function overview(from: string, to: string) {
 export function handlePa({ method, path, url, need, send, fail }: MockCtx): boolean {
   if (method === 'GET' && path === '/api/netops/pa/days') {
     if (!need('netops.pa.read')) return true;
-    send(200, { days: DAYS, import: { busy: false, total: 0, done: 0, failed: 0, queued: 0 } });
+    send(200, { days: DAYS, coverage: { from: DAYS.at(-1)!.day, to: DAYS[0]!.day }, import: { busy: false, failed: 0 } });
     return true;
   }
   if (method === 'GET' && path === '/api/netops/pa/overview') {
@@ -214,7 +215,10 @@ export function handlePa({ method, path, url, need, send, fail }: MockCtx): bool
     const from = url.searchParams.get('from') ?? '';
     const to = url.searchParams.get('to') || from;
     if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to) || from > to) return (fail(400, 'VALIDATION_FAILED', 'from / to 格式錯誤'), true);
-    send(200, overview(from, to));
+    // C3 D43:只查 ClickHouse;整個在資料範圍之前回 404 NETOPS_PA_OUT_OF_RETENTION
+    const coverage = { from: DAYS.at(-1)!.day, to: DAYS[0]!.day };
+    if (to < coverage.from) return (fail(404, 'NETOPS_PA_OUT_OF_RETENTION', `這段期間超過資料保留期限:目前只有 ${coverage.from} ~ ${coverage.to} 的資料`), true);
+    send(200, { ...overview(from, to), source: 'clickhouse', coverage, partial: from < coverage.from, topsState: 'ok', topsUntil: `${coverage.to}T23:00:00+08:00` });
     return true;
   }
   return false;

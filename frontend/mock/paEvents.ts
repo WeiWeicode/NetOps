@@ -13,10 +13,11 @@ const lastDays = (n: number) =>
   });
 
 const TYPES = [
-  { type: 'threat', label: '威脅', dir: '/threat', files: 6, rows: 52_000, days: lastDays(6) },
-  { type: 'url', label: 'URL 過濾', dir: '/url', files: 6, rows: 1_830_000, days: lastDays(6) },
-  { type: 'globalprotect', label: 'GlobalProtect VPN', dir: '/globalprotect', files: 6, rows: 3_400, days: lastDays(6) },
-  { type: 'wildfire', label: 'WildFire', dir: '/wildfire', files: 0, rows: 0, days: [] as string[] },
+  // C3 D43:威脅類在 ClickHouse(files 為有資料的小時數),GlobalProtect 仍是 FTP
+  { type: 'threat', label: '威脅', dir: '/threat', source: 'clickhouse', files: 144, rows: 52_000, days: lastDays(6) },
+  { type: 'url', label: 'URL 過濾', dir: '/url', source: 'clickhouse', files: 144, rows: 1_830_000, days: lastDays(6) },
+  { type: 'globalprotect', label: 'GlobalProtect VPN', dir: '/globalprotect', source: 'ftp', files: 6, rows: 3_400, days: lastDays(6) },
+  { type: 'wildfire', label: 'WildFire', dir: '/wildfire', source: 'clickhouse', files: 0, rows: 0, days: [] as string[] },
 ];
 
 const items = (list: [string, number][], k = 1) => list.map(([key, n]) => ({ key, n: Math.round(n * k) }));
@@ -221,7 +222,7 @@ function detail(type: string, k: number) {
 export function handlePaEvents({ method, path, url, need, send, fail }: MockCtx): boolean {
   if (method === 'GET' && path === '/api/netops/pa-events/types') {
     if (!need('netops.pa.read')) return true;
-    send(200, { types: TYPES });
+    send(200, { types: TYPES.map((t) => ({ ...t, coverage: t.days.length ? { from: [...t.days].sort()[0], to: [...t.days].sort().at(-1) } : null })) });
     return true;
   }
   if (method === 'GET' && path === '/api/netops/pa-events/overview') {
@@ -241,8 +242,10 @@ export function handlePaEvents({ method, path, url, need, send, fail }: MockCtx)
       label: t.label,
       from,
       to,
-      files: k,
-      // 最舊的一天模擬「摘要讀不到」,看得到結果不完整的提示
+      files: t.source === 'clickhouse' ? k * 24 : k,
+      source: t.source,
+      ...(t.source === 'clickhouse' ? { coverage: { from: t.days.at(-1), to: t.days[0] }, partial: !!t.days.length && from < t.days.at(-1)!, topsState: 'ok', topsUntil: `${to}T23:00:00+08:00` } : {}),
+      // 最舊的一天模擬「排行還沒建好」,看得到結果不完整的提示
       missing: days.includes(t.days.at(-1)!) ? 1 : 0,
       import: { busy: false, failed: 0 },
       rows: Math.round((t.rows / 6) * k),

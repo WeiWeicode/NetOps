@@ -26,6 +26,19 @@ export function trafficRecord(time: string, i: number, extra: Partial<LogRecord>
   };
 }
 
+/** 時間(UTC 毫秒)→ 每天(台灣時間 00:00)的小時數與筆數,新的在前 */
+function days(times: number[]) {
+  const m = new Map<number, { hours: Set<number>; rows: number }>();
+  for (const t of times) {
+    const day = Math.floor((t + 8 * HOUR) / (24 * HOUR)) * 24 * HOUR - 8 * HOUR;
+    const v = m.get(day) ?? { hours: new Set<number>(), rows: 0 };
+    v.hours.add(Math.floor(t / HOUR));
+    v.rows++;
+    m.set(day, v);
+  }
+  return [...m].sort((a, b) => b[0] - a[0]).map(([day, v]) => ({ day, hours: v.hours.size, rows: v.rows }));
+}
+
 export function createFakeReader(traffic: LogRecord[] = [], threats: { type: ChEventType; rec: LogRecord }[] = []): FakeReader {
   const f: FakeReader = {
     traffic,
@@ -55,6 +68,15 @@ export function createFakeReader(traffic: LogRecord[] = [], threats: { type: ChE
       const rs = f.traffic.filter((r) => ms(String(r.time)) >= from && ms(String(r.time)) < to);
       const uniq = (xs: string[]) => [...new Set(xs.filter(Boolean))].sort();
       return { apps: uniq(rs.map((r) => String(r.app))), zones: uniq(rs.flatMap((r) => [String(r.fromZone), String(r.toZone)])), actions: uniq(rs.map((r) => String(r.action))) };
+    },
+    async trafficDays() {
+      check('trafficDays');
+      return days(f.traffic.map((r) => ms(String(r.time))));
+    },
+    async threatDays() {
+      check('threatDays');
+      const types = [...new Set(f.threats.map((x) => x.type))];
+      return types.flatMap((type) => days(f.threats.filter((x) => x.type === type).map((x) => ms(String(x.rec.time)))).map((d) => ({ type, ...d })));
     },
     async earliestTrafficHour() {
       check('earliestTrafficHour');

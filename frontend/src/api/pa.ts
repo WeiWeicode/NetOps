@@ -3,11 +3,11 @@
  * 明細查詢(§4.3)需要 netops.pa-log.read。
  */
 import { http } from './gateway';
-import type { ImportStatus } from './ftp';
 import type { Job } from './jobs';
 
 export interface PaDay {
   day: string;
+  /** ClickHouse 有資料的小時數(舊欄位名稱) */
   files: number;
   rows: number;
 }
@@ -18,17 +18,27 @@ export interface TopEntry {
   bytes?: number;
 }
 
-/** 資料來源(C3;docs/API.md §4.1):省略時依後端設定(預設 auto) */
-export type PaSource = 'ftp' | 'clickhouse' | 'auto';
+/** 資料來源(C3 D43):只有 clickhouse(參數可省略) */
+export type PaSource = 'clickhouse';
+
+/** ClickHouse 實際有資料的範圍(YYYY-MM-DD) */
+export interface Coverage {
+  from: string;
+  to: string;
+}
 
 export interface PaOverview {
   from: string;
   to: string;
-  /** 實際使用的來源 */
-  source: 'ftp' | 'clickhouse';
-  /** source 為 clickhouse 時:排行、疑似掃描只算到這個時間(之後的小時還沒有排行);ftp 時不提供 */
-  topsUntil?: string;
-  /** ftp:期間內已分析的檔案數;clickhouse:有資料的小時數。0 表示沒有資料(不是沒有流量) */
+  source: 'clickhouse';
+  /** 排行、疑似掃描只算到這個時間(之後的小時還沒有排行) */
+  topsUntil: string;
+  /** ok;not-ready 剛啟動、排行建立中;stale 太久沒更新(ClickHouse 可能停止) */
+  topsState: 'ok' | 'not-ready' | 'stale';
+  /** ClickHouse 實際有資料的範圍;partial = 期間有一部分在範圍之前 */
+  coverage: Coverage;
+  partial: boolean;
+  /** 有資料的小時數;0 表示這段期間沒有資料 */
   files: number;
   /** 已分析但摘要讀不到的檔案數;大於 0 表示總覽不完整 */
   missing: number;
@@ -51,7 +61,7 @@ export interface PaOverview {
 }
 
 export const pa = {
-  days: () => http.get<{ days: PaDay[]; import: Omit<ImportStatus, 'running'> }>('/api/netops/pa/days'),
+  days: () => http.get<{ days: PaDay[]; coverage: Coverage | null; import: { busy: boolean; failed: number } }>('/api/netops/pa/days'),
   /** from / to:YYYY-MM-DD(含當天),最長 92 天;top 1–100 */
   overview: (from: string, to: string, top = 15, source?: PaSource) => http.get<PaOverview>('/api/netops/pa/overview', { query: { from, to, top, ...(source ? { source } : {}) } }),
   /** 明細查詢的下拉選項(期間內出現過的值) */
@@ -68,7 +78,7 @@ export interface PaOptions {
 // ---------- Log 明細查詢與匯出(§4.3,工作模式;後端 B2-logs) ----------
 
 /** 期間最長 31 天 */
-export const PA_SEARCH_MAX_DAYS = 31;
+export const PA_SEARCH_MAX_DAYS = 30;
 
 export const PA_SEARCH_KEYS = ['src', 'dst', 'ip', 'port', 'proto', 'app', 'rule', 'action', 'fromZone', 'toZone', 'user', 'country', 'q'] as const;
 export type PaSearchKey = (typeof PA_SEARCH_KEYS)[number];
@@ -78,8 +88,11 @@ export type PaSearchKey = (typeof PA_SEARCH_KEYS)[number];
 export type PaSearchBody = { from: string; to: string; limit?: number; source?: PaSource } & Partial<Record<PaSearchKey, string>>;
 
 export interface PaSearchResult {
-  /** 實際來源(C3) */
-  source: 'ftp' | 'clickhouse';
+  /** C3 D43:固定 clickhouse */
+  source: 'clickhouse';
+  /** ClickHouse 有資料的範圍;partial = 期間有一部分在範圍之前(超過保留期限的部分沒有資料) */
+  coverage?: Coverage;
+  partial?: boolean;
   from: string;
   to: string;
   total: number;

@@ -9,7 +9,9 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch 
 import { useRouter } from 'vue-router';
 import { describeError, can } from '@/api/gateway';
 import { fmtNum, fmtPct, fmtShort, fmtSize, fmtTime } from '@/api/format';
-import { actionOf, pa, type PaDay, type PaOverview, type TopEntry } from '@/api/pa';
+import { actionOf, pa, type Coverage, type PaDay, type PaOverview, type TopEntry } from '@/api/pa';
+import DateRangeField from '@/components/DateRangeField.vue';
+import { coverageText } from '@/composables/dateRange';
 import { NETOPS, UI } from '@/api/perms';
 import AiAnalysis from '@/components/AiAnalysis.vue';
 import TopList from '@/components/TopList.vue';
@@ -29,10 +31,14 @@ const days = ref<PaDay[]>([]);
 const daysLoaded = ref(false);
 const daysError = ref<Error | null>(null);
 const range = reactive({ from: '', to: '' });
+/** ClickHouse 實際有資料的範圍(C3 D43) */
+const coverage = ref<Coverage | null>(null);
 
 async function loadDays() {
   try {
-    days.value = (await pa.days()).days;
+    const r = await pa.days();
+    days.value = r.days;
+    coverage.value = r.coverage;
     daysError.value = null;
     const latest = days.value[0]?.day;
     if (!range.from && latest) Object.assign(range, { from: latest, to: latest });
@@ -101,9 +107,10 @@ const incomplete = computed(() => {
   const d = data.value;
   if (!d) return '';
   const why = [
-    d.import.busy ? '分析進行中' : '',
-    d.missing ? `${d.missing} 個已分析的檔案讀不到摘要` : '',
-    d.import.failed ? `${d.import.failed} 個檔案分析失敗` : '',
+    d.topsState === 'not-ready' ? '服務剛啟動,排行還在建立' : '',
+    d.topsState === 'stale' ? '排行太久沒更新(ClickHouse 可能停止)' : '',
+    d.missing ? `${d.missing} 小時的排行還沒建好` : '',
+    d.import.failed && d.topsState === 'ok' ? '上一輪排行更新失敗' : '',
   ];
   return why.filter(Boolean).join('、');
 });
@@ -205,26 +212,23 @@ const many = (n: number) => (n >= 1000 ? '1000+' : String(n));
 
     <GCard padding="sm">
       <div class="filters">
-        <GInput v-model="range.from" type="date" label="開始日期" :disabled="!days.length" class="date" />
-        <GInput v-model="range.to" type="date" label="結束日期" :disabled="!days.length" class="date" />
+        <DateRangeField v-model:from="range.from" v-model:to="range.to" :max-days="MAX_DAYS" :coverage="coverage" :disabled="!days.length" class="date" />
         <p class="small muted hint">
-          <template v-if="data?.timeMin">資料時間 {{ fmtTime(data.timeMin) }} ~ {{ fmtTime(data.timeMax) }},{{ data.files }} 個 log 檔</template>
-          <template v-if="days.length"> · 已分析 {{ days.at(-1)?.day }} ~ {{ days[0]?.day }}({{ days.length }} 天)</template>
+          <template v-if="data?.timeMin">資料時間 {{ fmtTime(data.timeMin) }} ~ {{ fmtTime(data.timeMax) }},{{ data.files }} 小時有資料</template>
+          <template v-if="days.length"> · {{ coverageText(coverage) }}</template>
         </p>
       </div>
       <p v-if="rangeError" class="small c-danger err">{{ rangeError }}</p>
     </GCard>
 
-    <GAlert v-if="daysError && days.length" tone="danger">重新取得已分析的日期失敗,以下是上次的清單:{{ describeError(daysError) }}</GAlert>
+    <GAlert v-if="daysError && days.length" tone="danger">重新取得有資料的日期失敗,以下是上次的清單:{{ describeError(daysError) }}</GAlert>
     <GCard v-if="daysError && !days.length">
-      <GEmpty tone="danger" icon="shield-check" title="無法取得已分析的日期" :description="describeError(daysError)">
+      <GEmpty tone="danger" icon="shield-check" title="無法取得有資料的日期" :description="describeError(daysError)">
         <GButton icon="refresh" @click="() => void refresh()">重試</GButton>
       </GEmpty>
     </GCard>
     <GCard v-else-if="daysLoaded && !days.length">
-      <GEmpty icon="folder" title="尚未分析任何 PA log" description="到「FTP Log 檔案」同步新檔案,系統會從 FTP 讀取 log 並產生統計(原始 log 不存本機)。">
-        <RouterLink to="/firewall/files"><GButton variant="primary" icon="folder">前往 FTP Log 檔案</GButton></RouterLink>
-      </GEmpty>
+      <GEmpty icon="activity" title="還沒有 PA TRAFFIC 資料" description="PA-560 轉送的 log 會即時寫進 ClickHouse;收到第一筆後這裡就會有資料。" />
     </GCard>
     <GCard v-else-if="loadError && !data">
       <GEmpty tone="danger" icon="shield-check" title="無法載入流量總覽" :description="describeError(loadError)">
@@ -240,8 +244,9 @@ const many = (n: number) => (n >= 1000 ? '1000+' : String(n));
       <GAlert v-else-if="data.from !== range.from || data.to !== range.to" tone="info">
         以下是 {{ data.from }} ~ {{ data.to }} 的結果{{ loading ? ',新的期間載入中…' : '' }}
       </GAlert>
-      <GAlert v-if="!data.files" tone="warning" title="這段期間沒有已分析的 log">沒有資料不代表沒有流量;請到「FTP Log 檔案」確認該期間的檔案已分析。</GAlert>
-      <GAlert v-if="incomplete" tone="warning" title="結果不完整">{{ incomplete }};統計只含已分析的檔案。</GAlert>
+      <GAlert v-if="!data.files" tone="warning" title="這段期間沒有資料">ClickHouse 這段期間沒有收到 log;{{ coverageText(data.coverage) }}。</GAlert>
+      <GAlert v-if="data.partial" tone="info" title="期間有一部分超過保留期限">{{ data.coverage.from }} 之前沒有資料,統計只含 {{ data.coverage.from }} 起。</GAlert>
+      <GAlert v-if="incomplete" tone="warning" title="排行不完整">{{ incomplete }};筆數與每小時統計是完整的。</GAlert>
 
       <!-- KPI -->
       <div class="grid kpis">
@@ -487,7 +492,8 @@ const many = (n: number) => (n >= 1000 ? '1000+' : String(n));
   align-items: flex-end;
 }
 .date {
-  width: 180px;
+  width: 300px;
+  max-width: 100%;
 }
 .hint {
   margin: 0 0 8px;
@@ -561,7 +567,7 @@ const many = (n: number) => (n >= 1000 ? '1000+' : String(n));
 }
 @media (max-width: 760px) {
   .date {
-    flex: 1 1 140px;
+    flex: 1 1 100%;
     width: auto;
   }
   .tops {

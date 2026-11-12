@@ -13,13 +13,13 @@ import { useRouter, type RouteLocationRaw } from 'vue-router';
 import { ApiError } from '@/api/gateway';
 import { slice, type SliceJob, type SliceQuery, type SliceResult, type SliceSource } from '@/api/slice';
 import { useJob } from './useJob';
-import { taipeiLocal } from './vizTime';
+import { dayStartMs, taipeiDay, taipeiLocal } from './vizTime';
 
 export type SliceState = 'idle' | 'loading' | 'waiting-job' | 'done' | 'error' | 'busy';
 
 /** 熱 / 冷分界:預設正式區 TRAFFIC 保留 30 天(29 天內查熱表);收到 409 的 details.hotFrom 後以後端為準 */
 const DEFAULT_HOT_DAYS = 29;
-const learnedHotFrom = ref<string | null>(null);
+const learnedHotFrom = ref<{ hotFrom: string; day: string } | null>(null);
 /** 冷查詢忙碌時預設幾秒後重試(後端 details.retryAfter 優先) */
 export const DEFAULT_RETRY_SEC = 10;
 
@@ -57,7 +57,9 @@ export function useSlice(opts: { now?: () => number; pollMs?: number } = {}) {
   const isCold = computed(() => {
     const q = query.value;
     if (!q) return false;
-    const hotFrom = learnedHotFrom.value ? Date.parse(learnedHotFrom.value) : now() - DEFAULT_HOT_DAYS * 86_400_000;
+    // 後端的分界是「台灣今天 00:00 −(保留天數 − 1)天」;學到的值只用當天的(過了午夜分界會往後移)
+    const learned = learnedHotFrom.value && learnedHotFrom.value.day === taipeiDay(now()) ? Date.parse(learnedHotFrom.value.hotFrom) : null;
+    const hotFrom = learned ?? dayStartMs(taipeiDay(now())) - DEFAULT_HOT_DAYS * 86_400_000;
     return Date.parse(q.start) < hotFrom;
   });
 
@@ -100,7 +102,7 @@ export function useSlice(opts: { now?: () => number; pollMs?: number } = {}) {
       if (e instanceof ApiError) {
         const d = e.details as { retryAfter?: number; hotFrom?: string } | undefined;
         if (e.status === 429) countdown(Number(d?.retryAfter) || DEFAULT_RETRY_SEC);
-        if (e.code === 'NETOPS_COLD_ARCHIVE_DISABLED' && typeof d?.hotFrom === 'string') learnedHotFrom.value = d.hotFrom;
+        if (e.code === 'NETOPS_COLD_ARCHIVE_DISABLED' && typeof d?.hotFrom === 'string') learnedHotFrom.value = { hotFrom: d.hotFrom, day: taipeiDay(now()) };
       }
     } finally {
       if (query.value === my) loading.value = false;

@@ -16,6 +16,11 @@ import { countryIso2 } from './countries.js';
 
 const DAY_MS = 86_400_000;
 export const INSIGHT_MAX_DAYS = 90;
+/** 可查的最早日期(每天彙總保留 5 年) */
+const EARLIEST_DAYS = 5 * 365;
+/** 全系統同時計算中的儀表板(快取命中、同鍵合併不算;資安審查 M1:換日期繞過快取時保護 ClickHouse) */
+export const INSIGHT_CONCURRENCY = 2;
+export const INSIGHT_RETRY_AFTER_SEC = 5;
 const GRAIN_MS: Record<HeatGrain, number> = { '5m': 300_000, '1h': 3600_000, '1d': DAY_MS };
 /** 桑基圖 App 取前幾名(其他併「其他」) */
 const SANKEY_APPS = 15;
@@ -111,8 +116,10 @@ export function createInsightService(d: InsightDeps) {
     const bad = (field: string, message: string) => new AppError(400, 'VALIDATION_FAILED', '參數驗證失敗', [{ field, message }]);
     const fromMs = parseDay(q.from);
     const toDay = parseDay(q.to);
-    if (Number.isNaN(fromMs)) throw bad('from', '日期格式必須是 YYYY-MM-DD');
-    if (Number.isNaN(toDay)) throw bad('to', '日期格式必須是 YYYY-MM-DD');
+    if (Number.isNaN(fromMs) || dayText(fromMs) !== q.from) throw bad('from', '日期不正確');
+    if (Number.isNaN(toDay) || dayText(toDay) !== q.to) throw bad('to', '日期不正確');
+    // 熱力圖彙總最多 5 年;更早的日期查不到資料(資安審查 L2:極端日期會讓 ClickHouse 參數溢位)
+    if (fromMs < taipeiDayOf(now()) - EARLIEST_DAYS * DAY_MS) throw bad('from', `最早只能查 ${EARLIEST_DAYS / 365} 年內`);
     if (toDay < fromMs) throw bad('to', '結束日期不可早於開始日期');
     if (toDay > taipeiDayOf(now())) throw bad('to', '結束日期不可晚於今天');
     const days = Math.round((toDay - fromMs) / DAY_MS) + 1;
@@ -148,10 +155,21 @@ export function createInsightService(d: InsightDeps) {
     return { since: since === null ? null : isoTaipei(since), gaps: gaps.sort((a, b) => a.from.localeCompare(b.from)), gapsKnown: d.recon !== null };
   }
 
-  /** 含今天 60 秒;過去的期間 10 分鐘 */
+  /** 含今天 60 秒;過去的期間 10 分鐘。實際計算(沒命中快取)全系統同時 INSIGHT_CONCURRENCY 個,超過回 429 */
+  let running = 0;
   const cached = <T>(view: string, r: Range, load: () => Promise<T>) => {
     const live = r.toMs > now() - 3600_000;
-    return viaCh(() => d.cache.cached('pa-insight', { view, from: r.from, to: r.to }, live ? 60 : 600, load, { longTtl: !live }));
+    const limited = async () => {
+      if (running >= INSIGHT_CONCURRENCY)
+        throw new AppError(429, 'NETOPS_INSIGHT_BUSY', `儀表板查詢較多,請 ${INSIGHT_RETRY_AFTER_SEC} 秒後再試`, { retryAfter: INSIGHT_RETRY_AFTER_SEC });
+      running++;
+      try {
+        return await load();
+      } finally {
+        running--;
+      }
+    };
+    return viaCh(() => d.cache.cached('pa-insight', { view, from: r.from, to: r.to }, live ? 60 : 600, limited, { longTtl: !live }));
   };
 
   async function traffic(q: { from: string; to: string }) {
@@ -164,12 +182,13 @@ export function createInsightService(d: InsightDeps) {
       trend: await h.heatRows(g, r.fromMs, r.toMs),
       ad: ag === g ? null : await h.heatRows(ag, r.fromMs, r.toMs),
       since: await h.heatEarliest(g),
+      adSince: ag === g ? null : await h.heatEarliest(ag),
       flows: await h.insightFlows(r.fromMs, r.toMs, SANKEY_APPS),
       topIp: await h.insightTopSrc(r.fromMs, r.toMs, TOP),
       topApp: await h.insightTopApps(r.fromMs, r.toMs, TOP),
     }));
     const trend = series(r, g, data.trend, data.since, t, (x) => ({ sent: x.sent, recv: x.recv, sessions: x.sessions }), { sent: 0, recv: 0, sessions: 0 });
-    const allowDeny = series(r, ag, data.ad ?? data.trend, data.since, t, (x) => ({ allow: x.sessions - x.deny, deny: x.deny }), { allow: 0, deny: 0 });
+    const allowDeny = series(r, ag, data.ad ?? data.trend, ag === g ? data.since : data.adSince, t, (x) => ({ allow: Math.max(0, x.sessions - x.deny), deny: x.deny }), { allow: 0, deny: 0 });
     return {
       view: 'traffic' as const,
       from: r.from,
@@ -196,6 +215,7 @@ export function createInsightService(d: InsightDeps) {
       rows: await h.heatRows(g, r.fromMs, r.toMs),
       prev: await h.heatRows('1d', r.fromMs - len, r.fromMs),
       since: await h.heatEarliest(g),
+      daySince: g === '1d' ? null : await h.heatEarliest('1d'),
       countries: await h.threatCountries(r.fromMs, r.toMs),
       internal: await h.threatTopInternalSrc(r.fromMs, r.toMs, TOP),
       names: await h.threatTopNames(r.fromMs, r.toMs, TOP),
@@ -203,7 +223,8 @@ export function createInsightService(d: InsightDeps) {
     const since = data.since;
     const timeline = series(r, g, data.rows, since, t, (x) => ({ critical: x.critical, high: x.high, medium: x.medium, low: x.low }), { critical: 0, high: 0, medium: 0, low: 0 });
     // 前一期:資料起點晚於前一期的開始時,比較不完整 → prev 為 null(畫面不顯示增減)
-    const prevComplete = since !== null && since <= r.fromMs - len;
+    const daySince = g === '1d' ? since : data.daySince;
+    const prevComplete = daySince !== null && daySince <= r.fromMs - len;
     return {
       view: 'threat' as const,
       from: r.from,

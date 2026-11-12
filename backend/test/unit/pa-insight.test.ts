@@ -115,6 +115,32 @@ describe('GET /v1/pa/insight/*', () => {
     assert.ok(b.notes.length > 0);
   });
 
+  it('不存在的日期(2026-02-31)、5 年前以前回 400', async () => {
+    assert.equal((await t.call({ url: '/v1/pa/insight/traffic?from=2026-02-31&to=2026-03-01' })).statusCode, 400);
+    assert.equal((await t.call({ url: '/v1/pa/insight/traffic?from=2021-01-01&to=2021-01-02' })).statusCode, 400);
+  });
+
+  it('實際計算全系統同時 2 個:第 3 個(不同期間)回 429 + Retry-After;快取命中不受限', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const slow = { ...fakeReader(), insightFlows: async () => (await gate, []) } as HeatReader;
+    const t2 = await createTestApp({ ftp: createFakeFtp(), heat: { reader: slow, now: () => NOW } });
+    try {
+      const a = t2.call({ url: '/v1/pa/insight/traffic?from=2026-11-01&to=2026-11-02' });
+      const b = t2.call({ url: '/v1/pa/insight/traffic?from=2026-11-03&to=2026-11-04' });
+      await new Promise((r) => setTimeout(r, 30));
+      const c = await t2.call({ url: '/v1/pa/insight/traffic?from=2026-11-05&to=2026-11-06' });
+      assert.equal(c.statusCode, 429);
+      assert.equal(c.json().code, 'NETOPS_INSIGHT_BUSY');
+      assert.equal(c.headers['retry-after'], '5');
+      release();
+      assert.deepEqual([(await a).statusCode, (await b).statusCode], [200, 200]);
+      assert.equal((await t2.call({ url: '/v1/pa/insight/traffic?from=2026-11-05&to=2026-11-06' })).statusCode, 200);
+    } finally {
+      await t2.close();
+    }
+  });
+
   it('期間超過 90 天、結束早於開始、晚於今天回 400', async () => {
     assert.equal((await t.call({ url: '/v1/pa/insight/traffic?from=2026-08-12&to=2026-11-10' })).statusCode, 400);
     assert.equal((await t.call({ url: '/v1/pa/insight/traffic?from=2026-08-13&to=2026-11-10' })).statusCode, 200);

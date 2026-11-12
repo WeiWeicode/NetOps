@@ -6,7 +6,8 @@
 - 工作項目:V-b1 第 1、2 步(VIZ-RULES-DESIGN §4.4、§4.8)
 - 內容:① `GET /v1/pa/insight/traffic`(趨勢、桑基、Top 10 頻寬 IP、Top 10 App、Allow vs Deny)、`/v1/pa/insight/threat`(計分卡含前一期、時序、國家 ISO2、內網來源 RFC 1918、Top 10 威脅名稱;伺服器網段 V-c 前回 null + notes),最長 90 天,快取含今天 60 秒、其他 10 分鐘。② `infra/clickhouse/heat.ts` 加 6 個查詢(`pa_traffic_hourly_app` / `_src`、`pa_threat_logs` 的 log_type 排序鍵);`reader.ts` 加表常數 `hourlySrc`。③ `modules/pa-insight/countries.ts`:PA 國家英文全名 → ISO2(i18n-iso-countries 名稱 + PAN-OS 寫法,測試區實際值已比對)。④ `deploy/gateway-rbac.yaml`:選單 `netops.pa-heatmap.read`(sort 12)、`netops.pa-insight.read`(sort 15),includes `netops.pa.read`、`netops.pa-log.read`,加進 netops-admin、netops-viewer。⑤ 時段明細 429 另帶 `details.retryAfter`(前端讀不到回應標頭)
 - 檔案:`backend/src/{app.ts,infra/clickhouse/{heat,reader}.ts,modules/pa-insight/,modules/pa-heat/service.ts}`、`backend/test/{unit/pa-insight.test.ts,unit/pa-heat.test.ts,integration/heat.int.test.ts}`、`deploy/gateway-rbac.yaml`
-- 驗證:`npm run typecheck`、`npm test`(300 通過)、`check-scenarios.mjs`(119 / 119);CI `check:ingest-int` 見 MR
+- 審查修正(`code-reviewer`、`security-auditor` 2026-11-12):前一期是否完整改用每天表的資料起點(原本用 5 分鐘表,短期間時 prev 常被誤判 null);Allow / Deny 用自己粒度的資料起點、allow 不為負;威脅名稱的嚴重度改取最高(`any()` 每次可能不同);儀表板實際計算全系統同時 2 個,超過 429 `NETOPS_INSIGHT_BUSY`(換日期繞過快取時保護 ClickHouse);日期來回驗證(`2026-02-31`)與 5 年下限;`gateway-rbac.yaml` 註明選單 includes `pa-log.read` 的實際範圍。未改:查詢不隨使用者斷線中止(每支查詢有 20–30 秒上限)
+- 驗證:`npm run typecheck`、`npm test`(302 通過)、`check-scenarios.mjs`(119 / 119);CI `check:ingest-int` 見 MR
 
 ## 2026-11-11 V-a 熱力圖資料層:彙總表、熱力圖與時段明細 API
 - 工作項目:V-a(第 1–4、6 步;第 5 步冷路由等 C4)(ARCHITECTURE D34、D35;VIZ-RULES-DESIGN §3、§4.2、§4.3)

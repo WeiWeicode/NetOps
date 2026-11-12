@@ -3,11 +3,22 @@
  *   GET /v1/pa/insight/traffic   netops.pa.read
  *   GET /v1/pa/insight/threat    netops.pa.read
  */
-import type { FastifyPluginAsync } from 'fastify';
+import type { FastifyPluginAsync, FastifyReply } from 'fastify';
 import { DAY, looseObject } from '../../shared/schemas.js';
 import { INSIGHT_MAX_DAYS, type InsightService } from './service.js';
 
 const QUERY = { type: 'object', required: ['from', 'to'], additionalProperties: false, properties: { from: DAY, to: DAY } } as const;
+
+/** 429 時補上 Retry-After 標頭(錯誤的 details.retryAfter) */
+async function withRetry<T>(reply: FastifyReply, run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (err) {
+    const retry = (err as { details?: { retryAfter?: number } }).details?.retryAfter;
+    if (retry) reply.header('retry-after', String(retry));
+    throw err;
+  }
+}
 
 const insightRoutes: FastifyPluginAsync<{ svc: InsightService }> = async (app, { svc }) => {
   app.get<{ Querystring: { from: string; to: string } }>(
@@ -16,7 +27,7 @@ const insightRoutes: FastifyPluginAsync<{ svc: InsightService }> = async (app, {
       schema: {
         operationId: 'netops.pa-insight.traffic',
         summary: 'PA 分析儀表板:流量',
-        description: `一次回流量視角全部圖表的資料:trend(上傳 / 下載 + Session;≤ 2 天每 5 分鐘、≤ 31 天每小時、其他每天)、sankey(來源區域 → App → 目的區域,App 取前 15,其他併「其他」)、topIp(Top 10 頻寬 IP,上傳 / 下載)、topApp(Top 10 App)、allowDeny(≤ 2 天每小時、其他每天)。期間 from / to 含當天,最長 ${INSIGHT_MAX_DAYS} 天;數值 null 表示沒有資料(彙總表最早的格子之前)。ClickHouse 無法使用回 503 NETOPS_CLICKHOUSE_UNAVAILABLE。`,
+        description: `一次回流量視角全部圖表的資料:trend(上傳 / 下載 + Session;≤ 2 天每 5 分鐘、≤ 31 天每小時、其他每天)、sankey(來源區域 → App → 目的區域,App 取前 15,其他併「其他」)、topIp(Top 10 頻寬 IP,上傳 / 下載)、topApp(Top 10 App)、allowDeny(≤ 2 天每小時、其他每天)。期間 from / to 含當天,最長 ${INSIGHT_MAX_DAYS} 天、最早 5 年內;實際計算(沒命中快取)全系統同時 2 個,超過回 429 NETOPS_INSIGHT_BUSY(details.retryAfter);數值 null 表示沒有資料(彙總表最早的格子之前)。ClickHouse 無法使用回 503 NETOPS_CLICKHOUSE_UNAVAILABLE。`,
         tags: ['PA 分析儀表板'],
         'x-permission': 'netops.pa.read',
         'x-gherkin': [
@@ -34,7 +45,7 @@ const insightRoutes: FastifyPluginAsync<{ svc: InsightService }> = async (app, {
         response: { 200: looseObject('流量儀表板(docs/API.md §4.5)') },
       },
     },
-    async (req) => svc.traffic(req.query),
+    async (req, reply) => withRetry(reply, () => svc.traffic(req.query)),
   );
 
   app.get<{ Querystring: { from: string; to: string } }>(
@@ -57,7 +68,7 @@ const insightRoutes: FastifyPluginAsync<{ svc: InsightService }> = async (app, {
         response: { 200: looseObject('威脅儀表板(docs/API.md §4.5)') },
       },
     },
-    async (req) => svc.threat(req.query),
+    async (req, reply) => withRetry(reply, () => svc.threat(req.query)),
   );
 };
 

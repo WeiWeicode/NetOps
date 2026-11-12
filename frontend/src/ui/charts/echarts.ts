@@ -17,6 +17,12 @@ echarts.use([LineChart, BarChart, PieChart, SankeyChart, TreemapChart, MapChart,
 echarts.registerMap('world', world as unknown as Parameters<typeof echarts.registerMap>[1]);
 
 export { echarts };
+
+/**
+ * tooltip / label 的 formatter 回傳字串時,ECharts 以 HTML 插入(不跳脫)。App 名稱、威脅名稱、國家、IP 都來自 PA log,
+ * **formatter 裡的資料字串一律先經 escapeHtml**(資安審查 V-b1 L3)。字串模板('{b}')與預設 tooltip 由 ECharts 自己跳脫。
+ */
+export const escapeHtml = (s: unknown): string => echarts.format.encodeHTML(String(s ?? ''));
 export const WORLD_MAP = 'world';
 
 /** 讀 CSS 變數(color-mix 等由瀏覽器算好;讀不到時用 fallback) */

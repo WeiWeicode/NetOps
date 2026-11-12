@@ -25,6 +25,8 @@ let lib: Lib | null = null;
 let ro: ResizeObserver | null = null;
 let mo: MutationObserver | null = null;
 let key = '';
+/** 動態載入完成前就卸載:不建立圖表與觀察器(程式碼審查 V-b1 #2) */
+let dead = false;
 
 function render() {
   if (!chart.value) return;
@@ -40,9 +42,9 @@ function create() {
   const c = lib.echarts.init(el.value, lib.buildTheme(), { renderer: 'svg' });
   c.on('click', (e) => {
     const p = e as { seriesName?: string; name?: string; value?: unknown; data?: unknown; dataType?: string };
-    const data = p.data as { source?: string; target?: string } | undefined;
-    // 桑基圖的連線:name = 「source>target」
-    const name = p.dataType === 'edge' && data?.source ? `${data.source}>${data.target}` : String(p.name ?? '');
+    const data = p.data as { id?: string; source?: string; target?: string } | undefined;
+    // 桑基圖:連線 name =「source>target」(資料另帶 source / target);節點用 id(z: / a: / d:),不用顯示名稱
+    const name = p.dataType === 'edge' && data?.source ? `${data.source}>${data.target}` : p.dataType === 'node' && typeof data?.id === 'string' ? data.id : String(p.name ?? '');
     emit('pick', { chart: props.chart, series: p.seriesName, name, value: typeof p.value === 'number' ? p.value : undefined, data: p.data });
   });
   chart.value = c;
@@ -53,9 +55,10 @@ onMounted(async () => {
   try {
     lib = await import('./echarts');
   } catch {
-    failed.value = true;
+    if (!dead) failed.value = true;
     return;
   }
+  if (dead) return;
   create();
   emit('ready');
   if (typeof ResizeObserver !== 'undefined' && el.value) {
@@ -72,6 +75,7 @@ onMounted(async () => {
 watch(() => [props.option, props.loading, reduced.value], render, { deep: false });
 
 onBeforeUnmount(() => {
+  dead = true;
   ro?.disconnect();
   mo?.disconnect();
   chart.value?.dispose();

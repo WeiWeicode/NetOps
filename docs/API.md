@@ -368,7 +368,7 @@ PA 匯入在背景佇列執行;同步、分析只是送進佇列,畫面輪詢狀
 | GET | `/api/netops/pa/insight/traffic?from&to` | 流量視角 |
 | GET | `/api/netops/pa/insight/threat?from&to` | 安全威脅視角 |
 
-`from`、`to`:`YYYY-MM-DD`(含當天),最長 **90 天**(來源 IP 彙總與威脅原始表保留 90 天);`to` 晚於今天、早於 `from` 回 400。時間序列的數值 `null` 表示沒有資料(彙總表最早的格子之前),和 0 不同;`coverage` 同 §4.4。ClickHouse 無法使用回 503 `NETOPS_CLICKHOUSE_UNAVAILABLE`。
+`from`、`to`:`YYYY-MM-DD`(含當天),最長 **90 天**(來源 IP 彙總與威脅原始表保留 90 天)、最早 5 年內;不存在的日期(例 `2026-02-31`)、`to` 晚於今天或早於 `from` 回 400。實際計算(沒命中快取)全系統同時 2 個,超過回 **429** `NETOPS_INSIGHT_BUSY`(`Retry-After` 與 `details.retryAfter` 為 5 秒;畫面倒數後重試)。時間序列的數值 `null` 表示沒有資料(彙總表最早的格子之前),和 0 不同;`coverage` 同 §4.4。ClickHouse 無法使用回 503 `NETOPS_CLICKHOUSE_UNAVAILABLE`。
 
 ```jsonc
 // traffic
@@ -397,7 +397,7 @@ PA 匯入在背景佇列執行;同步、分析只是送進佇列,畫面輪詢狀
   "countries": [ { "country": "China", "iso2": "CN", "count": 30, "critical": 1, "high": 5 } ],  // 全部國家(給地圖);內網範圍不列,對不到的併成 { "country": "未知", "iso2": null }
   "topInternalSrc": [ { "ip": "10.10.112.31", "count": 12, "high": 3 } ],   // RFC 1918 來源(V-c 網段設定後改用設定)
   "topServerDst": null,                  // 伺服器網段在偵測設定(V-c)之前沒有,見 notes
-  "topNames": [ { "name": "…(12345)", "severity": "high", "count": 9 } ],
+  "topNames": [ { "name": "…(12345)", "severity": "high", "count": 9 } ],   // 同名有多種嚴重度時取最高的
   "notes": [ "內網以 RFC 1918 判斷;伺服器網段尚未設定(偵測設定 V-c),「被攻擊最多的伺服器」暫不提供" ],
   "generatedAt": "…"
 }
@@ -678,6 +678,7 @@ AI 相關(語意搜尋、向量同步、外部 IP 自動學習)見 §10.2(A1)。
 | 409 | `NETOPS_HEATMAP_METRIC_UNAVAILABLE` | 熱力圖指標尚未開放(`ad`,AD 階段 V-d;§4.4) |
 | 422 | `NETOPS_HEATMAP_OUT_OF_RETENTION` | 熱力圖日視圖超過 5 分鐘彙總保留(1 年);`details.earliest`(§4.4) |
 | 409 | `NETOPS_COLD_ARCHIVE_DISABLED` | 時段明細早於原始表保留、要讀冷歸檔,冷歸檔(C4)尚未提供;`details.hotFrom`(§4.4)。設定狀態,不用 5xx |
+| 429 | `NETOPS_INSIGHT_BUSY` | 分析儀表板同時計算的查詢已滿(全系統 2 個);帶 `Retry-After`(§4.5,V-b1) |
 | 429 | `NETOPS_COLD_QUERY_BUSY` | 已有冷資料查詢在執行(全系統 1 個)或歸檔匯出中;帶 `Retry-After`(§4.4,C4 起) |
 | 403 | `NETOPS_PA_CONTROL_DISABLED` | 正式區不能切換收集器的輪詢與接收(§3.2 `collector-control`,只有測試區可用) |
 | 424 | `NETOPS_REDIS_UNAVAILABLE` | 即時監控讀不到 `netops-redis`(§3.2;`snapshot` 例外,回 200 `state: unavailable`)。不用 5xx:避免累積 BFF 斷路器失敗。原始錯誤只寫服務日誌 |

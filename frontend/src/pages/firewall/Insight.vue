@@ -33,7 +33,7 @@ const option = computed(() => {
 });
 
 function onPick(p: ChartPick) {
-  const q = toSliceQuery(p, traffic.range.value, { bucketSeconds: traffic.data.value?.bucketSeconds });
+  const q = toSliceQuery(p, traffic.range.value, { bucketSeconds: traffic.data.value?.bucketSeconds, allowDenyBucketSeconds: traffic.data.value?.allowDenyBucketSeconds });
   if (q) void s.open(q);
 }
 </script>

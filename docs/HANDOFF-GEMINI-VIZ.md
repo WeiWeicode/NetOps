@@ -75,6 +75,10 @@ MOCK=admin npm run dev      # PowerShell:$env:MOCK='admin'; npm run dev
 
 **`useSlice` 的狀態**:`idle` → `loading` → `done`;`waiting-job`(202,自動輪詢,可 `cancel()`);`busy`(429,`retryAfter` 每秒倒數,到 0 才能 `retry()`);`error`(`error.code` 判斷:`NETOPS_COLD_ARCHIVE_DISABLED` / `NETOPS_ARCHIVE_NOT_FOUND` 用中性提示,其他用 danger)。`isCold` 在開查前就有值,用來決定要不要放冷資料過場。
 
+**tooltip / label 的 formatter**(資安):formatter **回傳字串**時 ECharts 以 HTML 插入、不跳脫;App、威脅名稱、國家、IP 都來自 PA log,字串一律先經 `escapeHtml`(`ui/charts/echarts.ts`,由 GEChart 載入的模組;你的元件在 option 裡用字串模板 `'{b}: {c}'` 就不需要)。不要用 `v-html`。
+
+**useInsight 的 429**:儀表板同時計算全系統 2 個,滿了回 `NETOPS_INSIGHT_BUSY`(`error.details.retryAfter` 秒),畫面顯示「稍後自動重試」類的中性提示並 `refresh()`。
+
 **AD 指標**:`useHeatmap().metricOptions` 的 `ad` 是 `disabled: true, hint: 'AD 階段開放'`,畫面要顯示但不能選;儀表板 AD Tab 停用。
 
 **目前資料的限制**(畫面要照實呈現,不要當成 bug):

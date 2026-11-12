@@ -30,6 +30,7 @@ permissions:
   - { code: netops.pa-dashboard.read, name: 流量總覽, kind: menu, parent: netops.group.firewall, sort: 10, includes: [netops.pa.read] }
   # V-b1(VIZ-RULES-DESIGN §4.8,X15:熱力圖 sort 12、儀表板 sort 15;時段明細抽屜要 netops.pa-log.read)
   # 「查詢即時連線」按鈕(netops.pa-heatmap.query / netops.pa-insight.query)等 C5 完成才登記
+  # 注意:includes netops.pa-log.read 等於同時開放「Log 明細查詢」API(時段明細抽屜要用);只授權這兩個選單的角色也能查原始 log(設計 §4.8 決定)
   - { code: netops.pa-heatmap.read, name: 活動熱力圖, kind: menu, parent: netops.group.firewall, sort: 12, includes: [netops.pa.read, netops.pa-log.read] }
   - { code: netops.pa-insight.read, name: 分析儀表板, kind: menu, parent: netops.group.firewall, sort: 15, includes: [netops.pa.read, netops.pa-log.read] }
   - { code: netops.pa-events.read, name: 安全事件, kind: menu, parent: netops.group.firewall, sort: 20, includes: [netops.pa.read] }

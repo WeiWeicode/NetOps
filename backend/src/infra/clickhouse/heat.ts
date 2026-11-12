@@ -80,6 +80,8 @@ export interface HeatReader {
 const sec = (ms: number) => Math.floor(ms / 1000);
 const ipArr = (expr: string) => `arrayMap(x -> replaceRegexpOne(toString(x), '^::ffff:', ''), ${expr})`;
 const TOP_N = 10;
+/** 同一個威脅名稱有多種嚴重度時取最高的(any() 每次可能不同,快取與畫面會跳動;程式碼審查 V-b1 #4) */
+const MAX_SEVERITY = "arrayElement(['informational', 'low', 'medium', 'high', 'critical'], toUInt8(greatest(1, max(indexOf(['informational', 'low', 'medium', 'high', 'critical'], severity)))))";
 const HOUR_RANGE = 'hour >= toDateTime({from:UInt32}) AND hour < toDateTime({to:UInt32})';
 const THREAT_RANGE = `log_type = 'threat' AND event_time >= toDateTime({from:UInt32}) AND event_time < toDateTime({to:UInt32})`;
 /** RFC 1918(常數;不接受外部字串) */
@@ -233,7 +235,7 @@ export function createHeatReader(cfg: ClickHouseConfig, fetchImpl: typeof fetch 
     },
     async threatTopNames(fromMs, toMs, limit, signal) {
       const r = await rows<{ k: string; sv: string; n: number }>(
-        `SELECT name AS k, any(severity) AS sv, count() AS n FROM ${READ_TABLES.threat} WHERE ${THREAT_RANGE} GROUP BY k ORDER BY n DESC, k LIMIT {n:UInt16}`,
+        `SELECT name AS k, ${MAX_SEVERITY} AS sv, count() AS n FROM ${READ_TABLES.threat} WHERE ${THREAT_RANGE} GROUP BY k ORDER BY n DESC, k LIMIT {n:UInt16}`,
         { from: sec(fromMs), to: sec(toMs), n: limit },
         30,
         signal,
@@ -285,7 +287,7 @@ export function createHeatReader(cfg: ClickHouseConfig, fetchImpl: typeof fetch 
         : Promise.resolve([] as LogRecord[]);
       const topsP = async (): Promise<SliceData['top']> => {
         if (isTraffic) return { src: await topBy(ipText('src')), dst: await topBy(ipText('dst')), app: await topBy('app'), dport: await topBy('toString(dport)'), dstCountry: await topBy('dst_country') };
-        const name = (await q<{ k: string; sv: string; n: number }>(`SELECT name AS k, any(severity) AS sv, count() AS n FROM ${table} WHERE ${w} GROUP BY k ORDER BY n DESC, k LIMIT ${TOP_N}`)).map((x) => ({
+        const name = (await q<{ k: string; sv: string; n: number }>(`SELECT name AS k, ${MAX_SEVERITY} AS sv, count() AS n FROM ${table} WHERE ${w} GROUP BY k ORDER BY n DESC, k LIMIT ${TOP_N}`)).map((x) => ({
           key: String(x.k ?? ''),
           severity: x.sv === 'informational' ? 'info' : x.sv,
           count: num(x.n),

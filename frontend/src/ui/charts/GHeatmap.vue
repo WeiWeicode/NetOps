@@ -6,7 +6,7 @@
  *   色階:level 1–4 → --heat-<metric>-1..4;level 0 → --heat-empty;v === null(沒有資料)加斜線底紋,和 0 分開
  *   鍵盤:方向鍵移動、Enter = select、Shift+Enter = drill;雙擊 = drill
  */
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { fmtShort, fmtSize } from '@/api/format';
 import type { HeatCell } from '@/api/heatmap';
 import type { GHeatmapProps } from './viz-types';
@@ -50,14 +50,22 @@ function label(c: HeatCell): string {
 }
 
 const focusIndex = ref(0);
-const btns = ref<HTMLButtonElement[]>([]);
+const root = ref<HTMLElement | null>(null);
+// 換粒度 / 期間後格數變了:可聚焦的格子要在範圍內(否則鍵盤進不了格網;程式碼審查 V-b1 #9)
+watch(
+  () => props.cells.length,
+  (n) => {
+    if (focusIndex.value >= n) focusIndex.value = Math.max(0, n - 1);
+  },
+);
 function move(i: number, dc: number, dr: number) {
   const p = placed.value[i];
   if (!p) return;
   const j = byPos.value.get(`${p.col + dc}:${p.row + dr}`);
   if (j === undefined) return;
   focusIndex.value = j;
-  btns.value[j]?.focus();
+  // 依 data-i 找按鈕(v-for 的 ref 陣列順序不保證和資料一致)
+  root.value?.querySelector<HTMLButtonElement>(`[data-i="${j}"]`)?.focus();
 }
 function onKey(e: KeyboardEvent, i: number, c: HeatCell) {
   const d: Record<string, [number, number]> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
@@ -73,13 +81,12 @@ function onKey(e: KeyboardEvent, i: number, c: HeatCell) {
 </script>
 
 <template>
-  <div class="g-heatmap" :class="[`is-${granularity}`, { 'is-loading': loading }]" role="grid" :aria-busy="loading" :style="{ '--cols': shape.cols, '--rows': shape.rows }">
+  <div ref="root" class="g-heatmap" :class="[`is-${granularity}`, { 'is-loading': loading }]" role="group" aria-label="熱力圖(方向鍵移動、Enter 開明細、Shift+Enter 下鑽)" :aria-busy="loading" :style="{ '--cols': shape.cols, '--rows': shape.rows }">
     <button
       v-for="p in placed"
       :key="p.c.t"
-      ref="btns"
       type="button"
-      role="gridcell"
+      :data-i="p.i"
       class="g-heatmap__cell"
       :class="[`lv-${p.c.level}`, { 'is-null': p.c.v === null, 'is-partial': p.c.partial, 'is-selected': selected === p.c.t }]"
       :style="{ gridColumn: p.col + 1, gridRow: p.row + 1, '--heat': p.c.level ? `var(--heat-${metric}-${p.c.level})` : 'var(--heat-empty)' }"

@@ -215,15 +215,17 @@ describe('useChartPick', () => {
   const range = { from: '2026-11-05', to: '2026-11-11' };
   it('時間類:被點的格子;Allow / Deny 的 deny、威脅時序的嚴重度帶條件', () => {
     expect(toSliceQuery({ chart: 'trend', name: '2026-11-10T08:00:00+08:00' }, range, { bucketSeconds: 3600 })).toEqual({ start: '2026-11-10T08:00:00+08:00', end: '2026-11-10T09:00:00+08:00', type: 'traffic' });
-    expect(toSliceQuery({ chart: 'allowDeny', series: 'deny', name: '2026-11-10T00:00:00+08:00' }, range, { bucketSeconds: 86400 })?.action).toBe('block');
+    expect(toSliceQuery({ chart: 'allowDeny', series: 'deny', name: '2026-11-10T00:00:00+08:00' }, range, { bucketSeconds: 3600, allowDenyBucketSeconds: 86400 })).toEqual({ start: '2026-11-10T00:00:00+08:00', end: '2026-11-11T00:00:00+08:00', type: 'traffic', action: 'block' });
     expect(toSliceQuery({ chart: 'timeline', series: 'high', name: '2026-11-10T00:00:00+08:00' }, range, { bucketSeconds: 86400 })).toMatchObject({ type: 'threat', severity: 'high' });
     expect(toSliceQuery({ chart: 'trend', name: 'x' }, range, { bucketSeconds: 3600 })).toBeNull();
   });
 
   it('其他圖表:期間最後一天 + 條件;桑基連線兩端;「其他」App 與未知國家不帶條件', () => {
     const day = { start: '2026-11-11T00:00:00+08:00', end: '2026-11-12T00:00:00+08:00' };
-    expect(toSliceQuery({ chart: 'topIp', name: '10.0.0.1' }, range)).toEqual({ ...day, type: 'traffic', ip: '10.0.0.1', sort: 'bytes' });
-    expect(toSliceQuery({ chart: 'sankey', name: 'z:trust>a:ssl' }, range)).toEqual({ ...day, type: 'traffic', sort: 'bytes', fromZone: 'trust', app: 'ssl' });
+    expect(toSliceQuery({ chart: 'topIp', name: '10.0.0.1' }, range)).toEqual({ ...day, type: 'traffic', src: '10.0.0.1', sort: 'bytes' });
+    expect(toSliceQuery({ chart: 'sankey', name: 'z:trust>a:ssl', data: { source: 'z:trust', target: 'a:ssl' } }, range)).toEqual({ ...day, type: 'traffic', sort: 'bytes', fromZone: 'trust', app: 'ssl' });
+    expect(toSliceQuery({ chart: 'sankey', name: 'a:x>y', data: { source: 'a:x>y', target: 'd:未知' } }, range)).toEqual({ ...day, type: 'traffic', sort: 'bytes', app: 'x>y' });
+    expect(toSliceQuery({ chart: 'sankey', name: 'z:dmz' }, range)).toEqual({ ...day, type: 'traffic', sort: 'bytes', fromZone: 'dmz' });
     expect(toSliceQuery({ chart: 'sankey', name: 'a:其他' }, range)).toEqual({ ...day, type: 'traffic', sort: 'bytes' });
     expect(toSliceQuery({ chart: 'country', name: 'CN', data: { country: 'China', iso2: 'CN' } }, range)).toEqual({ ...day, type: 'threat', country: 'China' });
     expect(toSliceQuery({ chart: 'country', name: '', data: { country: '未知', iso2: null } }, range)).toBeNull();
@@ -255,6 +257,34 @@ describe('useInsight', () => {
     await flush();
     expect(t.activePreset.value).toBe('custom');
     expect(t.includesToday.value).toBe(false);
+    scope.stop();
+  });
+});
+
+describe('useInsight 請求順序(程式碼審查 V-b1 #1)', () => {
+  it('換期間時清掉舊資料;舊期間較晚回來的回應丟棄;含今天時 60 秒後背景刷新', async () => {
+    vi.useFakeTimers();
+    let resolveOld!: (v: unknown) => void;
+    mocks.traffic.mockImplementationOnce(() => new Promise((r) => (resolveOld = r)));
+    mocks.traffic.mockImplementation(async (r) => trafficInsight({ ...r, now: NOW }));
+    const scope = effectScope();
+    const t = scope.run(() => useInsight('traffic', { now: () => NOW }))!;
+    t.preset('30d');
+    await flush();
+    expect(t.data.value?.from).toBe('2026-10-13');
+    resolveOld(trafficInsight({ from: '2026-11-05', to: '2026-11-11', now: NOW }));
+    await flush();
+    expect(t.data.value?.from).toBe('2026-10-13');
+    const calls = mocks.traffic.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(mocks.traffic.mock.calls.length).toBe(calls + 1);
+    expect(t.loading.value).toBe(false);
+    t.setCustom('2026-10-01', '2026-10-31');
+    expect(t.data.value).toBeNull();
+    await flush();
+    const after = mocks.traffic.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(mocks.traffic.mock.calls.length).toBe(after);
     scope.stop();
   });
 });

@@ -133,7 +133,9 @@ CREATE TABLE IF NOT EXISTS netops.pa_traffic_hourly_src
     src       IPv6,
     action    LowCardinality(String),
     sessions  UInt64,
-    bytes     UInt64
+    bytes     UInt64,
+    bytes_sent UInt64 DEFAULT 0,  -- V-a(migrations/003)
+    bytes_recv UInt64 DEFAULT 0
 )
 ENGINE = SummingMergeTree
 PARTITION BY toYYYYMM(hour)
@@ -142,6 +144,90 @@ TTL hour + INTERVAL {{TTL_HOURLY_SRC}} DELETE;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS netops.pa_traffic_hourly_src_mv
 TO netops.pa_traffic_hourly_src AS
-SELECT toStartOfHour(event_time) AS hour, src, action, count() AS sessions, sum(bytes) AS bytes
+SELECT toStartOfHour(event_time) AS hour, src, action, count() AS sessions, sum(bytes) AS bytes,
+       sum(bytes_sent) AS bytes_sent, sum(bytes_recv) AS bytes_recv
 FROM netops.pa_traffic_logs
 GROUP BY hour, src, action;
+
+-- 熱力圖彙總(V-a;docs/VIZ-RULES-DESIGN.md §3.1–§3.3、ARCHITECTURE D34):不分維度,每個時間格一列;只存總數與 Top IP(topK,近似)
+--   {{TTL_HEAT_5M}}  每 5 分鐘  測試區 3 DAY、正式區 1 YEAR(V1)
+--   {{TTL_HEAT_1H}}  每小時     測試區 3 DAY、正式區 5 YEAR
+--   {{TTL_HEAT_1D}}  每天       測試區 3 DAY、正式區 5 YEAR
+-- AggregatingMergeTree 只在背景合併:查詢一定要 sum() / -Merge + GROUP BY bucket。
+-- 每個粒度兩個 MV(TRAFFIC、威脅)寫同一張表,沒寫到的欄位是 0 / 空的聚合狀態;三個粒度各自從原始表算(不串接)。
+-- MV 一律用表別名 l 引用來源欄位:輸出別名和來源欄位同名(sum(bytes) AS bytes)時,同一個 SELECT 裡其他地方的 bytes
+--   會被解析成別名(26.3:ILLEGAL_AGGREGATION);輸出別名不能改(TO 表依欄位名稱對應)。
+-- 去重視窗同 migrations/002:netops-ingest 重送時 MV 用衍生 token 去重;手動重建(rebuild-day.sh)要帶 insert_deduplicate = 0。
+CREATE TABLE IF NOT EXISTS netops.pa_heat_5m
+(
+    bucket        DateTime('Asia/Taipei'),
+    sessions      SimpleAggregateFunction(sum, UInt64),
+    bytes         SimpleAggregateFunction(sum, UInt64),
+    bytes_sent    SimpleAggregateFunction(sum, UInt64),
+    bytes_recv    SimpleAggregateFunction(sum, UInt64),
+    deny          SimpleAggregateFunction(sum, UInt64),   -- action != 'allow'
+    thr_critical  SimpleAggregateFunction(sum, UInt64),   -- log_type = 'threat' 的筆數(不乘 repeat_count,X9)
+    thr_high      SimpleAggregateFunction(sum, UInt64),
+    thr_medium    SimpleAggregateFunction(sum, UInt64),
+    thr_low       SimpleAggregateFunction(sum, UInt64),
+    thr_info      SimpleAggregateFunction(sum, UInt64),
+    top_bytes_src AggregateFunction(topKWeighted(3), IPv6, UInt64),
+    top_deny_src  AggregateFunction(topKIf(3), IPv6, UInt8),
+    top_thr_src   AggregateFunction(topKIf(3), IPv6, UInt8)
+)
+ENGINE = AggregatingMergeTree
+PARTITION BY toYYYYMM(bucket)
+ORDER BY bucket
+TTL bucket + INTERVAL {{TTL_HEAT_5M}} DELETE
+SETTINGS non_replicated_deduplication_window = 1000;
+
+CREATE TABLE IF NOT EXISTS netops.pa_heat_1h AS netops.pa_heat_5m
+ENGINE = AggregatingMergeTree
+PARTITION BY toYYYYMM(bucket)
+ORDER BY bucket
+TTL bucket + INTERVAL {{TTL_HEAT_1H}} DELETE
+SETTINGS non_replicated_deduplication_window = 1000;
+
+CREATE TABLE IF NOT EXISTS netops.pa_heat_1d AS netops.pa_heat_5m
+ENGINE = AggregatingMergeTree
+PARTITION BY toYear(bucket)
+ORDER BY bucket
+TTL bucket + INTERVAL {{TTL_HEAT_1D}} DELETE
+SETTINGS non_replicated_deduplication_window = 1000;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS netops.pa_heat_5m_traffic_mv TO netops.pa_heat_5m AS
+SELECT toStartOfFiveMinutes(l.event_time) AS bucket, count() AS sessions, sum(l.bytes) AS bytes, sum(l.bytes_sent) AS bytes_sent,
+       sum(l.bytes_recv) AS bytes_recv, countIf(l.action != 'allow') AS deny,
+       topKWeightedState(3)(l.src, l.bytes) AS top_bytes_src, topKIfState(3)(l.src, l.action != 'allow') AS top_deny_src
+FROM netops.pa_traffic_logs AS l GROUP BY bucket;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS netops.pa_heat_1h_traffic_mv TO netops.pa_heat_1h AS
+SELECT toStartOfHour(l.event_time) AS bucket, count() AS sessions, sum(l.bytes) AS bytes, sum(l.bytes_sent) AS bytes_sent,
+       sum(l.bytes_recv) AS bytes_recv, countIf(l.action != 'allow') AS deny,
+       topKWeightedState(3)(l.src, l.bytes) AS top_bytes_src, topKIfState(3)(l.src, l.action != 'allow') AS top_deny_src
+FROM netops.pa_traffic_logs AS l GROUP BY bucket;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS netops.pa_heat_1d_traffic_mv TO netops.pa_heat_1d AS
+SELECT toStartOfDay(l.event_time) AS bucket, count() AS sessions, sum(l.bytes) AS bytes, sum(l.bytes_sent) AS bytes_sent,
+       sum(l.bytes_recv) AS bytes_recv, countIf(l.action != 'allow') AS deny,
+       topKWeightedState(3)(l.src, l.bytes) AS top_bytes_src, topKIfState(3)(l.src, l.action != 'allow') AS top_deny_src
+FROM netops.pa_traffic_logs AS l GROUP BY bucket;
+
+-- 威脅:只算 log_type = 'threat'(url、data、wildfire 不算進威脅指標);Top IP 依 critical / high / medium 筆數
+CREATE MATERIALIZED VIEW IF NOT EXISTS netops.pa_heat_5m_threat_mv TO netops.pa_heat_5m AS
+SELECT toStartOfFiveMinutes(event_time) AS bucket, countIf(severity = 'critical') AS thr_critical, countIf(severity = 'high') AS thr_high,
+       countIf(severity = 'medium') AS thr_medium, countIf(severity = 'low') AS thr_low, countIf(severity = 'informational') AS thr_info,
+       topKIfState(3)(src, severity IN ('critical', 'high', 'medium')) AS top_thr_src
+FROM netops.pa_threat_logs WHERE log_type = 'threat' GROUP BY bucket;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS netops.pa_heat_1h_threat_mv TO netops.pa_heat_1h AS
+SELECT toStartOfHour(event_time) AS bucket, countIf(severity = 'critical') AS thr_critical, countIf(severity = 'high') AS thr_high,
+       countIf(severity = 'medium') AS thr_medium, countIf(severity = 'low') AS thr_low, countIf(severity = 'informational') AS thr_info,
+       topKIfState(3)(src, severity IN ('critical', 'high', 'medium')) AS top_thr_src
+FROM netops.pa_threat_logs WHERE log_type = 'threat' GROUP BY bucket;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS netops.pa_heat_1d_threat_mv TO netops.pa_heat_1d AS
+SELECT toStartOfDay(event_time) AS bucket, countIf(severity = 'critical') AS thr_critical, countIf(severity = 'high') AS thr_high,
+       countIf(severity = 'medium') AS thr_medium, countIf(severity = 'low') AS thr_low, countIf(severity = 'informational') AS thr_info,
+       topKIfState(3)(src, severity IN ('critical', 'high', 'medium')) AS top_thr_src
+FROM netops.pa_threat_logs WHERE log_type = 'threat' GROUP BY bucket;

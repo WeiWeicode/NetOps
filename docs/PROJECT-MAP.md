@@ -1,6 +1,6 @@
 # 專案地圖 — NetOps
 
-> **最後更新:2026-11-11**(C3 D43:PA 總覽、安全事件、明細只查 ClickHouse(`modules/pa/{routes,log-routes,ch-overview}.ts`、`pa-events/routes.ts`),FTP 只做對帳與補漏;C3 第 3 批:`modules/pa/{reconcile,recon-routes}.ts`(FTP 每日對帳、補漏 API)、`ingest/backfill.ts`(netops-ingest 從 FTP 補寫缺的 seqno)、`infra/redis/backfill.ts`(補漏佇列)、netops-ingest 加 FTP 與 `ingest-egress` 網路;第 2 批:Log 明細可查 ClickHouse(`log-routes.ts` 的 `source`);C3 查詢切換第 1 批:`infra/clickhouse/reader.ts`(netops_reader 唯讀查詢)、`infra/redis/cache.ts`(儀表板快取)、`modules/pa/ch-summary.ts`(ClickHouse 每小時摘要,`palogs/ch/`)、`modules/pa/ch-overview.ts`(來源切換 ftp / clickhouse / auto);netops-api 加入 `netops-ch` 網路與 `ch_reader_password`;2026-11-10 C2 寫入管線:`backend/src/ingest/`(netops-ingest,netops-api 同映像不同進入點)、`backend/src/infra/clickhouse/`、`backend/src/infra/redis/ingest.ts`、`deploy/clickhouse/migrations/`、`verify-ingest.sh`、`dedupe-day.sh`、CI `check:ingest-int`;收集器 `seqno`、`sessionId`;CI:`deploy/ci-netops-pa.sh`,netops-pa 沒變更時不重建;C1 ClickHouse POC:`deploy/clickhouse/`、`netops-clickhouse`、`deploy/host2-set-clickhouse-secrets.sh`、POC 工具 `deploy/clickhouse/poc/`;R1 驗收修正:即時監控排行切換與 log 暫停鈕改用 `GCard` 的 `#actions` 插槽,前端新增掛載測試(`@vue/test-utils`、`happy-dom`)與插槽名稱檢查;串流 401 先經 web-kit 換發;串流每人上限 3。2026-11-09:R1 測試區收集器開關:`netops:pa:control` 由 `netops-api` `infra/redis` 寫、`pa-collector/netops_pa/control.py` 讀,API `PUT /v1/pa-live/collector-control`、按鈕 `netops.pa-live.manage`;即時監控頁首輪詢 / 接收狀態、429 與路由未發佈的提示;CI 冒煙測試不再打 `/v1/ping`。2026-11-05:S0 串流驗證:`modules/pa-live/` SSE 驗證路由、`backend/scripts/sse-probe.mjs`,不改 Gateway;D1 驗收修正:測試區 `FTP_LOG_DIR=/my-data` 寫進 CI、`netops-kb-backup` healthcheck、FTP 清單不列系統資料夾、AD FTP 清單改手動;2026-11-04:D1 完成並上測試區,有未驗項目:CI 發佈前端 SPA 與套用畫面權限、`deploy/gateway-rbac.yaml`、知識庫 NAS 備份 `deploy/kb-backup/`、監控 Key;驗收報告 `docs/test-reports/2026-11-04-d1-uat.md`。2026-11-03:F1、B2 完成;舊版程式未改動)。
+> **最後更新:2026-11-11**(C3 D43:PA 總覽、安全事件、明細只查 ClickHouse(`modules/pa/{routes,log-routes,ch-overview}.ts`、`pa-events/routes.ts`),FTP 只做對帳與補漏;V-a 熱力圖資料層:`deploy/clickhouse/schema.sql` 的 `pa_heat_5m` / `_1h` / `_1d` 與 6 個物化檢視、`migrations/003`、`rebuild-day.sh`;`infra/clickhouse/heat.ts`(熱力圖與時段明細查詢)、`infra/redis/cold-lock.ts`(冷查詢鎖,C4 接上)、`modules/pa-heat/`(熱力圖、時段明細 API);C3 第 3 批:`modules/pa/{reconcile,recon-routes}.ts`(FTP 每日對帳、補漏 API)、`ingest/backfill.ts`(netops-ingest 從 FTP 補寫缺的 seqno)、`infra/redis/backfill.ts`(補漏佇列)、netops-ingest 加 FTP 與 `ingest-egress` 網路;第 2 批:Log 明細可查 ClickHouse(`log-routes.ts` 的 `source`);C3 查詢切換第 1 批:`infra/clickhouse/reader.ts`(netops_reader 唯讀查詢)、`infra/redis/cache.ts`(儀表板快取)、`modules/pa/ch-summary.ts`(ClickHouse 每小時摘要,`palogs/ch/`)、`modules/pa/ch-overview.ts`(來源切換 ftp / clickhouse / auto);netops-api 加入 `netops-ch` 網路與 `ch_reader_password`;2026-11-10 C2 寫入管線:`backend/src/ingest/`(netops-ingest,netops-api 同映像不同進入點)、`backend/src/infra/clickhouse/`、`backend/src/infra/redis/ingest.ts`、`deploy/clickhouse/migrations/`、`verify-ingest.sh`、`dedupe-day.sh`、CI `check:ingest-int`;收集器 `seqno`、`sessionId`;CI:`deploy/ci-netops-pa.sh`,netops-pa 沒變更時不重建;C1 ClickHouse POC:`deploy/clickhouse/`、`netops-clickhouse`、`deploy/host2-set-clickhouse-secrets.sh`、POC 工具 `deploy/clickhouse/poc/`;R1 驗收修正:即時監控排行切換與 log 暫停鈕改用 `GCard` 的 `#actions` 插槽,前端新增掛載測試(`@vue/test-utils`、`happy-dom`)與插槽名稱檢查;串流 401 先經 web-kit 換發;串流每人上限 3。2026-11-09:R1 測試區收集器開關:`netops:pa:control` 由 `netops-api` `infra/redis` 寫、`pa-collector/netops_pa/control.py` 讀,API `PUT /v1/pa-live/collector-control`、按鈕 `netops.pa-live.manage`;即時監控頁首輪詢 / 接收狀態、429 與路由未發佈的提示;CI 冒煙測試不再打 `/v1/ping`。2026-11-05:S0 串流驗證:`modules/pa-live/` SSE 驗證路由、`backend/scripts/sse-probe.mjs`,不改 Gateway;D1 驗收修正:測試區 `FTP_LOG_DIR=/my-data` 寫進 CI、`netops-kb-backup` healthcheck、FTP 清單不列系統資料夾、AD FTP 清單改手動;2026-11-04:D1 完成並上測試區,有未驗項目:CI 發佈前端 SPA 與套用畫面權限、`deploy/gateway-rbac.yaml`、知識庫 NAS 備份 `deploy/kb-backup/`、監控 Key;驗收報告 `docs/test-reports/2026-11-04-d1-uat.md`。2026-11-03:F1、B2 完成;舊版程式未改動)。
 > 開發新功能後,在同一個變更內更新本文件(`AGENT.md` §9)。只寫結構與職責,細節連到 `docs/`。
 
 資訊網通管理系統:PA-560 防火牆 log、AD 事件與網通知識庫;AI 問答只留在舊版(ARCHITECTURE D17)。目標是接入 GigaNexus Gateway(`/netops/`、`netops-api` :51292),目前部署於 IIS `/NetOps`。
@@ -37,8 +37,8 @@ NetOps/
 │  │  ├─ config.ts          服務設定:資料目錄、FTP(*_FILE 機密)、明細查詢上限;test / prod 缺少時啟動失敗
 │  │  ├─ errors.ts、openapi.ts、print-openapi.ts
 │  │  ├─ infra/store/       資料存取邊界(D8):模組只呼叫具名函式;/readyz 檢查資料目錄
-│  │  ├─ infra/clickhouse/  netops-clickhouse 存取(HTTP 介面 + fetch,表名只用常數):index.ts netops-ingest 寫入(C2);reader.ts netops-api 唯讀查詢(C3,query_params、依每分鐘筆數切段)
-│  │  ├─ infra/redis/       netops-redis:index.ts(即時監控讀取、收集器開關)、ingest.ts(consumer group ch-writer、心跳、缺口清單)、cache.ts(儀表板快取 netops:cache:*,C3)、backfill.ts(補漏佇列 netops:backfill:*,C3)
+│  │  ├─ infra/clickhouse/  netops-clickhouse 存取(HTTP 介面 + fetch,表名只用常數):index.ts netops-ingest 寫入(C2);reader.ts netops-api 唯讀查詢(C3,query_params、依每分鐘筆數切段);heat.ts 熱力圖彙總與時段明細(V-a)
+│  │  ├─ infra/redis/       netops-redis:index.ts(即時監控讀取、收集器開關)、ingest.ts(consumer group ch-writer、心跳、缺口清單)、cache.ts(儀表板快取 netops:cache:*,C3)、backfill.ts(補漏佇列 netops:backfill:*,C3)、cold-lock.ts(冷查詢鎖 netops:cold:lock,V-a;C4 接上)
 │  │  ├─ ingest/            netops-ingest 進入點 main.ts(dist/src/ingest/main.js)、writer.ts(批次寫入、成功才 ACK、重啟補待處理)、rows.ts(JSON → 列)、config.ts、backfill.ts(C3 FTP 補漏)
 │  │  ├─ infra/jobs/        長時間工作(D6):本人才能查、數量與時間上限、程序重啟後失效
 │  │  ├─ infra/ftp/         FTP 唯讀(列目錄、串流下載);連線上限 FTP_MAX_CONNECTIONS
@@ -50,13 +50,14 @@ NetOps/
 │  │     │                  log-routes.ts(明細查詢與匯出,工作模式)、ch-summary.ts(ClickHouse 每小時摘要,背景)、
 │  │     │                  ch-overview.ts(總覽 / 安全事件 / 篩選選項的 ClickHouse 來源與切換,C3)、
 │  │     │                  reconcile.ts、recon-routes.ts(FTP 與 ClickHouse 每日對帳、補漏 API,C3)
+│  │     ├─ pa-heat/        heat.ts(熱力圖期間、格子、分級,純函式)、service.ts(熱力圖快取、時段明細工作:30 秒同步、熱 / 冷分界)、routes.ts(V-a)
 │  │     ├─ pa-events/      core/paevents.js(舊版逐字)、importer.ts(其他類型 log 匯入)、routes.ts(安全事件總覽)
 │  │     ├─ ad/             core/adlog.js(舊版逐字)、importer.ts(AD 匯入)、routes.ts(總覽、明細、匯出)
 │  │     ├─ kb/             core/notes.js(舊版 kb.js 的格式與匯整)、service.ts、routes.ts
 │  │     └─ ftp/            routes.ts(PA)、ad-routes.ts(AD;清單為工作模式)
 │  ├─ scripts/sse-probe.mjs S0 驗證腳本:經 Gateway 連 SSE,記錄事件到達時間、斷線與重連(Cookie 由執行者放環境變數)
 │  ├─ test/unit/            app、config、jobs、store、ftp、pa / ad(與舊版結果比對)、pa-live(SSE,真實 HTTP 連線)、ingest;test/fixtures 假 log、假 AD 匯出檔、假 FTP、假 Stream / ClickHouse
-│  ├─ test/integration/     ingest.int.test.ts、reader.int.test.ts(C3,netops_reader):真 Redis + ClickHouse(CI check:ingest-int 起一次性容器;npm run test:int)
+│  ├─ test/integration/     ingest.int.test.ts、reader.int.test.ts(C3,netops_reader)、heat.int.test.ts(V-a 熱力圖彙總與時段明細):真 Redis + ClickHouse(CI check:ingest-int 起一次性容器;npm run test:int)
 │  └─ Dockerfile、.npmrc(@giganexus/* 取自 GitLab npm Registry)
 ├─ frontend/                netops-web(Vue 3 + TypeScript,base /netops/;F1 完成,框架由入口網複製,docs/UI-GUIDE.md)
 │  ├─ src/
@@ -131,6 +132,7 @@ NetOps/
 | PA 即時監控(R1)與測試區收集器開關 | 收集器 `pa-collector/netops_pa/`(開關 `control.py`、鍵 `keys.py`);API `backend/src/modules/pa-live/{live-routes,service}.ts`、Redis `backend/src/infra/redis/`;畫面 `frontend/src/pages/firewall/Live.vue`、`frontend/src/composables/paLive.ts`;鍵格式 `docs/PA-LIVE-PLAN.md` §4 |
 | SSE 串流(S0 驗證、R1、A1 問答) | `backend/src/modules/pa-live/routes.ts`、`docs/API.md` §3.1(逾時與標頭條件)、`docs/test-reports/2026-11-05-s0-sse.md` |
 | FTP 對帳與補漏(C3) | `backend/src/modules/pa/{reconcile,recon-routes}.ts`、`backend/src/ingest/backfill.ts`、`backend/src/infra/redis/backfill.ts`;API.md §5.3、ARCHITECTURE D33 |
+| 活動熱力圖、時段明細(V-a) | `backend/src/modules/pa-heat/`、`backend/src/infra/clickhouse/heat.ts`、`deploy/clickhouse/{schema.sql,rebuild-day.sh}`;API.md §4.4、VIZ-RULES-DESIGN §3、§4 |
 | PA 總覽 / 安全事件改查 ClickHouse(C3) | `backend/src/modules/pa/{ch-overview,ch-summary}.ts`、`backend/src/infra/clickhouse/reader.ts`、`backend/src/infra/redis/cache.ts`;ARCHITECTURE D29、D42 |
 | PA log 寫入 ClickHouse(C2) | `backend/src/ingest/`、`backend/src/infra/{clickhouse,redis/ingest.ts}`、`deploy/clickhouse/`、手冊 `docs/PA-LOG-CLICKHOUSE-GUIDE.md` §6;Redis 鍵 `docs/PA-LIVE-PLAN.md` §4 |
 | 新版部署 | `.gitlab-ci.yml`、`deploy/` |

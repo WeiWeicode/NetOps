@@ -153,7 +153,7 @@ export async function trafficOverview(d: ChOverviewDeps, from: string, to: strin
       };
     }),
     // 排行還沒建好 / 過期的結果不快取(建好後馬上看得到;程式碼審查 #8)
-    (v) => v.topsState === 'ok',
+    { keep: (v) => v.topsState === 'ok' },
   );
   return { ...r, ...cov, top: cut(r.top as TopMap, topN), topBytes: cut(r.topBytes as TopMap, topN) };
 }
@@ -184,7 +184,7 @@ export async function eventOverview(d: ChOverviewDeps, type: ChEventType, from: 
       const m = mergeEventSummaries(type, list, TOP_MAX);
       return { ...m, source: 'clickhouse' as const, missing, topsUntil: untilOut(until, toMs), topsState: state };
     }),
-    (v) => v.topsState === 'ok',
+    { keep: (v) => v.topsState === 'ok' },
   );
   return { ...r, ...cov, tops: r.tops.map((t: { items: unknown[] }) => ({ ...t, items: t.items.slice(0, topN) })) };
 }

@@ -242,3 +242,66 @@
   --field: #09161f;
   --shadow-lg: 0 16px 40px rgb(0 0 0 / 0.45);
 }
+
+/* ───── 熱力圖、儀表板(V-b1 / V-b2;VIZ-RULES-DESIGN §6.6、HANDOFF-GEMINI-VIZ §6)─────
+   四種組合(玻璃 / 扁平 × 明亮 / 黑暗)色塊對底色 ≥ 3:1、徽章文字對底色 ≥ 4.5:1。 */
+:root,
+:root[data-theme='light'] {
+  --heat-empty: rgb(11 34 51 / 0.11);
+  --heat-traffic-1: #2b8cbe;
+  --heat-traffic-2: #0570b0;
+  --heat-traffic-3: #034e7b;
+  --heat-traffic-4: #012a4a;
+  --heat-deny-1: #c2780e;
+  --heat-deny-2: #9e5808;
+  --heat-deny-3: #7a3b04;
+  --heat-deny-4: #4d2100;
+  --heat-threat-1: #2574d9;
+  --heat-threat-2: #b86e00;
+  --heat-threat-3: #c93328;
+  --heat-threat-4: #7f1111;
+  --heat-ad-1: #7c5cd6;
+  --heat-ad-2: #6242bd;
+  --heat-ad-3: #492c9c;
+  --heat-ad-4: #2f1973;
+  --glow-critical: rgb(224 72 62 / 0.52);
+  --glow-high: rgb(224 144 26 / 0.48);
+  --badge-hot: #9a4e00;
+  --badge-cold: #066078;
+}
+
+:root[data-theme='dark'] {
+  --heat-empty: rgb(255 255 255 / 0.09);
+  --heat-traffic-1: #1d7fb8;
+  --heat-traffic-2: #269fe0;
+  --heat-traffic-3: #4cc3ff;
+  --heat-traffic-4: #9ce3ff;
+  --heat-deny-1: #b57214;
+  --heat-deny-2: #db901f;
+  --heat-deny-3: #f7b23b;
+  --heat-deny-4: #ffd479;
+  --heat-threat-1: #3898ff;
+  --heat-threat-2: #f5a524;
+  --heat-threat-3: #ff6b61;
+  --heat-threat-4: #ff9e99;
+  --heat-ad-1: #7e5bef;
+  --heat-ad-2: #9b7dff;
+  --heat-ad-3: #b79eff;
+  --heat-ad-4: #d6c7ff;
+  --glow-critical: rgb(255 107 97 / 0.56);
+  --glow-high: rgb(255 181 71 / 0.52);
+  --badge-hot: #ffc15e;
+  --badge-cold: #4de3ff;
+}
+
+:root[data-theme='light'][data-style='flat'] {
+  --heat-empty: #dfe8f0;
+  --glow-critical: rgb(224 72 62 / 0.38);
+  --glow-high: rgb(224 144 26 / 0.35);
+}
+
+:root[data-theme='dark'][data-style='flat'] {
+  --heat-empty: #1b3145;
+  --glow-critical: rgb(255 107 97 / 0.42);
+  --glow-high: rgb(255 181 71 / 0.38);
+}

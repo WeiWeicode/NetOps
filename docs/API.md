@@ -1,7 +1,7 @@
 # NetOps API
 
 > `netops-api` 的對外介面:前端(F1)照本文件串接。決策見 [ARCHITECTURE.md](ARCHITECTURE.md),工作項目見 [IMPL-PLAN.md](IMPL-PLAN.md)。
-> **狀態:B1 定稿;C3 `feature/clickhouse-c3-query` 加 §4.1、§4.2 的 `source`(ClickHouse),`feature/clickhouse-c3-detail` 加 §4.3 的 `source`,`feature/clickhouse-c3-reconcile` 加 §5.3 對帳與補漏;V-a `feature/viz-a-heatmap-data` 加 §4.4 熱力圖與時段明細;`feature/clickhouse-c3-ch-only`(D43)§4.1–§4.3 只查 ClickHouse、對帳 01:00;B2-pa 已實作 §4.1、§5.1;B2-ad 已實作 §4.2、§5.2、§6;B2-kb 已實作 §7;B2-logs 已實作 §4.3(B2 全部完成);A1(AI 搬移)第 2 批 `feature/a1-ai-api` 實作 §10**。各模組在 B2 分批實作,「批次」欄是預定交付的 MR;實作與本文件不同時,以 MR 描述的「API 變更」為準並同步更新本文件。
+> **狀態:B1 定稿;C3 `feature/clickhouse-c3-query` 加 §4.1、§4.2 的 `source`(ClickHouse),`feature/clickhouse-c3-detail` 加 §4.3 的 `source`,`feature/clickhouse-c3-reconcile` 加 §5.3 對帳與補漏;V-a `feature/viz-a-heatmap-data` 加 §4.4 熱力圖與時段明細;V-b1 `feature/viz-b1-insight-frontend` 加 §4.5 分析儀表板;C5 `feature/c5-pa-precise-query` 加 §3.3 PA 精準查詢;`feature/clickhouse-c3-ch-only`(D43)§4.1–§4.3 只查 ClickHouse、對帳 01:00;B2-pa 已實作 §4.1、§5.1;B2-ad 已實作 §4.2、§5.2、§6;B2-kb 已實作 §7;B2-logs 已實作 §4.3(B2 全部完成);A1(AI 搬移)第 2 批 `feature/a1-ai-api` 實作 §10**。各模組在 B2 分批實作,「批次」欄是預定交付的 MR;實作與本文件不同時,以 MR 描述的「API 變更」為準並同步更新本文件。
 > 欄位的完整定義以服務的 `/openapi.json` 為準(上架時匯入 Gateway);本文件寫路徑、權限、請求與回應格式。
 
 ---
@@ -73,7 +73,8 @@ PA 匯入在背景佇列執行;同步、分析只是送進佇列,畫面輪詢狀
 | `netops.ping.read` | 連線驗證:查詢 | §3(含 §3.1 串流驗證) |
 | `netops.pa-realtime.read` | PA 即時監控:查詢 | §3.2(畫面節點 `netops.pa-live.read`) |
 | `netops.pa-realtime.write` | PA 即時監控:測試區暫停 / 繼續收集器 | §3.2 `collector-control`(按鈕 `netops.pa-live.manage`,只給 `netops-admin`;2026-11-09 需求方決定) |
-| `netops.pa.read` | PA 防火牆:查詢 | §4.1、§4.2、§4.4 熱力圖 |
+| `netops.pa-query.read` | PA 精準查詢:查詢 | §3.3(**只給 `netops-admin`**,CQ7;按鈕 `netops.pa-live.query`) |
+| `netops.pa.read` | PA 防火牆:查詢 | §4.1、§4.2、§4.4 熱力圖、§4.5 儀表板 |
 | `netops.pa-log.read` | PA Log 明細:查詢 | §4.3、§4.4 時段明細 |
 | `netops.ftp.read` | FTP Log 檔案:查詢 | §5 讀取 |
 | `netops.ftp.write` | FTP Log 檔案:同步與管理 | §5 寫入 |
@@ -108,6 +109,62 @@ PA 匯入在背景佇列執行;同步、分析只是送進佇列,畫面輪詢狀
 - **逾時(不受 AGENT.md §7.3 一般 API 10 秒限制的原因)**:BFF 對上游的 `bodyTimeout` 等於路由逾時,而 undici 的 `bodyTimeout` 是「兩個資料塊之間」的閒置時間,不是總時長;本路由設 `x-timeout-ms: 60000`,心跳 15 秒,所以連線可以一直開著。BFF 斷路器計入「收到標頭之前」的逾時與連線錯誤,以及上游回 5xx;串流已回 200 之後的中斷不累積,所以名額滿時回 **429**(回 5xx 會讓有權限的人藉此打開斷路器、整個 `netops-api` 停 30 秒)。**SSE 路由一定要設 `x-timeout-ms` 大於心跳間隔**(預設 10 秒會在第一次心跳前被切斷),心跳不可超過 60 秒。
 - 權限用 `netops.ping.read`:同 §3 是連線驗證用,不綁畫面節點、不在 `gateway-rbac.yaml` 的角色內,在 GigaItApp 個別指派(B0 時指派給 `it-admin`,現況以 GigaItApp 為準);S0 驗證完成後可把這條路由在 GigaItApp 停用;不新增權限代碼,`gateway-rbac.yaml` 不變。R1 正式串流用 `netops.pa-realtime.read`(PA-LIVE-PLAN §8)。
 - 驗證腳本 `backend/scripts/sse-probe.mjs`,步驟見 `docs/test-reports/2026-11-05-s0-sse.md`。
+
+### 3.3 PA 精準查詢(C5)— 批次 `feature/c5-pa-precise-query`
+
+設計見 [PA-LOG-CLICKHOUSE-GUIDE.md](PA-LOG-CLICKHOUSE-GUIDE.md) §9;決策 D31、CQ6、CQ7;門檻依 IMPL-PLAN C0 **E4 結果**(2026-11-10:15 分鐘、500 筆、逾時 60 秒、全系統一次一個、管理平面 CPU > 50% 不送;較大範圍實測前不放寬)。`netops-api` 只驗證與送出,PA-560 由 `netops-pa` 的查詢執行者查(`PA_QUERY_ENABLED`,**測試區預設關閉**,需求方手動開)。
+
+| 方法 | 路徑 | 權限 | 稽核 | 說明 |
+| --- | --- | --- | --- | --- |
+| GET | `/api/netops/pa-query/status` | `netops.pa-query.read` | — | 按鈕能不能按:`{ enabled, executor, heartbeatAgeSec, activeSec, globalCoolSec, userCoolSec, mgmtCpu }` |
+| POST | `/api/netops/pa-query/jobs` | `netops.pa-query.read` | `meta` | 送出(202 + 工作) |
+| GET | `/api/netops/pa-query/jobs/{id}` | `netops.pa-query.read` | `meta` | 工作狀態與結果(本人;10 分鐘內) |
+
+**權限**:`netops.pa-query.read` **只給 `netops-admin`**(CQ7;按鈕 `netops.pa-live.query`);`netops-viewer` 沒有,BFF 回 403。查詢本身唯讀(D22),但會在 PA-560 管理平面執行,所以和寫入一樣只給管理員。
+
+**送出內容**(`additionalProperties: false`):
+
+| 欄位 | 說明 |
+| --- | --- |
+| `kind` | `log`:XML API `type=log`;`session`:Session Browser(`show session all filter source / destination <IP>`) |
+| `ip` | **必填,單一 IPv4 / IPv6**(不接受 CIDR、萬用字元);查詢語法只由驗證過的值組成,不接受自訂 filter |
+| `logType` | `log`:`traffic`(預設)/ `threat` |
+| `from`、`to` | `log`:ISO 8601 含時區;`to − from` ≤ **15 分鐘**、`to` 在最近 **1 小時**內(更早的用 §4.3 Log 明細查詢) |
+| `nlogs` | `log`:1–**500**(預設 500) |
+| `direction` | `session`:`src`(該 IP 為來源,預設)/ `dst` |
+
+**限流**(被擋一律 **429** `NETOPS_PA_QUERY_BUSY`,`Retry-After` 與 `details.retryAfter`,不回 5xx):
+
+| 規則 | 值 |
+| --- | --- |
+| 全系統同時 | 1 個(Redis `netops:paq:active`,TTL 90 秒;`netops-pa` 結束時釋放) |
+| 全域間隔 | 10 秒(每個工作結束後) |
+| 每人冷卻 | 60 秒(送出時起算;被擋的請求不算) |
+| 管理平面 CPU | 最新快照(輪詢寫入)> 50% 先擋;`netops-pa` 送出前**再取樣一次**,> 50% 或讀不到就不送,工作標 `rejected` |
+| 工作逾時 | 60 秒;到時 `netops-pa` 送 `action=finish` 取消 PA 上的工作,工作標 `failed`(`NETOPS_PA_QUERY_TIMEOUT`) |
+
+`netops-pa` 沒開查詢執行者、或心跳超過 60 秒:409 `NETOPS_PA_QUERY_DISABLED`。Redis 連不上:424 `NETOPS_REDIS_UNAVAILABLE`。
+
+```jsonc
+// POST 202、GET 200
+{
+  "id": "…uuid…", "kind": "log", "status": "done",      // queued | running | done | failed | rejected
+  "params": { "logType": "traffic", "ip": "10.10.130.124", "from": "2026-11-12T01:45:00.000Z", "to": "2026-11-12T02:00:00.000Z", "nlogs": 500 },
+  "createdAt": "…", "startedAt": "…", "finishedAt": "…",
+  "mgmtCpu": 4.5,                                       // 送出前取樣到的管理平面 CPU(%)
+  "error": null,                                        // failed / rejected:{ code, message }(NETOPS_PA_QUERY_TIMEOUT、_FAILED、_EXPIRED、_INVALID、_CPU_HIGH、_CPU_UNKNOWN)
+  "result": {                                           // done 才有
+    "rows": [ { "time": "2026/11/12 09:58:01", "action": "allow", "src": "10.10.130.124", "sport": 51000, "dst": "8.8.8.8", "dport": 443,
+                "app": "ssl", "rule": "Allow-Web", "fromZone": "trust", "toZone": "untrust", "bytes": 1200, "sent": 200, "recv": 1000 } ],
+    // log:欄位同 §4.3(time 為 PA 設備時間 yyyy/MM/dd HH:mm:ss);session:id、app、state、type、src、sport、dst、dport、proto、
+    //      fromZone、toZone、startTime、bytes、rule、natSrc、natDst、natSport、natDport、srcUser
+    "count": 1, "truncated": false                      // truncated:達 500 筆上限
+  }
+}
+```
+
+- API Key 只在 `netops-pa`,放 `X-PAN-KEY` 標頭(不進網址、POST 內容與錯誤訊息,日誌遮罩)。不跟隨轉址;PA 的錯誤原文只寫日誌,`error.message` 只有分類與 PA code。PA 端該 Key 的 Admin Role 應只開 XML API Log 與 Operational Requests(網通設定;程式另以白名單只送唯讀請求)。
+- 測試區與正式區查同一台 PA-560,名額與冷卻各在自己的 Redis(兩區同時查可能各 1 個;正式區上線前再評估)。
 
 ### 3.2 PA 即時監控(R1)— 批次 `feature/r1-api`
 
@@ -339,7 +396,7 @@ PA 匯入在背景佇列執行;同步、分析只是送進佇列,畫面輪詢狀
 | `rows` | 明細列數 0–200(預設 100);全部明細請用 §4.3 Log 明細查詢 |
 | `sort` | `time`(預設,新到舊)\| `bytes`(只對 `traffic`) |
 
-**熱 / 冷分界**:`hotFrom` = 今天 00:00 −(原始表保留天數 − 1)天(TRAFFIC 30 → 29 天、威脅 90 → 89 天;測試區 3 → 2 天;設定 `NETOPS_TTL_TRAFFIC_DAYS` / `NETOPS_TTL_THREAT_DAYS`,預設依部署區,要和 `apply-schema.sh` 一致)。`start ≥ hotFrom` 查原始表(`source: "hot"`);早於 `hotFrom` 的部分讀 **NAS 冷歸檔**(C4,每天一個 Parquet,帳號 `netops_cold` 以 `file()` 讀),`source` 為 `cold` / `mixed`(跨分界時兩段合併:總數相加、排行重排、明細列依排序合併),欄位格式和熱資料相同。冷歸檔關閉(`NETOPS_ARCHIVE_ENABLED=0`,例如正式區 NAS 空間還沒核准)回 409 `NETOPS_COLD_ARCHIVE_DISABLED`,`details.hotFrom` 為可查的起點。期間涵蓋的任何一天沒有歸檔成功回 404 `NETOPS_COLD_ARCHIVE_NOT_FOUND`,`details.missing` 為 `[{ type: "traffic" | "threat", day: "YYYY-MM-DD", status }]`,`status`:`missing`(尚未歸檔,例:前一天 02:30 之前)、`failed`(歸檔失敗,每小時重試中)、`expired`(超過歸檔保留期限:測試區 14 天;正式區至少 1 年)、`unreadable`(紀錄成功但檔案讀不到:NAS 未掛載或檔案遺失);TRAFFIC 明細另外要同一天的威脅歸檔(摘要列的威脅數)。不回傳檔案路徑。冷查詢全系統同時 1 個(Redis 鎖 `netops:cold:lock`,和每天 02:30 起的歸檔匯出共用),拿不到回 429 `NETOPS_COLD_QUERY_BUSY` 與 `Retry-After: 10`。冷查詢從 NAS 讀整天的檔,通常超過 30 秒轉成工作(202)。
+**熱 / 冷分界**:`hotFrom` = 今天 00:00 −(原始表保留天數 − 1)天(TRAFFIC 30 → 29 天、威脅 90 → 89 天;測試區 3 → 2 天;設定 `NETOPS_TTL_TRAFFIC_DAYS` / `NETOPS_TTL_THREAT_DAYS`,預設依部署區,要和 `apply-schema.sh` 一致)。`start ≥ hotFrom` 查原始表(`source: "hot"`);早於 `hotFrom` 的部分讀 **NAS 冷歸檔**(C4,每天一個 Parquet,帳號 `netops_cold` 以 `file()` 讀),`source` 為 `cold` / `mixed`(跨分界時兩段合併:總數相加、排行重排、明細列依排序合併),欄位格式和熱資料相同。冷歸檔關閉(`NETOPS_ARCHIVE_ENABLED=0`,例如正式區 NAS 空間還沒核准)回 409 `NETOPS_COLD_ARCHIVE_DISABLED`,`details.hotFrom` 為可查的起點。期間涵蓋的任何一天沒有歸檔成功回 404 `NETOPS_COLD_ARCHIVE_NOT_FOUND`,`details.missing` 為 `[{ type: "traffic" | "threat", day: "YYYY-MM-DD", status }]`,`status`:`missing`(尚未歸檔,例:前一天 02:30 之前)、`failed`(歸檔失敗,每小時重試中)、`expired`(超過歸檔保留期限:測試區 14 天;正式區至少 1 年)、`unreadable`(紀錄成功但檔案讀不到:NAS 未掛載或檔案遺失);TRAFFIC 明細另外要同一天的威脅歸檔(摘要列的威脅數)。不回傳檔案路徑。冷查詢全系統同時 1 個(Redis 鎖 `netops:cold:lock`,和每天 02:30 起的歸檔匯出共用),拿不到回 429 `NETOPS_COLD_QUERY_BUSY` 與 `Retry-After: 10`(`details.retryAfter` 同值,前端 web-kit 讀不到回應標頭時用)。冷查詢從 NAS 讀整天的檔,通常超過 30 秒轉成工作(202)。
 
 **同步 30 秒,超過轉工作**:一律建 `pa-slice` 工作;30 秒內完成回 **200** 結果,否則回 **202** 工作狀態(§1.1),前端改輪詢 `GET /pa/slices/{id}`(完成時 `result` 為結果)。同一人、同一組參數在工作保留期間(30 分鐘)重送回同一個工作(進行中 202、完成 200),不重複查詢。工作每人同時 2 個、全系統 6 個(和 §4.3 分開計),同時執行 2 個(其餘排隊;一個工作內的 ClickHouse 查詢依序執行),每人保留 5 筆,執行上限 120 秒(ClickHouse 每個查詢 50 秒;冷工作 110 秒,全系統 1 個)。取消熱查詢工作時,已送出的 ClickHouse 查詢不會中止(結果是多人共用的快取),最多再跑 50 秒;30 秒內失敗直接回該錯誤(例 503 `NETOPS_CLICKHOUSE_UNAVAILABLE`)。熱查詢結果另有 60 秒共用快取(`netops:cache:pa-slice:*`)。
 
@@ -360,6 +417,53 @@ PA 匯入在背景佇列執行;同步、分析只是送進佇列,畫面輪詢狀
   "seconds": 0.8
 }
 ```
+
+### 4.5 分析儀表板(V-b1)— 批次 `feature/viz-b1-insight-frontend`
+
+設計見 [VIZ-RULES-DESIGN.md](VIZ-RULES-DESIGN.md) §4.4。一個視角一支 API,一次回該視角全部圖表的資料(畫面一個請求,快取一份 `netops:cache:pa-insight:*`:含今天或結束未滿 1 小時 60 秒,其他 10 分鐘)。權限 `netops.pa.read`。
+
+| 方法 | 路徑 | 說明 |
+| --- | --- | --- |
+| GET | `/api/netops/pa/insight/traffic?from&to` | 流量視角 |
+| GET | `/api/netops/pa/insight/threat?from&to` | 安全威脅視角 |
+
+`from`、`to`:`YYYY-MM-DD`(含當天),最長 **90 天**(來源 IP 彙總與威脅原始表保留 90 天)、最早 5 年內;不存在的日期(例 `2026-02-31`)、`to` 晚於今天或早於 `from` 回 400。實際計算(沒命中快取)全系統同時 2 個,超過回 **429** `NETOPS_INSIGHT_BUSY`(`Retry-After` 與 `details.retryAfter` 為 5 秒;畫面倒數後重試)。時間序列的數值 `null` 表示沒有資料(彙總表最早的格子之前),和 0 不同;`coverage` 同 §4.4。ClickHouse 無法使用回 503 `NETOPS_CLICKHOUSE_UNAVAILABLE`。
+
+```jsonc
+// traffic
+{
+  "view": "traffic", "from": "2026-11-05", "to": "2026-11-11",
+  "bucketSeconds": 3600,                 // trend:≤ 2 天 300、≤ 31 天 3600、其他 86400
+  "allowDenyBucketSeconds": 86400,       // allowDeny:≤ 2 天 3600、其他 86400
+  "coverage": { "since": "…", "gaps": [], "gapsKnown": true },
+  "trend": [ { "t": "2026-11-05T00:00:00+08:00", "sent": 1200, "recv": 5400, "sessions": 310 } ],   // pa_heat_*
+  "sankey": {                            // 來源區域 → App → 目的區域(位元組);App 取前 15,其他併「其他」
+    "nodes": [ { "id": "z:LAN", "name": "LAN", "layer": 0 }, { "id": "a:ssl", "name": "ssl", "layer": 1 }, { "id": "d:WAN", "name": "WAN", "layer": 2 } ],
+    "links": [ { "source": "z:LAN", "target": "a:ssl", "bytes": 3000 } ]
+  },
+  "topIp": [ { "ip": "10.10.112.20", "bytes": 3000, "sent": 1000, "recv": 2000, "sessions": 100 } ],  // pa_traffic_hourly_src;migration 003 之前的列上傳 / 下載為 0
+  "topApp": [ { "app": "ssl", "bytes": 3000, "sessions": 100 } ],
+  "allowDeny": [ { "t": "…", "allow": 90, "deny": 10 } ],
+  "generatedAt": "…"
+}
+// threat(只算 log_type = threat 的筆數,不乘 Repeat Count)
+{
+  "view": "threat", "from": "…", "to": "…", "bucketSeconds": 3600, "coverage": { … },
+  "score": { "critical": 1, "high": 2, "medium": 5, "low": 11, "info": 40,
+             "prev": { "critical": 0, "high": 4, "medium": 3, "low": 9, "info": 30 },   // 前一個同長度期間;資料起點晚於前一期開始時為 null(畫面不顯示增減)
+             "prevFrom": "2026-10-29", "prevTo": "2026-11-04" },
+  "timeline": [ { "t": "…", "critical": 0, "high": 1, "medium": 0, "low": 2 } ],
+  "countries": [ { "country": "China", "iso2": "CN", "count": 30, "critical": 1, "high": 5 } ],  // 全部國家(給地圖);內網範圍不列,對不到的併成 { "country": "未知", "iso2": null }
+  "topInternalSrc": [ { "ip": "10.10.112.31", "count": 12, "high": 3 } ],   // RFC 1918 來源(V-c 網段設定後改用設定)
+  "topServerDst": null,                  // 伺服器網段在偵測設定(V-c)之前沒有,見 notes
+  "topNames": [ { "name": "…(12345)", "severity": "high", "count": 9 } ],   // 同名有多種嚴重度時取最高的
+  "notes": [ "內網以 RFC 1918 判斷;伺服器網段尚未設定(偵測設定 V-c),「被攻擊最多的伺服器」暫不提供" ],
+  "generatedAt": "…"
+}
+```
+
+- 國家:PA 的國家欄位是英文全名,後端轉 ISO 3166-1 alpha-2(`backend/src/modules/pa-insight/countries.ts`);前端地圖以 ISO2 對應(`frontend/src/ui/charts/world/`)。
+- 和流量總覽一致:`trend` 的 `sessions` 加總 = 流量總覽同期間的 `rows`(兩者都來自 ClickHouse 寫入的 TRAFFIC;彙總表上線前的日子要先用 `rebuild-day.sh` 回填)。
 
 ---
 
@@ -630,13 +734,17 @@ AI 相關(語意搜尋、向量同步、外部 IP 自動學習)見 §10.2(A1)。
 | 409 | `NETOPS_BACKFILL_NOTHING` | 這一天沒有需要補漏的小時(§5.3) |
 | 409 | `NETOPS_BACKFILL_BUSY` | 補漏佇列已滿(§5.3) |
 | 404 | `NETOPS_BACKFILL_NOT_FOUND` | 補漏工作不存在或已超過 7 天(§5.3) |
-| 503 | `NETOPS_CLICKHOUSE_UNAVAILABLE` | ClickHouse 連不上、查詢失敗或未設定(C3,§4.1–§4.3;不再改用 FTP);熱力圖與時段明細(§4.4)同樣回這個代碼。只影響用到 ClickHouse 的 API。原始錯誤只寫服務日誌 |
+| 503 | `NETOPS_CLICKHOUSE_UNAVAILABLE` | ClickHouse 連不上、查詢失敗或未設定(C3,§4.1–§4.3;不再改用 FTP);熱力圖與時段明細(§4.4)、分析儀表板(§4.5)同樣回這個代碼。只影響用到 ClickHouse 的 API。原始錯誤只寫服務日誌 |
 | 409 | `NETOPS_HEATMAP_METRIC_UNAVAILABLE` | 熱力圖指標尚未開放(`ad`,AD 階段 V-d;§4.4) |
 | 422 | `NETOPS_HEATMAP_OUT_OF_RETENTION` | 熱力圖日視圖超過 5 分鐘彙總保留(1 年);`details.earliest`(§4.4) |
 | 409 | `NETOPS_COLD_ARCHIVE_DISABLED` | 時段明細早於原始表保留、要讀冷歸檔,冷歸檔關閉(`NETOPS_ARCHIVE_ENABLED=0`);`details.hotFrom`(§4.4)。設定狀態,不用 5xx |
 | 404 | `NETOPS_COLD_ARCHIVE_NOT_FOUND` | 時段明細期間有一天沒有歸檔成功(尚未歸檔、失敗、超過保留期限、檔案讀不到);`details.missing`(§4.4,C4) |
+| 429 | `NETOPS_INSIGHT_BUSY` | 分析儀表板同時計算的查詢已滿(全系統 2 個);帶 `Retry-After`(§4.5,V-b1) |
 | 429 | `NETOPS_COLD_QUERY_BUSY` | 已有冷資料查詢在執行(全系統 1 個)或歸檔匯出中;帶 `Retry-After`(§4.4,C4 起) |
 | 403 | `NETOPS_PA_CONTROL_DISABLED` | 正式區不能切換收集器的輪詢與接收(§3.2 `collector-control`,只有測試區可用) |
+| 429 | `NETOPS_PA_QUERY_BUSY` | PA 精準查詢:已有查詢在執行(全系統 1 個)、間隔 / 冷卻中或管理平面 CPU 過高;帶 `Retry-After`(§3.3) |
+| 409 | `NETOPS_PA_QUERY_DISABLED` | PA 精準查詢未啟用(`netops-pa` 沒開查詢執行者或停止回報;§3.3) |
+| 404 | `NETOPS_PA_QUERY_NOT_FOUND` | PA 精準查詢工作不存在、不是本人的或超過 10 分鐘(§3.3) |
 | 424 | `NETOPS_REDIS_UNAVAILABLE` | 即時監控讀不到 `netops-redis`(§3.2;`snapshot` 例外,回 200 `state: unavailable`)。不用 5xx:避免累積 BFF 斷路器失敗。原始錯誤只寫服務日誌 |
 | 424 | `NETOPS_PA_LIVE_DISABLED` | 未設定 `REDIS_URL`(只會在 dev) |
 | 403 | `NETOPS_STREAM_OWNER_UNKNOWN` | 身分沒有工號也沒有 sub,不能建立即時串流(正常經 Gateway 不會發生) |

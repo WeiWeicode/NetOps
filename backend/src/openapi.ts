@@ -35,6 +35,8 @@ export const PERMISSIONS = [
   { code: 'netops.pa-realtime.write', name: 'NetOps PA 即時監控:測試區暫停 / 繼續收集器' },
   { code: 'netops.pa.read', name: 'NetOps PA 防火牆:查詢' },
   { code: 'netops.pa-log.read', name: 'NetOps PA Log 明細:查詢' },
+  // C5:PA 精準查詢(XML API log、Session Browser);只給 netops-admin(CQ7,按鈕 netops.pa-live.query)
+  { code: 'netops.pa-query.read', name: 'NetOps PA 精準查詢:查詢' },
   { code: 'netops.ftp.read', name: 'NetOps FTP Log 檔案:查詢' },
   { code: 'netops.ftp.write', name: 'NetOps FTP Log 檔案:同步與管理' },
   { code: 'netops.ad.read', name: 'NetOps AD 事件:查詢' },

@@ -24,6 +24,8 @@ declare module 'vue' {
     GStatCard: (typeof import('./ui/components/GStatCard.vue'))['default'];
     GStyleToggle: (typeof import('./ui/components/GStyleToggle.vue'))['default'];
     GSwitch: (typeof import('./ui/components/GSwitch.vue'))['default'];
+    GDrawer: (typeof import('./ui/components/GDrawer.vue'))['default'];
+    GSourceBadge: (typeof import('./ui/components/GSourceBadge.vue'))['default'];
     GTable: (typeof import('./ui/components/GTable.vue'))['default'];
     GTabs: (typeof import('./ui/components/GTabs.vue'))['default'];
     GTextarea: (typeof import('./ui/components/GTextarea.vue'))['default'];
@@ -33,6 +35,17 @@ declare module 'vue' {
     GRing: (typeof import('./ui/charts/GRing.vue'))['default'];
     GSparkline: (typeof import('./ui/charts/GSparkline.vue'))['default'];
     GStackedBars: (typeof import('./ui/charts/GStackedBars.vue'))['default'];
+    GEChart: (typeof import('./ui/charts/GEChart.vue'))['default'];
+    GHeatmap: (typeof import('./ui/charts/GHeatmap.vue'))['default'];
+    GWorldMap: (typeof import('./ui/charts/GWorldMap.vue'))['default'];
+    GTrendDualAxis: (typeof import('./ui/charts/GTrendDualAxis.vue'))['default'];
+    GTopCompare: (typeof import('./ui/charts/GTopCompare.vue'))['default'];
+    GTopBars: (typeof import('./ui/charts/GTopBars.vue'))['default'];
+    GThreatTimeline: (typeof import('./ui/charts/GThreatTimeline.vue'))['default'];
+    GSeverityCards: (typeof import('./ui/charts/GSeverityCards.vue'))['default'];
+    GSankey: (typeof import('./ui/charts/GSankey.vue'))['default'];
+    GAppShare: (typeof import('./ui/charts/GAppShare.vue'))['default'];
+    GAllowDeny: (typeof import('./ui/charts/GAllowDeny.vue'))['default'];
   }
   interface ComponentCustomProperties {
     $can: (code: string) => boolean;

@@ -41,12 +41,17 @@ import type { ChOverviewDeps } from './modules/pa/ch-overview.js';
 import { createReconciler } from './modules/pa/reconcile.js';
 import reconRoutes from './modules/pa/recon-routes.js';
 import { connectBackfillQueue, type BackfillQueue } from './infra/redis/backfill.js';
+import { connectPaQueryStore, type PaQueryStore } from './infra/redis/pa-query.js';
+import paQueryRoutes from './modules/pa-query/routes.js';
+import { createPaQueryService } from './modules/pa-query/service.js';
 import { createHeatReader, type HeatReader } from './infra/clickhouse/heat.js';
 import { connectColdLock, type ColdLock } from './infra/redis/cold-lock.js';
 import { createColdFileClient } from './infra/clickhouse/archive.js';
 import { createColdSlice } from './modules/pa-heat/cold.js';
 import heatRoutes from './modules/pa-heat/routes.js';
 import { createHeatService, type ColdSlice } from './modules/pa-heat/service.js';
+import insightRoutes from './modules/pa-insight/routes.js';
+import { createInsightService } from './modules/pa-insight/service.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -86,6 +91,8 @@ export async function buildApp(
     backfillQueue?: BackfillQueue | null;
     /** 熱力圖與時段明細(V-a);測試注入假實作。冷資料(C4 前)沒有實作,冷路由回 409 */
     heat?: { reader?: HeatReader | null; cold?: ColdSlice | null; coldLock?: ColdLock | null; now?: () => number; syncMs?: number };
+    /** PA 精準查詢(C5);測試注入,null = 沒有 Redis */
+    paQuery?: { store?: PaQueryStore | null; now?: () => number };
   } = {},
 ): Promise<FastifyInstance> {
   const app = Fastify({
@@ -203,6 +210,9 @@ export async function buildApp(
   const backfillQueue = deps.backfillQueue !== undefined ? deps.backfillQueue : config.redisUrl ? connectBackfillQueue(config.redisUrl) : null;
   if (backfillQueue) app.addHook('onClose', async () => backfillQueue.close());
   await app.register(reconRoutes, { recon, queue: backfillQueue });
+  // PA 精準查詢(C5,D31):netops-api 只驗證與送出,PA-560 由 netops-pa 查(PA_QUERY_ENABLED)
+  const paQueryStore = deps.paQuery?.store !== undefined ? deps.paQuery.store : config.redisUrl ? connectPaQueryStore(config.redisUrl) : null;
+  await app.register(paQueryRoutes, { svc: createPaQueryService(paQueryStore, deps.paQuery?.now) });
   // 活動熱力圖、時段明細(V-a):只讀彙總表與 1 天內的原始表;更早的時段讀 NAS 冷歸檔(C4,NETOPS_ARCHIVE_ENABLED=1 才開放)
   const heatReader = deps.heat?.reader !== undefined ? deps.heat.reader : config.clickhouse ? createHeatReader(config.clickhouse) : null;
   const cold = deps.heat?.cold !== undefined ? deps.heat.cold : config.clickhouseCold ? createColdSlice(createColdFileClient(config.clickhouseCold), app.log) : null;
@@ -220,6 +230,8 @@ export async function buildApp(
     now: deps.heat?.now,
   });
   await app.register(heatRoutes, { svc: heatSvc, syncMs: deps.heat?.syncMs });
+  // 分析儀表板(V-b1):彙總表與威脅原始表,最長 90 天
+  await app.register(insightRoutes, { svc: createInsightService({ heat: heatReader, cache, recon, log: app.log, now: deps.heat?.now }) });
   await app.register(paEventRoutes, { events, ch });
   await app.register(adRoutes, { ad });
   await app.register(adFtpRoutes, { ad });

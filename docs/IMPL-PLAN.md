@@ -18,7 +18,7 @@
 | R2 | 封鎖 IP(DAG 動態標籤) | 未排程(D22) |
 | C0–C6 | PA log 高吞吐架構(ClickHouse + Parquet 冷歸檔 + PA 精準查詢) | **已核准(2026-11-10)**,C0 外部前置事項進行中;**C1 實測完成、MR 待合併**(D27–D33,[PA-LOG-CLICKHOUSE-GUIDE.md](PA-LOG-CLICKHOUSE-GUIDE.md)) |
 | V-a | 熱力圖資料層:長期彙總(5 分鐘 / 每小時 / 每天)、熱力圖 API、時段明細熱 / 冷路由 | **第 1–4、6 步實作完成、MR 待合併(`feature/viz-a-heatmap-data`)**;第 5 步冷路由在 C4 MR(`feature/clickhouse-c4-archive`)(D34、D35) |
-| V-b | 儀表板與熱力圖畫面:V-b1 Claude 元件介面與 API,V-b2 Gemini 頁面與動畫 | **規劃已合併(2026-11-11,!70)**;前置 V-a(D40、D41) |
+| V-b | 儀表板與熱力圖畫面:V-b1 Claude 元件介面與 API,V-b2 Gemini 頁面與動畫 | **V-b1 實作完成、MR 待合併(`feature/viz-b1-insight-frontend`,堆疊在 V-a 之後)**;V-b2(Gemini)可在 V-b1 合併後開工(HANDOFF-GEMINI-VIZ §2.1)(D40、D41) |
 | V-c | 偵測規則引擎:PA 規則 1–7、冷卻、白名單、網段設定頁、告警頁 | **規劃已合併(2026-11-11,!70)**;前置 C3;**需求方提供網段清單與初始白名單**(X11)(D37、D38、D39) |
 | V-d | AD:AD 事件進 ClickHouse、AD 指標與圖表、規則 8–9 | **延後**(V4,D36) |
 | ~~後續~~ | ~~服務寫入資料庫~~ | 取消(D20;PA log 改寫 ClickHouse 見 C0–C6,D27) |
@@ -258,6 +258,8 @@ D13:骨架直接留用;AI 不在這次範圍,不做串流驗證(D7、D17)。
 **狀態:程式完成,MR 待合併(2026-11-12,`feature/clickhouse-c4-archive`)**。`netops-ingest` 每天 02:30 起匯出前一天的 TRAFFIC 與威脅類 Parquet(本機暫存 → NAS `pa-archive/YYYY/`、SHA-256、ClickHouse 讀回列數核對、`.sha256`、manifest 表 `netops.pa_archive_manifest`,migration 004);失敗每小時重試到資料被 TTL 刪除前,D+25(測試區 D+2)心跳 `archiveState=late`;歸檔後來源列數變了(補漏、去重)自動重新歸檔;保留期限 `NETOPS_ARCHIVE_KEEP_DAYS`(測試區 14 天;正式區 0 = 不刪或至少 366)。冷查詢:V-a 時段明細冷路由(`netops_cold`、`file()`、最多 1 天、30 秒同步否則工作、全系統 1 個、缺歸檔 404)。測試區用現有 `docker-folder`(剩約 18 GB);**需求方步驟**:執行 `deploy/host2-setup-pa-archive.sh` 建目錄與標記檔。正式區要等 E2(NAS 空間),之前 `NETOPS_ARCHIVE_ENABLED=0`。完成條件(連續 7 天、7 天前可查、拔 NAS)在測試區觀察後補報告。
 
 ## C5 PA 精準查詢(已核准)
+
+**狀態:實作完成、MR 待合併(`feature/c5-pa-precise-query`)**;測試區預設關閉,合併後由主討論串安排小範圍實測(單一 IP、15 分鐘、看管理平面 CPU)。熱力圖 / 儀表板的「查詢即時連線」按鈕等 V-b1(!78)合併後再接(`useLivePaQuery` 改用 `usePaQuery`)。
 
 1. `netops-pa` 查詢執行者(視窗 ≤ 15 分鐘、`nlogs` ≤ 500、逾時 60 秒、全域鎖;送出前管理平面 CPU > 50% 不送,E4 結果)。
 2. `netops-api` 送出 / 結果 API(冷卻、429)、權限 `netops.pa-query.read`、按鈕節點 `netops.pa-live.query`,**只給 `netops-admin`**(CQ7);即時監控頁加按鈕;Session Browser。

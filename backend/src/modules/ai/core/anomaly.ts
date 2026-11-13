@@ -121,7 +121,9 @@ export function pickHeatAnomalies(d: HeatmapForAi): { stats: HeatStats; anomalie
   const groups = new Map<string, number[]>();
   for (const c of has) {
     const k = groupOf(c.t, d.granularity);
-    groups.set(k, [...(groups.get(k) ?? []), c.v]);
+    const g = groups.get(k);
+    if (g) g.push(c.v);
+    else groups.set(k, [c.v]);
   }
   const grouped = d.granularity !== 'day' && [...groups.values()].every((g) => g.length >= MIN_GROUP);
   const baseOf = new Map<string, { med: number; scale: number }>();

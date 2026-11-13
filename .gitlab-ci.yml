@@ -82,6 +82,8 @@ check:ingest-int:
       "$CH_IMAGE" >/dev/null
     - docker run -d --name "$N-redis" --network "$N-net" -p 127.0.0.1::6379 redis:7.4-alpine >/dev/null
     - for i in $(seq 1 60); do docker exec "$N-ch" wget -qO- http://127.0.0.1:8123/ping >/dev/null 2>&1 && break; sleep 1; done
+    # 升級測試:V-a 前的舊 schema → apply-schema.sh 要成功(2026-11-12 測試區部署失敗的情況);結束時刪掉資料庫
+    - sh deploy/clickhouse/test-upgrade.sh "$N-ch" 2>&1 | tee -a "$L"; test "$(tail -n 1 "$L" | cut -c1-4)" = "OK  "
     - sh deploy/clickhouse/apply-schema.sh test "$N-ch" 2>&1 | tee -a "$L"
     # migrations 可重複執行
     - sh deploy/clickhouse/apply-schema.sh test "$N-ch" >/dev/null

@@ -2,6 +2,13 @@
 
 > `backend/`、`deploy/` 的修改;新紀錄加在最上方,格式見 `AGENT.md` §11。
 
+## 2026-11-13 ClickHouse 建表:舊表也能升級(測試區部署失敗修正)
+- 工作項目:V-a、C1(`BugFix.md` 同日紀錄)
+- 內容:① `deploy/clickhouse/schema.sql`:`pa_traffic_hourly_src_mv` 之前先 `ALTER TABLE netops.pa_traffic_hourly_src ADD COLUMN IF NOT EXISTS bytes_sent / bytes_recv`;檔頭補規則「MV 用到 migration 才加的欄位,MV 之前要先補欄位」。其他 MV 檢查過:`pa_traffic_hourly_app_mv` 沒用到新欄位;熱力圖 6 個 MV 的目標表是 V-a 新表、來源欄位(`pa_traffic_logs.bytes_sent / bytes_recv`、`pa_threat_logs.severity / log_type / src`)C1 起就有;`migrations/001`(threat 欄位)沒有 MV 依賴;`002` 只改設定。② `deploy/clickhouse/test-upgrade.sh` 與 `upgrade-test/before-va.sql`(V-a 合併前 e0a8e79 的 schema + 001、002):套舊版 → 寫一列 → `apply-schema.sh` 兩次 → 檢查欄位、8 個 MV、003 的新查詢、升級後的寫入有進來源彙總與 3 個熱力圖表 → 刪資料庫;只能對 `netops-int-*` 容器執行。③ `.gitlab-ci.yml` `check:ingest-int` 在原本的空資料庫建表之前跑升級測試。
+- 資料影響(主機 2 唯讀查詢,2026-11-13):測試區沒有 `pa_heat_5m / 1h / 1d` 與 6 個熱力圖 MV;`pa_traffic_hourly_src` 沒有上傳 / 下載欄位,MV 仍是舊查詢(sessions、bytes 有在寫);原始 TRAFFIC 從 2026-11-11 08:36 起。合併部署後用 `rebuild-day.sh` 回填(需求方同意後執行),步驟見 MR。
+- 檔案:`deploy/clickhouse/{schema.sql,test-upgrade.sh,upgrade-test/before-va.sql}`、`.gitlab-ci.yml`
+- 驗證:`sh -n`、CI `check:ingest-int`(本機沒有 ClickHouse)
+
 ## 2026-11-12 C5 PA 精準查詢
 - 工作項目:C5(PA-LOG-CLICKHOUSE-GUIDE §9;D31、CQ6、CQ7;E4:15 分鐘、500 筆、60 秒、一次一個、管理平面 CPU > 50% 不送)
 - 內容:① `pa-collector/netops_pa/pa_query.py`:查詢執行者(`PA_QUERY_ENABLED`,預設關閉)。從 Redis 取工作、確認名額、參數再驗、送出前取樣管理平面 CPU、XML API `type=log`(每 2 秒起逐次加到 5 秒輪詢,60 秒逾時送 `action=finish`)或 Session Browser(`show session all filter`)、結果寫回 Redis、釋放名額、設全域間隔。自寫最小 XML API 用戶端:API Key 放 `X-PAN-KEY` 標頭(pan-python 的 `log()` 逾時不取消 PA 上的工作)。只送唯讀請求(D22)。② `config.py` 加 `QueryConfig`(`PA_QUERY_MAX_MGMT_CPU` 上限 50,實測前不放寬);`keys.py` 加 `netops:paq:*`;`__main__.py` 啟動執行者、心跳 `queryEnabled`。③ `backend/src/infra/redis/pa-query.ts`(名額 SET NX、冷卻、建立工作失敗時歸還)、`modules/pa-query/`(送出 / 狀態 / 結果 API,429 帶 `Retry-After`)、`openapi.ts` 權限 `netops.pa-query.read`。④ `deploy/gateway-rbac.yaml` 按鈕 `netops.pa-live.query`(只加進 netops-admin);`docker-compose.yml` 傳 `PA_QUERY_ENABLED`、`PA_QUERY_MAX_MGMT_CPU`;`host2-set-pa-secrets.sh` 補 `PA_QUERY_ENABLED=0`

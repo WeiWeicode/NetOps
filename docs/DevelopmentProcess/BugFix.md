@@ -2,6 +2,11 @@
 
 > Bug 修改;新紀錄加在最上方,格式見 `AGENT.md` §11。
 
+## 2026-11-13 測試區部署從 V-a 起卡在 ClickHouse 建表(熱力圖表沒建立)
+- 工作項目:V-a、C1(develop pipeline 884、889、890、910 失敗)
+- 內容:`deploy/clickhouse/apply-schema.sh` 先跑 `schema.sql` 再跑 `migrations/`。V-a 在 `schema.sql` 的 `pa_traffic_hourly_src_mv` 加了 `bytes_sent`、`bytes_recv`,這兩欄要等 `migrations/003` 才會加到既有的 `pa_traffic_hourly_src`;ClickHouse 26.3 即使 MV 已存在,`CREATE MATERIALIZED VIEW IF NOT EXISTS` 也會先檢查輸出欄位,所以失敗(`THERE_IS_NO_COLUMN`),003 與後面的熱力圖表 / MV 都沒有建立。CI 的整合測試只從空資料庫建表,所以沒抓到。修正:`schema.sql` 在這個 MV 之前先 `ADD COLUMN IF NOT EXISTS`(和 003 相同,可重複執行),檔頭寫明規則;CI 加升級測試(V-a 前的 schema → `apply-schema.sh`)。修正內容見 `BackendCorrection.md` 同日紀錄。
+- 檔案:同上
+
 ## 2026-11-10 即時監控排行切換與 log 暫停鈕沒有渲染等驗收問題
 - 工作項目:R1(驗收報告 `docs/test-reports/2026-11-10-pa-live-uat.md` §4.1、§4.4、§7)
 - 內容:`Live.vue` 對 `GCard` 用了不存在的 `#extra` 插槽(只有 `header` / `actions` / `footer`),排行的類型與 5 / 15 / 60 分鐘切換、即時 log 的暫停鈕都沒有渲染,Vue 不會報錯,原有單元測試只測純函式也沒抓到;改 `#actions`,並補掛載測試與全前端插槽名稱檢查(沒有找到其他用錯的地方)。另修:輪詢暫停時介面流量仍顯示最後一輪的值;URL 過濾 log 的「名稱」欄顯示 `9999(9999)`;串流重連遇 401 不會換發 Token。修正內容見 `FrontendCorrection.md` 同日紀錄。

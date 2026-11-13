@@ -53,11 +53,12 @@ function fakeRows(body: Record<string, string>) {
       elapsed: i % 30,
       endReason: action === 'allow' ? 'tcp-fin' : 'policy-deny',
       category: 'any',
-      srcCountry: '10.0.0.0-10.255.255.255',
-      dstCountry: body.country || 'United States',
+      srcCountry: body.srcCountry || '10.0.0.0-10.255.255.255',
+      dstCountry: body.dstCountry || body.country || 'United States',
       appRisk: 4,
-      threat: '',
-      severity: '',
+      // type=THREAT:威脅名稱、嚴重度(C7 第二輪)
+      threat: body.type === 'THREAT' ? body.threat || ['SMB Brute Force(40004)', 'Port Scan(8001)'][i % 2]! : '',
+      severity: body.type === 'THREAT' ? body.severity || ['high', 'medium', 'critical'][i % 3]! : '',
       url: '',
     };
   });
@@ -81,6 +82,7 @@ function view(s: Search) {
       s.status === 'done'
         ? {
             source: 'clickhouse',
+            type: s.body.type === 'THREAT' ? 'THREAT' : 'TRAFFIC',
             from: s.body.from,
             to: s.body.to,
             total: s.rows.length,

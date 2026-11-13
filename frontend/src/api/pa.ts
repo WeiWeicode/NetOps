@@ -80,7 +80,8 @@ export interface PaOptions {
 /** 期間最長 31 天 */
 export const PA_SEARCH_MAX_DAYS = 30;
 
-export const PA_SEARCH_KEYS = ['src', 'dst', 'ip', 'port', 'proto', 'app', 'rule', 'action', 'fromZone', 'toZone', 'user', 'country', 'q'] as const;
+/** 查詢條件(type:TRAFFIC 預設、THREAT 查威脅 log;threat、severity 只有 THREAT;country 任一方、srcCountry / dstCountry 分方向) */
+export const PA_SEARCH_KEYS = ['type', 'src', 'dst', 'ip', 'port', 'proto', 'app', 'rule', 'action', 'fromZone', 'toZone', 'user', 'country', 'srcCountry', 'dstCountry', 'threat', 'severity', 'q'] as const;
 export type PaSearchKey = (typeof PA_SEARCH_KEYS)[number];
 
 /** 送出的查詢:from / to 為 ISO 8601 含時區,其他條件選填 */
@@ -90,6 +91,8 @@ export type PaSearchBody = { from: string; to: string; limit?: number; source?: 
 export interface PaSearchResult {
   /** C3 D43:固定 clickhouse */
   source: 'clickhouse';
+  /** 查的是 TRAFFIC 或威脅 log(舊的工作沒有此欄,視為 TRAFFIC) */
+  type?: 'TRAFFIC' | 'THREAT';
   /** ClickHouse 有資料的範圍;partial = 期間有一部分在範圍之前(超過保留期限的部分沒有資料) */
   coverage?: Coverage;
   partial?: boolean;

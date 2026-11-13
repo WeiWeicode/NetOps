@@ -2,7 +2,7 @@
  * 假 ClickHouse 唯讀查詢(C3):記憶體中的 TRAFFIC 與威脅類紀錄(核心紀錄格式),實作 infra/clickhouse/reader 的介面
  */
 import { ClickHouseError } from '../../src/infra/clickhouse/index.js';
-import type { ChEventType, ClickHouseReader, LogRecord } from '../../src/infra/clickhouse/reader.js';
+import type { ChEventType, ClickHouseReader, LogRecord, TrafficFilter } from '../../src/infra/clickhouse/reader.js';
 import { buildFilter } from '../../src/modules/pa/core/palog.js';
 
 const ms = (t: string) => Date.parse(`${t.slice(0, 10).replace(/\//g, '-')}T${t.slice(11, 19)}+08:00`);
@@ -104,13 +104,21 @@ export function createFakeReader(traffic: LogRecord[] = [], threats: { type: ChE
     },
     async searchTraffic(q, limit) {
       check('searchTraffic');
-      // 條件語意用核心 buildFilter(FTP 版);時間另外比
-      const { fromMs, toMs, ...rest } = q;
-      const filter = buildFilter(rest) as (r: LogRecord, raw: string) => boolean;
-      const hit = f.traffic
-        .filter((r) => ms(String(r.time)) >= fromMs && ms(String(r.time)) < toMs && filter(r, Object.values(r).join(',')))
-        .sort((a, b) => String(a.time).localeCompare(String(b.time)));
-      return { rows: hit.slice(0, limit).map((r) => ({ ...r })), more: hit.length > limit, scanned: f.traffic.length };
+      return search(f.traffic, q, limit, f.traffic.length);
+    },
+    async searchThreat(q, limit) {
+      check('searchThreat');
+      const { severity, threat, ...rest } = q;
+      const sev = severity === 'info' ? 'informational' : severity;
+      const recs = f.threats
+        .filter((x) => x.type === 'threat')
+        .map((x) => x.rec)
+        .filter((r) => (!sev || r.severity === sev) && (!threat || String(r.name).toLowerCase().includes(threat.toLowerCase())));
+      return search(recs, rest, limit, f.threats.length);
+    },
+    async threatCount(from, to) {
+      check('threatCount');
+      return f.threats.filter((x) => x.type === 'threat' && ms(String(x.rec.time)) >= from && ms(String(x.rec.time)) < to).length;
     },
     async trafficCount(from, to) {
       check('trafficCount');
@@ -124,6 +132,16 @@ export function createFakeReader(traffic: LogRecord[] = [], threats: { type: ChE
       return n;
     },
   };
+  /** 條件語意用核心 buildFilter(FTP 版);時間與來源 / 目的國家另外比 */
+  function search(recs: LogRecord[], q: TrafficFilter, limit: number, scanned: number) {
+    const { fromMs, toMs, srcCountry, dstCountry, ...rest } = q;
+    const filter = buildFilter(rest) as (r: LogRecord, raw: string) => boolean;
+    const has = (v: unknown, x?: string) => !x || String(v).toLowerCase().includes(x.toLowerCase());
+    const hit = recs
+      .filter((r) => ms(String(r.time)) >= fromMs && ms(String(r.time)) < toMs && has(r.srcCountry, srcCountry) && has(r.dstCountry, dstCountry) && filter(r, Object.values(r).join(',')))
+      .sort((a, b) => String(a.time).localeCompare(String(b.time)));
+    return { rows: hit.slice(0, limit).map((r) => ({ ...r })), more: hit.length > limit, scanned };
+  }
   function check(name: string) {
     f.calls.push(name);
     if (f.failing) throw new ClickHouseError('ClickHouse 連線失敗:ECONNREFUSED', undefined, undefined);

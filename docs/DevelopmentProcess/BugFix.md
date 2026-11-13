@@ -2,6 +2,15 @@
 
 > Bug 修改;新紀錄加在最上方,格式見 `AGENT.md` §11。
 
+## 2026-11-13 V-b2 C7 重驗不通過:Top 10 來源 IP 帶成任一方 IP、Log 明細頁的未套用提示消失、時段明細逾時卡住
+
+- 內容:
+  - 抽屜點來源 / 目的 IP(Top 10 與明細表)原本帶 `ip=`(任一方),改為 `src=` / `dst=`(`SearchExtra.filterSrc` / `filterDst`)。
+  - Log 明細查詢頁收到 `type=THREAT`、`threat`、`severity` 時的「未套用」提示原本跟著網址算,自動查詢 `router.replace` 改寫網址後提示馬上消失;改成進頁時算一次。Log 明細查詢(前端與後端 `POST /pa/log-searches`)只查 TRAFFIC,不支援威脅類與嚴重度,真正帶入要另開工作由需求方決定。
+  - `useSlice` 第一個請求沒有用戶端逾時,網路逾時時抽屜停在「查詢時段明細中…」直到瀏覽器放棄;改成 45 秒中止 → `state = 'error'`(`SliceTimeoutError`),新增 `retryable`,換條件或關閉時中止舊請求。
+- 檔案:`frontend/src/composables/useSlice.ts`、`frontend/src/api/slice.ts`、`frontend/src/components/SliceDrawer.vue`、`frontend/src/composables/searchQuery.ts`、`frontend/src/pages/firewall/Search.vue`
+- 驗證:frontend `npm run typecheck`、`npm test`(見 MR)
+
 ## 2026-11-13 V-b2 第一輪驗收:熱力圖未彙總時段畫成 0、嚴重度篩選與跳 Log 條件(C1、C3–C5、C7–C9)
 - 工作項目:V-a、V-b1(`docs/HANDOFF.md`「2026-11-13 V-b2 畫面驗收(第一輪)」;Gemini 畫面修正 U1–U10 commit `ba410a4` 一起進 MR)
 - 內容:C1 熱力圖 11-13 00:00–08:30(彙總上線前)回 `v=0`、`gaps=[]`,違反「沒有資料不等於 0」:彙總表沒有該格一律 `v=null`,並把 `since` 之後的連續缺格列進 `coverage.gaps`(`reason: no-data`)。C3 威脅類時段明細總流量顯示 0 B:`useSlice.summary` 把威脅類的流量欄位轉成 `null`,抽屜顯示「不適用」。C4 嚴重度 chip 只做前端過濾:`useSlice.setSeverity()` 帶 `severity` 重查(後端早已支援)。C5 移除 AD 異常指標。C7 `openInSearch(extra?)` 帶點選的項目與威脅類條件。C8 mock 威脅明細補 `severity`、`name`。C9 `viz.mount.test.ts` 4 項舊規格改新規格。前後端細節見 `BackendCorrection.md`、`FrontendCorrection.md` 同日紀錄。

@@ -32,6 +32,8 @@ import GWorldMap from '@/ui/charts/GWorldMap.vue';
 import GDrawer from '@/ui/components/GDrawer.vue';
 import GSourceBadge from '@/ui/components/GSourceBadge.vue';
 import { heatmapResponse, sliceResult, threatInsight, trafficInsight } from '../mock/fixtures/viz';
+/** slice.get 的第二個參數(逾時與換條件時中止用) */
+const SIG = { signal: expect.any(AbortSignal) };
 
 const NOW = Date.parse('2026-11-11T10:07:30+08:00');
 
@@ -265,7 +267,7 @@ describe('GHeatmap 熱力圖元件', () => {
 });
 
 describe('GSourceBadge 與 GDrawer / SliceDrawer', () => {
-  it('SliceDrawer 威脅類:總流量「不適用」、嚴重度 chip 重查(C3 / C4)、點 Top 10 與 IP 帶項目開 Log 明細查詢(C7)', async () => {
+  it('SliceDrawer:流量類沒有嚴重度 chip;威脅類總流量「不適用」、嚴重度 chip 重查(C3 / C4)、點 Top 10 與 IP 帶項目開 Log 明細查詢(C7)', async () => {
     const q = { start: '2026-11-11T08:00:00+08:00', end: '2026-11-11T09:00:00+08:00' };
     mocks.sliceGet.mockImplementation(async (x: { type?: 'traffic' | 'threat'; severity?: 'high' }) => ({ kind: 'result', result: sliceResult({ ...q, type: x.type, severity: x.severity }) }));
     const s = useSlice({ now: () => NOW, pollMs: 1000 });
@@ -277,11 +279,15 @@ describe('GSourceBadge 與 GDrawer / SliceDrawer', () => {
     await s.open({ ...q, type: 'traffic', ip: '10.10.112.20' });
     await flushPromises();
     expect(w.find('.slice-drawer__kpis').text()).not.toContain('不適用');
+    // 流量類不顯示嚴重度 chip(需求方 2026-11-13 決定)
+    expect(w.find('.slice-sev.is-interactive').exists()).toBe(false);
 
-    // 點「高」→ 切成威脅類、只留 IP 條件重查;總流量顯示「不適用」(不是 0 B)
+    // 威脅類:點「高」→ 加上嚴重度重查;總流量顯示「不適用」(不是 0 B)
+    await s.open({ ...q, type: 'threat', ip: '10.10.112.20' });
+    await flushPromises();
     await w.findAll('.slice-sev.is-interactive').find((b) => b.text().includes('高'))!.trigger('click');
     await flushPromises();
-    expect(mocks.sliceGet).toHaveBeenLastCalledWith({ ...q, type: 'threat', severity: 'high', ip: '10.10.112.20' });
+    expect(mocks.sliceGet).toHaveBeenLastCalledWith({ ...q, type: 'threat', ip: '10.10.112.20', severity: 'high' }, SIG);
     expect(w.find('.slice-drawer__kpis').text()).toContain('不適用');
     expect(w.find('.slice-drawer__kpis').text()).not.toContain('0 B');
     expect(w.find('.slice-sev.is-active').text()).toContain('高');
@@ -290,17 +296,17 @@ describe('GSourceBadge 與 GDrawer / SliceDrawer', () => {
     expect(w.find('tbody').text()).toContain('SMB Brute Force');
     expect(w.find('tbody').text()).not.toContain('critical');
 
-    // Top 10 威脅名稱 → filterThreat;明細來源 IP → filterIp
+    // Top 10 威脅名稱 → filterThreat;明細來源 IP → filterSrc(C7 第二輪:來源 IP 對應來源欄位)
     await w.findAll('.slice-drawer__top-tab').find((b) => b.text() === '威脅名稱')!.trigger('click');
     await w.find('.g-barlist button').trigger('click');
     expect(openInSearch).toHaveBeenLastCalledWith({ filterThreat: 'SMB Brute Force(40004)' });
     await w.find('.slice-ip-btn').trigger('click');
-    expect(openInSearch).toHaveBeenLastCalledWith({ filterIp: expect.any(String) });
+    expect(openInSearch).toHaveBeenLastCalledWith({ filterSrc: expect.any(String) });
 
-    // 清除篩選 → 回到原本的流量類條件
+    // 清除篩選 → 拿掉嚴重度
     await w.find('.slice-sev__clear').trigger('click');
     await flushPromises();
-    expect(mocks.sliceGet).toHaveBeenLastCalledWith({ ...q, type: 'traffic', ip: '10.10.112.20' });
+    expect(mocks.sliceGet).toHaveBeenLastCalledWith({ ...q, type: 'threat', ip: '10.10.112.20' }, SIG);
     expect(w.find('.slice-sev.is-active').exists()).toBe(false);
     mocks.sliceGet.mockReset();
     w.unmount();

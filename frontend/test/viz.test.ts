@@ -11,9 +11,11 @@ import type { SliceJob, SliceResult } from '@/api/slice';
 import { toSliceQuery } from '@/composables/useChartPick';
 import { useHeatmap } from '@/composables/useHeatmap';
 import { useInsight } from '@/composables/useInsight';
-import { useSlice } from '@/composables/useSlice';
+import { searchExtraOf, SliceTimeoutError, topLabelOf, useSlice } from '@/composables/useSlice';
 import { formatRange } from '@/composables/vizTime';
 import { heatmapResponse, sliceResult, threatInsight, trafficInsight } from '../mock/fixtures/viz';
+/** slice.get 的第二個參數(逾時與換條件時中止用) */
+const SIG = { signal: expect.any(AbortSignal) };
 
 const mocks = vi.hoisted(() => ({
   heatmapGet: vi.fn(),
@@ -127,9 +129,9 @@ describe('useHeatmap', () => {
 
 describe('useSlice', () => {
   const q = { start: '2026-11-11T08:00:00+08:00', end: '2026-11-11T09:00:00+08:00' };
-  const setup = () => {
+  const setup = (opts: { timeoutMs?: number } = {}) => {
     const scope = effectScope();
-    const s = scope.run(() => useSlice({ now: () => NOW, pollMs: 1000 }))!;
+    const s = scope.run(() => useSlice({ now: () => NOW, pollMs: 1000, ...opts }))!;
     return { s, scope };
   };
   const result = sliceResult({ ...q }) as unknown as SliceResult;
@@ -222,6 +224,98 @@ describe('useSlice', () => {
     });
   });
 
+  it('C7 第二輪:來源 IP → src、目的 IP → dst(只取代同方向條件),威脅類仍帶 type / severity', async () => {
+    mocks.sliceGet.mockResolvedValue({ kind: 'result', result });
+    const { s } = setup();
+    await s.open({ ...q, ip: '10.0.0.1', src: '10.0.0.2', dst: '8.8.8.8' });
+    expect(s.searchTarget({ filterSrc: '10.10.115.35' })).toEqual({
+      path: '/firewall/search',
+      query: { from: '2026-11-11T08:00', to: '2026-11-11T08:59', ip: '10.0.0.1', src: '10.10.115.35', dst: '8.8.8.8' },
+    });
+    expect(s.searchTarget({ filterDst: '1.1.1.1' })).toEqual({
+      path: '/firewall/search',
+      query: { from: '2026-11-11T08:00', to: '2026-11-11T08:59', ip: '10.0.0.1', src: '10.0.0.2', dst: '1.1.1.1' },
+    });
+    await s.open({ ...q, type: 'threat', severity: 'high' });
+    expect(s.searchTarget({ filterSrc: '10.10.115.35' })).toEqual({
+      path: '/firewall/search',
+      query: { from: '2026-11-11T08:00', to: '2026-11-11T08:59', type: 'THREAT', severity: 'high', src: '10.10.115.35' },
+    });
+  });
+
+  it('逾時:超過 timeoutMs 中止請求 → error(SliceTimeoutError)、retryable,retry 後恢復', async () => {
+    vi.useFakeTimers();
+    try {
+      let seen: AbortSignal | undefined;
+      mocks.sliceGet.mockImplementationOnce(
+        (_q: unknown, o: { signal: AbortSignal }) =>
+          new Promise((_r, reject) => {
+            seen = o.signal;
+            o.signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+          }),
+      );
+      const { s } = setup({ timeoutMs: 1000 });
+      const p = s.open(q);
+      await vi.advanceTimersByTimeAsync(999);
+      expect(s.state.value).toBe('loading');
+      await vi.advanceTimersByTimeAsync(1);
+      await p;
+      expect(seen?.aborted).toBe(true);
+      expect(s.state.value).toBe('error');
+      expect(s.error.value).toBeInstanceOf(SliceTimeoutError);
+      expect(s.retryable.value).toBe(true);
+      mocks.sliceGet.mockResolvedValueOnce({ kind: 'result', result });
+      await s.retry();
+      expect(s.state.value).toBe('done');
+      expect(s.retryable.value).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('網路錯誤(TypeError)與 5xx 可重試;409 中性提示不可重試;換條件會中止舊請求', async () => {
+    const { s } = setup();
+    mocks.sliceGet.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    await s.open(q);
+    expect(s.state.value).toBe('error');
+    expect(s.retryable.value).toBe(true);
+    mocks.sliceGet.mockRejectedValueOnce(new ApiError(502, 'BAD_GATEWAY', 'x', null));
+    await s.open(q);
+    expect(s.retryable.value).toBe(true);
+    mocks.sliceGet.mockRejectedValueOnce(new ApiError(409, 'NETOPS_COLD_ARCHIVE_DISABLED', 'x', null));
+    await s.open(q);
+    expect(s.state.value).toBe('error');
+    expect(s.retryable.value).toBe(false);
+
+    let first: AbortSignal | undefined;
+    mocks.sliceGet.mockImplementationOnce((_q: unknown, o: { signal: AbortSignal }) => ((first = o.signal), new Promise(() => undefined)));
+    const p1 = s.open(q);
+    await vi.waitFor(() => expect(first).toBeDefined());
+    mocks.sliceGet.mockResolvedValueOnce({ kind: 'result', result });
+    await s.open({ ...q, ip: '10.0.0.1' });
+    expect(first?.aborted).toBe(true);
+    expect(s.state.value).toBe('done');
+    void p1;
+
+    // 同一個條件物件重跑(retry):被中止的舊請求不可寫入錯誤
+    let old: AbortSignal | undefined;
+    mocks.sliceGet.mockImplementationOnce(
+      (_q: unknown, o: { signal: AbortSignal }) =>
+        new Promise((_r, reject) => {
+          old = o.signal;
+          o.signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+        }),
+    );
+    const p2 = s.open(q);
+    await vi.waitFor(() => expect(old).toBeDefined());
+    mocks.sliceGet.mockResolvedValueOnce({ kind: 'result', result });
+    await s.retry();
+    await p2;
+    expect(old?.aborted).toBe(true);
+    expect(s.state.value).toBe('done');
+    expect(s.error.value).toBeNull();
+  });
+
   it('C3:威脅類的流量摘要為 null(不適用),流量類照實', async () => {
     const threat = sliceResult({ ...q, type: 'threat' }) as unknown as SliceResult;
     mocks.sliceGet.mockResolvedValueOnce({ kind: 'result', result: threat });
@@ -233,33 +327,61 @@ describe('useSlice', () => {
     expect(s.summary.value?.bytes).toBe(result.summary.bytes);
   });
 
-  it('C4:setSeverity 重查;流量類切成威脅類只留 IP 條件,取消回到原條件', async () => {
+  it('C4:只有威脅類可用嚴重度(supportsSeverity);setSeverity 加上 / 拿掉 severity,流量類不動作', async () => {
     mocks.sliceGet.mockResolvedValue({ kind: 'result', result });
     const { s } = setup();
-    const base = { ...q, type: 'traffic' as const, ip: '10.0.0.1', app: 'ssl', action: 'block' as const, sort: 'bytes' as const };
-    await s.open(base);
+    const traffic = { ...q, type: 'traffic' as const, ip: '10.0.0.1', app: 'ssl' };
+    await s.open(traffic);
+    expect(s.supportsSeverity.value).toBe(false);
+    const n0 = mocks.sliceGet.mock.calls.length;
     await s.setSeverity('high');
-    expect(mocks.sliceGet).toHaveBeenLastCalledWith({ ...q, type: 'threat', severity: 'high', ip: '10.0.0.1' });
-    await s.setSeverity('critical');
-    expect(mocks.sliceGet).toHaveBeenLastCalledWith({ ...q, type: 'threat', severity: 'critical', ip: '10.0.0.1' });
+    expect(mocks.sliceGet.mock.calls.length).toBe(n0);
+    expect(s.query.value).toEqual(traffic);
+    // 威脅類:保留全部條件只加 severity
+    await s.open({ ...q, type: 'threat', country: 'China' });
+    expect(s.supportsSeverity.value).toBe(true);
+    await s.setSeverity('low');
+    expect(mocks.sliceGet).toHaveBeenLastCalledWith({ ...q, type: 'threat', country: 'China', severity: 'low' }, SIG);
     // 同一個嚴重度不重查
     const n = mocks.sliceGet.mock.calls.length;
-    await s.setSeverity('critical');
+    await s.setSeverity('low');
     expect(mocks.sliceGet.mock.calls.length).toBe(n);
     await s.setSeverity(null);
-    expect(mocks.sliceGet).toHaveBeenLastCalledWith(base);
-    expect(s.query.value).toEqual(base);
-    // 威脅類:保留全部條件只加 severity;open 新條件後取消不會回到舊條件
-    await s.open({ ...q, type: 'threat', country: 'China' });
-    await s.setSeverity('low');
-    expect(mocks.sliceGet).toHaveBeenLastCalledWith({ ...q, type: 'threat', country: 'China', severity: 'low' });
-    await s.setSeverity(null);
-    expect(mocks.sliceGet).toHaveBeenLastCalledWith({ ...q, type: 'threat', country: 'China' });
+    expect(mocks.sliceGet).toHaveBeenLastCalledWith({ ...q, type: 'threat', country: 'China' }, SIG);
     // 連點同一個 chip(第一次還在取消舊工作時就再點):第二次是取消,不會被吞掉
     const first = s.setSeverity('medium');
     const second = s.setSeverity(null);
     await Promise.all([first, second]);
     expect(s.query.value).toEqual({ ...q, type: 'threat', country: 'China' });
+  });
+
+  it('C7 第二輪:searchExtraOf 點選對應(來源 / 目的 IP、國家分方向、私有網段改帶 CIDR)、topLabelOf', () => {
+    expect(searchExtraOf('src', '10.10.115.35')).toEqual({ filterSrc: '10.10.115.35' });
+    expect(searchExtraOf('dst', '約 8.8.8.8')).toEqual({ filterDst: '8.8.8.8' });
+    expect(searchExtraOf('srcCountry', 'China')).toEqual({ filterSrcCountry: 'China' });
+    expect(searchExtraOf('dstCountry', 'Japan')).toEqual({ filterDstCountry: 'Japan' });
+    expect(searchExtraOf('srcCountry', '10.0.0.0-10.255.255.255')).toEqual({ filterSrc: '10.0.0.0/8' });
+    expect(searchExtraOf('dstCountry', '172.16.0.0-172.31.255.255')).toEqual({ filterDst: '172.16.0.0/12' });
+    // 不是單一 CIDR 的範圍:不可點
+    expect(searchExtraOf('srcCountry', '10.0.0.1-10.0.0.3')).toBeNull();
+    expect(searchExtraOf('app', 'ssl')).toEqual({ filterApp: 'ssl' });
+    expect(searchExtraOf('dport', '443')).toEqual({ filterPort: '443' });
+    expect(searchExtraOf('name', 'X(1)')).toEqual({ filterThreat: 'X(1)' });
+    expect(searchExtraOf('src', '—')).toBeNull();
+    expect(searchExtraOf('unknown', 'x')).toBeNull();
+    expect(topLabelOf('srcCountry', '192.168.0.0-192.168.255.255')).toBe('內部網路 192.168.0.0/16');
+    expect(topLabelOf('srcCountry', 'China')).toBe('China');
+    expect(topLabelOf('src', '10.0.0.0-10.255.255.255')).toBe('10.0.0.0-10.255.255.255');
+  });
+
+  it('C7 第二輪:威脅類 searchTarget 帶 type / threat / severity 與分方向國家', async () => {
+    mocks.sliceGet.mockResolvedValue({ kind: 'result', result });
+    const { s } = setup();
+    await s.open({ ...q, type: 'threat', severity: 'high', threatName: 'X(1)' });
+    expect(s.searchTarget({ filterSrcCountry: 'China', filterDstCountry: 'Japan' })).toEqual({
+      path: '/firewall/search',
+      query: { from: '2026-11-11T08:00', to: '2026-11-11T08:59', type: 'THREAT', threat: 'X(1)', severity: 'high', srcCountry: 'China', dstCountry: 'Japan' },
+    });
   });
 });
 

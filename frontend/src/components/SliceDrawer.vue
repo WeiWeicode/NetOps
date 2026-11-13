@@ -15,7 +15,8 @@ import { ApiError, describeError } from '@/api/gateway';
 import type { HeatCell } from '@/api/heatmap';
 import type { SliceSeverity, SliceTopItem } from '@/api/slice';
 import { useLivePaQuery } from '@/composables/useLivePaQuery';
-import type { SearchExtra, useSlice } from '@/composables/useSlice';
+import { searchExtraOf, topLabelOf, type useSlice } from '@/composables/useSlice';
+import type { GBarListItem } from '@/ui/charts/GBarList.vue';
 import { formatRange } from '@/composables/vizTime';
 import type { Column } from '@/ui/components/GTable.vue';
 
@@ -154,7 +155,9 @@ const activeTopItems = computed(() => {
   const list: SliceTopItem[] = r.top[activeTopKey.value] ?? [];
   const isTraffic = r.type === 'traffic';
   return list.slice(0, 10).map((item) => ({
-    label: item.key,
+    // C7b:國家欄位是私有 / 保留網段時顯示「內部網路 …」;點選用原始值(key)
+    label: topLabelOf(activeTopKey.value, item.key),
+    key: item.key,
     value: isTraffic ? (item.bytes ?? item.sessions ?? 0) : (item.count ?? 0),
     hint: isTraffic
       ? `${fmtSize(item.bytes ?? 0)} · ${fmtNum(item.sessions ?? 0)} 次`
@@ -164,18 +167,13 @@ const activeTopItems = computed(() => {
   }));
 });
 
-/** U5 / C7:點選 Top 10 項目或明細表 IP,以該項目開啟 Log 明細查詢 */
+/** U5 / C7:點選 Top 10 項目或明細表 IP,以該項目開啟 Log 明細查詢(條件對應見 useSlice.searchExtraOf) */
 function openItemInSearch(dimKey: string, rawVal: string) {
-  const val = rawVal.replace(/^約\s+/, '').trim();
-  if (!val || val === '—') return;
-  const extra: SearchExtra = {};
-  if (dimKey === 'src' || dimKey === 'dst' || dimKey === 'ip') extra.filterIp = val;
-  else if (dimKey === 'srcCountry' || dimKey === 'dstCountry') extra.filterCountry = val;
-  else if (dimKey === 'app') extra.filterApp = val;
-  else if (dimKey === 'dport') extra.filterPort = val;
-  else if (dimKey === 'name') extra.filterThreat = val;
-  void props.slice.openInSearch(extra);
+  const extra = searchExtraOf(dimKey, rawVal);
+  if (extra) void props.slice.openInSearch(extra);
 }
+/** 沒有對應條件的項目不可點(例:不是單一 CIDR 的網段;C7b) */
+const canPickTop = (item: GBarListItem) => !!searchExtraOf(activeTopKey.value, (item as GBarListItem & { key?: string }).key ?? item.label);
 
 /** 明細表欄位(U8:時間欄加寬並搭配 nowrap 不換行) */
 const tableColumns = computed<Column[]>(() => {
@@ -344,7 +342,7 @@ function onDrawerToggle(v: boolean) {
       </div>
 
       <!-- 各嚴重度威脅統計:可點選與取消選取(U4;critical / high 呼吸光暈 §5) -->
-      <div class="slice-drawer__threats" role="group" aria-label="各嚴重度威脅數量（點擊可篩選或取消）">
+      <div v-if="slice.supportsSeverity.value" class="slice-drawer__threats" role="group" aria-label="各嚴重度威脅數量（點擊可篩選或取消）">
         <button
           v-for="sev in SEVERITY_DEFS"
           :key="sev.key"
@@ -398,9 +396,9 @@ function onDrawerToggle(v: boolean) {
           v-if="activeTopItems.length"
           :items="activeTopItems"
           colorful
-          clickable
+          :clickable="canPickTop"
           pick-hint="點擊在 Log 明細查詢開啟"
-          @pick="(item) => openItemInSearch(activeTopKey, item.label)"
+          @pick="(item) => openItemInSearch(activeTopKey, (item as GBarListItem & { key?: string }).key ?? item.label)"
         />
         <GEmpty v-else compact :title="selectedSeverity ? '此嚴重度下無排行資料' : '此時段無排行資料'" />
       </GCard>

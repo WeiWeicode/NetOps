@@ -203,7 +203,7 @@ D13:骨架直接留用;AI 不在這次範圍,不做串流驗證(D7、D17)。
 
 | # | 誰 | 做什麼 | 卡住哪個階段 | 對應決策 |
 | --- | --- | --- | --- | --- |
-| E1 | 需求方 → **FTP 管理者 / IT** | 問 FTP `10.10.130.66` 上的 PA log(`/my-data` 等目錄)**保留多久**、會不會自動刪 | C4(決定歸檔原始 log 還是只歸檔彙總) | CQ3 |
+| E1 | 需求方 → **FTP 管理者 / IT** | 問 FTP `10.10.130.66` 上的 PA log(`/my-data` 等目錄)**保留多久**、會不會自動刪 **已回覆(2026-11-13):保留 10 天,需求方排程自動刪除**;長期原始 log 只靠 C4 Parquet 歸檔(E2 必申請) | C4(決定歸檔原始 log 還是只歸檔彙總) | CQ3 |
 | E2 | 需求方 → **IT / NAS 管理者** | E1 的答案不夠長時,申請 NetOps 歸檔空間:一年約 150–370 GB(原始 log Parquet 至少 1 年);現有 `docker-folder` 只剩 18 GB | C4 | CQ3、CQ12 |
 | E3 | 需求方 → **網通** | PA-560 的 Syslog Custom Log Format(TRAFFIC)與 HTTP Payload(威脅類)**加 `$seqno`、`$sessionid`**,然後 Commit;改完回報實際變數名稱(PAN-OS 12.1.7-h3) | C2 | CQ9 |
 |  |  | **E3 結果(2026-11-10 完成)**:需求方在 PA-560 把 `,"seqno":"$seqno","sessionId":"$sessionid"` 加到 Syslog `netops-syslog` 的 Traffic 格式與 HTTP `netops-http` 的 Threat、URL、Data、Wildfire Payload 並 Commit(變數名稱與文件相同)。主機 2 抓封包:51294 與 51293 都帶到值(例:seqno `7688588907462574142`、sessionId `288580`),TRAFFIC 持續接收。PA-FORWARDING-SPEC B.3、C.2 已更新;Decryption / GlobalProtect / User-ID 沒有加 |  |  |
@@ -310,6 +310,17 @@ D13:骨架直接留用;AI 不在這次範圍,不做串流驗證(D7、D17)。
 4. 元件測試與測試報告(`docs/test-reports/YYYY-MM-DD-viz-*.md`)。
 
 **前置**:V-b1。**負責人**:Gemini;Claude 審查(只改邏輯層的需求寫進 MR 說明交給 Claude);需求方驗收。**完成條件**:HANDOFF-GEMINI-VIZ §8 驗收清單全部通過(四種風格組合 × 1440 / 375 px、reduced-motion、鍵盤操作、`null` / 冷資料 / 429 狀態);沒有修改禁止範圍的檔案;測試報告已提交。
+
+#### V-b2 驗收追加:威脅 log 明細查詢(Claude;需求方 2026-11-13 決定)
+
+驗收 C7 發現時段明細抽屜跳到 Log 明細查詢時,威脅類條件無法套用。需求方決定:
+
+1. Log 明細查詢加威脅 log:`POST /pa/log-searches` 加 `type`(`TRAFFIC` / `THREAT`)、`severity`、`threat`(API.md §4.3),同一支 API 與權限 `netops.pa-log.read`,不新增路由與權限代碼。
+2. 國家分來源 / 目的:`srcCountry`、`dstCountry`(`country` 仍為任一方)。
+3. 流量類時段明細抽屜不顯示嚴重度 chip(`useSlice.supportsSeverity`)。
+4. C7b:PA 對私有 / 保留位址的國家欄位填網段範圍;抽屜 Top 10 顯示「內部網路 10.0.0.0/8」,點選改帶 `src` / `dst` 的 CIDR。
+
+**負責人**:Claude(邏輯層與最小可用畫面);Gemini(Log 明細查詢頁新欄位與威脅結果欄位的版面樣式)。**完成條件**:後端單元與整合測試涵蓋威脅查詢條件;前端測試涵蓋跳轉條件與網段轉 CIDR;測試區重驗 C7 / C7b 通過。
 
 ## V-c 偵測規則引擎
 

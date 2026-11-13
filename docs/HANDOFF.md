@@ -2,6 +2,19 @@
 
 > 接手時先讀 `AGENT.md`,再讀 `docs/ARCHITECTURE.md`、`docs/IMPL-PLAN.md`。
 
+## 2026-11-13 需求方決定:FTP 保留 10 天、對帳 08:10、自動補漏、AI 改用 ClickHouse
+
+**決定(需求方 2026-11-13,照做,不要重新討論)**
+
+1. **FTP 只保留 10 天**:需求方之後會寫排程自動刪 FTP 上的 PA log(回答 IMPL-PLAN E1)。長期原始 log 只剩 C4 的 NAS Parquet 歸檔,正式區 E2(NAS 150 GB / 年)必須申請。AD log(`/AD_Log_Backup`)在同一台 FTP:刪除排程若包含它,刪之前要先匯入。
+2. **對帳改每天 08:10**(PA 前一天匯出檔約 07:45 才出現):目前設定只有小時(`NETOPS_RECON_HOUR`,`backend/src/config.ts:292`),要支援分鐘(例如 `NETOPS_RECON_TIME=08:10`,保留舊變數相容),Compose、API.md §5.3、ARCHITECTURE D43 一併改。**已做(!91):`NETOPS_RECON_TIME` 預設 08:10,`-1` 不自動。**
+3. **加自動補漏**(已做:!91,`NETOPS_RECON_AUTO_BACKFILL=0` 關閉):對帳發現 `gap` 時自動送補漏工作(同 `POST /api/netops/pa/backfills`,`createdBy` 標示系統),失敗或 FTP 還沒分析完時照對帳的重試規則;要能用環境變數關閉。FTP 只留 10 天,缺口要在期限內補完,超過時記 warn。
+4. **AI 分析 / 問答 / 外部 IP 學習改用 ClickHouse 查**(取代 FTP 摘要、連線組合統計與事件彙總;D43 的「後續改」)。改完才能把 `FTP_SYNC_MINUTES` 收掉;解密、GlobalProtect、User-ID 仍讀 FTP 摘要,FTP 只留 10 天後的影響要一併評估。改動大,先寫計畫(IMPL-PLAN 新階段)再實作。
+
+**現況說明**(回覆需求方時用):11/11 以前的資料目前匯不進來。補漏只補 ClickHouse 已有資料的日子(其他日子對帳是 `not-covered`),而且測試區 TTL 3 天,匯了也會被刪;歷史匯入留到正式區 C6 再評估。
+
+**排程**:2、3 在目前 Opus 子任務做完威脅 Log 查詢(`feature/vb2-threat-search`)後接著做;4 另一批,先計畫。
+
 ## 2026-11-13 V-b2 畫面驗收(第一輪)
 
 **接手方式**:新討論串說「從 `NetOps/docs/HANDOFF.md`「2026-11-13 V-b2 畫面驗收(第一輪)」接手」。下一步是派下面「Claude 邏輯層待修」給 Opus 子任務(需求方指示後才派)。
@@ -97,7 +110,7 @@
 
 - 需求方 2026-11-11 晚上決定(ARCHITECTURE D43):推翻 CQ10「並行 2 週」,PA 總覽、安全事件(威脅類)、Top N、Log 明細**只查 ClickHouse**;FTP 只做每日對帳與補漏、AD、AI。
 - 原因:!71–!73 上線後總覽 11/10–11/11、安全事件 11/11 顯示 0。`auto` 只在期間開始晚於 ClickHouse 最早一小時(測試區 2026-11-11 08:00)才用 ClickHouse,其他時候走 FTP,而 FTP 還沒分析那幾天。另外測試區 15 時的每小時摘要一直建不起來(一段 8 萬列串流超過 30 秒逾時),已改成每段 2 萬列、最多等 180 秒。
-- 對帳:`NETOPS_RECON_HOUR` 預設 1(01:00 起),對帳流程自己同步分析 FTP 的 TRAFFIC 檔;PA 前一天的匯出檔約 07:45 才出現,之前為 pending、每 10 分鐘再試。
+- 對帳(2026-11-13 起改為 `NETOPS_RECON_TIME` 預設 08:10,見上):原本 `NETOPS_RECON_HOUR` 預設 1(01:00 起),對帳流程自己同步分析 FTP 的 TRAFFIC 檔;PA 前一天的匯出檔約 07:45 才出現,之前為 pending、每 10 分鐘再試。
 - 後續:AI 分析 / 問答 / 外部 IP 學習改用 ClickHouse(目前用 FTP 摘要、連線組合統計與事件彙總,改動大);在那之前 `FTP_SYNC_MINUTES` 要保留(AI 與解密 / GlobalProtect / User-ID 仍要 FTP 分析)。
 - 前端:日期改單一區間欄位(`feature/netops-date-range`,堆疊在後端 MR 之後)。
 

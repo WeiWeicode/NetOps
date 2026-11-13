@@ -109,6 +109,18 @@ describe('netops_reader 唯讀查詢', () => {
     assert.ok((await reader.trafficCount(H, H + HOUR)) >= N);
   });
 
+  it('威脅 log 明細查詢(C7 第二輪):嚴重度、威脅名稱、來源 IP;SQL 在真 ClickHouse 可執行', async () => {
+    const q = (f: object, limit = 100) => reader.searchThreat({ fromMs: H, toMs: H + HOUR, threat: 'C3 Test', ...f }, limit, 10);
+    const all = await q({ severity: 'high', src: '203.0.113.9' });
+    assert.equal(all.rows.length, 5);
+    assert.equal(all.rows[0]!.name, 'C3 Test(1)');
+    assert.equal(all.rows[0]!.dst, '10.77.0.1');
+    assert.equal((await q({ severity: 'low' })).rows.length, 0);
+    assert.equal((await q({ srcCountry: 'no-such-country' })).rows.length, 0);
+    assert.equal((await q({ q: 'c3 test' })).rows.length, 5);
+    assert.ok((await reader.threatCount(H, H + HOUR)) >= 5);
+  });
+
   it('唯讀帳號不能寫入、不能放寬執行秒數上限', async () => {
     const post = (q: string, extra = '') =>
       fetch(`${CH_URL}/?${extra}`, { method: 'POST', headers: { 'X-ClickHouse-User': 'netops_reader', 'X-ClickHouse-Key': readerPw }, body: q });

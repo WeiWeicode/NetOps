@@ -8,6 +8,12 @@
 - 檔案:`backend/src/config.ts`、`backend/src/app.ts`、`backend/src/modules/pa/reconcile.ts`、`backend/src/modules/pa/recon-routes.ts`、`deploy/docker-compose.yml`、`backend/test/unit/ch-recon.test.ts`、`backend/test/unit/ch-overview.test.ts`
 - 驗證:`npm run typecheck`、`npm test`、`npm run build`(見 MR)
 
+## 2026-11-13 Log 明細查詢加威脅 log 與來源 / 目的國家(V-b2 驗收 C7 第二輪)
+- 工作項目:V-b2 驗收追加(需求方 2026-11-13 決定)
+- 內容:`POST /pa/log-searches` 加 `type`(TRAFFIC / THREAT)、`severity`、`threat`、`srcCountry`、`dstCountry`。THREAT 查 `pa_threat_logs`(log_type = threat;`reader.searchThreat`、`threatSearchWhere`、`threatCount`),資料列 `threat` 為威脅名稱、嚴重度 informational 回 info,匯出檔名 `PA_threat_`;TRAFFIC 帶 severity / threat 回 400。`trafficWhere` 加 srcCountry / dstCountry,`searchTraffic` 與 `searchThreat` 共用 `search()`。路由與權限不變。
+- 檔案:`backend/src/infra/clickhouse/reader.ts`、`backend/src/modules/pa/log-routes.ts`、`backend/test/fixtures/fake-ch.ts`、`backend/test/unit/ch-detail.test.ts`、`backend/test/integration/reader.int.test.ts`
+- 驗證:`npm run typecheck`、`npm test`、`npm run build`(見 MR);`test:int` 看 CI
+
 ## 2026-11-13 熱力圖:彙總表沒有的格子回 null 並列進 gaps(C1)
 - 工作項目:V-a(V-b2 第一輪驗收 C1)
 - 內容:`buildCells` 原本把 `coverage.since` 之後、彙總表沒有列的格子補成 0,11-13 00:00–08:30(彙總部署前)因此顯示 `v=0`、`partial=false`、`gaps=[]`。改成沒有列一律 `v=null`、`level=0`;`since` 之後、已結束超過 10 分鐘(`MISSING_GRACE_MS`,避免最後幾格遲到的寫入一直閃「不完整」)的連續缺格合併成 `{ reason: 'no-data' }`,併進 `coverage.gaps`,重疊的格子 `partial=true`。`gapsKnown` 仍只代表每日對帳。`docs/API.md` §4.4、OpenAPI `description` / `x-gherkin` 同步。時段明細 `severity` 後端原本就支援,不改。

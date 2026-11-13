@@ -292,6 +292,8 @@ PA 匯入在背景佇列執行;同步、分析只是送進佇列,畫面輪詢狀
 
 **ClickHouse 明細(C3,D43)**:期間最長 30 天;只用關鍵字 `q`、沒有其他條件時最長 1 天(超過回 400,`details` 指出 `q`);執行上限 50 秒,全系統同時 2 個、每人 1 個。`source` 只接受 `clickhouse`(或省略)。期間整個超過保留期限回 404 `NETOPS_PA_OUT_OF_RETENTION`;期間內沒有 log 回 404 `NETOPS_PA_NO_DATA`;ClickHouse 連不上回 503 `NETOPS_CLICKHOUSE_UNAVAILABLE`;執行中失敗或超過 50 秒時工作 `failed`,`error.code` 為 `NETOPS_CLICKHOUSE_UNAVAILABLE`。
 - 條件語意同舊版(IP 完全相同 / CIDR / 萬用字元並比對 NAT、Port、動作…);`q` 比對主要文字欄位(IP、Port、類型、協定、規則、使用者、App、區域、動作、URL 類別、國家、結束原因、主機名稱)串起來的字串,不是整列原始 CSV(數字欄位如位元組、Session ID 不在比對範圍)。IP 以位址值比較:IPv6 的 CIDR 用真正的範圍,`::1` 與 `0:0:0:1` 視為相同。
+- **威脅 log(V-b2 C7 第二輪,需求方 2026-11-13 決定)**:`type` 為 `TRAFFIC`(預設)或 `THREAT`。`THREAT` 查威脅 log(`pa_threat_logs` 的 `log_type = threat`,不含 url / data / wildfire),另可用 `severity`(`critical`、`high`、`medium`、`low`、`info`;`informational` 視同 `info`)與 `threat`(威脅名稱包含,不分大小寫);其他條件同 TRAFFIC(威脅表沒有的欄位 `sport`、`endReason`… 不在 `q` 比對範圍,改比對威脅名稱、URL、嚴重度)。`TRAFFIC` 帶 `severity` 或 `threat` 回 400(不靜默忽略)。期間內沒有威脅 log(`log_type = threat`)回 404 `NETOPS_PA_NO_DATA`;`coverage` / `partial` 依威脅類(threat、url、data、wildfire)整體的資料範圍(同 §4.2),所以某天只有 url 類時 coverage 會含那天、查詢則回 404。結果 `result.type` 為查詢的類型;資料列欄位同 `ROW_FIELDS`,`threat` 為威脅名稱、`severity` 為嚴重度,流量欄位(`bytes`、`sent`…)為空白;匯出檔名開頭 `PA_threat_`。
+- 國家:`country` 比對來源或目的任一方(相容);`srcCountry`、`dstCountry` 只比對來源 / 目的國家(包含,不分大小寫)。PA 對私有 / 保留位址的國家欄位填網段範圍(例 `10.0.0.0-10.255.255.255`),不是國家;畫面點選這類項目時改帶 `src` / `dst` 的 CIDR(C7b)。
 - 結果 `result.source` 固定 `clickhouse`;`files`、`filesScanned` 為 0(舊欄位),`scanned` 為 ClickHouse 讀過的列數,`stopReason` 為 `''` 或 `limit`,`coverage`、`partial` 同 §4.1(`partial` 時匯出檔名結尾加「_部分期間超過保留期限」);`progress` 只有 `{ found: 0 }`。
 
 | 方法 | 路徑 | 權限 | 說明 |
@@ -308,7 +310,8 @@ PA 匯入在背景佇列執行;同步、分析只是送進佇列,畫面輪詢狀
   "from": "2026-11-02T08:00:00+08:00", "to": "2026-11-02T09:00:00+08:00",
   "src": "10.10.1.5", "dst": "10.10.0.0/16", "ip": "10.10.124.*", "port": "443,8443", "proto": "tcp",
   "app": "ssl", "rule": "Allow", "action": "block", "fromZone": "trust", "toZone": "untrust",
-  "user": "S112009", "country": "TW", "q": "keyword", "limit": 2000
+  "user": "S112009", "country": "TW", "srcCountry": "China", "dstCountry": "Japan", "q": "keyword", "limit": 2000,
+  "type": "THREAT", "threat": "Brute Force", "severity": "high"   // type 省略為 TRAFFIC;threat、severity 只有 THREAT
 }
 ```
 
@@ -325,6 +328,7 @@ PA 匯入在背景佇列執行;同步、分析只是送進佇列,畫面輪詢狀
 // 完成時的 result
 {
   "source": "ftp",          // C3:實際來源 ftp | clickhouse
+  "type": "TRAFFIC",        // TRAFFIC | THREAT
   "from": "2026-11-02T08:00:00+08:00", "to": "2026-11-02T09:00:00+08:00",
   "total": 120, "limit": 2000,
   "files": 2, "filesScanned": 2, "scanned": 845000, "seconds": 12.3,

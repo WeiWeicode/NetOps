@@ -67,8 +67,9 @@ withDefaults(
   position: relative;
   z-index: 1;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
+  gap: 8px 12px;
   padding: 18px 20px 0;
 }
 .p-sm .head {
@@ -98,8 +99,10 @@ withDefaults(
 }
 .actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   align-items: center;
+  min-width: 0;
 }
 .body {
   position: relative;

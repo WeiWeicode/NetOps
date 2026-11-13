@@ -97,7 +97,7 @@ const inputType = computed(() => (props.type === 'password' && reveal.value ? 't
 }
 .lead {
   margin-left: 12px;
-  color: var(--text-3);
+  color: var(--text-2);
 }
 input {
   flex: 1;
@@ -109,6 +109,7 @@ input {
   background: transparent;
   font: inherit;
   color: var(--text);
+  color-scheme: inherit;
 }
 input::placeholder {
   color: var(--text-3);
@@ -120,7 +121,7 @@ input::placeholder {
   height: 100%;
   border: 0;
   background: transparent;
-  color: var(--text-3);
+  color: var(--text-2);
   cursor: pointer;
 }
 .trail:hover {

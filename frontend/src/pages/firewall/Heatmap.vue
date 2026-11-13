@@ -25,6 +25,8 @@ const selectedCell = ref<HeatCell | null>(null);
 watch([h.granularity, h.date], () => (selectedCell.value = null));
 
 const granularityOptions = h.granularityOptions.map((g) => ({ label: g.label, value: g.value }));
+// U6: 移除熱力圖指標列的「AD 異常」(metricOptions 本身由 Claude 調整,畫面端先隱藏該項)
+const visibleMetricOptions = computed(() => h.metricOptions.filter((m) => m.value !== 'ad'));
 
 function selectMetric(m: HeatMetric, disabled?: boolean) {
   if (disabled) return;
@@ -49,10 +51,9 @@ const periodLabel = computed(() => {
   return formatRange(d.from, d.to);
 });
 
+// U10: 只在目前顯示範圍內真有無資料格子(v === null)時才顯示提示橫幅
 const hasNullBeforeSince = computed(() => {
-  const d = h.data.value;
-  if (!d) return false;
-  if (d.coverage.since && Date.parse(d.coverage.since) > Date.parse(d.from)) return true;
+  if (!h.data.value) return false;
   return h.cells.value.some((c) => c.v === null);
 });
 
@@ -103,6 +104,7 @@ const canDrillSelected = computed(() => {
 });
 
 function onSelect(cell: HeatCell) {
+  if (cell.v === null) return;
   selectedCell.value = cell;
   if (!h.canSlice.value) return;
   const q = h.sliceQuery(cell);
@@ -111,6 +113,7 @@ function onSelect(cell: HeatCell) {
 }
 
 function onDrill(cell: HeatCell) {
+  if (cell.v === null) return;
   if (h.drill(cell)) {
     drawer.value = false;
     void s.close();
@@ -126,7 +129,7 @@ function drillFromDrawer() {
   <div class="viz-heatmap stack">
     <GPageHeader
       title="活動熱力圖"
-      subtitle="GitHub 風格長期活動視圖（年 53 週 / 月 24 小時 / 日 5 分鐘）；點擊格子開啟時段明細，雙擊或按 Shift+Enter 下鑽至日視圖"
+      subtitle="長期活動視圖（年 53 週直式由新到舊 / 月 24 小時 / 日 5 分鐘）；點擊有資料格子開啟時段明細，雙擊或按 Shift+Enter 下鑽至日視圖"
     >
       <GButton size="sm" variant="secondary" icon="refresh" :loading="h.loading.value" @click="h.refresh()">
         重新整理
@@ -145,7 +148,7 @@ function drillFromDrawer() {
           <span class="viz-heatmap__lbl">指標</span>
           <div class="viz-metric-seg" role="radiogroup" aria-label="熱力圖指標">
             <button
-              v-for="m in h.metricOptions"
+              v-for="m in visibleMetricOptions"
               :key="m.value"
               type="button"
               role="radio"
@@ -216,7 +219,7 @@ function drillFromDrawer() {
       彙總表還沒有資料（此日期前沒有資料）。
     </GAlert>
     <GAlert v-else-if="hasNullBeforeSince" tone="info">
-      此日期前沒有資料{{ sinceLabel ? `（彙總資料起點：${sinceLabel}）` : '' }}；斜線底紋代表尚未建立彙總，不等於 0。
+      顯示範圍內含彙總資料起點{{ sinceLabel ? `（${sinceLabel}）` : '' }}之前的時段（此日期前沒有資料）；斜線底紋代表尚未建立彙總，不等於 0。
     </GAlert>
 
     <!-- 期間摘要列 -->
@@ -357,6 +360,7 @@ function drillFromDrawer() {
   color: var(--text);
   font: inherit;
   font-size: var(--fs-sm);
+  color-scheme: inherit;
 }
 .viz-heatmap__date:focus {
   outline: 2px solid var(--field-focus);

@@ -39,8 +39,42 @@ const esc = (s: unknown): string =>
 
 const nodeLabelMap = computed(() => new Map(props.nodes.map((n) => [n.id, n.name])));
 
+/**
+ * U9: 計算各節點流量並決定每一層(layer)只顯示前 Top N(且佔比達門檻)的標籤,
+ * 避免小節點高度過窄時文字互相重疊;完整名稱與流量仍於 hover / tooltip 顯示。
+ */
+const visibleLabelIds = computed(() => {
+  const inBytes = new Map<string, number>();
+  const outBytes = new Map<string, number>();
+  for (const l of props.links) {
+    outBytes.set(l.source, (outBytes.get(l.source) ?? 0) + l.bytes);
+    inBytes.set(l.target, (inBytes.get(l.target) ?? 0) + l.bytes);
+  }
+  const byLayer = new Map<number, { id: string; bytes: number }[]>();
+  for (const n of props.nodes) {
+    const b = Math.max(inBytes.get(n.id) ?? 0, outBytes.get(n.id) ?? 0);
+    const list = byLayer.get(n.layer) ?? [];
+    list.push({ id: n.id, bytes: b });
+    byLayer.set(n.layer, list);
+  }
+  const keep = new Set<string>();
+  const TOP_N_PER_LAYER = 5;
+  const MIN_SHARE = 0.04;
+  for (const [, list] of byLayer) {
+    list.sort((a, b) => b.bytes - a.bytes);
+    const total = list.reduce((sum, x) => sum + x.bytes, 0) || 1;
+    list.slice(0, TOP_N_PER_LAYER).forEach((item, idx) => {
+      if (idx === 0 || item.bytes / total >= MIN_SHARE) {
+        keep.add(item.id);
+      }
+    });
+  }
+  return keep;
+});
+
 const option = computed<Record<string, unknown>>(() => {
   const map = nodeLabelMap.value;
+  const keepLabels = visibleLabelIds.value;
   return {
     animationDuration: 1200,
     animationEasing: 'cubicOut',
@@ -61,17 +95,28 @@ const option = computed<Record<string, unknown>>(() => {
       {
         type: 'sankey',
         left: 16,
-        right: 96,
+        right: 112,
         top: 16,
         bottom: 16,
         nodeWidth: 18,
         nodeGap: 10,
-        emphasis: { focus: 'adjacency' },
+        emphasis: {
+          focus: 'adjacency',
+          label: {
+            show: true,
+            formatter: (p: unknown) => {
+              const d = (p as { data?: { displayName?: string } }).data;
+              return d?.displayName ?? '';
+            },
+          },
+        },
         lineStyle: { color: 'gradient', curveness: 0.45, opacity: 0.36 },
+        labelLayout: { hideOverlap: true },
         label: {
           formatter: (p: unknown) => {
-            const d = (p as { data?: { displayName?: string }; name?: string }).data;
-            return d?.displayName ?? '';
+            const d = (p as { data?: { id?: string; displayName?: string; showLabel?: boolean } }).data;
+            if (!d || d.showLabel === false) return '';
+            return d.displayName ?? '';
           },
         },
         data: props.nodes.map((n) => ({
@@ -79,6 +124,7 @@ const option = computed<Record<string, unknown>>(() => {
           name: n.id,
           displayName: n.name,
           depth: n.layer,
+          showLabel: keepLabels.has(n.id),
         })),
         links: props.links.map((l) => ({
           source: l.source,

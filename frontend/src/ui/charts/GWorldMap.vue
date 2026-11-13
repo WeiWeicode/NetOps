@@ -46,6 +46,54 @@ const topList = computed(() => props.countries.slice(0, props.top));
 const maxCount = computed(() => Math.max(1, ...props.countries.map((c) => c.count)));
 const byIso2 = computed(() => new Map(props.countries.filter((c) => c.iso2).map((c) => [c.iso2!, c])));
 
+/**
+ * U7: Natural Earth GeoJSON 中跨 ±180° 換日線的多邊形(俄羅斯楚科奇半島/弗蘭格爾島、斐濟)
+ * 若直接以平面座標連線,會從 +178.7° 拉直線到 -180°,在北極上方形成橫貫全圖的藍色長條並壓過阿拉斯加。
+ * 透過 ECharts projection.stream 對跨越換日線(|Δlon| > 180 且非南極洲封閉邊)的多邊形將西經展開為 lon + 360,
+ * 消除橫貫頂部的異常色帶並維持俄羅斯與阿拉斯加正常幾何形狀。
+ */
+const worldProjection = {
+  project: (pt: number[]) => [pt[0]!, -pt[1]! / 0.75],
+  unproject: (pt: number[]) => [pt[0]!, -pt[1]! * 0.75],
+  stream: (out: {
+    polygonStart: () => void;
+    polygonEnd: () => void;
+    lineStart: () => void;
+    lineEnd: () => void;
+    point: (x: number, y: number) => void;
+  }) => {
+    let ring: [number, number][] = [];
+    return {
+      polygonStart: () => out.polygonStart(),
+      polygonEnd: () => out.polygonEnd(),
+      lineStart: () => {
+        ring = [];
+      },
+      point: (lon: number, lat: number) => {
+        ring.push([lon, lat]);
+      },
+      lineEnd: () => {
+        if (!ring.length) return;
+        let crossesAntimeridian = false;
+        for (let i = 1; i < ring.length; i++) {
+          if (Math.abs(ring[i]![0] - ring[i - 1]![0]) > 180 && ring[i]![1] > -60) {
+            crossesAntimeridian = true;
+            break;
+          }
+        }
+        out.lineStart();
+        for (const [lon, lat] of ring) {
+          const adjLon = crossesAntimeridian && lon < 0 ? lon + 360 : lon;
+          out.point(adjLon, -lat / 0.75);
+        }
+        out.lineEnd();
+        ring = [];
+      },
+      sphere: () => undefined,
+    };
+  },
+};
+
 const option = computed<Record<string, unknown>>(() => {
   const c1 = token('--heat-threat-1', '#2574d9');
   const c2 = token('--heat-threat-2', '#b86e00');
@@ -97,6 +145,7 @@ const option = computed<Record<string, unknown>>(() => {
         name: '來源國家威脅',
         type: 'map',
         map: 'world',
+        projection: worldProjection,
         roam: true,
         scaleLimit: { min: 1, max: 6 },
         itemStyle: {

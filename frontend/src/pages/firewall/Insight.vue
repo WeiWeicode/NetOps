@@ -451,7 +451,7 @@ const topNameRows = computed(() =>
 
     <!-- 視角 Tab 與期間選擇列 -->
     <div class="viz-insight__top">
-      <!-- 視角頁籤:流量 / 威脅 / AD(停用並標示「AD 階段開放」§3.3) -->
+      <!-- 視角頁籤:流量 / 威脅(U6:移除「AD 異常」頁籤,AD 之後獨立做在 AD 網域) -->
       <nav class="viz-tabs glass" role="tablist" aria-label="分析儀表板視角">
         <button
           type="button"
@@ -474,19 +474,6 @@ const topNameRows = computed(() =>
         >
           <GIcon name="shield-alert" :size="16" />
           <span>威脅分析</span>
-        </button>
-        <button
-          type="button"
-          role="tab"
-          class="viz-tabs__tab is-disabled"
-          disabled
-          aria-disabled="true"
-          :aria-selected="false"
-          title="AD 階段開放"
-        >
-          <GIcon name="users" :size="16" />
-          <span>AD 異常</span>
-          <span class="viz-tabs__hint">AD 階段開放</span>
         </button>
       </nav>
 
@@ -937,5 +924,6 @@ const topNameRows = computed(() =>
   color: var(--text);
   font: inherit;
   font-size: var(--fs-sm);
+  color-scheme: inherit;
 }
 </style>

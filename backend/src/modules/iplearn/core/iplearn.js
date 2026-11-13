@@ -175,7 +175,7 @@ export function parseJson(text) {
 /**
  * deps：
  *   loadState() / saveState(state)：palogs/iplearn.json（store.pa）
- *   recentSummaries(days) → { summaries, from, to, files }：最近 days 天的 TRAFFIC 摘要（from / to 為 'yyyy/MM/dd'）
+ *   recentSummaries(days) → { summaries, from, to, files }（或其 Promise）：最近 days 天的 TRAFFIC 摘要（from / to 為 'yyyy/MM/dd'）
  *   listNotes()、saveNote(data, author, id?)：知識庫（id 不存在時丟出錯誤）
  *   noteState(id) → 'auto' | 'manual' | null：筆記仍是自動學習的、管理者改過（拿掉標籤或修改人不是 AI 自動學習）、已刪除
  *   chatOnce({ messages, maxTokens })：模型（不串流、不思考）
@@ -205,9 +205,9 @@ export function createIpLearner(deps) {
 
   const save = () => saveState(state)
 
-  /** 最近 days 天的 PA 摘要 → { list: Map(ip → { score, ctx }), from, to, files } */
-  function candidates(days) {
-    const r = recentSummaries(days)
+  /** 最近 days 天的 PA 摘要 → { list: Map(ip → { score, ctx }), from, to, files }（AC2：recentSummaries 可以是 async，ClickHouse 來源） */
+  async function candidates(days) {
+    const r = await recentSummaries(days)
     return { list: candidatesFrom(r.summaries), from: r.from, to: r.to, files: r.files }
   }
 
@@ -301,7 +301,7 @@ export function createIpLearner(deps) {
       run.log.push(`${nowText().slice(11, 19)} ${msg}`)
     }
     try {
-      const c = candidates(days)
+      const c = await candidates(days)
       const manual = manualMatchers()
       const ttl = options.ttlDays * 86400000
       const touched = new Set()

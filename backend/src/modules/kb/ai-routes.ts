@@ -5,6 +5,7 @@
  * 讀取用 netops.kb.read、執行用 netops.kb.write(同舊版:狀態所有人可看,執行限管理者)。
  */
 import type { FastifyPluginAsync } from 'fastify';
+import { IPLEARN_MAX_DAYS } from '../../config.js';
 import { AppError } from '../../errors.js';
 import { ACCEPTED, looseObject } from '../../shared/schemas.js';
 import { logTimeOut } from '../../shared/time.js';
@@ -158,7 +159,7 @@ const kbAiRoutes: FastifyPluginAsync<{ kb: KbService; vector: VectorIndex; learn
         operationId: 'netops.kb.ip-learn',
         summary: '立即學習外部 IP',
         description:
-          '在背景從最近幾天的 PA 摘要挑出外部 IP,查 RDAP 與 DNS 反查後請模型整理成知識庫筆記(作者「AI 自動學習」、標籤「自動學習」);回 202 與狀態,畫面輪詢 ip-learning。' +
+          '在背景從最近幾天(最多 30 天)的 PA TRAFFIC 排行挑出外部 IP(NETOPS_AI_SOURCE=clickhouse 時取 ClickHouse 原始 TRAFFIC 建的每小時摘要,ftp 時取 FTP 摘要),查 RDAP 與 DNS 反查後請模型整理成知識庫筆記(作者「AI 自動學習」、標籤「自動學習」);回 202 與狀態,畫面輪詢 ip-learning。' +
           'rewrite 為 true 時已學過的組織筆記全部重寫(管理者改過的筆記不覆寫)。執行中回 409 NETOPS_IPLEARN_BUSY;沒有設定 AI 回 409 NETOPS_AI_DISABLED。',
         tags: ['知識庫'],
         'x-permission': 'netops.kb.write',
@@ -173,11 +174,15 @@ const kbAiRoutes: FastifyPluginAsync<{ kb: KbService; vector: VectorIndex; learn
           '  假如 外部 IP 自動學習正在執行',
           '  當 呼叫 POST /api/netops/kb/ip-learnings',
           '  那麼 回應 409 NETOPS_IPLEARN_BUSY',
+          '',
+          '場景: 天數超過 30 天',
+          '  當 呼叫 POST /api/netops/kb/ip-learnings 帶 days 31',
+          '  那麼 回應 400 VALIDATION_FAILED',
         ].join('\n'),
         body: {
           type: 'object',
           additionalProperties: false,
-          properties: { days: { type: 'integer', minimum: 1, maximum: 60 }, max: { type: 'integer', minimum: 1, maximum: 500 }, rewrite: { type: 'boolean', default: false } },
+          properties: { days: { type: 'integer', minimum: 1, maximum: IPLEARN_MAX_DAYS, description: '看最近幾天(1–30;AC2 起上限 30)' }, max: { type: 'integer', minimum: 1, maximum: 500 }, rewrite: { type: 'boolean', default: false } },
         },
         response: ACCEPTED,
       },

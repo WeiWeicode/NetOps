@@ -12,7 +12,7 @@ vi.mock('@giganexus/web-kit', async (orig) => ({
 
 const { AiStreamError, createSseParser, streamPost } = await import('@/api/ai');
 const { ApiError } = await import('@giganexus/web-kit');
-const { applyEvent, historyOf, searchLink } = await import('@/composables/aiChat');
+const { applyEvent, coarseNote, historyOf, searchLink } = await import('@/composables/aiChat');
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -112,6 +112,27 @@ describe('applyEvent(同舊版 PaAsk.vue 的事件處理)', () => {
     expect(r.status).toBe('整理 AD 事件記錄...');
     applyEvent(r, { event: 'meta', data: { ips: [], ports: [] } }, false);
     expect(r.status).toBe('整理期間統計...');
+  });
+});
+
+describe('AC2:ClickHouse 來源的事件(docs/API.md §10.1)', () => {
+  it('scan 的 source / step → 狀態文字;evidence 保留 ClickHouse 欄位', () => {
+    const r = { role: 'assistant' as const, content: '' } as Parameters<typeof applyEvent>[0];
+    applyEvent(r, { event: 'scan', data: { label: 'x', source: 'clickhouse', step: 'traffic' } }, false);
+    expect(r.status).toBe('查詢防火牆 log(ClickHouse)...');
+    applyEvent(r, { event: 'scan', data: { label: 'x', source: 'clickhouse', step: 'threat' } }, false);
+    expect(r.status).toBe('查詢威脅類 log...');
+    const skipped = { from: '2026/10/01 00:00', to: '2026/10/14 12:00' };
+    applyEvent(r, { event: 'evidence', data: { label: 'x', source: 'clickhouse', matched: 30, samples: 15, skipped, partial: false } }, false);
+    expect(r.evidence).toMatchObject({ source: 'clickhouse', samples: 15, skipped });
+    expect(r.status).toBe('AI 分析中...');
+  });
+
+  it('coarseNote:有超過 30 天的較粗期間才有提示', () => {
+    expect(coarseNote(null)).toBe('');
+    expect(coarseNote({ detail: { from: '2026-10-15', to: '2026-11-13' }, coarse: null, rawDays: 30 })).toBe('');
+    expect(coarseNote({ detail: null, coarse: { from: '2026-08-14', to: '2026-10-14' }, rawDays: 30 })).toBe('超過 30 天的資料較粗:2026-08-14 ~ 2026-10-14 只有每天 / 每小時彙總(沒有目的 IP、Port、規則等排行與逐小時統計)');
+    expect(coarseNote({ detail: null, coarse: { from: '2026-10-14', to: '2026-10-14' }, rawDays: 30 })).toContain(':2026-10-14 只有');
   });
 });
 

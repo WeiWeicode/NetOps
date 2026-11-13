@@ -4,11 +4,13 @@
  *   POST /api/netops/ai/analyses(SSE);只送統計摘要給公司內部 AI,不送原始 log
  *   question:想特別了解的問題(可空白);深入思考較慢
  * 以對話框顯示(流量總覽頁的「AI 分析」按鈕,權限 netops.pa-dashboard.ai)
+ * AC2:資料來源是 ClickHouse 時 meta 帶粒度(grain);超過 30 天的部分只有每天 / 每小時彙總,畫面註明「超過 30 天的資料較粗」
  */
 import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
 import { ai, AiStreamError, type AiStatus } from '@/api/ai';
 import { describeError } from '@/api/gateway';
 import { toast } from '@/ui';
+import { coarseNote, type Grain } from '@/composables/aiChat';
 import AiMarkdown from './AiMarkdown.vue';
 
 const props = defineProps<{ from: string; to: string }>();
@@ -21,6 +23,15 @@ interface Meta {
   rows: number;
   notes: { id: string; title: string; related: boolean }[];
   vectorError: boolean;
+  /** clickhouse(AC2)或 ftp(正式區 C6 之前) */
+  source?: 'clickhouse' | 'ftp';
+  /** ClickHouse:每小時摘要的小時數、每天彙總的天數、粒度、資料範圍 */
+  hours?: number;
+  days?: number;
+  grain?: Grain;
+  coverage?: { from: string; to: string };
+  partial?: boolean;
+  summaryState?: 'ok' | 'not-ready' | 'stale';
 }
 
 const think = ref(false);
@@ -36,6 +47,7 @@ const elapsed = ref(0);
 let controller: AbortController | null = null;
 let timer: ReturnType<typeof setInterval> | undefined;
 
+const coarse = computed(() => coarseNote(meta.value?.grain));
 const running = computed(() => ['preparing', 'thinking', 'writing'].includes(phase.value));
 const phaseText = computed(() => {
   if (phase.value === 'preparing') return '整理防火牆統計、等待 AI 回應...';
@@ -147,7 +159,15 @@ onBeforeUnmount(() => {
       </div>
       <p class="xs faint">只把這段期間的統計摘要(不是原始 log)送到公司內部的 AI 服務{{ service?.model ? `(${service.model})` : '' }},不會傳到外部。</p>
 
-      <p v-if="meta" class="xs muted">
+      <p v-if="meta?.source === 'clickhouse'" class="xs muted">
+        ClickHouse 每小時摘要 {{ (meta.hours ?? 0).toLocaleString() }} 小時<template v-if="meta.days">、每天彙總 {{ meta.days.toLocaleString() }} 天</template>、{{ meta.rows.toLocaleString() }} 筆連線紀錄<template v-if="meta.notes?.length"> · 參考知識庫 {{ meta.notes.length }} 則</template>
+        <span v-if="meta.missing" class="c-warning"> · {{ meta.missing.toLocaleString() }} 小時的摘要還沒建好,排行可能不完整</span>
+        <span v-if="meta.summaryState && meta.summaryState !== 'ok'" class="c-warning"> · 每小時摘要尚未更新完成</span>
+        <span v-if="meta.partial && meta.coverage" class="c-warning"> · {{ meta.coverage.from }} 之前沒有資料</span>
+        <span v-if="meta.vectorError" class="c-warning"> · 語意搜尋失敗,筆記改用關鍵字比對</span>
+      </p>
+      <GAlert v-if="coarse" tone="warning" title="超過 30 天的資料較粗">{{ coarse }}。AI 會說明這段資料的限制,要看細節請縮短到最近 {{ meta?.grain?.rawDays ?? 30 }} 天。</GAlert>
+      <p v-if="meta && meta.source !== 'clickhouse'" class="xs muted">
         {{ meta.files }} 個 log 檔、{{ meta.rows.toLocaleString() }} 筆連線紀錄<template v-if="meta.notes?.length"> · 參考知識庫 {{ meta.notes.length }} 則</template>
         <span v-if="meta.missing" class="c-warning"> · {{ meta.missing }} 個檔案的摘要讀不到,資料不完整</span>
         <span v-if="meta.vectorError" class="c-warning"> · 語意搜尋失敗,筆記改用關鍵字比對</span>

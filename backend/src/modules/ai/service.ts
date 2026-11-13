@@ -6,6 +6,9 @@
  *              thinking、content、done(見 docs/API.md §10)
  * 與舊版不同:資料不完整要明確標示(AGENT.md §5):meta / evidence 帶 missing(摘要讀不到的檔案數),
  *   notes 帶 vectorError(向量庫失敗,改用關鍵字 / IP 比對);路由驗證與 SSE 由 routes.ts、sse.ts 負責。
+ * AC2(ARCHITECTURE D44):資料來源依 NETOPS_AI_SOURCE 切換。clickhouse = 查 ClickHouse(ch-source.ts,不掃 FTP、不排隊);
+ *   ftp = 舊路徑(FTP 摘要與原始 log 掃描,本檔原本的流程,正式區 C6 之前沿用;需求方 2026-11-13 AQ4「Keep old path」)。
+ *   兩條路徑送給模型的文字格式相同;ClickHouse 路徑的 meta / scan / evidence 多 source: 'clickhouse' 與粒度、保留期限欄位(API.md §10.1)。
  */
 import type { FtpConfig } from '../../config.js';
 import { AppError } from '../../errors.js';
@@ -23,6 +26,7 @@ import type { TrafficImporter } from '../pa/importer.js';
 import { ASK_PROMPT, buildContext, EVENT_Q, kbSection, SYSTEM_PROMPT } from './core/context.js';
 import { buildCondition, createCollector, parseQuestion } from './core/evidence.js';
 import type { SseStream } from './sse.js';
+import type { AiSource, ChAiSource } from './ch-source.js';
 import { dayOut, logTimeOut } from '../../shared/time.js';
 
 /** 語意搜尋(kb/core/vector.js searchVectors) */
@@ -73,8 +77,17 @@ export function createAiService(deps: {
   readFlows(name: string): Promise<string | null>;
   searchSeconds: number;
   kbMaxChars: number;
+  /** AI 資料來源(NETOPS_AI_SOURCE);clickhouse 時 ch 必須有值 */
+  source?: AiSource;
+  ch?: ChAiSource | null;
 }) {
   const { traffic, events, ad, kb, vector, ftp } = deps;
+  const source: AiSource = deps.source ?? 'ftp';
+  /** ClickHouse 來源(未建立時 ch-source 的 need() 回 503) */
+  const chOf = (): ChAiSource => {
+    if (!deps.ch) throw new AppError(503, 'NETOPS_CLICKHOUSE_UNAVAILABLE', 'PA log 資料庫(ClickHouse)暫時無法使用,請稍後再試');
+    return deps.ch;
+  };
 
   /** AI 未設定(LLM_URL 空白)時回 409:是設定狀態不是故障,回 5xx 會累積 BFF 斷路器失敗 */
   function llmOf(): Llm {
@@ -105,25 +118,37 @@ export function createAiService(deps: {
 
   /* ───────── 期間整體分析 ───────── */
 
-  /** 驗證(串流開始前,錯誤回 4xx):沒有已分析的 log 回 404 */
-  function prepareAnalysis(from: string, to: string) {
+  /** 分析的資料(串流開始前讀好):ftp = FTP 摘要;clickhouse = ClickHouse(ch 帶粒度與完整度,meta 用) */
+  type AnalysisCtx = { text: string; files: number; rows: number; missing?: number; ch?: Awaited<ReturnType<ChAiSource['analysisContext']>> };
+
+  /**
+   * 驗證(串流開始前,錯誤回 4xx / 503):沒有已分析的 log 回 404;
+   * clickhouse 來源:ClickHouse 未設定或連不上回 503、整段超過保留期限回 404 NETOPS_PA_OUT_OF_RETENTION(不改用 FTP,同 D43)
+   */
+  async function prepareAnalysis(from: string, to: string): Promise<AnalysisCtx> {
     llmOf();
+    if (source === 'clickhouse') {
+      const c = await chOf().analysisContext(from, to);
+      return { text: c.text, files: c.hours + c.days, rows: c.rows, missing: c.missing, ch: c };
+    }
     const ctx = context(from, to);
     if (!ctx) throw new AppError(404, 'NETOPS_PA_NO_DATA', '這段期間沒有已分析的 log,請先到「FTP Log 檔案」同步');
     return ctx;
   }
 
-  async function analyze(s: SseStream, input: { from: string; to: string; think: boolean; question: string }, ctx: { text: string; files: number; rows: number }) {
+  async function analyze(s: SseStream, input: { from: string; to: string; think: boolean; question: string }, ctx: AnalysisCtx) {
     const llm = llmOf();
     const { from, to, think, question } = input;
     let text = ctx.text;
     // PA 其他類型 log(威脅、URL、GlobalProtect…)的期間摘要一起分析
-    const ev = events.eventsContext(from, to, { topN: 8 });
+    const ev = ctx.ch ? await chOf().eventsContext(from, to, 8) : events.eventsContext(from, to, { topN: 8 });
     if (ev) text += `\n\n${ev}`;
     const model = await llm.model();
     // 向量庫語意搜尋(有輸入問題時):跟問題意思相近的筆記一起排到前面
     const kbNotes = await notes({ text: `${question}\n${text}`, query: question });
-    s.send('meta', { model, from: dayOut(from), to: dayOut(to), files: ctx.files, missing: missingIn(from, to), rows: ctx.rows, contextChars: text.length, notes: kbNotes.used, vectorError: kbNotes.vectorError });
+    const c = ctx.ch;
+    const chMeta = c ? { source: 'clickhouse', hours: c.hours, days: c.days, grain: c.grain, coverage: c.coverage, partial: c.partial, summaryState: c.state } : { source: 'ftp' };
+    s.send('meta', { model, from: dayOut(from), to: dayOut(to), files: ctx.files, missing: c ? c.missing : missingIn(from, to), rows: ctx.rows, contextChars: text.length, notes: kbNotes.used, vectorError: kbNotes.vectorError, ...chMeta });
     const ask = question ? `\n\n使用者另外想了解：${question}\n請在「整體結論」之後先用「## 針對提問」章節回答這個問題，再依規則完成其餘章節。` : '';
     await streamAnswer(s, llm, think, [
       { role: 'system', content: SYSTEM_PROMPT },
@@ -157,8 +182,11 @@ export function createAiService(deps: {
   /** 對話紀錄:最近 6 則,每則最多 4000 字(同舊版) */
   const historyOf = (h: HistoryItem[] = []) => h.filter((m) => ['user', 'assistant'].includes(m?.role) && m.content).slice(-6).map((m) => ({ role: m.role, content: String(m.content).slice(0, 4000) }));
 
-  /** 驗證(串流開始前):沒有已分析的 log、也不是 AD 問題時回 404 */
-  function prepareQuestion(input: { from: string; to: string; question: string; history?: HistoryItem[]; source?: 'pa' | 'ad' }) {
+  /**
+   * 驗證(串流開始前):沒有已分析的 log、也不是 AD 問題時回 404;
+   * clickhouse 來源:ClickHouse 未設定或連不上回 503、沒有任何 PA 資料回 404(AD 問題不因 ClickHouse 失敗而中斷,改在資料中註明)
+   */
+  async function prepareQuestion(input: { from: string; to: string; question: string; history?: HistoryItem[]; source?: 'pa' | 'ad' }) {
     llmOf();
     const { from, to, question } = input;
     const history = historyOf(input.history);
@@ -180,21 +208,55 @@ export function createAiService(deps: {
     const lastUser = [...history].reverse().find((m) => m.role === 'user')?.content ?? '';
     const eventIds = [...new Set([...eventIdsIn(question), ...(adOnly ? eventIdsIn(lastUser) : [])])];
     const adQ = adOnly || isAdQuestion(question) || eventIds.length > 0 || (!cond.ips.length && !cond.ports.length && isAdQuestion(lastUser));
+    if (source === 'clickhouse') {
+      // paError:AD 問題時 ClickHouse 失敗只略過防火牆資料(回答仍可用 AD 事件);不是 AD 問題時照常回 404 / 503
+      let paError = '';
+      if (!adOnly) {
+        try {
+          await chOf().prepareQuestion();
+        } catch (err) {
+          if (!adQ || !(err instanceof AppError)) throw err;
+          paError = err.message;
+        }
+      }
+      return { history, cond, adOnly, lastUser, eventIds, adQ, files: [] as ReturnType<TrafficImporter['filesInRange']>, ch: !adOnly && !paError, paError };
+    }
     const files = adOnly ? [] : traffic.filesInRange(from, to);
     if (!files.length && !adQ) throw new AppError(404, 'NETOPS_PA_NO_DATA', '這段時間沒有已分析的 log 檔,請先到「FTP Log 檔案」同步');
-    return { history, cond, adOnly, lastUser, eventIds, adQ, files };
+    return { history, cond, adOnly, lastUser, eventIds, adQ, files, ch: false, paError: '' };
   }
 
-  async function ask(s: SseStream, input: { from: string; to: string; question: string; think: boolean }, p: ReturnType<typeof prepareQuestion>) {
+  async function ask(s: SseStream, input: { from: string; to: string; question: string; think: boolean }, p: Awaited<ReturnType<typeof prepareQuestion>>) {
     const llm = llmOf();
     const { from, to, question, think } = input;
     const { history, cond, adOnly, lastUser, eventIds, adQ, files } = p;
     const closed = () => s.signal.aborted;
     const model = await llm.model();
-    s.send('meta', { model, from: logTimeOut(from), to: logTimeOut(to), files: files.length, ips: cond.ips, ports: cond.ports, source: adOnly ? 'ad' : 'pa' });
+    // dataSource:資料來源(ftp / clickhouse);source 沿用原本的 pa / ad(問答範圍)
+    s.send('meta', { model, from: logTimeOut(from), to: logTimeOut(to), files: files.length, ips: cond.ips, ports: cond.ports, source: adOnly ? 'ad' : 'pa', dataSource: p.ch ? 'clickhouse' : 'ftp' });
 
     let evidence = '';
-    if ((cond.ips.length || cond.ports.length) && files.length) {
+    if (p.paError) {
+      evidence = `## 防火牆 log\n（${p.paError}；這次只能依 AD 事件記錄回答，沒有防火牆資料）`;
+    } else if (p.ch && (cond.ips.length || cond.ports.length)) {
+      const got = await chEvidence(s, cond, from, to);
+      if (got === null) return;
+      evidence = got;
+    } else if (p.ch && !adQ) {
+      // 沒有 IP / Port:改用期間的統計摘要(ClickHouse)
+      const dF = from.slice(0, 10);
+      const dT = to.slice(0, 10);
+      let ctx: Awaited<ReturnType<ChAiSource['analysisContext']>> | null = null;
+      try {
+        ctx = await chOf().analysisContext(dF, dT);
+      } catch (err) {
+        // 沒有資料 / 超過保留期限:照實寫給模型(查無紀錄不等於沒有發生);ClickHouse 失敗照常以 error 事件結束
+        if (!(err instanceof AppError) || err.status !== 404) throw err;
+      }
+      if (closed()) return;
+      s.send('evidence', { label: '問題中沒有 IP / Port，改用期間的整體統計', summary: true, source: 'clickhouse', hours: ctx?.hours ?? 0, days: ctx?.days ?? 0, missing: ctx?.missing ?? 0, grain: ctx?.grain ?? null });
+      evidence = `## 問題中沒有 IP 或 Port，以下是 ${dF} ~ ${dT} 的整體統計摘要\n\n${ctx?.text ?? '（這段期間 ClickHouse 沒有資料）'}`;
+    } else if ((cond.ips.length || cond.ports.length) && files.length) {
       const key = JSON.stringify([cond, from, to]);
       let hit = evidenceCache.get(key);
       if (!hit || Date.now() - hit.at > 600000) {
@@ -275,15 +337,18 @@ export function createAiService(deps: {
     const dTo = to.slice(0, 10);
 
     // PA 其他類型 log:問題有 IP → 這些 IP 的紀錄;沒有 IP 但問到威脅 / VPN / 網站等 → 期間摘要
-    if (!adOnly) {
+    if (!adOnly && !p.paError) {
       let ev = '';
       if (cond.ips.length) {
         const ms = cond.ips.map(ipMatcher).filter(Boolean) as ((ip: string) => boolean)[];
-        const r = events.eventsForIps(from, to, (ip) => ms.some((m) => m(ip)));
+        const test = (ip: string) => ms.some((m) => m(ip));
+        if (p.ch) s.send('scan', { label: '查詢威脅類 log', source: 'clickhouse', step: 'threat' });
+        const r = p.ch ? await chOf().eventsForIps(cond.ips, from, to, test, s.signal) : events.eventsForIps(from, to, test);
+        if (closed()) return;
         if (r.text) s.send('events', { hits: r.hits });
         ev = r.text;
       } else if (EVENT_Q.test(question) || (!cond.ports.length && EVENT_Q.test(lastUser))) {
-        ev = events.eventsContext(dFrom, dTo);
+        ev = p.ch ? await chOf().eventsContext(dFrom, dTo) : events.eventsContext(dFrom, dTo);
         if (ev) s.send('events', { summary: true });
       }
       if (ev) evidence = [evidence, ev].filter(Boolean).join('\n\n');
@@ -309,6 +374,28 @@ export function createAiService(deps: {
     ]);
   }
 
+  /**
+   * 問答有 IP / Port(ClickHouse):原始 TRAFFIC 的連線組合統計與範例;scan 事件告知正在查,evidence 回傳 ClickHouse 的欄位(API.md §10.1)。
+   * 同樣的條件 10 分鐘內不重查(同 FTP 路徑;資料不完整的結果不快取)。使用者中斷時回 null
+   */
+  async function chEvidence(s: SseStream, cond: Cond, from: string, to: string): Promise<string | null> {
+    const key = JSON.stringify(['clickhouse', cond, from, to]);
+    let hit = evidenceCache.get(key);
+    if (!hit || Date.now() - hit.at > 600000) {
+      const { label } = condition(cond, from, to);
+      s.send('scan', { label, source: 'clickhouse', step: 'traffic' });
+      const r = await chOf().trafficEvidence(cond, from, to, s.signal);
+      if (s.signal.aborted) return null;
+      hit = { at: Date.now(), info: r.info, text: r.text };
+      if (r.cacheable) {
+        if (evidenceCache.size > 20) evidenceCache.delete(evidenceCache.keys().next().value!);
+        evidenceCache.set(key, hit);
+      }
+    }
+    s.send('evidence', { ...hit.info, cached: hit.at < Date.now() - 1000 });
+    return hit.text;
+  }
+
   /** 模型串流 → SSE:thinking、content、done(同舊版 streamChat) */
   async function streamAnswer(s: SseStream, llm: Llm, think: boolean, messages: ChatMessage[]) {
     for await (const e of llm.stream({ messages, think, signal: s.signal })) {
@@ -329,6 +416,6 @@ export function createAiService(deps: {
     }
   }
 
-  return { enabled: () => Boolean(deps.llm), requireEnabled: () => void llmOf(), prepareAnalysis, analyze, prepareQuestion, ask, status, summarize };
+  return { source, enabled: () => Boolean(deps.llm), requireEnabled: () => void llmOf(), prepareAnalysis, analyze, prepareQuestion, ask, status, summarize };
 }
 

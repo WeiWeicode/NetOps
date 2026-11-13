@@ -4,6 +4,8 @@
  *   - 向量同步(VECTOR_SYNC=1 才寫入):筆記異動 3 秒後、啟動 5 秒後、每 30 分鐘(同舊版 vector.js)
  *   - 外部 IP 自動學習:每 10 分鐘檢查一次是否到 IPLEARN_HOUR(同舊版 iplearn.js;預設 -1 不自動)
  * 背景同步在程序內執行,只跑單一容器(AGENT.md §7.3)。
+ * AC2:分析、問答、外部 IP 學習的資料來源依 config.ai.source(NETOPS_AI_SOURCE):clickhouse 查 ClickHouse(ch-source.ts),
+ *   ftp 沿用 FTP 摘要(正式區 C6 之前;需求方 2026-11-13 AQ4)。
  */
 import type { FastifyInstance } from 'fastify';
 import type { Config, FtpConfig } from '../../config.js';
@@ -21,6 +23,9 @@ import { createVectorIndex } from '../kb/core/vector.js';
 import type { KbService } from '../kb/service.js';
 import type { EventImporter } from '../pa-events/importer.js';
 import type { TrafficImporter } from '../pa/importer.js';
+import type { ClickHouseReader } from '../../infra/clickhouse/reader.js';
+import type { ChSummaryBuilder } from '../pa/ch-summary.js';
+import { createChAiSource } from './ch-source.js';
 import aiRoutes from './routes.js';
 import { createAiService } from './service.js';
 import { createSseHub } from './sse.js';
@@ -38,6 +43,11 @@ export interface AiDeps {
   kb: KbService;
   ftp: Ftp;
   paStore: PaStore;
+  /** ClickHouse 唯讀查詢與每小時摘要(未設定 ClickHouse 時為 null;clickhouse 來源的 AI 回 503) */
+  chReader?: ClickHouseReader | null;
+  chBuilder?: ChSummaryBuilder | null;
+  /** 測試時固定「現在」(ClickHouse 來源的 30 天分界、保留期限) */
+  now?: () => number;
   /** 測試時注入假的 AI 主機 / RDAP */
   fetch?: typeof fetch;
   /** 測試時縮短 SSE 心跳 */
@@ -51,6 +61,18 @@ export async function registerAi(app: FastifyInstance, deps: AiDeps) {
   const log = { info: (m: string) => app.log.info(m), error: (o: object, m: string) => app.log.error(o, m) };
 
   const llm = cfg.llm.url ? createLlm(cfg.llm, fetchImpl) : null;
+  const ch =
+    cfg.source === 'clickhouse'
+      ? createChAiSource({
+          reader: deps.chReader ?? null,
+          builder: deps.chBuilder ?? null,
+          events,
+          ttlDays: config.paTtlDays,
+          summaryDays: config.chSummary.days,
+          log: app.log,
+          now: deps.now,
+        })
+      : null;
   const vector = createVectorIndex({
     qdrant: createQdrant(cfg.vector, fetchImpl),
     embed: createEmbedder(cfg.vector, fetchImpl).embed,
@@ -76,6 +98,8 @@ export async function registerAi(app: FastifyInstance, deps: AiDeps) {
         loadState: () => paStore.loadIpLearnState(),
         saveState: (s: unknown) => paStore.saveIpLearnState(s),
         recentSummaries: (days: number) => {
+          // AC2:clickhouse 來源取原始 TRAFFIC 建的每小時摘要(上限 30 天,不新增彙總表)
+          if (ch) return ch.recentSummaries(days);
           // 同舊版 candidates:今天往前 days 天(含今天)
           const to = new Date();
           const from = new Date(Date.now() - (days - 1) * 86400000);
@@ -162,6 +186,8 @@ export async function registerAi(app: FastifyInstance, deps: AiDeps) {
     readFlows: (name) => paStore.readFlows(name),
     searchSeconds: config.search.seconds,
     kbMaxChars: cfg.kbMaxChars,
+    source: cfg.source,
+    ch,
   });
   const hub = createSseHub(app, { maxStreams: cfg.maxStreams, maxPerUser: cfg.maxStreamsPerUser, heartbeatMs: deps.heartbeatMs });
   await app.register(aiRoutes, { ai, hub });

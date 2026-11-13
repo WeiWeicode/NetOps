@@ -46,7 +46,7 @@ async function refresh() {
 async function run() {
   starting.value = true;
   try {
-    const days = Math.min(Math.max(Math.round(Number(form.days)) || 7, 1), 60);
+    const days = Math.min(Math.max(Math.round(Number(form.days)) || 7, 1), 30);
     const max = Math.min(Math.max(Math.round(Number(form.max)) || 150, 1), 500);
     Object.assign(form, { days, max });
     status.value = await ai.learnIps({ days, max, rewrite: form.rewrite });
@@ -96,7 +96,7 @@ onBeforeUnmount(() => {
         <p v-if="status.finishedAt && !status.busy" class="xs faint">結束於 {{ fmtTime(status.finishedAt) }}</p>
 
         <div v-if="props.canRun" class="run">
-          <GInput v-model.number="form.days" type="number" label="看最近幾天的 log(1–60)" class="num-in" :disabled="status.busy" />
+          <GInput v-model.number="form.days" type="number" label="看最近幾天的 log(1–30)" class="num-in" :disabled="status.busy" />
           <GInput v-model.number="form.max" type="number" label="最多查幾個新 IP(1–500)" class="num-in" :disabled="status.busy" />
           <GCheckbox v-model="form.rewrite" :disabled="status.busy" label="已學過的組織也重新整理(管理者改過的筆記不覆寫)" />
           <GButton variant="primary" icon="play" :loading="starting" :disabled="status.busy" @click="run">立即學習</GButton>

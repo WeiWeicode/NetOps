@@ -48,6 +48,8 @@ touch "$ENV_FILE"
 add() { grep -q "^$1=" "$ENV_FILE" || { echo "$1=$2" >> "$ENV_FILE"; echo "netops.env 新增 $1"; }; }
 add PA_POLL_ENABLED 0
 add PA_RECEIVE_ENABLED 0
+# C5 PA 精準查詢(D31;測試區預設關閉,由需求方手動開)
+add PA_QUERY_ENABLED 0
 add PA_HOST ""
 add PA_ALLOWED_SOURCES ""
 chmod 644 "$ENV_FILE"

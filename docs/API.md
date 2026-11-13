@@ -1,7 +1,7 @@
 # NetOps API
 
 > `netops-api` 的對外介面:前端(F1)照本文件串接。決策見 [ARCHITECTURE.md](ARCHITECTURE.md),工作項目見 [IMPL-PLAN.md](IMPL-PLAN.md)。
-> **狀態:B1 定稿;C3 `feature/clickhouse-c3-query` 加 §4.1、§4.2 的 `source`(ClickHouse),`feature/clickhouse-c3-detail` 加 §4.3 的 `source`,`feature/clickhouse-c3-reconcile` 加 §5.3 對帳與補漏;V-a `feature/viz-a-heatmap-data` 加 §4.4 熱力圖與時段明細;V-b1 `feature/viz-b1-insight-frontend` 加 §4.5 分析儀表板;`feature/clickhouse-c3-ch-only`(D43)§4.1–§4.3 只查 ClickHouse、對帳 01:00;B2-pa 已實作 §4.1、§5.1;B2-ad 已實作 §4.2、§5.2、§6;B2-kb 已實作 §7;B2-logs 已實作 §4.3(B2 全部完成);A1(AI 搬移)第 2 批 `feature/a1-ai-api` 實作 §10**。各模組在 B2 分批實作,「批次」欄是預定交付的 MR;實作與本文件不同時,以 MR 描述的「API 變更」為準並同步更新本文件。
+> **狀態:B1 定稿;C3 `feature/clickhouse-c3-query` 加 §4.1、§4.2 的 `source`(ClickHouse),`feature/clickhouse-c3-detail` 加 §4.3 的 `source`,`feature/clickhouse-c3-reconcile` 加 §5.3 對帳與補漏;V-a `feature/viz-a-heatmap-data` 加 §4.4 熱力圖與時段明細;V-b1 `feature/viz-b1-insight-frontend` 加 §4.5 分析儀表板;C5 `feature/c5-pa-precise-query` 加 §3.3 PA 精準查詢;`feature/clickhouse-c3-ch-only`(D43)§4.1–§4.3 只查 ClickHouse、對帳 01:00;B2-pa 已實作 §4.1、§5.1;B2-ad 已實作 §4.2、§5.2、§6;B2-kb 已實作 §7;B2-logs 已實作 §4.3(B2 全部完成);A1(AI 搬移)第 2 批 `feature/a1-ai-api` 實作 §10**。各模組在 B2 分批實作,「批次」欄是預定交付的 MR;實作與本文件不同時,以 MR 描述的「API 變更」為準並同步更新本文件。
 > 欄位的完整定義以服務的 `/openapi.json` 為準(上架時匯入 Gateway);本文件寫路徑、權限、請求與回應格式。
 
 ---
@@ -73,6 +73,7 @@ PA 匯入在背景佇列執行;同步、分析只是送進佇列,畫面輪詢狀
 | `netops.ping.read` | 連線驗證:查詢 | §3(含 §3.1 串流驗證) |
 | `netops.pa-realtime.read` | PA 即時監控:查詢 | §3.2(畫面節點 `netops.pa-live.read`) |
 | `netops.pa-realtime.write` | PA 即時監控:測試區暫停 / 繼續收集器 | §3.2 `collector-control`(按鈕 `netops.pa-live.manage`,只給 `netops-admin`;2026-11-09 需求方決定) |
+| `netops.pa-query.read` | PA 精準查詢:查詢 | §3.3(**只給 `netops-admin`**,CQ7;按鈕 `netops.pa-live.query`) |
 | `netops.pa.read` | PA 防火牆:查詢 | §4.1、§4.2、§4.4 熱力圖、§4.5 儀表板 |
 | `netops.pa-log.read` | PA Log 明細:查詢 | §4.3、§4.4 時段明細 |
 | `netops.ftp.read` | FTP Log 檔案:查詢 | §5 讀取 |
@@ -108,6 +109,62 @@ PA 匯入在背景佇列執行;同步、分析只是送進佇列,畫面輪詢狀
 - **逾時(不受 AGENT.md §7.3 一般 API 10 秒限制的原因)**:BFF 對上游的 `bodyTimeout` 等於路由逾時,而 undici 的 `bodyTimeout` 是「兩個資料塊之間」的閒置時間,不是總時長;本路由設 `x-timeout-ms: 60000`,心跳 15 秒,所以連線可以一直開著。BFF 斷路器計入「收到標頭之前」的逾時與連線錯誤,以及上游回 5xx;串流已回 200 之後的中斷不累積,所以名額滿時回 **429**(回 5xx 會讓有權限的人藉此打開斷路器、整個 `netops-api` 停 30 秒)。**SSE 路由一定要設 `x-timeout-ms` 大於心跳間隔**(預設 10 秒會在第一次心跳前被切斷),心跳不可超過 60 秒。
 - 權限用 `netops.ping.read`:同 §3 是連線驗證用,不綁畫面節點、不在 `gateway-rbac.yaml` 的角色內,在 GigaItApp 個別指派(B0 時指派給 `it-admin`,現況以 GigaItApp 為準);S0 驗證完成後可把這條路由在 GigaItApp 停用;不新增權限代碼,`gateway-rbac.yaml` 不變。R1 正式串流用 `netops.pa-realtime.read`(PA-LIVE-PLAN §8)。
 - 驗證腳本 `backend/scripts/sse-probe.mjs`,步驟見 `docs/test-reports/2026-11-05-s0-sse.md`。
+
+### 3.3 PA 精準查詢(C5)— 批次 `feature/c5-pa-precise-query`
+
+設計見 [PA-LOG-CLICKHOUSE-GUIDE.md](PA-LOG-CLICKHOUSE-GUIDE.md) §9;決策 D31、CQ6、CQ7;門檻依 IMPL-PLAN C0 **E4 結果**(2026-11-10:15 分鐘、500 筆、逾時 60 秒、全系統一次一個、管理平面 CPU > 50% 不送;較大範圍實測前不放寬)。`netops-api` 只驗證與送出,PA-560 由 `netops-pa` 的查詢執行者查(`PA_QUERY_ENABLED`,**測試區預設關閉**,需求方手動開)。
+
+| 方法 | 路徑 | 權限 | 稽核 | 說明 |
+| --- | --- | --- | --- | --- |
+| GET | `/api/netops/pa-query/status` | `netops.pa-query.read` | — | 按鈕能不能按:`{ enabled, executor, heartbeatAgeSec, activeSec, globalCoolSec, userCoolSec, mgmtCpu }` |
+| POST | `/api/netops/pa-query/jobs` | `netops.pa-query.read` | `meta` | 送出(202 + 工作) |
+| GET | `/api/netops/pa-query/jobs/{id}` | `netops.pa-query.read` | `meta` | 工作狀態與結果(本人;10 分鐘內) |
+
+**權限**:`netops.pa-query.read` **只給 `netops-admin`**(CQ7;按鈕 `netops.pa-live.query`);`netops-viewer` 沒有,BFF 回 403。查詢本身唯讀(D22),但會在 PA-560 管理平面執行,所以和寫入一樣只給管理員。
+
+**送出內容**(`additionalProperties: false`):
+
+| 欄位 | 說明 |
+| --- | --- |
+| `kind` | `log`:XML API `type=log`;`session`:Session Browser(`show session all filter source / destination <IP>`) |
+| `ip` | **必填,單一 IPv4 / IPv6**(不接受 CIDR、萬用字元);查詢語法只由驗證過的值組成,不接受自訂 filter |
+| `logType` | `log`:`traffic`(預設)/ `threat` |
+| `from`、`to` | `log`:ISO 8601 含時區;`to − from` ≤ **15 分鐘**、`to` 在最近 **1 小時**內(更早的用 §4.3 Log 明細查詢) |
+| `nlogs` | `log`:1–**500**(預設 500) |
+| `direction` | `session`:`src`(該 IP 為來源,預設)/ `dst` |
+
+**限流**(被擋一律 **429** `NETOPS_PA_QUERY_BUSY`,`Retry-After` 與 `details.retryAfter`,不回 5xx):
+
+| 規則 | 值 |
+| --- | --- |
+| 全系統同時 | 1 個(Redis `netops:paq:active`,TTL 90 秒;`netops-pa` 結束時釋放) |
+| 全域間隔 | 10 秒(每個工作結束後) |
+| 每人冷卻 | 60 秒(送出時起算;被擋的請求不算) |
+| 管理平面 CPU | 最新快照(輪詢寫入)> 50% 先擋;`netops-pa` 送出前**再取樣一次**,> 50% 或讀不到就不送,工作標 `rejected` |
+| 工作逾時 | 60 秒;到時 `netops-pa` 送 `action=finish` 取消 PA 上的工作,工作標 `failed`(`NETOPS_PA_QUERY_TIMEOUT`) |
+
+`netops-pa` 沒開查詢執行者、或心跳超過 60 秒:409 `NETOPS_PA_QUERY_DISABLED`。Redis 連不上:424 `NETOPS_REDIS_UNAVAILABLE`。
+
+```jsonc
+// POST 202、GET 200
+{
+  "id": "…uuid…", "kind": "log", "status": "done",      // queued | running | done | failed | rejected
+  "params": { "logType": "traffic", "ip": "10.10.130.124", "from": "2026-11-12T01:45:00.000Z", "to": "2026-11-12T02:00:00.000Z", "nlogs": 500 },
+  "createdAt": "…", "startedAt": "…", "finishedAt": "…",
+  "mgmtCpu": 4.5,                                       // 送出前取樣到的管理平面 CPU(%)
+  "error": null,                                        // failed / rejected:{ code, message }(NETOPS_PA_QUERY_TIMEOUT、_FAILED、_EXPIRED、_INVALID、_CPU_HIGH、_CPU_UNKNOWN)
+  "result": {                                           // done 才有
+    "rows": [ { "time": "2026/11/12 09:58:01", "action": "allow", "src": "10.10.130.124", "sport": 51000, "dst": "8.8.8.8", "dport": 443,
+                "app": "ssl", "rule": "Allow-Web", "fromZone": "trust", "toZone": "untrust", "bytes": 1200, "sent": 200, "recv": 1000 } ],
+    // log:欄位同 §4.3(time 為 PA 設備時間 yyyy/MM/dd HH:mm:ss);session:id、app、state、type、src、sport、dst、dport、proto、
+    //      fromZone、toZone、startTime、bytes、rule、natSrc、natDst、natSport、natDport、srcUser
+    "count": 1, "truncated": false                      // truncated:達 500 筆上限
+  }
+}
+```
+
+- API Key 只在 `netops-pa`,放 `X-PAN-KEY` 標頭(不進網址、POST 內容與錯誤訊息,日誌遮罩)。不跟隨轉址;PA 的錯誤原文只寫日誌,`error.message` 只有分類與 PA code。PA 端該 Key 的 Admin Role 應只開 XML API Log 與 Operational Requests(網通設定;程式另以白名單只送唯讀請求)。
+- 測試區與正式區查同一台 PA-560,名額與冷卻各在自己的 Redis(兩區同時查可能各 1 個;正式區上線前再評估)。
 
 ### 3.2 PA 即時監控(R1)— 批次 `feature/r1-api`
 
@@ -684,6 +741,9 @@ AI 相關(語意搜尋、向量同步、外部 IP 自動學習)見 §10.2(A1)。
 | 429 | `NETOPS_INSIGHT_BUSY` | 分析儀表板同時計算的查詢已滿(全系統 2 個);帶 `Retry-After`(§4.5,V-b1) |
 | 429 | `NETOPS_COLD_QUERY_BUSY` | 已有冷資料查詢在執行(全系統 1 個)或歸檔匯出中;帶 `Retry-After`(§4.4,C4 起) |
 | 403 | `NETOPS_PA_CONTROL_DISABLED` | 正式區不能切換收集器的輪詢與接收(§3.2 `collector-control`,只有測試區可用) |
+| 429 | `NETOPS_PA_QUERY_BUSY` | PA 精準查詢:已有查詢在執行(全系統 1 個)、間隔 / 冷卻中或管理平面 CPU 過高;帶 `Retry-After`(§3.3) |
+| 409 | `NETOPS_PA_QUERY_DISABLED` | PA 精準查詢未啟用(`netops-pa` 沒開查詢執行者或停止回報;§3.3) |
+| 404 | `NETOPS_PA_QUERY_NOT_FOUND` | PA 精準查詢工作不存在、不是本人的或超過 10 分鐘(§3.3) |
 | 424 | `NETOPS_REDIS_UNAVAILABLE` | 即時監控讀不到 `netops-redis`(§3.2;`snapshot` 例外,回 200 `state: unavailable`)。不用 5xx:避免累積 BFF 斷路器失敗。原始錯誤只寫服務日誌 |
 | 424 | `NETOPS_PA_LIVE_DISABLED` | 未設定 `REDIS_URL`(只會在 dev) |
 | 403 | `NETOPS_STREAM_OWNER_UNKNOWN` | 身分沒有工號也沒有 sub,不能建立即時串流(正常經 Gateway 不會發生) |

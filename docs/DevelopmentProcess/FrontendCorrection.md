@@ -2,6 +2,13 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。範圍:`frontend/`。
 
+## 2026-11-12 C5 PA 精準查詢(邏輯層與最小介面)
+- 工作項目:C5
+- 內容:`api/paQuery.ts`、`composables/usePaQuery.ts`(按鈕權限才呼叫 API、送出 → 每 2 秒輪詢最多 90 秒、429 倒數、rejected / failed)、`components/PaQueryPanel.vue`(即時監控頁的樸素版,正式畫面交 Gemini,HANDOFF-GEMINI-VIZ §10)、`perms.ts` 加 `UI.paLiveQuery`、`API.paQueryRead`;假 Gateway `mock/paQuery.ts` 與 admin 的按鈕權限
+- 檔案:`frontend/src/{api/paQuery.ts,api/perms.ts,composables/usePaQuery.ts,components/PaQueryPanel.vue,pages/firewall/Live.vue}`、`frontend/mock/{paQuery,gateway}.ts`、`frontend/test/paQuery.test.ts`
+- 審查修正(2026-11-12):冷卻剩餘秒數依時間遞減、歸零後重讀狀態(原本按鈕停用到重新整理);輪詢連續失敗 3 次才放棄;429 倒數結束清掉錯誤;狀態讀取失敗另存 `stateError`,不蓋掉已完成的結果
+- 驗證:`vue-tsc`、`npm test`(124 通過);`MOCK=admin` 瀏覽器:即時監控頁送出 Session 查詢,約 3 秒後顯示 6 筆
+
 ## 2026-11-12 V-b2 審查修正(Claude)
 - 工作項目:V-b2(審查 Gemini 41f7b53;`code-reviewer`)
 - 內容:① `GHeatmap`:滑鼠單擊延遲 250ms 才 `select`,雙擊只 `drill`(原本第一下就打開抽屜,遮罩吃掉第二下,雙擊下鑽做不到);年視圖欄位從 `from` 所在週的週起點起算(原本同一欄會跨兩週、最後一欄可能兩格疊在一起);資料換了(刷新、同長度的上一期 / 下一期)就清 tooltip;每格的 label 與 style 在 `placed` 一次算好(hover 不再讓 371 格重算 label);加 Home / End。② `GDrawer`:Esc 也掛在 document(焦點掉回 body 時仍可關)、開著時鎖背景捲動、可聚焦判斷改用 `getClientRects`、點 SVG / 表格列開啟時不把 body 當成觸發元素。③ `useInsight` 加 `canSlice`(和 `useHeatmap` 同一個判斷),`Insight.vue` 改讀它,沒有 Log 明細權限時提示而不是不動;合併重複的 import;Top 10 威脅名稱在 ≤ 640px 縮小左側標籤區。④ `Heatmap.vue`:換粒度 / 期間時清掉選取格。⑤ `components.d.ts` 補 9 個圖表元件(報告 §5 第 2 點)。⑥ 測試:雙擊 / 單擊延遲、年視圖欄位、Home / End、tooltip 清除、抽屜捲動鎖與 document Esc;頁面級測試逾時 15 秒(全套件冷啟動時偶發超過 5 秒)。

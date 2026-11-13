@@ -27,7 +27,11 @@ import { ASK_PROMPT, buildContext, EVENT_Q, kbSection, SYSTEM_PROMPT } from './c
 import { buildCondition, createCollector, parseQuestion } from './core/evidence.js';
 import type { SseStream } from './sse.js';
 import type { AiSource, ChAiSource } from './ch-source.js';
+import type { DailySummaryResult } from './daily-summary.js';
 import {
+  DAILY_TASK,
+  dailyContext,
+  trafficSessions,
   EVENTS_TASK,
   eventsContext,
   EXPLAIN_PROMPT,
@@ -587,6 +591,78 @@ export function createAiService(deps: {
     ]);
   }
 
+  /* ───────── AC7 每日摘要(排程呼叫,不經 SSE) ───────── */
+
+  /** 每日摘要的模型回答上限(字元;超過截斷) */
+  const DAILY_TEXT_MAX = 20000;
+
+  /**
+   * 產生某一天(YYYY-MM-DD)的每日摘要:前一天的流量(儀表板快取 + 前一天比較)與四類安全事件(總覽快取)。
+   * 其中一段取不到時只在資料中註明;兩段都取不到時丟出(排程記失敗並重試)。不送原始 log。
+   */
+  async function dailySummary(day: string): Promise<DailySummaryResult> {
+    const llm = llmOf();
+    const src = deps.explain;
+    if (!src?.insight || !src.events) throw noSource();
+    const q = { from: day, to: day };
+    let traffic: Parameters<typeof dailyContext>[1];
+    let lastErr: unknown = null;
+    try {
+      const data = (await src.insight.traffic(q)) as TrafficInsightForAi;
+      let prev: TrafficPrev | null = null;
+      let prevError = false;
+      try {
+        prev = await src.insight.trafficPrev(q);
+      } catch (err) {
+        if (!(err instanceof AppError)) throw err;
+        prevError = true;
+      }
+      traffic = { data, prev, prevError };
+    } catch (err) {
+      lastErr = err;
+      traffic = { error: err instanceof AppError ? err.message : '查詢失敗' };
+    }
+    let events: Parameters<typeof dailyContext>[2];
+    try {
+      events = await src.events(dayRange({ from: day }));
+    } catch (err) {
+      lastErr = err;
+      events = { error: err instanceof AppError ? err.message : '查詢失敗' };
+    }
+    if ('error' in traffic && 'error' in events) throw lastErr;
+    const { text, clipped } = dailyContext(day, traffic, events);
+    const kbNotes = await notes({ ips: ipsInText(text, 50), text, query: '' });
+    const model = await llm.model();
+    const answer = await llm.chatOnce({
+      messages: [
+        { role: 'system', content: EXPLAIN_PROMPT },
+        { role: 'user', content: `${DAILY_TASK}\n\n---\n以下是系統查到的資料：\n\n${text}${deps.ipNames?.(text) ?? ''}${kbSection(kbNotes)}` },
+      ],
+      maxTokens: 3000,
+    });
+    if (!answer.trim()) throw new AppError(502, 'NETOPS_AI_EMPTY', 'AI 沒有回答內容');
+    const ev = 'error' in events ? null : events;
+    const rows = (t: string) => {
+      const x = ev?.types.find((y) => y.type === t);
+      return x ? (x.overview?.rows ?? 0) : null;
+    };
+    const partial =
+      'error' in traffic ||
+      'error' in events ||
+      traffic.prevError ||
+      traffic.data.coverage.gaps.length > 0 ||
+      !traffic.data.coverage.gapsKnown ||
+      events.types.some((t) => t.overview && (t.overview.partial || t.overview.missing > 0 || t.overview.topsState !== 'ok'));
+    return {
+      text: answer.length > DAILY_TEXT_MAX ? `${answer.slice(0, DAILY_TEXT_MAX)}\n\n（回答過長，已截斷）` : answer,
+      model,
+      partial,
+      clipped,
+      contextChars: text.length,
+      counts: { sessions: 'error' in traffic ? null : trafficSessions(traffic.data), threat: rows('threat'), url: rows('url'), data: rows('data'), wildfire: rows('wildfire') },
+    };
+  }
+
   /** 模型串流 → SSE:thinking、content、done(同舊版 streamChat) */
   async function streamAnswer(s: SseStream, llm: Llm, think: boolean, messages: ChatMessage[]) {
     for await (const e of llm.stream({ messages, think, signal: s.signal })) {
@@ -607,6 +683,6 @@ export function createAiService(deps: {
     }
   }
 
-  return { source, enabled: () => Boolean(deps.llm), requireEnabled: () => void llmOf(), prepareAnalysis, analyze, prepareQuestion, ask, prepareExplanation, explain, status, summarize };
+  return { source, enabled: () => Boolean(deps.llm), requireEnabled: () => void llmOf(), prepareAnalysis, analyze, prepareQuestion, ask, prepareExplanation, explain, dailySummary, status, summarize };
 }
 

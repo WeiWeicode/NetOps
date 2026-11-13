@@ -33,6 +33,7 @@ import paLiveLiveRoutes, { type LiveStreamOptions } from './modules/pa-live/live
 import { createPaLiveService } from './modules/pa-live/service.js';
 import pingRoutes from './modules/ping/routes.js';
 import { registerAi } from './modules/ai/index.js';
+import type { DailySummaryScheduler } from './modules/ai/daily-summary.js';
 import { swaggerOptions } from './openapi.js';
 import { createClickHouseReader, type ClickHouseReader } from './infra/clickhouse/reader.js';
 import { connectDashboardCache, createDashboardCache, type DashboardCache } from './infra/redis/cache.js';
@@ -65,6 +66,8 @@ declare module 'fastify' {
     chSummary: ChSummaryBuilder | null;
     /** IP 對照表(AC3):PA 各 API 的 names、Log 明細名稱搜尋、AI 提示詞 */
     ipNames: IpNameService;
+    /** AI 每日摘要排程(AC7) */
+    aiDaily: DailySummaryScheduler;
   }
   interface FastifyRequest {
     identity: GatewayIdentity | null;
@@ -185,6 +188,7 @@ export async function buildApp(
   );
   app.get('/openapi.json', noAuth, async () => app.swagger());
 
+  for (const w of config.startupWarnings ?? []) app.log.warn(w);
   await app.register(pingRoutes);
   // S0 串流驗證(SSE,PA-LIVE-PLAN §7)
   await app.register(paLiveRoutes, deps.streamTest ?? {});
@@ -235,6 +239,12 @@ export async function buildApp(
     retentionDays: config.ftpRetentionDays,
     now: deps.chNow,
   });
+  // AC7:AI 每日摘要在 registerAi 建立(下面);對帳每一輪、每日同步之後在背景觸發,不等 AI 回答(AI 主機無法使用不影響對帳與同步)
+  let aiDaily: { kick(): void } | null = null;
+  const afterRecon = async () => {
+    await daily.run();
+    aiDaily?.kick();
+  };
   // 對帳發現缺口時自動送補漏(需求方 2026-11-13 決定;NETOPS_RECON_AUTO_BACKFILL=0 關閉)
   const recon =
     chReader && chBuilder
@@ -246,7 +256,7 @@ export async function buildApp(
           log: app.log,
           at: config.reconAt,
           backfill: { queue: backfillQueue, enabled: config.reconAutoBackfill, retentionDays: config.ftpRetentionDays },
-          after: daily.run,
+          after: afterRecon,
           now: deps.chNow,
         })
       : null;
@@ -294,7 +304,28 @@ export async function buildApp(
     threat: heatSvc.threatProfile,
     events: (q: { from: string; to: string }) => eventsForAi(ch, q.from, q.to),
   };
-  await registerAi(app, { config, traffic, events, ad, kb, ftp, paStore: app.store.pa, chReader, chBuilder, now: deps.chNow, explain, ...deps.ai });
+  // 每日同步這一輪結束(完成 / 停止重試 / 未啟用),或沒有要同步的類型(沒有啟用 PA 三類也沒有 AD)
+  const syncReady = () => {
+    const s = daily.status();
+    return s.categories.length === 0 || ['done', 'gave-up', 'disabled'].includes(s.state);
+  };
+  const aiReg = await registerAi(app, {
+    config,
+    traffic,
+    events,
+    ad,
+    kb,
+    ftp,
+    paStore: app.store.pa,
+    chReader,
+    chBuilder,
+    now: deps.chNow,
+    explain,
+    daily: { autoRecon: Boolean(recon) && config.reconAt >= 0, syncReady },
+    ...deps.ai,
+  });
+  aiDaily = aiReg.daily;
+  app.decorate('aiDaily', aiReg.daily);
   await app.register(ftpRoutes, {
     ftp,
     traffic,

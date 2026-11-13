@@ -29,6 +29,7 @@ import { createChAiSource } from './ch-source.js';
 import aiRoutes from './routes.js';
 import { createAiService, type ExplainSources } from './service.js';
 import { createSseHub } from './sse.js';
+import { createDailySummary, type DailySummaryScheduler } from './daily-summary.js';
 import { aiNamesSection } from '../ip-names/service.js';
 
 const pad = (n: number) => String(n).padStart(2, '0');
@@ -55,9 +56,14 @@ export interface AiDeps {
   heartbeatMs?: number;
   /** AC4 AI 解讀的資料來源(時段明細、分析儀表板) */
   explain?: ExplainSources;
+  /**
+   * AC7 每日摘要的排程條件:autoRecon = 有自動對帳(ClickHouse + NETOPS_RECON_TIME ≥ 0);
+   * syncReady = 每日同步(AC1)今天這一輪已結束(完成、停止重試或未啟用)
+   */
+  daily?: { autoRecon: boolean; syncReady(): boolean };
 }
 
-export async function registerAi(app: FastifyInstance, deps: AiDeps) {
+export async function registerAi(app: FastifyInstance, deps: AiDeps): Promise<{ daily: DailySummaryScheduler }> {
   const { config, traffic, events, ad, kb, ftp, paStore } = deps;
   const cfg = config.ai;
   const fetchImpl = deps.fetch ?? fetch;
@@ -195,7 +201,18 @@ export async function registerAi(app: FastifyInstance, deps: AiDeps) {
     ipNames: (text) => aiNamesSection(app.ipNames, text),
     explain: deps.explain,
   });
+  // AC7:對帳與每日同步後自動產生前一天的摘要(要有 LLM_URL、自動對帳、AI 解讀的資料來源;NETOPS_AI_DAILY_SUMMARY)
+  const daily = createDailySummary({
+    enabled: cfg.dailySummary && Boolean(llm) && Boolean(deps.daily?.autoRecon) && Boolean(deps.explain?.insight && deps.explain.events),
+    at: config.reconAt,
+    generate: (day) => ai.dailySummary(day),
+    store: paStore,
+    ready: () => deps.daily?.syncReady() ?? true,
+    log: app.log,
+    now: deps.now,
+  });
   const hub = createSseHub(app, { maxStreams: cfg.maxStreams, maxPerUser: cfg.maxStreamsPerUser, heartbeatMs: deps.heartbeatMs });
-  await app.register(aiRoutes, { ai, hub });
+  await app.register(aiRoutes, { ai, hub, daily });
   await app.register(kbAiRoutes, { kb, vector, learner, learnHour: cfg.ipLearn.hour, learnDefaults: { days: cfg.ipLearn.days, max: cfg.ipLearn.max }, log });
+  return { daily };
 }

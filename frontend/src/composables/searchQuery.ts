@@ -54,15 +54,55 @@ export const isPorts = (v: string) => /^\d{1,5}(\s*,\s*\d{1,5})*$/.test(v);
 /** 事件 ID:數字以逗號分隔 */
 export const isEventIds = (v: string) => /^\d{1,6}(\s*,\s*\d{1,6})*$/.test(v);
 
+/** 查詢類型(TRAFFIC 預設;THREAT 查威脅 log,需求方 2026-11-13 決定) */
+export const SEARCH_TYPES = ['TRAFFIC', 'THREAT'] as const;
+/** 嚴重度(畫面與網址用 info) */
+export const SEARCH_SEVERITIES = ['critical', 'high', 'medium', 'low', 'info'] as const;
+export const isSearchType = (v: string) => (SEARCH_TYPES as readonly string[]).includes(v);
+export const isSeverity = (v: string) => (SEARCH_SEVERITIES as readonly string[]).includes(v);
+
 /**
- * 網址帶了 Log 明細查詢頁不支援的威脅類條件(本頁只查 TRAFFIC;時段明細抽屜的威脅類會帶 type=THREAT、threat、severity):
- * 回傳要提示「未套用」的文字,沒有則空字串(AGENT §5:不靜默忽略)。
+ * 網址帶了 Log 明細查詢頁無法套用的條件:不認得的類型、不認得的嚴重度、
+ * 不是 THREAT 卻帶了威脅名稱或嚴重度(只有威脅 log 有這兩欄)。回傳要提示「未套用」的文字,沒有則空字串(AGENT §5:不靜默忽略)。
  * 頁面要在進頁時算一次:自動查詢會用 router.replace 改寫網址(只留本頁條件),跟著網址算提示會馬上消失(C7 第二輪)
  */
 export function ignoredThreatCond(q: LocationQuery): string {
+  const str = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
+  const type = str(q.type);
   const parts: string[] = [];
-  if (q.type === 'THREAT') parts.push('類型 THREAT');
-  if (typeof q.threat === 'string' && q.threat) parts.push(`威脅名稱「${q.threat}」`);
-  if (typeof q.severity === 'string' && q.severity) parts.push(`嚴重度 ${q.severity}`);
+  if (type && !isSearchType(type)) parts.push(`類型 ${type}`);
+  const threat = type === 'THREAT';
+  if (!threat && str(q.threat)) parts.push(`威脅名稱「${str(q.threat)}」`);
+  const sev = str(q.severity);
+  if (sev && (!threat || !isSeverity(sev))) parts.push(`嚴重度 ${sev}`);
   return parts.join('、');
+}
+
+/** IPv4「a.b.c.d」→ 整數;格式不符回 null */
+function ipv4Int(v: string): number | null {
+  const m = v.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (!m) return null;
+  const parts = m.slice(1).map(Number);
+  if (parts.some((x) => x > 255)) return null;
+  return parts.reduce((acc, x) => acc * 256 + x, 0);
+}
+
+/**
+ * PA 的國家欄位(Source / Destination Country):私有與保留位址填的是網段範圍(例「10.0.0.0-10.255.255.255」),不是國家(C7b)。
+ * 範圍 → { label: 「內部網路 10.0.0.0/8」, cidr };剛好是一個 CIDR 時給 cidr(可改用 IP 條件查),否則 cidr 為 null、label 為「網段 原字串」。
+ * 不是範圍(一般國家名稱)回 null。
+ */
+export function countryRange(key: string): { label: string; cidr: string | null } | null {
+  const m = key.trim().match(/^([0-9a-fA-F.:]+)-([0-9a-fA-F.:]+)$/);
+  if (!m) return null;
+  const [, from = '', to = ''] = m;
+  const a = ipv4Int(from);
+  const b = ipv4Int(to);
+  let cidr: string | null = null;
+  if (a !== null && b !== null && b >= a) {
+    const size = b - a + 1;
+    const bits = Math.log2(size);
+    if (Number.isInteger(bits) && a % size === 0) cidr = `${from}/${32 - bits}`;
+  }
+  return { label: cidr ? `內部網路 ${cidr}` : `網段 ${key.trim()}`, cidr };
 }

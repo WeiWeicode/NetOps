@@ -145,6 +145,13 @@ export interface ClickHouseReader {
   searchTraffic(f: TrafficFilter, limit: number, maxSeconds: number, signal?: AbortSignal): Promise<{ rows: LogRecord[]; more: boolean; scanned: number }>;
   /** 期間內 TRAFFIC 每小時彙總的總筆數(明細查詢前判斷有沒有資料) */
   trafficCount(fromMs: number, toMs: number): Promise<number>;
+  /**
+   * 威脅 log 明細查詢(log_type = threat;V-b2 C7 第二輪,需求方 2026-11-13 決定;docs/API.md §4.3):
+   * 語意同 searchTraffic,另加嚴重度、威脅名稱;rows 為 THREAT_FIELDS 的欄位
+   */
+  searchThreat(f: ThreatSearchFilter, limit: number, maxSeconds: number, signal?: AbortSignal): Promise<{ rows: LogRecord[]; more: boolean; scanned: number }>;
+  /** 期間內威脅 log(log_type = threat)的筆數(明細查詢前判斷有沒有資料) */
+  threatCount(fromMs: number, toMs: number): Promise<number>;
 }
 
 /** 明細查詢條件(和 FTP 掃描 core/palog.js buildFilter 相同語意;時間為 UTC 毫秒,toMs 不含) */
@@ -162,8 +169,19 @@ export interface TrafficFilter {
   fromZone?: string;
   toZone?: string;
   user?: string;
+  /** 來源或目的國家任一方(相容) */
   country?: string;
+  /** 來源國家(src_country) */
+  srcCountry?: string;
+  /** 目的國家(dst_country) */
+  dstCountry?: string;
   q?: string;
+}
+
+/** 威脅 log 明細條件:TRAFFIC 的條件 + 嚴重度(critical / high / medium / low / info)、威脅名稱(包含) */
+export interface ThreatSearchFilter extends TrafficFilter {
+  severity?: string;
+  threat?: string;
 }
 
 const IPV4 = /^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
@@ -175,6 +193,11 @@ const TEXT_COLUMNS = [
   ipText('src'), ipText('dst'), ipText('nat_src'), ipText('nat_dst'), 'toString(sport)', 'toString(dport)', 'subtype', 'proto', 'rule', 'src_user', 'app',
   'from_zone', 'to_zone', 'action', 'category', 'src_country', 'dst_country', 'end_reason', 'src_host', 'dst_host',
 ];
+/** 威脅表沒有 sport、end_reason、src_host、dst_host;另加威脅名稱、URL、嚴重度 */
+const THREAT_TEXT_COLUMNS = [
+  ipText('src'), ipText('dst'), ipText('nat_src'), ipText('nat_dst'), 'toString(dport)', 'subtype', 'proto', 'rule', 'src_user', 'app',
+  'from_zone', 'to_zone', 'action', 'category', 'src_country', 'dst_country', 'name', 'url', 'severity',
+];
 
 /**
  * 明細條件 → SQL 條件與參數(純函式;值一律放參數,欄位名稱只來自程式內常數)。
@@ -182,7 +205,7 @@ const TEXT_COLUMNS = [
  *       不是合法 IP 也不是合法 CIDR 時同 FTP 版:CIDR 以字首比對、其他以字串完全相同比對
  *   其他欄位同 buildFilter:proto、區域完全相同不分大小寫;App、規則、使用者、國家包含;action allow / block / 原文
  */
-export function trafficWhere(f: TrafficFilter): { where: string[]; params: Record<string, Param> } {
+export function trafficWhere(f: TrafficFilter, textColumns: string[] = TEXT_COLUMNS): { where: string[]; params: Record<string, Param> } {
   const where = ['event_time >= toDateTime({from:UInt32})', 'event_time < toDateTime({to:UInt32})'];
   const params: Record<string, Param> = { from: sec(f.fromMs), to: Math.ceil(f.toMs / 1000) };
   let n = 0;
@@ -238,11 +261,33 @@ export function trafficWhere(f: TrafficFilter): { where: string[]; params: Recor
   exact('to_zone', f.toZone);
   contains(['src_user'], f.user);
   contains(['src_country', 'dst_country'], f.country);
+  contains(['src_country'], f.srcCountry);
+  contains(['dst_country'], f.dstCountry);
   const action = String(f.action ?? '').trim();
   if (action === 'allow') where.push(`action = 'allow'`);
   else if (action === 'block') where.push(`action != 'allow'`);
   else if (action) where.push(`action = ${p(action, 'String')}`);
-  contains([`concat(${TEXT_COLUMNS.join(", ',', ")})`], f.q);
+  contains([`concat(${textColumns.join(", ',', ")})`], f.q);
+  return { where, params };
+}
+
+/** 嚴重度(畫面用 info;表內是 informational) */
+export const SEARCH_SEVERITIES = ['critical', 'high', 'medium', 'low', 'info', 'informational'] as const;
+
+/** 威脅 log 明細條件 → SQL(log_type = threat;其餘同 trafficWhere,欄位在威脅表同名) */
+export function threatSearchWhere(f: ThreatSearchFilter): { where: string[]; params: Record<string, Param> } {
+  const { where, params } = trafficWhere(f, THREAT_TEXT_COLUMNS);
+  where.push(`log_type = 'threat'`);
+  const sev = String(f.severity ?? '').trim().toLowerCase();
+  if (sev) {
+    params.sev = sev === 'info' ? 'informational' : sev;
+    where.push('severity = {sev:String}');
+  }
+  const name = String(f.threat ?? '').trim();
+  if (name) {
+    params.thr = name;
+    where.push('positionCaseInsensitiveUTF8(name, {thr:String}) > 0');
+  }
   return { where, params };
 }
 
@@ -415,6 +460,44 @@ export function createClickHouseReader(cfg: ClickHouseConfig, fetchImpl: Fetch =
     return total;
   }
 
+  /** 明細查詢(工作模式內執行):依時間由舊到新最多 limit 筆;more = 還有更多符合的;scanned = ClickHouse 讀過的列數 */
+  async function search(
+    table: 'traffic' | 'threat',
+    fields: [string, string][],
+    w: { where: string[]; params: Record<string, Param> },
+    limit: number,
+    seconds: number,
+    signal?: AbortSignal,
+  ): Promise<{ rows: LogRecord[]; more: boolean; scanned: number }> {
+    const names = fields.map(([k]) => k);
+    const out: LogRecord[] = [];
+    let scanned = 0;
+    const secs = Math.min(Math.max(Math.floor(seconds), 1), 50);
+    await stream(
+      `SELECT ${fields.map(([, e]) => e).join(', ')} FROM ${READ_TABLES[table]} WHERE ${w.where.join(' AND ')} ORDER BY event_time, src LIMIT {lim:UInt32}`,
+      { ...w.params, lim: limit + 1 },
+      (cols) => {
+        const r: LogRecord = {};
+        for (let i = 0; i < names.length; i++) r[names[i]!] = cols[i] as string | number;
+        out.push(r);
+      },
+      signal,
+      // 工作取消(HTTP 連線中斷)時 ClickHouse 也停止查詢
+      { max_execution_time: String(secs), cancel_http_readonly_queries_on_client_close: '1' },
+      (res) => {
+        try {
+          scanned = Number(JSON.parse(res.headers.get('x-clickhouse-summary') ?? '{}').read_rows) || 0;
+        } catch {
+          /* 沒有摘要標頭只是少了掃描筆數 */
+        }
+      },
+      // 用戶端等待比伺服器端上限多 10 秒:逾時由 ClickHouse 回 159(資安審查 M1)
+      (secs + 10) * 1000,
+    );
+    const more = out.length > limit;
+    return { rows: more ? out.slice(0, limit) : out, more, scanned };
+  }
+
   const range = (fromMs: number, toMs: number) => ({ from: sec(fromMs), to: sec(toMs) });
 
   return {
@@ -469,35 +552,14 @@ export function createClickHouseReader(cfg: ClickHouseConfig, fetchImpl: Fetch =
       );
       return r.filter((x) => isChEventType(x.t)).map((x) => ({ type: x.t as ChEventType, hour: x.h * 1000, n: Number(x.n) }));
     },
-    async searchTraffic(f, limit, seconds, signal) {
-      const { where, params } = trafficWhere(f);
-      const names = TRAFFIC_FIELDS.map(([k]) => k);
-      const out: LogRecord[] = [];
-      let scanned = 0;
-      const secs = Math.min(Math.max(Math.floor(seconds), 1), 50);
-      await stream(
-        `SELECT ${TRAFFIC_FIELDS.map(([, e]) => e).join(', ')} FROM ${READ_TABLES.traffic} WHERE ${where.join(' AND ')} ORDER BY event_time, src LIMIT {lim:UInt32}`,
-        { ...params, lim: limit + 1 },
-        (cols) => {
-          const r: LogRecord = {};
-          for (let i = 0; i < names.length; i++) r[names[i]!] = cols[i] as string | number;
-          out.push(r);
-        },
-        signal,
-        // 工作取消(HTTP 連線中斷)時 ClickHouse 也停止查詢
-        { max_execution_time: String(secs), cancel_http_readonly_queries_on_client_close: '1' },
-        (res) => {
-          try {
-            scanned = Number(JSON.parse(res.headers.get('x-clickhouse-summary') ?? '{}').read_rows) || 0;
-          } catch {
-            /* 沒有摘要標頭只是少了掃描筆數 */
-          }
-        },
-        // 用戶端等待比伺服器端上限多 10 秒:逾時由 ClickHouse 回 159(資安審查 M1)
-        (secs + 10) * 1000,
+    searchTraffic: (f, limit, seconds, signal) => search('traffic', TRAFFIC_FIELDS, trafficWhere(f), limit, seconds, signal),
+    searchThreat: (f, limit, seconds, signal) => search('threat', THREAT_FIELDS, threatSearchWhere(f), limit, seconds, signal),
+    async threatCount(fromMs, toMs) {
+      const r = await rows<{ n: number }>(
+        `SELECT count() AS n FROM ${READ_TABLES.threat} WHERE log_type = 'threat' AND event_time >= toDateTime({from:UInt32}) AND event_time < toDateTime({to:UInt32})`,
+        { from: sec(fromMs), to: Math.ceil(toMs / 1000) },
       );
-      const more = out.length > limit;
-      return { rows: more ? out.slice(0, limit) : out, more, scanned };
+      return Number(r[0]?.n ?? 0);
     },
     async trafficCount(fromMs, toMs) {
       const r = await rows<{ n: number }>(

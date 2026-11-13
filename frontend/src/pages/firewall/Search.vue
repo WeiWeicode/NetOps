@@ -5,7 +5,9 @@
  *   送出 → 每 1.5 秒查詢進度 → 完成後分頁讀取結果(每頁 50 筆)、匯出 CSV(後端產生)。可隨時停止;離開頁面自動取消。
  *   流量總覽點選會帶 ?from=&to=&src=… 進來並自動查詢;網址條件只收白名單與格式正確的值(composables/searchQuery.ts)。
  *   期間最長 30 天(只用關鍵字最長 1 天);目的 Port 只能是數字與逗號(後端同樣檢查)。
- *   時段明細抽屜的威脅類會帶 type=THREAT、threat、severity(useSlice.openInSearch;C7),本頁只查 TRAFFIC,這些條件不套用並提示(AGENT §5)。
+ *   type=THREAT 查威脅 log(需求方 2026-11-13 決定),可再用威脅名稱、嚴重度;國家可分來源 / 目的(srcCountry / dstCountry)。
+ *   時段明細抽屜的威脅類會帶 type=THREAT、threat、severity(useSlice.openInSearch;C7);無法套用的條件(不認得的類型等)提示「未套用」(AGENT §5)。
+ *   版面是最小可用版(類型、威脅名稱、嚴重度、來源 / 目的國家欄位與威脅欄位),樣式之後交 Gemini。
  */
 import { computed, onMounted, reactive, ref, shallowRef, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
@@ -23,7 +25,7 @@ import {
   type PaSearchBody,
   type PaSearchKey,
 } from '@/api/pa';
-import { cameFromApp, ignoredThreatCond as threatCondOf, isPorts, localToIso, pickQuery, toLocalInput } from '@/composables/searchQuery';
+import { cameFromApp, ignoredThreatCond as threatCondOf, isPorts, isSearchType, isSeverity, localToIso, pickQuery, toLocalInput } from '@/composables/searchQuery';
 import { useJob } from '@/composables/useJob';
 import DateRangeField from '@/components/DateRangeField.vue';
 import { coverageText } from '@/composables/dateRange';
@@ -32,7 +34,7 @@ import { toast } from '@/ui';
 
 const PAGE_SIZE = 50;
 const route = useRoute();
-/** 網址帶了本頁不支援的威脅類條件:進頁時算一次(自動查詢會改寫網址;C7 第二輪) */
+/** 網址帶了本頁無法套用的條件:進頁時算一次(自動查詢會改寫網址;C7 第二輪) */
 const ignoredThreatCond = threatCondOf(route.query);
 const router = useRouter();
 
@@ -79,6 +81,18 @@ const actionOptions = computed(() => [
   ),
 ]);
 const PROTOS = ['tcp', 'udp', 'icmp'].map((v) => ({ label: v, value: v }));
+const TYPES = [
+  { label: '流量(TRAFFIC)', value: 'TRAFFIC' },
+  { label: '威脅(THREAT)', value: 'THREAT' },
+];
+const SEVERITIES = [
+  { label: '嚴重', value: 'critical' },
+  { label: '高', value: 'high' },
+  { label: '中', value: 'medium' },
+  { label: '低', value: 'low' },
+  { label: '資訊', value: 'info' },
+];
+const isThreatForm = computed(() => form.type === 'THREAT');
 
 // ---------- 查詢(工作模式) ----------
 const job = useJob({ create: paLog.create, get: paLog.get, cancel: paLog.cancel });
@@ -125,7 +139,9 @@ function search() {
   // 查詢中按 Enter 不重送(要重查請先停止)
   if (job.running.value) return;
   if (formError.value) return toast.warning(formError.value);
-  const cond = Object.fromEntries(PA_SEARCH_KEYS.map((k) => [k, form[k].trim()]).filter(([, v]) => v)) as Partial<Record<PaSearchKey, string>>;
+  // 威脅名稱、嚴重度只有威脅 log 有(後端 TRAFFIC 帶這兩個條件回 400);類型是 TRAFFIC 時不送
+  const skip = new Set<PaSearchKey>(isThreatForm.value ? [] : ['threat', 'severity']);
+  const cond = Object.fromEntries(PA_SEARCH_KEYS.filter((k) => !skip.has(k)).map((k) => [k, form[k].trim()]).filter(([, v]) => v)) as Partial<Record<PaSearchKey, string>>;
   // 條件記在網址:重新整理或分享連結可還原(時間用本地時間,不含時區)
   void router.replace({ query: { from: form.from, to: form.to, ...cond } });
   const body: PaSearchBody = { from: localToIso(form.from), to: localToIso(form.to), ...cond };
@@ -189,7 +205,9 @@ const localMinute = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${
 
 onMounted(async () => {
   const q = route.query;
-  Object.assign(form, pickQuery(q, PA_SEARCH_KEYS, { proto: (v) => /^[a-z0-9-]{1,16}$/i.test(v), port: isPorts }));
+  Object.assign(form, pickQuery(q, PA_SEARCH_KEYS, { proto: (v) => /^[a-z0-9-]{1,16}$/i.test(v), port: isPorts, type: isSearchType, severity: isSeverity }));
+  // 威脅名稱、嚴重度只有 THREAT 用:不是 THREAT 時不留在表單(否則之後切到 THREAT 會默默送出;已列在「未套用」提示;程式碼審查)
+  if (form.type !== 'THREAT') Object.assign(form, { threat: '', severity: '' });
   // 資料範圍一律先載入(網址帶條件進來時也要顯示可查範圍;程式碼審查 #2),失敗只影響提示
   const days = pa.days().then(
     (r) => ((coverage.value = r.coverage), r),
@@ -212,7 +230,7 @@ onMounted(async () => {
   }
 });
 
-const columns = [
+const TRAFFIC_COLUMNS = [
   { key: 'time', label: '時間', width: '170px' },
   { key: 'action', label: '動作', width: '100px' },
   { key: 'src', label: '來源 IP', mono: true },
@@ -225,15 +243,26 @@ const columns = [
   { key: 'bytes', label: '流量', align: 'right' as const, width: '90px', hideSm: true },
   { key: 'dstCountry', label: '目的國家', hideSm: true },
 ];
+/** 威脅 log 的欄位(威脅名稱、嚴重度、來源 / 目的、動作;版面之後交 Gemini) */
+const THREAT_COLUMNS = [
+  { key: 'time', label: '時間', width: '170px' },
+  { key: 'severity', label: '嚴重度', width: '90px' },
+  { key: 'threat', label: '威脅名稱' },
+  { key: 'action', label: '動作', width: '100px' },
+  { key: 'src', label: '來源 IP', mono: true },
+  { key: 'dst', label: '目的 IP', mono: true },
+  { key: 'dport', label: 'Port', width: '90px' },
+  { key: 'app', label: '應用程式', hideSm: true },
+  { key: 'srcCountry', label: '來源國家', hideSm: true },
+];
+const columns = computed(() => (result.value?.type === 'THREAT' ? THREAT_COLUMNS : TRAFFIC_COLUMNS));
 const keyed = computed(() => rows.value.map((r, i) => ({ ...r, _k: `${page.value}:${i}` })));
 const asRow = (r: unknown) => r as PaLogRow;
 </script>
 
 <template>
   <div class="stack" style="--gap: 16px">
-    <GAlert v-if="ignoredThreatCond" tone="info">
-      Log 明細查詢目前只查 TRAFFIC,{{ ignoredThreatCond }} 未套用;結果是同一時段、同一 IP 等條件的流量紀錄。
-    </GAlert>
+    <GAlert v-if="ignoredThreatCond" tone="info">連結帶的條件 {{ ignoredThreatCond }} 本頁無法套用,未套用;其他條件照查。</GAlert>
     <GCard padding="sm">
       <form class="stack" style="--gap: 12px" @submit.prevent="search">
         <div class="filters">
@@ -249,7 +278,12 @@ const asRow = (r: unknown) => r as PaLogRow;
           <GSelect v-model="form.fromZone" label="來源區域" :options="opts(options.zones, form.fromZone)" placeholder="全部" class="sm" />
           <GSelect v-model="form.toZone" label="目的區域" :options="opts(options.zones, form.toZone)" placeholder="全部" class="sm" />
           <GInput v-model="form.user" label="使用者" clearable class="sm" />
-          <GInput v-model="form.country" label="國家" placeholder="China" clearable class="sm" />
+          <GSelect v-model="form.type" label="類型" :options="TYPES" placeholder="流量(TRAFFIC)" class="sm" />
+          <GInput v-if="isThreatForm" v-model="form.threat" label="威脅名稱" clearable class="md" />
+          <GSelect v-if="isThreatForm" v-model="form.severity" label="嚴重度" :options="SEVERITIES" placeholder="全部" class="sm" />
+          <GInput v-model="form.country" label="國家(任一方)" placeholder="China" clearable class="sm" />
+          <GInput v-model="form.srcCountry" label="來源國家" clearable class="sm" />
+          <GInput v-model="form.dstCountry" label="目的國家" clearable class="sm" />
           <GInput v-model="form.q" label="關鍵字" placeholder="IP、App、規則等欄位包含" clearable class="md" />
         </div>
         <div class="filters">

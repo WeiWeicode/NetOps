@@ -311,6 +311,17 @@ D13:骨架直接留用;AI 不在這次範圍,不做串流驗證(D7、D17)。
 
 **前置**:V-b1。**負責人**:Gemini;Claude 審查(只改邏輯層的需求寫進 MR 說明交給 Claude);需求方驗收。**完成條件**:HANDOFF-GEMINI-VIZ §8 驗收清單全部通過(四種風格組合 × 1440 / 375 px、reduced-motion、鍵盤操作、`null` / 冷資料 / 429 狀態);沒有修改禁止範圍的檔案;測試報告已提交。
 
+#### V-b2 驗收追加:威脅 log 明細查詢(Claude;需求方 2026-11-13 決定)
+
+驗收 C7 發現時段明細抽屜跳到 Log 明細查詢時,威脅類條件無法套用。需求方決定:
+
+1. Log 明細查詢加威脅 log:`POST /pa/log-searches` 加 `type`(`TRAFFIC` / `THREAT`)、`severity`、`threat`(API.md §4.3),同一支 API 與權限 `netops.pa-log.read`,不新增路由與權限代碼。
+2. 國家分來源 / 目的:`srcCountry`、`dstCountry`(`country` 仍為任一方)。
+3. 流量類時段明細抽屜不顯示嚴重度 chip(`useSlice.supportsSeverity`)。
+4. C7b:PA 對私有 / 保留位址的國家欄位填網段範圍;抽屜 Top 10 顯示「內部網路 10.0.0.0/8」,點選改帶 `src` / `dst` 的 CIDR。
+
+**負責人**:Claude(邏輯層與最小可用畫面);Gemini(Log 明細查詢頁新欄位與威脅結果欄位的版面樣式)。**完成條件**:後端單元與整合測試涵蓋威脅查詢條件;前端測試涵蓋跳轉條件與網段轉 CIDR;測試區重驗 C7 / C7b 通過。
+
 ## V-c 偵測規則引擎
 
 1. DDL `detect_alerts`(TTL 正式區 1 年、測試區 3 天,X3);`netops_writer` 加 `INSERT ON netops.detect_alerts`;`netops-ingest` 掛 reader 密碼檔與資料目錄(唯讀)(機密腳本由需求方執行)。

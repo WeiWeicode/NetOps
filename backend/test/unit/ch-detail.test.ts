@@ -6,7 +6,7 @@
  */
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
-import { trafficWhere } from '../../src/infra/clickhouse/reader.js';
+import { threatSearchWhere, trafficWhere } from '../../src/infra/clickhouse/reader.js';
 import { createFakeFtp } from '../fixtures/fake-ftp.js';
 import { createFakeReader, trafficRecord, type FakeReader } from '../fixtures/fake-ch.js';
 import { createTestApp, waitFor, type TestApp } from '../helpers.js';
@@ -49,13 +49,48 @@ describe('trafficWhere(明細條件 → SQL)', () => {
     assert.match(w.where.find((x) => x.includes('concat('))!, /positionCaseInsensitiveUTF8\(concat\(/);
     assert.ok(trafficWhere({ fromMs: F, toMs: T, port: '99999' }).where.includes('0'));
   });
+
+  it('國家:country 比對來源或目的,srcCountry / dstCountry 只比對一方(C7 第二輪)', () => {
+    const any = trafficWhere({ fromMs: F, toMs: T, country: 'Japan' });
+    assert.ok(any.where.some((x) => x.includes('src_country') && x.includes('dst_country')));
+    const src = trafficWhere({ fromMs: F, toMs: T, srcCountry: 'China' });
+    const w = src.where.at(-1)!;
+    assert.match(w, /src_country/);
+    assert.doesNotMatch(w, /dst_country/);
+    assert.match(trafficWhere({ fromMs: F, toMs: T, dstCountry: 'China' }).where.at(-1)!, /^\(positionCaseInsensitiveUTF8\(dst_country/);
+  });
+});
+
+describe('threatSearchWhere(威脅 log 明細條件)', () => {
+  it('只查 log_type threat;嚴重度 info → informational;威脅名稱包含;值都放參數;q 比對威脅名稱', () => {
+    const evil = "x' OR 1=1 --";
+    const w = threatSearchWhere({ fromMs: F, toMs: T, severity: 'info', threat: evil, src: '10.0.0.1', q: 'brute' });
+    const sql = w.where.join(' AND ');
+    assert.ok(w.where.includes(`log_type = 'threat'`));
+    assert.ok(w.where.includes('severity = {sev:String}'));
+    assert.equal(w.params.sev, 'informational');
+    assert.equal(w.params.thr, evil);
+    assert.ok(!sql.includes('OR 1=1'));
+    assert.match(sql, /dst_country, ',', name, ',', url/);
+    assert.doesNotMatch(sql, /end_reason/);
+  });
 });
 
 describe('明細 API(只查 ClickHouse)', () => {
   let t: TestApp;
   let reader: FakeReader;
   before(async () => {
-    reader = createFakeReader(Array.from({ length: 30 }, (_, i) => trafficRecord(`2026/11/11 00:${String(i).padStart(2, '0')}:00`, i)));
+    const thr = (time: string, name: string, severity: string, src: string, srcCountry: string) => ({
+      time, subtype: 'vulnerability', src, dst: '10.10.1.1', natSrc: '', natDst: '', rule: 'In', srcUser: '', app: 'ms-ds-smb', fromZone: 'WAN', toZone: 'LAN',
+      dport: 445, proto: 'tcp', action: 'reset-both', url: '', name, category: 'any', severity, direction: 'client-to-server', srcCountry, dstCountry: '10.0.0.0-10.255.255.255',
+      repeat: 1, thrCategory: 'brute-force', filedigest: '', filetype: '',
+    });
+    reader = createFakeReader(Array.from({ length: 30 }, (_, i) => trafficRecord(`2026/11/11 00:${String(i).padStart(2, '0')}:00`, i)), [
+      { type: 'threat', rec: thr('2026/11/11 00:05:00', 'SMB Brute Force(40004)', 'high', '203.0.113.9', 'China') },
+      { type: 'threat', rec: thr('2026/11/11 00:06:00', 'Port Scan(8001)', 'high', '198.51.100.7', 'United States') },
+      { type: 'threat', rec: thr('2026/11/11 00:07:00', 'DNS Query(1)', 'informational', '10.10.1.2', '10.0.0.0-10.255.255.255') },
+      { type: 'url', rec: thr('2026/11/11 00:08:00', 'x', 'informational', '10.10.1.2', '10.0.0.0-10.255.255.255') },
+    ]);
     t = await createTestApp({ ftp: createFakeFtp(), chReader: reader, chNow: () => Date.parse('2026-11-11T03:10:00+08:00'), env: { NETOPS_CH_SUMMARY_MINUTES: '0', PA_SEARCH_LIMIT: '20' } });
     await t.app.chSummary!.runOnce();
   });
@@ -67,6 +102,48 @@ describe('明細 API(只查 ClickHouse)', () => {
     return (await t.call({ url: `/v1/pa/log-searches/${id}` })).json();
   }
   const range = { from: '2026-11-11T00:00:00+08:00', to: '2026-11-11T00:59:00+08:00' };
+
+  it('type THREAT:查威脅 log,嚴重度、威脅名稱、來源國家都套用;threat 欄為威脅名稱,嚴重度 informational 回 info(C7 第二輪)', async () => {
+    const res = await submit({ ...range, type: 'THREAT', severity: 'high', srcCountry: 'China' });
+    assert.equal(res.statusCode, 202, res.body);
+    const job = await done(res.json().id);
+    assert.equal(job.status, 'done', JSON.stringify(job.error));
+    assert.equal(job.result.type, 'THREAT');
+    assert.equal(job.result.total, 1);
+    const rows = (await t.call({ url: `/v1/pa/log-searches/${job.id}/rows` })).json();
+    assert.equal(rows.items[0].threat, 'SMB Brute Force(40004)');
+    assert.equal(rows.items[0].severity, 'high');
+    assert.equal(rows.items[0].src, '203.0.113.9');
+    const csv = await t.call({ url: `/v1/pa/log-searches/${job.id}/export` });
+    assert.match(String(csv.headers['content-disposition']), /PA_threat_/);
+    const named = await done((await submit({ ...range, type: 'THREAT', threat: 'scan' })).json().id);
+    assert.equal(named.result.total, 1);
+    // 關鍵字比對威脅名稱;country 任一方可和 srcCountry 一起用
+    assert.equal((await done((await submit({ ...range, type: 'THREAT', q: 'Brute Force(' })).json().id)).result.total, 1);
+    assert.equal((await done((await submit({ ...range, type: 'THREAT', country: '10.0.0.0', srcCountry: 'United' })).json().id)).result.total, 1);
+    const info = await done((await submit({ ...range, type: 'THREAT', severity: 'info' })).json().id);
+    assert.equal(info.result.total, 1);
+    assert.equal((await t.call({ url: `/v1/pa/log-searches/${info.id}/rows` })).json().items[0].severity, 'info');
+    // url 類型不算威脅 log
+    const all = await done((await submit({ ...range, type: 'THREAT' })).json().id);
+    assert.equal(all.result.total, 3);
+  });
+
+  it('TRAFFIC 帶嚴重度或威脅名稱回 400;type 只接受 TRAFFIC / THREAT;srcCountry 只比對來源', async () => {
+    assert.equal((await submit({ ...range, severity: 'high' })).statusCode, 400);
+    assert.equal((await submit({ ...range, type: 'TRAFFIC', threat: 'x' })).statusCode, 400);
+    assert.equal((await submit({ ...range, type: 'URL' })).statusCode, 400);
+    // 關鍵字 + 嚴重度 / 威脅名稱仍限 1 天(資安審查)
+    const long = { from: '2026-11-09T00:00:00+08:00', to: '2026-11-11T00:00:00+08:00', type: 'THREAT', q: 'x' };
+    assert.equal((await submit({ ...long, severity: 'info' })).statusCode, 400);
+    assert.equal((await submit({ ...long, threat: 'scan' })).statusCode, 400);
+    const src = await done((await submit({ ...range, srcCountry: 'United States' })).json().id);
+    assert.equal(src.status, 'done');
+    assert.equal(src.result.total, 0);
+    const dst = await done((await submit({ ...range, dstCountry: 'United States' })).json().id);
+    assert.equal(dst.result.total, 20);
+    assert.equal(dst.result.type, 'TRAFFIC');
+  });
 
   it('結果格式同舊版(欄位、分頁、匯出、取消),依時間由舊到新', async () => {
     const res = await submit({ ...range, src: '10.10.1.1' });

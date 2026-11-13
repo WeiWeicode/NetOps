@@ -11,7 +11,7 @@ import type { SliceJob, SliceResult } from '@/api/slice';
 import { toSliceQuery } from '@/composables/useChartPick';
 import { useHeatmap } from '@/composables/useHeatmap';
 import { useInsight } from '@/composables/useInsight';
-import { SliceTimeoutError, useSlice } from '@/composables/useSlice';
+import { searchExtraOf, SliceTimeoutError, topLabelOf, useSlice } from '@/composables/useSlice';
 import { formatRange } from '@/composables/vizTime';
 import { heatmapResponse, sliceResult, threatInsight, trafficInsight } from '../mock/fixtures/viz';
 /** slice.get 的第二個參數(逾時與換條件時中止用) */
@@ -327,26 +327,25 @@ describe('useSlice', () => {
     expect(s.summary.value?.bytes).toBe(result.summary.bytes);
   });
 
-  it('C4:setSeverity 重查;流量類切成威脅類只留 IP 條件,取消回到原條件', async () => {
+  it('C4:只有威脅類可用嚴重度(supportsSeverity);setSeverity 加上 / 拿掉 severity,流量類不動作', async () => {
     mocks.sliceGet.mockResolvedValue({ kind: 'result', result });
     const { s } = setup();
-    const base = { ...q, type: 'traffic' as const, ip: '10.0.0.1', app: 'ssl', action: 'block' as const, sort: 'bytes' as const };
-    await s.open(base);
+    const traffic = { ...q, type: 'traffic' as const, ip: '10.0.0.1', app: 'ssl' };
+    await s.open(traffic);
+    expect(s.supportsSeverity.value).toBe(false);
+    const n0 = mocks.sliceGet.mock.calls.length;
     await s.setSeverity('high');
-    expect(mocks.sliceGet).toHaveBeenLastCalledWith({ ...q, type: 'threat', severity: 'high', ip: '10.0.0.1' }, SIG);
-    await s.setSeverity('critical');
-    expect(mocks.sliceGet).toHaveBeenLastCalledWith({ ...q, type: 'threat', severity: 'critical', ip: '10.0.0.1' }, SIG);
-    // 同一個嚴重度不重查
-    const n = mocks.sliceGet.mock.calls.length;
-    await s.setSeverity('critical');
-    expect(mocks.sliceGet.mock.calls.length).toBe(n);
-    await s.setSeverity(null);
-    expect(mocks.sliceGet).toHaveBeenLastCalledWith(base, SIG);
-    expect(s.query.value).toEqual(base);
-    // 威脅類:保留全部條件只加 severity;open 新條件後取消不會回到舊條件
+    expect(mocks.sliceGet.mock.calls.length).toBe(n0);
+    expect(s.query.value).toEqual(traffic);
+    // 威脅類:保留全部條件只加 severity
     await s.open({ ...q, type: 'threat', country: 'China' });
+    expect(s.supportsSeverity.value).toBe(true);
     await s.setSeverity('low');
     expect(mocks.sliceGet).toHaveBeenLastCalledWith({ ...q, type: 'threat', country: 'China', severity: 'low' }, SIG);
+    // 同一個嚴重度不重查
+    const n = mocks.sliceGet.mock.calls.length;
+    await s.setSeverity('low');
+    expect(mocks.sliceGet.mock.calls.length).toBe(n);
     await s.setSeverity(null);
     expect(mocks.sliceGet).toHaveBeenLastCalledWith({ ...q, type: 'threat', country: 'China' }, SIG);
     // 連點同一個 chip(第一次還在取消舊工作時就再點):第二次是取消,不會被吞掉
@@ -354,6 +353,35 @@ describe('useSlice', () => {
     const second = s.setSeverity(null);
     await Promise.all([first, second]);
     expect(s.query.value).toEqual({ ...q, type: 'threat', country: 'China' });
+  });
+
+  it('C7 第二輪:searchExtraOf 點選對應(來源 / 目的 IP、國家分方向、私有網段改帶 CIDR)、topLabelOf', () => {
+    expect(searchExtraOf('src', '10.10.115.35')).toEqual({ filterSrc: '10.10.115.35' });
+    expect(searchExtraOf('dst', '約 8.8.8.8')).toEqual({ filterDst: '8.8.8.8' });
+    expect(searchExtraOf('srcCountry', 'China')).toEqual({ filterSrcCountry: 'China' });
+    expect(searchExtraOf('dstCountry', 'Japan')).toEqual({ filterDstCountry: 'Japan' });
+    expect(searchExtraOf('srcCountry', '10.0.0.0-10.255.255.255')).toEqual({ filterSrc: '10.0.0.0/8' });
+    expect(searchExtraOf('dstCountry', '172.16.0.0-172.31.255.255')).toEqual({ filterDst: '172.16.0.0/12' });
+    // 不是單一 CIDR 的範圍:不可點
+    expect(searchExtraOf('srcCountry', '10.0.0.1-10.0.0.3')).toBeNull();
+    expect(searchExtraOf('app', 'ssl')).toEqual({ filterApp: 'ssl' });
+    expect(searchExtraOf('dport', '443')).toEqual({ filterPort: '443' });
+    expect(searchExtraOf('name', 'X(1)')).toEqual({ filterThreat: 'X(1)' });
+    expect(searchExtraOf('src', '—')).toBeNull();
+    expect(searchExtraOf('unknown', 'x')).toBeNull();
+    expect(topLabelOf('srcCountry', '192.168.0.0-192.168.255.255')).toBe('內部網路 192.168.0.0/16');
+    expect(topLabelOf('srcCountry', 'China')).toBe('China');
+    expect(topLabelOf('src', '10.0.0.0-10.255.255.255')).toBe('10.0.0.0-10.255.255.255');
+  });
+
+  it('C7 第二輪:威脅類 searchTarget 帶 type / threat / severity 與分方向國家', async () => {
+    mocks.sliceGet.mockResolvedValue({ kind: 'result', result });
+    const { s } = setup();
+    await s.open({ ...q, type: 'threat', severity: 'high', threatName: 'X(1)' });
+    expect(s.searchTarget({ filterSrcCountry: 'China', filterDstCountry: 'Japan' })).toEqual({
+      path: '/firewall/search',
+      query: { from: '2026-11-11T08:00', to: '2026-11-11T08:59', type: 'THREAT', threat: 'X(1)', severity: 'high', srcCountry: 'China', dstCountry: 'Japan' },
+    });
   });
 });
 

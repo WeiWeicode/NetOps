@@ -203,7 +203,7 @@ D13:骨架直接留用;AI 不在這次範圍,不做串流驗證(D7、D17)。
 
 | # | 誰 | 做什麼 | 卡住哪個階段 | 對應決策 |
 | --- | --- | --- | --- | --- |
-| E1 | 需求方 → **FTP 管理者 / IT** | 問 FTP `10.10.130.66` 上的 PA log(`/my-data` 等目錄)**保留多久**、會不會自動刪 | C4(決定歸檔原始 log 還是只歸檔彙總) | CQ3 |
+| E1 | 需求方 → **FTP 管理者 / IT** | 問 FTP `10.10.130.66` 上的 PA log(`/my-data` 等目錄)**保留多久**、會不會自動刪 **已回覆(2026-11-13):保留 10 天,需求方排程自動刪除**;長期原始 log 只靠 C4 Parquet 歸檔(E2 必申請) | C4(決定歸檔原始 log 還是只歸檔彙總) | CQ3 |
 | E2 | 需求方 → **IT / NAS 管理者** | E1 的答案不夠長時,申請 NetOps 歸檔空間:一年約 150–370 GB(原始 log Parquet 至少 1 年);現有 `docker-folder` 只剩 18 GB | C4 | CQ3、CQ12 |
 | E3 | 需求方 → **網通** | PA-560 的 Syslog Custom Log Format(TRAFFIC)與 HTTP Payload(威脅類)**加 `$seqno`、`$sessionid`**,然後 Commit;改完回報實際變數名稱(PAN-OS 12.1.7-h3) | C2 | CQ9 |
 |  |  | **E3 結果(2026-11-10 完成)**:需求方在 PA-560 把 `,"seqno":"$seqno","sessionId":"$sessionid"` 加到 Syslog `netops-syslog` 的 Traffic 格式與 HTTP `netops-http` 的 Threat、URL、Data、Wildfire Payload 並 Commit(變數名稱與文件相同)。主機 2 抓封包:51294 與 51293 都帶到值(例:seqno `7688588907462574142`、sessionId `288580`),TRAFFIC 持續接收。PA-FORWARDING-SPEC B.3、C.2 已更新;Decryption / GlobalProtect / User-ID 沒有加 |  |  |

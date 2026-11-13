@@ -26,7 +26,7 @@ const heatRoutes: FastifyPluginAsync<{ svc: HeatService; syncMs?: number }> = as
         operationId: 'netops.pa-heatmap.get',
         summary: 'PA 活動熱力圖',
         description:
-          '年(53 週 × 7 天,每天一格)、月(每小時一格)、日(每 5 分鐘一格)的熱力圖。metric:traffic 位元組、deny 非 allow 筆數、threat 威脅加權分數(10×critical + 5×high + 2×medium + 1×low,依最高嚴重度分級);ad 為 AD 階段預留,回 409 NETOPS_HEATMAP_METRIC_UNAVAILABLE。只讀彙總表(每天、每小時保留 5 年,每 5 分鐘 1 年);日視圖超過 1 年回 422 NETOPS_HEATMAP_OUT_OF_RETENTION(details.earliest)。v 為 null 表示沒有資料(彙總表最早的格子之前),和 0 不同;coverage 標示資料起點與 FTP 對帳缺口;tip.topIp 為近似值。',
+          '年(53 週 × 7 天,每天一格)、月(每小時一格)、日(每 5 分鐘一格)的熱力圖。metric:traffic 位元組、deny 非 allow 筆數、threat 威脅加權分數(10×critical + 5×high + 2×medium + 1×low,依最高嚴重度分級);ad 為 AD 階段預留,回 409 NETOPS_HEATMAP_METRIC_UNAVAILABLE。只讀彙總表(每天、每小時保留 5 年,每 5 分鐘 1 年);日視圖超過 1 年回 422 NETOPS_HEATMAP_OUT_OF_RETENTION(details.earliest)。v 為 null 表示沒有資料(彙總表最早的格子之前,或彙總表沒有該格,例如彙總上線前的時段),和 0 不同;coverage 標示資料起點、FTP 對帳缺口(recon-gap)與未彙總的時段(not-aggregated,結束未滿 10 分鐘的格子不列);tip.topIp 為近似值。',
         tags: ['PA 熱力圖'],
         'x-permission': 'netops.pa.read',
         'x-gherkin': [
@@ -40,7 +40,12 @@ const heatRoutes: FastifyPluginAsync<{ svc: HeatService; syncMs?: number }> = as
           '  假如 彙總表最早的資料是 2026-11-10 15:00',
           '  當 呼叫 GET /api/netops/pa/heatmap?granularity=month&metric=traffic&date=2026-11-11',
           '  那麼 2026-11-10 15:00 之前的格子 v 為 null、level 為 0',
-          '  而且 之後沒有流量的格子 v 為 0',
+          '',
+          '場景: 彙總表缺的時段是 null 並列在 gaps',
+          '  假如 彙總表最早的資料是 2026-11-11,2026-11-13 只有 08:35 之後有彙總',
+          '  當 呼叫 GET /api/netops/pa/heatmap?granularity=day&metric=threat&date=2026-11-13',
+          '  那麼 00:00–08:30 的格子 v 為 null、level 為 0、partial 為 true',
+          '  而且 coverage.gaps 有 { from: 00:00, to: 08:35, reason: not-aggregated }',
           '',
           '場景: 威脅依最高嚴重度分級',
           '  當 呼叫 GET /api/netops/pa/heatmap?granularity=day&metric=threat',

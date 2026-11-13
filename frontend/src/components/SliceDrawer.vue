@@ -13,9 +13,9 @@ import { computed, ref, watch } from 'vue';
 import { fmtNum, fmtSize, fmtTime } from '@/api/format';
 import { ApiError, describeError } from '@/api/gateway';
 import type { HeatCell } from '@/api/heatmap';
-import type { SliceTopItem } from '@/api/slice';
+import type { SliceSeverity, SliceTopItem } from '@/api/slice';
 import { useLivePaQuery } from '@/composables/useLivePaQuery';
-import type { useSlice } from '@/composables/useSlice';
+import type { SearchExtra, useSlice } from '@/composables/useSlice';
 import { formatRange } from '@/composables/vizTime';
 import type { Column } from '@/ui/components/GTable.vue';
 
@@ -64,8 +64,8 @@ const errorText = computed(() => {
   return describeError(err);
 });
 
-/** 嚴重度 chip 點選切換(U4:點選篩選、再點一次取消) */
-type SeverityKey = 'critical' | 'high' | 'medium' | 'low' | 'info';
+/** 嚴重度 chip 點選切換(U4:點選篩選、再點一次取消;C4:useSlice.setSeverity 依嚴重度重查 Top 10 與明細) */
+type SeverityKey = SliceSeverity;
 const SEVERITY_DEFS: readonly { key: SeverityKey; label: string }[] = [
   { key: 'critical', label: '嚴重' },
   { key: 'high', label: '高' },
@@ -83,8 +83,8 @@ watch(
   { immediate: true },
 );
 
-function toggleSeverity(sev: SeverityKey) {
-  selectedSeverity.value = selectedSeverity.value === sev ? null : sev;
+function toggleSeverity(sev: SeverityKey | null) {
+  void props.slice.setSeverity(selectedSeverity.value === sev ? null : sev);
 }
 
 /** 篩選條件標籤 */
@@ -151,9 +151,7 @@ watch(
 const activeTopItems = computed(() => {
   const r = props.slice.result.value;
   if (!r) return [];
-  const rawList: SliceTopItem[] = r.top[activeTopKey.value] ?? [];
-  const sev = selectedSeverity.value;
-  const list = sev && rawList.some((x) => x.severity !== undefined) ? rawList.filter((x) => x.severity === sev) : rawList;
+  const list: SliceTopItem[] = r.top[activeTopKey.value] ?? [];
   const isTraffic = r.type === 'traffic';
   return list.slice(0, 10).map((item) => ({
     label: item.key,
@@ -166,26 +164,17 @@ const activeTopItems = computed(() => {
   }));
 });
 
-/** U5: 點選 Top 10 項目或明細表 IP,使用既有 openInSearch 開啟 Log 明細查詢 */
-const IPV4_RE = /(?<![\d.])(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)(?![\d.])/;
-
+/** U5 / C7:點選 Top 10 項目或明細表 IP,以該項目開啟 Log 明細查詢 */
 function openItemInSearch(dimKey: string, rawVal: string) {
   const val = rawVal.replace(/^約\s+/, '').trim();
   if (!val || val === '—') return;
-  const extra: Record<string, string> = {};
-  if (dimKey === 'src') extra.src = val;
-  else if (dimKey === 'dst') extra.dst = val;
-  else if (dimKey === 'ip') extra.ip = val;
-  else if (dimKey === 'srcCountry' || dimKey === 'dstCountry') extra.country = val;
-  else if (dimKey === 'app') extra.app = val;
-  else if (dimKey === 'dport') extra.port = val;
-  else if (dimKey === 'name') {
-    const ipMatch = val.match(IPV4_RE)?.[0];
-    if (ipMatch) extra.ip = ipMatch;
-    else extra.q = val;
-  }
-  const openFn = props.slice.openInSearch as (cond?: Record<string, string>) => Promise<void>;
-  void openFn(extra);
+  const extra: SearchExtra = {};
+  if (dimKey === 'src' || dimKey === 'dst' || dimKey === 'ip') extra.filterIp = val;
+  else if (dimKey === 'srcCountry' || dimKey === 'dstCountry') extra.filterCountry = val;
+  else if (dimKey === 'app') extra.filterApp = val;
+  else if (dimKey === 'dport') extra.filterPort = val;
+  else if (dimKey === 'name') extra.filterThreat = val;
+  void props.slice.openInSearch(extra);
 }
 
 /** 明細表欄位(U8:時間欄加寬並搭配 nowrap 不換行) */
@@ -195,7 +184,7 @@ const tableColumns = computed<Column[]>(() => {
     return [
       { key: 'time', label: '時間', width: '164px', mono: true },
       { key: 'severity', label: '嚴重度', width: '84px' },
-      { key: 'threatName', label: '威脅名稱' },
+      { key: 'name', label: '威脅名稱' },
       { key: 'src', label: '來源 IP', mono: true },
       { key: 'dst', label: '目的 IP', mono: true },
       { key: 'action', label: '動作', width: '76px' },
@@ -214,12 +203,7 @@ const tableColumns = computed<Column[]>(() => {
 
 const tableRows = computed(() => {
   const rows = props.slice.result.value?.rows ?? [];
-  const sev = selectedSeverity.value;
-  const filtered =
-    sev && rows.some((r) => r.severity !== undefined)
-      ? rows.filter((r) => String(r.severity) === sev)
-      : rows;
-  return filtered.map((row, idx) => ({
+  return rows.map((row, idx) => ({
     _id: `${idx}-${row.time ?? ''}`,
     ...row,
   }));
@@ -341,9 +325,11 @@ function onDrawerToggle(v: boolean) {
       <div class="slice-drawer__kpis">
         <div class="slice-kpi">
           <span class="slice-kpi__lbl">總流量</span>
-          <strong class="slice-kpi__val num">{{ fmtSize(slice.result.value.summary.bytes) }}</strong>
-          <span class="slice-kpi__sub num">
-            ↑ {{ fmtSize(slice.result.value.summary.sent) }} · ↓ {{ fmtSize(slice.result.value.summary.recv) }}
+          <!-- C3:威脅類沒有流量欄位,顯示「不適用」(不是 0 B) -->
+          <strong v-if="slice.summary.value?.bytes == null" class="slice-kpi__val">不適用</strong>
+          <strong v-else class="slice-kpi__val num">{{ fmtSize(slice.summary.value.bytes) }}</strong>
+          <span v-if="slice.summary.value?.bytes != null" class="slice-kpi__sub num">
+            ↑ {{ fmtSize(slice.summary.value.sent ?? 0) }} · ↓ {{ fmtSize(slice.summary.value.recv ?? 0) }}
           </span>
         </div>
         <div class="slice-kpi">
@@ -384,7 +370,7 @@ function onDrawerToggle(v: boolean) {
           v-if="selectedSeverity"
           type="button"
           class="slice-sev__clear xs"
-          @click="selectedSeverity = null"
+          @click="toggleSeverity(null)"
         >
           清除篩選
         </button>
@@ -422,7 +408,7 @@ function onDrawerToggle(v: boolean) {
       <!-- 明細表(最多 200 列;rowsTruncated 提示;U8 時間欄不換行;U5 點 IP 開 Log 明細查詢) -->
       <GCard title="時段明細紀錄" padding="none">
         <template #actions>
-          <span v-if="slice.result.value.rowsTruncated && !selectedSeverity" class="faint xs">
+          <span v-if="slice.result.value.rowsTruncated" class="faint xs">
             只顯示前 {{ slice.result.value.rowsLimit }} 筆
           </span>
           <span v-else class="faint xs">共 {{ tableRows.length }} 筆</span>

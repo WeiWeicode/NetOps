@@ -2,6 +2,12 @@
 
 > `backend/`、`deploy/` 的修改;新紀錄加在最上方,格式見 `AGENT.md` §11。
 
+## 2026-11-13 熱力圖:彙總表沒有的格子回 null 並列進 gaps(C1)
+- 工作項目:V-a(V-b2 第一輪驗收 C1)
+- 內容:`buildCells` 原本把 `coverage.since` 之後、彙總表沒有列的格子補成 0,11-13 00:00–08:30(彙總部署前)因此顯示 `v=0`、`partial=false`、`gaps=[]`。改成沒有列一律 `v=null`、`level=0`;`since` 之後、已結束超過 10 分鐘(`MISSING_GRACE_MS`,避免最後幾格遲到的寫入一直閃「不完整」)的連續缺格合併成 `{ reason: 'not-aggregated' }`,併進 `coverage.gaps`,重疊的格子 `partial=true`。`gapsKnown` 仍只代表每日對帳。`docs/API.md` §4.4、OpenAPI `description` / `x-gherkin` 同步。時段明細 `severity` 後端原本就支援,不改。
+- 檔案:`backend/src/modules/pa-heat/heat.ts`、`service.ts`、`routes.ts`、`backend/test/unit/pa-heat.test.ts`、`docs/API.md`
+- 驗證:`npm run typecheck`、`npm test`(330 / 330)、`npm run build` 通過;`npm run test:int` 本機沒有 Docker,交給 MR 的 CI(整合測試未改)
+
 ## 2026-11-13 冷歸檔 NAS 準備腳本:權限檢查誤報
 - 工作項目:C4
 - 內容:`deploy/host2-setup-pa-archive.sh` 的群組權限檢查 `case "$G" in "1000 d???r?x"*)` 把萬用字元 `?` 放在引號內,被當成字面字元,永遠比對不到,權限正確(群組 1000、`r-x`)也印 WARN(需求方 2026-11-13 在主機 2 執行時發現)。改成 `"1000 d"???r?x*`(引號外才是萬用字元)。只影響提示訊息:目錄、標記檔與寫入測試本來就正確,不需要重跑腳本。

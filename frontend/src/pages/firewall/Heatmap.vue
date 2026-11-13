@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
  * 防火牆 › 活動熱力圖(V-b2;HANDOFF-GEMINI-VIZ §3.1、§3.2、§7):
- *   - 上方工具列:粒度(年/月/日)、指標(威脅等級/總流量/阻擋數/AD 異常停用並顯示「AD 階段開放」)、前後期、日期選擇、圖例(4 階 + 0 + 沒有資料 + 資料不完整)
+ *   - 上方工具列:粒度(年/月/日)、指標(威脅等級/總流量/阻擋數;AD 異常之後獨立做在 AD 網域)、前後期、日期選擇、圖例(4 階 + 0 + 沒有資料 + 資料不完整)
  *   - 日視圖超過 1 年(NETOPS_HEATMAP_OUT_OF_RETENTION):顯示「每 5 分鐘資料只保留 1 年,最早可查 {earliest}」
  *   - coverage.since 之前顯示「此日期前沒有資料」;partial 標示「此時段資料不完整」
  *   - 點格子 → 開 SliceDrawer(useSlice.open);雙擊或抽屜「下鑽」→ useHeatmap.drill
@@ -9,7 +9,7 @@
 import { computed, ref, watch } from 'vue';
 import { fmtNum, fmtShort, fmtSize } from '@/api/format';
 import { ApiError, describeError } from '@/api/gateway';
-import type { HeatCell, HeatMetric } from '@/api/heatmap';
+import type { HeatCell, PaHeatMetric } from '@/api/heatmap';
 import SliceDrawer from '@/components/SliceDrawer.vue';
 import { useHeatmap } from '@/composables/useHeatmap';
 import { useSlice } from '@/composables/useSlice';
@@ -25,10 +25,8 @@ const selectedCell = ref<HeatCell | null>(null);
 watch([h.granularity, h.date], () => (selectedCell.value = null));
 
 const granularityOptions = h.granularityOptions.map((g) => ({ label: g.label, value: g.value }));
-// U6: 移除熱力圖指標列的「AD 異常」(metricOptions 本身由 Claude 調整,畫面端先隱藏該項)
-const visibleMetricOptions = computed(() => h.metricOptions.filter((m) => m.value !== 'ad'));
 
-function selectMetric(m: HeatMetric, disabled?: boolean) {
+function selectMetric(m: PaHeatMetric, disabled?: boolean) {
   if (disabled) return;
   h.metric.value = m;
 }
@@ -148,7 +146,7 @@ function drillFromDrawer() {
           <span class="viz-heatmap__lbl">指標</span>
           <div class="viz-metric-seg" role="radiogroup" aria-label="熱力圖指標">
             <button
-              v-for="m in visibleMetricOptions"
+              v-for="m in h.metricOptions"
               :key="m.value"
               type="button"
               role="radio"

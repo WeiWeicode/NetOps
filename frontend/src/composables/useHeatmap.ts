@@ -5,21 +5,20 @@
  *   h.prev() / h.next():前後一期(年 1 年、月 1 個月、日 1 天;不超過今天)
  *   h.drill(cell):年 / 月的格子 → 那一天的日視圖;日格不下鑽
  *   h.sliceQuery(cell):格子 → 時段明細條件(給 useSlice.open)
- *   h.metricOptions:ad 為 disabled(AD 階段開放)
+ *   h.metricOptions:威脅等級 / 總流量 / 阻擋數(AD 異常不放在這裡,之後獨立做進 AD 網域;C5)
  * 錯誤:ApiError;日視圖超過 1 年是 NETOPS_HEATMAP_OUT_OF_RETENTION(details.earliest),retention.dayEarliest 可先擋。
  */
 import { computed, ref, shallowRef, watch } from 'vue';
 import { can } from '@/api/gateway';
-import { heatmap, type HeatCell, type HeatGranularity, type HeatMetric, type HeatmapResponse, type PaHeatMetric } from '@/api/heatmap';
+import { heatmap, type HeatCell, type HeatGranularity, type HeatmapResponse, type PaHeatMetric } from '@/api/heatmap';
 import { API } from '@/api/perms';
 import type { SliceQuery } from '@/api/slice';
 import { addDays, addMonths, plusSeconds, taipeiDay } from './vizTime';
 
-export const METRIC_OPTIONS: readonly { value: HeatMetric; label: string; disabled?: boolean; hint?: string }[] = [
+export const METRIC_OPTIONS: readonly { value: PaHeatMetric; label: string; disabled?: boolean; hint?: string }[] = [
   { value: 'threat', label: '威脅等級' },
   { value: 'traffic', label: '總流量' },
   { value: 'deny', label: '阻擋數' },
-  { value: 'ad', label: 'AD 異常', disabled: true, hint: 'AD 階段開放' },
 ];
 export const GRANULARITY_OPTIONS: readonly { value: HeatGranularity; label: string }[] = [
   { value: 'year', label: '年' },
@@ -31,7 +30,7 @@ export const DAY_VIEW_DAYS = 365;
 
 export interface UseHeatmapOptions {
   granularity?: HeatGranularity;
-  metric?: HeatMetric;
+  metric?: PaHeatMetric;
   date?: string;
   /** false:不自動查詢(測試用) */
   immediate?: boolean;
@@ -43,7 +42,7 @@ export function useHeatmap(opts: UseHeatmapOptions = {}) {
   const now = opts.now ?? Date.now;
   const today = () => taipeiDay(now());
   const granularity = ref<HeatGranularity>(opts.granularity ?? 'year');
-  const metric = ref<HeatMetric>(opts.metric ?? 'threat');
+  const metric = ref<PaHeatMetric>(opts.metric ?? 'threat');
   const date = ref<string>(opts.date ?? today());
   const data = shallowRef<HeatmapResponse | null>(null);
   const loading = ref(false);
@@ -57,16 +56,10 @@ export function useHeatmap(opts: UseHeatmapOptions = {}) {
 
   async function refresh(): Promise<void> {
     const my = ++seq;
-    if (metric.value === 'ad') {
-      data.value = null;
-      loading.value = false;
-      error.value = new Error('AD 異常指標在 AD 階段開放');
-      return;
-    }
     loading.value = true;
     error.value = null;
     try {
-      const r = await heatmap.get({ granularity: granularity.value, metric: metric.value as PaHeatMetric, date: date.value });
+      const r = await heatmap.get({ granularity: granularity.value, metric: metric.value, date: date.value });
       if (my === seq) data.value = r;
     } catch (e) {
       if (my === seq) {

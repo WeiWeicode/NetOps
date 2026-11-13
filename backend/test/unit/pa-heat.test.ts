@@ -65,12 +65,15 @@ describe('熱力圖期間與格子', () => {
   it('null 和 0 分開:彙總表最早的格子之前是 null;缺口內的格子 partial', () => {
     const r = heatRange('day', parseDay('2026-11-10'), NOW);
     const since = parseDay('2026-11-10') + 3600_000;
-    const rows = [row(since + 300_000, { bytes: 500, sessions: 3, topBytes: ['10.1.1.1'] })];
+    const day = parseDay('2026-11-10');
+    const rows = [row(since + 300_000, { bytes: 500, sessions: 3, topBytes: ['10.1.1.1'] }), row(day + 35 * 300_000, { bytes: 1 }), row(day + 36 * 300_000, { bytes: 1 })];
     const gap = { fromMs: since + 7200_000, toMs: since + 3 * 3600_000, reason: 'recon-gap' };
     const { cells, levels } = buildCells(r, 'traffic', rows, since, [gap]);
     assert.equal(cells[0]!.v, null);
     assert.equal(cells[0]!.level, 0);
-    assert.equal(cells[12]!.v, 0);
+    // C1:since 之後、彙總表沒有列的格子也是 null(沒有資料,不是 0)
+    assert.equal(cells[12]!.v, null);
+    assert.equal(cells[12]!.level, 0);
     assert.equal(cells[13]!.v, 500);
     assert.equal(cells[13]!.tip.topIp.traffic, '10.1.1.1');
     assert.equal(cells[13]!.t, '2026-11-10T01:05:00+08:00');
@@ -78,6 +81,25 @@ describe('熱力圖期間與格子', () => {
     assert.equal(cells[35]!.partial, false);
     assert.equal(levels.method, 'quantile');
     assert.ok(buildCells(r, 'traffic', [], null, []).cells.every((c) => c.v === null));
+  });
+
+  it('C1:彙總表缺的格子 v = null,連續格子合併成 not-aggregated 缺口(最後 10 分鐘內的格子不列)', () => {
+    const day = parseDay('2026-11-13');
+    const now = day + 9 * 3600_000; // 09:00
+    const r = heatRange('day', day, now);
+    // 彙總表從 11-11 開始;11-13 只有 08:35 之後有列(00:00–08:30 未彙總)
+    const rows = [];
+    for (let t = day + 8 * 3600_000 + 35 * 60_000; t <= day + 8 * 3600_000 + 45 * 60_000; t += 300_000) rows.push(row(t, { critical: 1, sessions: 5 }));
+    const { cells, missing } = buildCells(r, 'threat', rows, day - 2 * 86_400_000, [], now);
+    assert.equal(cells[0]!.v, null);
+    assert.equal(cells[0]!.partial, true);
+    assert.equal(cells[102]!.v, null); // 08:30
+    assert.equal(cells[103]!.v, 10); // 08:35
+    assert.equal(cells[103]!.partial, false);
+    // 08:50(結束 08:55,距現在 5 分鐘)還在寬限內;08:55、09:00 進行中
+    assert.deepEqual(missing, [{ fromMs: day, toMs: day + 8 * 3600_000 + 35 * 60_000, reason: 'not-aggregated' }]);
+    assert.equal(cells[106]!.v, null);
+    assert.equal(cells[106]!.partial, false);
   });
 });
 
@@ -187,6 +209,9 @@ describe('GET /v1/pa/heatmap', () => {
     const c = b.cells.find((x: { t: string }) => x.t === '2026-11-11T08:00:00+08:00');
     assert.equal(c.v, 2000);
     assert.equal(c.level, 4);
+    // C1:彙總表沒有列的格子 null,並列進 coverage.gaps
+    assert.equal(b.cells[0].v, null);
+    assert.deepEqual(b.coverage.gaps[0], { from: '2026-11-01T00:00:00+08:00', to: '2026-11-11T08:00:00+08:00', reason: 'not-aggregated' });
   });
 
   it('威脅:v 為加權分數、依最高嚴重度分級', async () => {

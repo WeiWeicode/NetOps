@@ -121,19 +121,36 @@ export function heatmapResponse(q: { granularity: Granularity; metric: Metric; d
   };
 }
 
-/** GET /pa/slice 的結果(source 依呼叫端) */
-export function sliceResult(q: { start: string; end: string; type?: 'traffic' | 'threat'; source?: 'hot' | 'cold' | 'mixed'; rows?: number }) {
+type Severity = 'critical' | 'high' | 'medium' | 'low' | 'info';
+const SEVERITIES: readonly Severity[] = ['critical', 'high', 'medium', 'low', 'info'];
+/** 假威脅名稱(依嚴重度;欄位同 API.md §4.4 threat 明細的 name) */
+const THREAT_NAMES: Record<Severity, string> = {
+  critical: 'Apache Log4j Remote Code Execution(91991)',
+  high: 'SMB Brute Force(40004)',
+  medium: 'HTTP SQL Injection Attempt(30514)',
+  low: 'Non-RFC Compliant DNS(30520)',
+  info: 'Suspicious TLS Evasion Found(14978)',
+};
+
+/** GET /pa/slice 的結果(source 依呼叫端);type=threat 時依 severity 篩選摘要、排行與明細(C8) */
+export function sliceResult(q: { start: string; end: string; type?: 'traffic' | 'threat'; severity?: Severity; source?: 'hot' | 'cold' | 'mixed'; rows?: number }) {
   const s = Date.parse(q.start);
   const e = Date.parse(q.end);
   const a = aggAt(s, (e - s) / 1000);
   const n = Math.min(q.rows ?? 100, 40);
   const traffic = (q.type ?? 'traffic') === 'traffic';
+  if (!traffic && q.severity) for (const k of SEVERITIES) if (k !== q.severity) a[k] = 0;
+  const sevs = !traffic && q.severity ? [q.severity] : SEVERITIES.filter((k) => a[k] > 0);
+  const threatRow = (i: number, time: string) => {
+    const sev = sevs[i % Math.max(1, sevs.length)] ?? 'info';
+    return { time, subtype: 'vulnerability', action: i % 3 ? 'reset-both' : 'alert', src: i % 2 ? '203.0.113.9' : IPS[i % 5]!, dst: '10.10.130.124', dport: 445, app: 'ms-ds-smb', name: THREAT_NAMES[sev], severity: sev, srcCountry: 'China', dstCountry: 'Taiwan' };
+  };
   return {
     source: q.source ?? 'hot',
     type: q.type ?? 'traffic',
     start: iso(s),
     end: iso(e),
-    filters: {},
+    filters: !traffic && q.severity ? { severity: q.severity } : {},
     summary: { sessions: traffic ? a.sessions : a.critical + a.high + a.medium + a.low + a.info, bytes: traffic ? a.bytes : 0, sent: traffic ? a.sent : 0, recv: traffic ? a.recv : 0, deny: a.deny, threats: { critical: a.critical, high: a.high, medium: a.medium, low: a.low, info: a.info } },
     top: traffic
       ? {
@@ -143,8 +160,16 @@ export function sliceResult(q: { start: string; end: string; type?: 'traffic' | 
           dport: [{ key: '443', sessions: 900, bytes: 1e9 }],
           dstCountry: [{ key: 'United States', sessions: 400, bytes: 6e8 }],
         }
-      : { name: [{ key: 'SMB Brute Force(40004)', severity: 'high', count: 9 }], src: [{ key: '203.0.113.9', count: 9 }], dst: [{ key: '10.10.130.124', count: 9 }], srcCountry: [{ key: 'China', count: 9 }] },
-    rows: Array.from({ length: n }, (_, i) => ({ time: iso(e - (i + 1) * Math.max(1000, Math.floor((e - s) / (n + 1)))), action: i % 9 ? 'allow' : 'deny', src: IPS[i % 5]!, dst: '8.8.8.8', dport: 443, app: 'ssl', bytes: 1000 + i * 37 })),
+      : {
+          name: sevs.map((k) => ({ key: THREAT_NAMES[k], severity: k, count: a[k] })),
+          src: [{ key: '203.0.113.9', count: 9 }],
+          dst: [{ key: '10.10.130.124', count: 9 }],
+          srcCountry: [{ key: 'China', count: 9 }],
+        },
+    rows: Array.from({ length: traffic || sevs.length ? n : 0 }, (_, i) => {
+      const time = iso(e - (i + 1) * Math.max(1000, Math.floor((e - s) / (n + 1))));
+      return traffic ? { time, action: i % 9 ? 'allow' : 'deny', src: IPS[i % 5]!, dst: '8.8.8.8', dport: 443, app: 'ssl', bytes: 1000 + i * 37 } : threatRow(i, time);
+    }),
     rowsLimit: q.rows ?? 100,
     rowsTruncated: n < (q.rows ?? 100) ? false : true,
     coverage: { partial: false, gaps: [], gapsKnown: true },

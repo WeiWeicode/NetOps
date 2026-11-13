@@ -32,6 +32,8 @@ import GWorldMap from '@/ui/charts/GWorldMap.vue';
 import GDrawer from '@/ui/components/GDrawer.vue';
 import GSourceBadge from '@/ui/components/GSourceBadge.vue';
 import { heatmapResponse, sliceResult, threatInsight, trafficInsight } from '../mock/fixtures/viz';
+/** slice.get 的第二個參數(逾時與換條件時中止用) */
+const SIG = { signal: expect.any(AbortSignal) };
 
 const NOW = Date.parse('2026-11-11T10:07:30+08:00');
 
@@ -281,7 +283,7 @@ describe('GSourceBadge 與 GDrawer / SliceDrawer', () => {
     // 點「高」→ 切成威脅類、只留 IP 條件重查;總流量顯示「不適用」(不是 0 B)
     await w.findAll('.slice-sev.is-interactive').find((b) => b.text().includes('高'))!.trigger('click');
     await flushPromises();
-    expect(mocks.sliceGet).toHaveBeenLastCalledWith({ ...q, type: 'threat', severity: 'high', ip: '10.10.112.20' });
+    expect(mocks.sliceGet).toHaveBeenLastCalledWith({ ...q, type: 'threat', severity: 'high', ip: '10.10.112.20' }, SIG);
     expect(w.find('.slice-drawer__kpis').text()).toContain('不適用');
     expect(w.find('.slice-drawer__kpis').text()).not.toContain('0 B');
     expect(w.find('.slice-sev.is-active').text()).toContain('高');
@@ -290,17 +292,17 @@ describe('GSourceBadge 與 GDrawer / SliceDrawer', () => {
     expect(w.find('tbody').text()).toContain('SMB Brute Force');
     expect(w.find('tbody').text()).not.toContain('critical');
 
-    // Top 10 威脅名稱 → filterThreat;明細來源 IP → filterIp
+    // Top 10 威脅名稱 → filterThreat;明細來源 IP → filterSrc(C7 第二輪:來源 IP 對應來源欄位)
     await w.findAll('.slice-drawer__top-tab').find((b) => b.text() === '威脅名稱')!.trigger('click');
     await w.find('.g-barlist button').trigger('click');
     expect(openInSearch).toHaveBeenLastCalledWith({ filterThreat: 'SMB Brute Force(40004)' });
     await w.find('.slice-ip-btn').trigger('click');
-    expect(openInSearch).toHaveBeenLastCalledWith({ filterIp: expect.any(String) });
+    expect(openInSearch).toHaveBeenLastCalledWith({ filterSrc: expect.any(String) });
 
     // 清除篩選 → 回到原本的流量類條件
     await w.find('.slice-sev__clear').trigger('click');
     await flushPromises();
-    expect(mocks.sliceGet).toHaveBeenLastCalledWith({ ...q, type: 'traffic', ip: '10.10.112.20' });
+    expect(mocks.sliceGet).toHaveBeenLastCalledWith({ ...q, type: 'traffic', ip: '10.10.112.20' }, SIG);
     expect(w.find('.slice-sev.is-active').exists()).toBe(false);
     mocks.sliceGet.mockReset();
     w.unmount();

@@ -169,7 +169,10 @@ function openItemInSearch(dimKey: string, rawVal: string) {
   const val = rawVal.replace(/^約\s+/, '').trim();
   if (!val || val === '—') return;
   const extra: SearchExtra = {};
-  if (dimKey === 'src' || dimKey === 'dst' || dimKey === 'ip') extra.filterIp = val;
+  // 來源 / 目的 IP 對應 Log 明細查詢的來源 / 目的欄位(C7 第二輪)
+  if (dimKey === 'src') extra.filterSrc = val;
+  else if (dimKey === 'dst') extra.filterDst = val;
+  else if (dimKey === 'ip') extra.filterIp = val;
   else if (dimKey === 'srcCountry' || dimKey === 'dstCountry') extra.filterCountry = val;
   else if (dimKey === 'app') extra.filterApp = val;
   else if (dimKey === 'dport') extra.filterPort = val;

@@ -53,3 +53,16 @@ export const isPorts = (v: string) => /^\d{1,5}(\s*,\s*\d{1,5})*$/.test(v);
 
 /** 事件 ID:數字以逗號分隔 */
 export const isEventIds = (v: string) => /^\d{1,6}(\s*,\s*\d{1,6})*$/.test(v);
+
+/**
+ * 網址帶了 Log 明細查詢頁不支援的威脅類條件(本頁只查 TRAFFIC;時段明細抽屜的威脅類會帶 type=THREAT、threat、severity):
+ * 回傳要提示「未套用」的文字,沒有則空字串(AGENT §5:不靜默忽略)。
+ * 頁面要在進頁時算一次:自動查詢會用 router.replace 改寫網址(只留本頁條件),跟著網址算提示會馬上消失(C7 第二輪)
+ */
+export function ignoredThreatCond(q: LocationQuery): string {
+  const parts: string[] = [];
+  if (q.type === 'THREAT') parts.push('類型 THREAT');
+  if (typeof q.threat === 'string' && q.threat) parts.push(`威脅名稱「${q.threat}」`);
+  if (typeof q.severity === 'string' && q.severity) parts.push(`嚴重度 ${q.severity}`);
+  return parts.join('、');
+}

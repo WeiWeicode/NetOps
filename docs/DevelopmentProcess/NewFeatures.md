@@ -2,6 +2,12 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。
 
+## 2026-11-13 對帳後每日同步解密 / GlobalProtect / User-ID / AD(AC1)
+- 工作項目:AC1
+- 內容:每天自動對帳後從 FTP 匯入這四類(不進 ClickHouse,FTP 只留 10 天);FTP Log 檔案頁顯示保留期限內每天是否已匯入。`NETOPS_DAILY_SYNC=0` 關閉。
+- 檔案:見 BackendCorrection、FrontendCorrection 同日紀錄;`docs/API.md` §5.4
+- 驗證:單元測試;測試區連續 3 天自動匯入待上架後確認
+
 ## 2026-11-13 AI 改用 ClickHouse、PA 頁面 AI 功能、IP 對照表(規劃)
 - 工作項目:AC1–AC7(新階段)
 - 內容:需求方決定 AI 分析 / 問答 / 外部 IP 學習改查 ClickHouse、解密等在對帳後自動同步、PA 頁面新增 6 項 AI 功能、新增 IP 對照表(IP 自動帶出名稱)。只寫計畫,未改程式。

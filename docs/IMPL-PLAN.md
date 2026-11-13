@@ -378,6 +378,8 @@ D13:骨架直接留用;AI 不在這次範圍,不做串流驗證(D7、D17)。
 2. 前一天的檔案還沒出現或 FTP 失敗時,照對帳的重試規則;超過 FTP 保留期限(10 天)仍沒匯入時記 warn。可以用環境變數關閉。
 3. 寫入 API.md §5、ARCHITECTURE D43 / D44、Compose。
 
+**狀態**:程式完成(`feature/ac1-recon-sync`;`modules/ftp/daily-sync.ts`、FTP Log 檔案頁「每日自動同步」卡片、API.md §5.4、`NETOPS_DAILY_SYNC`),待上測試區驗「連續 3 天」。
+
 **前置**:無(對帳 !91 已上線)。**負責人**:Claude。**完成條件**:
 - 測試區連續 3 天不用手動就自動匯入這四類。
 - FTP Log 檔案頁顯示已分析。

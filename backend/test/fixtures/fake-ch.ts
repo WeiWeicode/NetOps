@@ -260,11 +260,16 @@ export function createFakeReader(traffic: LogRecord[] = [], threats: { type: ChE
   }
   /** 條件語意用核心 buildFilter(FTP 版);時間與來源 / 目的國家另外比 */
   function search(recs: LogRecord[], q: TrafficFilter, limit: number, scanned: number) {
-    const { fromMs, toMs, srcCountry, dstCountry, ...rest } = q;
+    const { fromMs, toMs, srcCountry, dstCountry, ipRanges, ...rest } = q;
     const filter = buildFilter(rest) as (r: LogRecord, raw: string) => boolean;
     const has = (v: unknown, x?: string) => !x || String(v).toLowerCase().includes(x.toLowerCase());
+    // AC3 名稱搜尋:來源、目的、NAT 任一方落在範圍內(同 trafficWhere 的 ipRanges)
+    const n = (ip: string) => ip.split('.').reduce((x, p) => x * 256 + Number(p), 0);
+    const inRanges = (r: LogRecord) =>
+      !ipRanges ||
+      [r.src, r.dst, r.natSrc, r.natDst].some((ip) => typeof ip === 'string' && /^\d+\.\d+\.\d+\.\d+$/.test(ip) && ipRanges.some(([a, b]) => n(ip) >= n(a) && n(ip) <= n(b)));
     const hit = recs
-      .filter((r) => ms(String(r.time)) >= fromMs && ms(String(r.time)) < toMs && has(r.srcCountry, srcCountry) && has(r.dstCountry, dstCountry) && filter(r, Object.values(r).join(',')))
+      .filter((r) => ms(String(r.time)) >= fromMs && ms(String(r.time)) < toMs && has(r.srcCountry, srcCountry) && has(r.dstCountry, dstCountry) && inRanges(r) && filter(r, Object.values(r).join(',')))
       .sort((a, b) => String(a.time).localeCompare(String(b.time)));
     return { rows: hit.slice(0, limit).map((r) => ({ ...r })), more: hit.length > limit, scanned };
   }

@@ -51,6 +51,8 @@ export async function createTestApp({
   heat?: NonNullable<Parameters<typeof buildApp>[1]>['heat'];
   /** C5 PA 精準查詢 */
   paQuery?: NonNullable<Parameters<typeof buildApp>[1]>['paQuery'];
+  /** AC3 日誌內容檢查 */
+  logStream?: NonNullable<Parameters<typeof buildApp>[1]>['logStream'];
 } = {}): Promise<TestApp> {
   const { publicKey, privateKey } = await generateKeyPair('ES256');
   const jwk = { ...(await exportJWK(publicKey)), kid: 'test', alg: 'ES256', use: 'sig' };

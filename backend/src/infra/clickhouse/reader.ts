@@ -253,6 +253,11 @@ export interface TrafficFilter {
   /** 目的國家(dst_country) */
   dstCountry?: string;
   q?: string;
+  /**
+   * IP 對照表名稱搜尋換成的 IPv4 範圍(AC3,AQ3;[起, 迄] 含):來源、目的、NAT 任一方落在任一範圍;空陣列 = 沒有符合
+   * 比對欄位同 ip 條件,結果和用 IP 查一致
+   */
+  ipRanges?: [string, string][];
 }
 
 /** 威脅 log 明細條件:TRAFFIC 的條件 + 嚴重度(critical / high / medium / low / info)、威脅名稱(包含) */
@@ -322,6 +327,17 @@ export function trafficWhere(f: TrafficFilter, textColumns: string[] = TEXT_COLU
   ipAny([['src', false], ['nat_src', true]], f.src);
   ipAny([['dst', false], ['nat_dst', true]], f.dst);
   ipAny([['src', false], ['dst', false], ['nat_src', true], ['nat_dst', true]], f.ip);
+  if (f.ipRanges) {
+    const valid = f.ipRanges.filter(([a, b]) => IPV4.test(a) && IPV4.test(b));
+    if (!valid.length) where.push('0');
+    else {
+      // 範圍放兩個陣列參數(URL 長度固定 2 個參數);IPv4 文字經 toIPv6 轉成 IPv4-mapped,和欄位型別相同
+      const lo = p(`[${valid.map(([a]) => `'${a}'`).join(',')}]`, 'Array(String)');
+      const hi = p(`[${valid.map(([, b]) => `'${b}'`).join(',')}]`, 'Array(String)');
+      const inRange = (c: string) => `arrayExists((a, b) -> ${c} BETWEEN a AND b, arrayMap(x -> toIPv6(x), ${lo}), arrayMap(x -> toIPv6(x), ${hi}))`;
+      where.push(`(${inRange('src')} OR ${inRange('dst')} OR (nat_src != toIPv6('::') AND ${inRange('nat_src')}) OR (nat_dst != toIPv6('::') AND ${inRange('nat_dst')}))`);
+    }
+  }
   const port = String(f.port ?? '').trim();
   if (port) {
     const ports = [...new Set(port.split(/[,\s]+/).filter(Boolean).map(Number))].filter((x) => Number.isInteger(x) && x >= 0 && x <= 65535);

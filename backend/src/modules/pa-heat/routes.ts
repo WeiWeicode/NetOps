@@ -22,6 +22,7 @@ const heatRoutes: FastifyPluginAsync<{ svc: HeatService; syncMs?: number }> = as
   app.get<{ Querystring: { granularity: Granularity; metric: Metric; date?: string } }>(
     '/v1/pa/heatmap',
     {
+      config: { ipNames: true },
       schema: {
         operationId: 'netops.pa-heatmap.get',
         summary: 'PA 活動熱力圖',
@@ -75,6 +76,7 @@ const heatRoutes: FastifyPluginAsync<{ svc: HeatService; syncMs?: number }> = as
   app.get<{ Querystring: SliceQuery }>(
     '/v1/pa/slice',
     {
+      config: { ipNames: true },
       schema: {
         operationId: 'netops.pa-slice.get',
         summary: 'PA 時段明細(熱力圖格子)',
@@ -170,6 +172,7 @@ const heatRoutes: FastifyPluginAsync<{ svc: HeatService; syncMs?: number }> = as
   app.get<{ Params: { id: string } }>(
     '/v1/pa/slices/:id',
     {
+      config: { ipNames: true },
       schema: {
         operationId: 'netops.pa-slice.job-get',
         summary: 'PA 時段明細(查詢工作)',

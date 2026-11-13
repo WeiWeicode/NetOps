@@ -32,8 +32,14 @@ const FIELD_LABELS: Record<string, string> = {
   bytes: '位元組', sent: '送出', recv: '接收', packets: '封包', elapsed: '持續(秒)', endReason: '結束原因', category: 'URL 類別',
   srcCountry: '來源國家', dstCountry: '目的國家', appRisk: 'App 風險', threat: '威脅名稱', severity: '嚴重性', url: 'URL / 檔名',
 };
+/** 名稱搜尋換成的 IP 範圍上限(AQ3:超過改用 ClickHouse ip_trie 字典,目前回 400 請縮小關鍵字) */
+export const NAME_RANGE_MAX = 1000;
+/** 匯出多的名稱欄(AC3:IP 對照表的使用者姓名或設備名稱,附部門) */
+const NAME_COLUMNS = ['來源名稱', '目的名稱'];
 const FIELDS = ROW_FIELDS as string[];
 const TIME_INDEX = FIELDS.indexOf('time');
+const SRC_INDEX = FIELDS.indexOf('src');
+const DST_INDEX = FIELDS.indexOf('dst');
 
 interface SearchBody {
   from: string;
@@ -58,6 +64,8 @@ interface SearchBody {
   threat?: string;
   /** 嚴重度(只有 THREAT) */
   severity?: string;
+  /** IP 對照表的使用者姓名 / 部門 / 設備名稱(包含;AC3) */
+  name?: string;
   q?: string;
   limit?: number;
   /** 只有 clickhouse(相容用,可省略) */
@@ -70,7 +78,7 @@ type SearchType = (typeof SEARCH_TYPES)[number];
  * 有條件的欄位(只有關鍵字 q 時限 1 天;資安審查 M2)。嚴重度、威脅名稱篩選力低(威脅名稱也是全掃描的包含比對),
  * 和 q 一起用時仍當成「只用關鍵字」(資安審查 2026-11-13)
  */
-const COND_KEYS = ['src', 'dst', 'ip', 'port', 'proto', 'app', 'rule', 'action', 'fromZone', 'toZone', 'user', 'country', 'srcCountry', 'dstCountry'] as const;
+const COND_KEYS = ['src', 'dst', 'ip', 'name', 'port', 'proto', 'app', 'rule', 'action', 'fromZone', 'toZone', 'user', 'country', 'srcCountry', 'dstCountry'] as const;
 
 /** 威脅 log 的列 → 明細欄位(ROW_FIELDS;威脅名稱 name → threat,沒有的欄位空白) */
 export const threatRow = (rec: LogRecord): LogRecord => ({ ...rec, threat: rec.name ?? '', severity: rec.severity === 'informational' ? 'info' : (rec.severity ?? '') });
@@ -125,7 +133,7 @@ const logRoutes: FastifyPluginAsync<{ limit: number; seconds: number; ch: ChOver
       schema: {
         operationId: 'netops.pa-log.search',
         summary: 'PA Log 明細查詢(送出工作)',
-        description: `依時間與條件查 ClickHouse 的 PA 原始 log:type 省略或 TRAFFIC 查 TRAFFIC;THREAT 查威脅 log(log_type = threat),另可用 severity(critical / high / medium / low / info)與 threat(威脅名稱包含),TRAFFIC 帶這兩個條件回 400。IP 支援完全相同、萬用字元與 CIDR,並比對 NAT 位址;country 為來源或目的任一方,srcCountry / dstCountry 只比對來源 / 目的。回 202 與工作狀態,完成後分頁取結果或匯出 CSV。依時間由舊到新取前 limit 筆(預設與上限 ${limit}),還有更多時 stopReason 為 limit;執行上限 ${CH_SEARCH_SECONDS} 秒。期間最長 ${SEARCH_MAX_DAYS} 天,只用關鍵字 q 時最長 1 天。期間整個超過保留期限回 404 NETOPS_PA_OUT_OF_RETENTION;期間內沒有資料回 404 NETOPS_PA_NO_DATA;ClickHouse 無法使用回 503 NETOPS_CLICKHOUSE_UNAVAILABLE。`,
+        description: `依時間與條件查 ClickHouse 的 PA 原始 log:type 省略或 TRAFFIC 查 TRAFFIC;THREAT 查威脅 log(log_type = threat),另可用 severity(critical / high / medium / low / info)與 threat(威脅名稱包含),TRAFFIC 帶這兩個條件回 400。IP 支援完全相同、萬用字元與 CIDR,並比對 NAT 位址;country 為來源或目的任一方,srcCountry / dstCountry 只比對來源 / 目的;name 比對 IP 對照表的使用者姓名、部門、設備名稱(包含),換成 IP 範圍後查(和用 IP 查結果相同;對照表沒有符合的回 400,範圍超過 ${NAME_RANGE_MAX} 個回 400)。回 202 與工作狀態,完成後分頁取結果或匯出 CSV。依時間由舊到新取前 limit 筆(預設與上限 ${limit}),還有更多時 stopReason 為 limit;執行上限 ${CH_SEARCH_SECONDS} 秒。期間最長 ${SEARCH_MAX_DAYS} 天,只用關鍵字 q 時最長 1 天。期間整個超過保留期限回 404 NETOPS_PA_OUT_OF_RETENTION;期間內沒有資料回 404 NETOPS_PA_NO_DATA;ClickHouse 無法使用回 503 NETOPS_CLICKHOUSE_UNAVAILABLE。`,
         tags: ['PA Log 明細'],
         'x-permission': 'netops.pa-log.read',
         'x-audit-level': 'meta',
@@ -183,6 +191,7 @@ const logRoutes: FastifyPluginAsync<{ limit: number; seconds: number; ch: ChOver
             type: { type: 'string', enum: [...SEARCH_TYPES] },
             threat: text(200),
             severity: { type: 'string', enum: [...SEARCH_SEVERITIES] },
+            name: text(50),
             q: text(200),
             limit: { type: 'integer', minimum: 1, maximum: limit },
             source: SOURCE,
@@ -212,7 +221,16 @@ const logRoutes: FastifyPluginAsync<{ limit: number; seconds: number; ch: ChOver
       const cov = await checkCoverage(ch, threat ? 'threat' : 'traffic', fromMs, toMs);
       const n = await viaClickHouse(() => (threat ? reader.threatCount(fromMs, toMs) : reader.trafficCount(fromMs, toMs)));
       if (!n) throw new AppError(404, 'NETOPS_PA_NO_DATA', threat ? '這段時間 ClickHouse 沒有威脅 log' : '這段時間 ClickHouse 沒有 log');
+      // 名稱搜尋(AC3,AQ3):先在 API 端換成 IP 範圍再查 ClickHouse;關鍵字本身不寫日誌(個資)
+      let ipRanges: [string, string][] | undefined;
+      if (b.name?.trim()) {
+        const m = app.ipNames.match(b.name);
+        if (!m.entries) throw validation('name', 'IP 對照表沒有符合的使用者姓名、部門或設備名稱');
+        if (m.ranges.length > NAME_RANGE_MAX) throw validation('name', `符合的 IP 範圍超過 ${NAME_RANGE_MAX} 個,請縮小關鍵字`);
+        ipRanges = m.ranges;
+      }
       const filter = {
+        ipRanges,
         fromMs, toMs, src: b.src, dst: b.dst, ip: b.ip, port: b.port, proto: b.proto, app: b.app, rule: b.rule, action: b.action, fromZone: b.fromZone, toZone: b.toZone,
         user: b.user, country: b.country, srcCountry: b.srcCountry, dstCountry: b.dstCountry, q: b.q, threat: b.threat, severity: b.severity,
       };
@@ -275,6 +293,7 @@ const logRoutes: FastifyPluginAsync<{ limit: number; seconds: number; ch: ChOver
   app.get<{ Params: { id: string }; Querystring: { page?: number; pageSize?: number } }>(
     '/v1/pa/log-searches/:id/rows',
     {
+      config: { ipNames: true },
       schema: {
         operationId: 'netops.pa-log.search-rows',
         summary: 'PA Log 明細查詢結果(分頁)',
@@ -303,7 +322,7 @@ const logRoutes: FastifyPluginAsync<{ limit: number; seconds: number; ch: ChOver
       schema: {
         operationId: 'netops.pa-log.search-export',
         summary: 'PA Log 明細查詢結果匯出',
-        description: '下載完成的明細工作的全部資料列(CSV,UTF-8 BOM,欄名中文,同舊版畫面匯出)。',
+        description: '下載完成的明細工作的全部資料列(CSV,UTF-8 BOM,欄名中文,同舊版畫面匯出);最後兩欄是來源 / 目的 IP 在 IP 對照表的名稱(姓名或設備名稱 / 部門,以匯出當下的對照表為準)。',
         tags: ['PA Log 明細'],
         'x-permission': 'netops.pa-log.read',
         'x-audit-level': 'meta',
@@ -315,13 +334,18 @@ const logRoutes: FastifyPluginAsync<{ limit: number; seconds: number; ch: ChOver
     async (req, reply) => {
       const owner = ownerOf(req.identity);
       const r = jobsOf(req.params.id, owner).result<SearchResult>(req.params.id, owner, KIND);
-      const rows = r.rows.map((row) => row.map((v, i) => (i === TIME_INDEX ? logTimeOut(String(v)) : v)));
+      // 匯出多兩欄名稱(AC3;以匯出當下的對照表為準)
+      const label = (ip: unknown) => {
+        const e = typeof ip === 'string' && ip ? app.ipNames.lookup(ip) : undefined;
+        return e ? [e.name || e.device, e.department].filter(Boolean).join(' / ') : '';
+      };
+      const rows = r.rows.map((row) => [...row.map((v, i) => (i === TIME_INDEX ? logTimeOut(String(v)) : v)), label(row[SRC_INDEX]), label(row[DST_INDEX])]);
       // 期間有一部分超過保留期限時檔名標出來(AGENT.md §5)
       const name = `PA_${r.type === 'THREAT' ? 'threat' : 'log'}_${r.from.slice(0, 16).replace(/\D/g, '')}_${r.to.slice(0, 16).replace(/\D/g, '')}${r.partial ? '_部分期間超過保留期限' : ''}.csv`;
       return reply
         .header('content-type', 'text/csv; charset=utf-8')
         .header('content-disposition', `attachment; filename*=UTF-8''${encodeURIComponent(name)}`)
-        .send(toCsv(FIELDS.map((f) => FIELD_LABELS[f] ?? f), rows));
+        .send(toCsv([...FIELDS.map((f) => FIELD_LABELS[f] ?? f), ...NAME_COLUMNS], rows));
     },
   );
 

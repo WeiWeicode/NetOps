@@ -103,6 +103,7 @@ const paQueryRoutes: FastifyPluginAsync<{ svc: PaQueryService }> = async (app, {
   app.get<{ Params: { id: string } }>(
     '/v1/pa-query/jobs/:id',
     {
+      config: { ipNames: true },
       schema: {
         operationId: 'netops.pa-query.get',
         summary: 'PA 精準查詢結果',

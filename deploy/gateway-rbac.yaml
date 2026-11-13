@@ -51,6 +51,10 @@ permissions:
   # 網通知識
   - { code: netops.kb-page.read, name: 知識庫, kind: menu, parent: netops.group.knowledge, sort: 10, includes: [netops.kb.read] }
   - { code: netops.kb-page.write, name: 新增 / 修改 / 刪除筆記, kind: button, parent: netops.kb-page.read, sort: 10, includes: [netops.kb.write] }
+  # IP 對照表(AC3;姓名、部門屬個資):選單與按鈕只給 netops-admin(網管),netops-viewer 不列(例外同 D31)。
+  #   PA 各畫面的名稱沿用各 PA API 的權限(看得到 PA 的人就看得到名稱),不需要這兩個節點
+  - { code: netops.ip-name-page.read, name: IP 對照表, kind: menu, parent: netops.group.knowledge, sort: 20, includes: [netops.ip-name.read] }
+  - { code: netops.ip-name-page.write, name: 新增 / 修改 / 刪除 / 匯入對照, kind: button, parent: netops.ip-name-page.read, sort: 10, includes: [netops.ip-name.write] }
 
   # AI(IMPL-PLAN A1,ARCHITECTURE D23):netops.ai.use 不是 .read,選單不能綁定(BACKEND-GUIDE §6.1),改由按鈕綁定;
   #   AI 問答頁的選單只綁該頁需要的讀取權限。舊版的整理筆記(寫知識庫)與翻譯依 2026-11-09 決定不搬(D25)
@@ -85,6 +89,9 @@ roles:
       - netops.ad-files.manage
       - netops.kb-page.read
       - netops.kb-page.write
+      # AC3:IP 對照表只給網管
+      - netops.ip-name-page.read
+      - netops.ip-name-page.write
       # AI(A1;netops.ai.use 給 admin 與 viewer,2026-11-05 決定)
       - netops.pa-ask.read
       - netops.pa-ask.use

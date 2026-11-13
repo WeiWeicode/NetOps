@@ -53,6 +53,8 @@ import heatRoutes from './modules/pa-heat/routes.js';
 import { createHeatService, type ColdSlice } from './modules/pa-heat/service.js';
 import insightRoutes from './modules/pa-insight/routes.js';
 import { createInsightService } from './modules/pa-insight/service.js';
+import ipNameRoutes from './modules/ip-names/routes.js';
+import { createIpNameService, type IpNameService } from './modules/ip-names/service.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -61,6 +63,8 @@ declare module 'fastify' {
     jobs: JobRunner;
     /** ClickHouse 每小時摘要(C3;沒有設定 ClickHouse 時為 null) */
     chSummary: ChSummaryBuilder | null;
+    /** IP 對照表(AC3):PA 各 API 的 names、Log 明細名稱搜尋、AI 提示詞 */
+    ipNames: IpNameService;
   }
   interface FastifyRequest {
     identity: GatewayIdentity | null;
@@ -68,6 +72,8 @@ declare module 'fastify' {
   interface FastifyContextConfig {
     /** false:不驗證 Token(健康檢查、OpenAPI) */
     gatewayAuth?: boolean;
+    /** true:回應(物件)附上 names = 本回應出現的 IP 的對照名稱(AC3;沿用該 API 的權限) */
+    ipNames?: boolean;
   }
 }
 
@@ -94,10 +100,12 @@ export async function buildApp(
     heat?: { reader?: HeatReader | null; cold?: ColdSlice | null; coldLock?: ColdLock | null; now?: () => number; syncMs?: number };
     /** PA 精準查詢(C5);測試注入,null = 沒有 Redis */
     paQuery?: { store?: PaQueryStore | null; now?: () => number };
+    /** 服務日誌的輸出(測試檢查日誌內容用;預設 stdout) */
+    logStream?: { write(msg: string): void };
   } = {},
 ): Promise<FastifyInstance> {
   const app = Fastify({
-    logger: { level: config.logLevel, redact: ['req.headers["x-internal-token"]'] },
+    logger: { level: config.logLevel, redact: ['req.headers["x-internal-token"]'], ...(deps.logStream ? { stream: deps.logStream } : {}) },
     // 沿用 Gateway 傳下來的 X-Request-Id,寫入每一筆日誌(§5.2)
     requestIdHeader: 'x-request-id',
   });
@@ -122,6 +130,18 @@ export async function buildApp(
     } catch {
       // 只有 Token 驗證失敗才回 401;Gateway 收到會視為設定錯誤並告警(§5.3)
       throw new AppError(401, 'NETOPS_INTERNAL_TOKEN_INVALID', '內部 Token 無效');
+    }
+  });
+
+  // IP 對照表(AC3):標了 config.ipNames 的 PA API 回應附上 names(只含本回應出現的 IP;對照表讀取失敗不影響原本的回應)
+  app.decorate('ipNames', createIpNameService(app.store.ipNames));
+  app.addHook('preSerialization', async (req, reply, payload) => {
+    if (!req.routeOptions.config.ipNames || reply.statusCode >= 300 || !payload || typeof payload !== 'object' || Array.isArray(payload)) return payload;
+    try {
+      return { ...(payload as Record<string, unknown>), names: app.ipNames.namesFor(payload) };
+    } catch (err) {
+      req.log.error({ err }, 'IP 對照表讀取失敗,回應不附名稱');
+      return payload;
     }
   });
 
@@ -262,6 +282,7 @@ export async function buildApp(
   await app.register(adFtpRoutes, { ad, daily: daily.status });
   const kb = createKbService(app.store.kb, app.log);
   await app.register(kbRoutes, { kb });
+  await app.register(ipNameRoutes, { svc: app.ipNames });
   // AI 分析、問答、語意搜尋、外部 IP 自動學習(IMPL-PLAN A1;deps.ai 只給測試注入假 AI 主機)
   await registerAi(app, { config, traffic, events, ad, kb, ftp, paStore: app.store.pa, chReader, chBuilder, now: deps.chNow, ...deps.ai });
   await app.register(ftpRoutes, {

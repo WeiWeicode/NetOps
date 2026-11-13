@@ -29,6 +29,7 @@ import { createChAiSource } from './ch-source.js';
 import aiRoutes from './routes.js';
 import { createAiService } from './service.js';
 import { createSseHub } from './sse.js';
+import { aiNamesSection } from '../ip-names/service.js';
 
 const pad = (n: number) => String(n).padStart(2, '0');
 /** Date → 'yyyy/MM/dd'(本地時間,容器 TZ=Asia/Taipei;舊版 utils.fmtDate) */
@@ -188,6 +189,8 @@ export async function registerAi(app: FastifyInstance, deps: AiDeps) {
     kbMaxChars: cfg.kbMaxChars,
     source: cfg.source,
     ch,
+    // AC3(D45):提示詞附 IP 對照(姓名、部門只送公司內部 AI 主機,不寫日誌)
+    ipNames: (text) => aiNamesSection(app.ipNames, text),
   });
   const hub = createSseHub(app, { maxStreams: cfg.maxStreams, maxPerUser: cfg.maxStreamsPerUser, heartbeatMs: deps.heartbeatMs });
   await app.register(aiRoutes, { ai, hub });

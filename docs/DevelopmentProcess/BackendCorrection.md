@@ -11,6 +11,7 @@
   - `config.ts`:`NETOPS_AI_SOURCE`(未設定時 test → clickhouse、prod / dev → ftp)、`IPLEARN_DAYS` 上限 30;`POST /kb/ip-learnings` 的 `days` 上限 30。
   - `ai/core/context.js` `buildContext` 加選填 `opts.source`(來源說明;不給時同舊版)。`iplearn.js` 的 `recentSummaries` 可回 Promise(`await`,舊版測試基準仍相同)。`pa-events/importer.ts` `eventsForIps` 加 `types`。`evidence.js` 未改(與舊版逐字相同的測試仍通過)。
   - Compose:`NETOPS_AI_SOURCE`(空白依 GW_ENV);`deploy/test.env.example` 加說明。
+  - `modules/ai/sse.ts`:「用戶端已斷線就不開始」改看 `req.raw.socket.destroyed`。路由在 `hub.open` 前 await 時,請求本文讀完的 IncomingMessage 已自動 destroy,原本的 `req.raw.destroyed` 會誤判為斷線而不送任何資料(CI「用戶端中途斷線」測試逾時)。
 - 檔案:`backend/src/modules/ai/ch-source.ts`、`backend/src/modules/ai/service.ts`、`backend/src/modules/ai/index.ts`、`backend/src/modules/ai/routes.ts`、`backend/src/modules/ai/core/context.js`、`backend/src/infra/clickhouse/reader.ts`、`backend/src/config.ts`、`backend/src/app.ts`、`backend/src/modules/kb/ai-routes.ts`、`backend/src/modules/iplearn/core/iplearn.js`、`backend/src/modules/pa-events/importer.ts`、`deploy/docker-compose.yml`、`deploy/test.env.example`、`backend/test/unit/ai-ch.test.ts`、`backend/test/integration/ai.int.test.ts`、`backend/test/fixtures/fake-ch.ts`
 - 驗證:見 MR(typecheck、`npm test`、`npm run build`;整合測試在 CI `check:ingest-int`)
 

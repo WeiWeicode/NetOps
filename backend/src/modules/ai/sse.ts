@@ -59,7 +59,9 @@ export function createSseHub(app: FastifyInstance, opts: SseHubOptions) {
    */
   function open(req: FastifyRequest, reply: FastifyReply, owner: string, run: (s: SseStream) => Promise<void>) {
     // 解析請求或驗證 Token 期間用戶端已斷線:close 事件已經發過,不開始(否則掃描與模型照跑、名額佔到最長時間)
-    if (req.raw.destroyed || reply.raw.destroyed) {
+    // 看 socket 而不是 req.raw:請求本文讀完後 IncomingMessage 會自動 destroy,路由在 open 之前 await(AC2 的 prepare*)時
+    // req.raw.destroyed 已是 true,但連線還在(Node 22)
+    if (req.raw.socket?.destroyed || reply.raw.destroyed) {
       reply.hijack();
       return reply;
     }

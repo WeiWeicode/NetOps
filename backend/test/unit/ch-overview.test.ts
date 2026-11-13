@@ -37,11 +37,26 @@ const HOUR = 3600_000;
 
 describe('config(C3)', () => {
   const base = { GW_ENV: 'dev', SERVICE_CODE: 'netops-api', GW_JWKS_URL: 'http://127.0.0.1/jwks' };
-  it('預設:dev 可以沒有 ClickHouse;每小時摘要 30 天、5 分鐘;對帳 01:00', () => {
+  it('預設:dev 可以沒有 ClickHouse;每小時摘要 30 天、5 分鐘;對帳 08:10、自動補漏開、FTP 保留 10 天', () => {
     const c = loadConfig(base);
     assert.equal(c.clickhouse, null);
     assert.deepEqual(c.chSummary, { days: 30, minutes: 5 });
-    assert.equal(c.reconHour, 1);
+    assert.equal(c.reconAt, 8 * 60 + 10);
+    assert.equal(c.reconAutoBackfill, true);
+    assert.equal(c.ftpRetentionDays, 10);
+  });
+  it('對帳時間:NETOPS_RECON_TIME=HH:MM 優先,舊的 NETOPS_RECON_HOUR 相容,-1 不自動;格式錯誤啟動失敗;自動補漏可關', () => {
+    assert.equal(loadConfig({ ...base, NETOPS_RECON_TIME: '07:05' }).reconAt, 7 * 60 + 5);
+    assert.equal(loadConfig({ ...base, NETOPS_RECON_TIME: '23:59', NETOPS_RECON_HOUR: '1' }).reconAt, 23 * 60 + 59);
+    assert.equal(loadConfig({ ...base, NETOPS_RECON_TIME: '-1' }).reconAt, -1);
+    assert.equal(loadConfig({ ...base, NETOPS_RECON_HOUR: '1' }).reconAt, 60);
+    assert.equal(loadConfig({ ...base, NETOPS_RECON_HOUR: '-1' }).reconAt, -1);
+    assert.throws(() => loadConfig({ ...base, NETOPS_RECON_TIME: '8:70' }), /NETOPS_RECON_TIME/);
+    assert.throws(() => loadConfig({ ...base, NETOPS_RECON_TIME: '24:00' }), /NETOPS_RECON_TIME/);
+    assert.throws(() => loadConfig({ ...base, NETOPS_RECON_HOUR: '24' }), /NETOPS_RECON_HOUR/);
+    assert.equal(loadConfig({ ...base, NETOPS_RECON_AUTO_BACKFILL: '0' }).reconAutoBackfill, false);
+    assert.throws(() => loadConfig({ ...base, NETOPS_RECON_AUTO_BACKFILL: 'no' }), /NETOPS_RECON_AUTO_BACKFILL/);
+    assert.equal(loadConfig({ ...base, NETOPS_FTP_RETENTION_DAYS: '14' }).ftpRetentionDays, 14);
   });
   it('有 CLICKHOUSE_URL 時密碼必填;帳號預設 netops_reader;URL 不可帶帳密', () => {
     assert.throws(() => loadConfig({ ...base, CLICKHOUSE_URL: 'http://ch:8123' }), /CLICKHOUSE_PASSWORD_FILE/);

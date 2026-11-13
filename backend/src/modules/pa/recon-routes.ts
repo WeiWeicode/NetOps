@@ -10,11 +10,11 @@ import type { FastifyPluginAsync } from 'fastify';
 import { AppError } from '../../errors.js';
 import type { BackfillJob, BackfillQueue } from '../../infra/redis/backfill.js';
 import { DAY, dayRangeQuery, looseObject } from '../../shared/schemas.js';
-import { dayIn, dayOut, dayRange, logTimeOut, taipeiDayStartMs, taipeiHourKey, validation } from '../../shared/time.js';
+import { dayIn, dayOut, dayRange, logTimeOut, taipeiHourKey, validation } from '../../shared/time.js';
 import { ClickHouseError } from '../../infra/clickhouse/index.js';
 import { ownerOf } from '../../infra/jobs/index.js';
 import { unavailable } from './ch-overview.js';
-import { RECON_THRESHOLD, type ReconDay, type Reconciler } from './reconcile.js';
+import { planBackfill, RECON_THRESHOLD, type ReconDay, type Reconciler } from './reconcile.js';
 
 const out = (r: ReconDay) => ({ ...r, day: dayOut(r.day), hours: r.hours.map((h) => ({ ...h, hour: logTimeOut(h.hour) })) });
 const jobOut = (j: BackfillJob) => ({ ...j, day: dayOut(j.day), hours: j.hours.map((h) => ({ hour: logTimeOut(taipeiHourKey(h.hour)), files: h.files.length })) });
@@ -112,25 +112,19 @@ const reconRoutes: FastifyPluginAsync<{ recon: Reconciler | null; queue: Backfil
       if (!queue) throw unavailable();
       const rec = await run(day);
       if (rec.status === 'pending') throw new AppError(409, 'NETOPS_RECON_PENDING', '這一天的 FTP 檔案還沒同步分析完,請先到「FTP Log 檔案」同步後再補漏');
-      let gaps = rec.hours.filter((h) => h.status === 'gap');
-      if (req.body.hours?.length) {
-        const want = new Set(
-          req.body.hours.map((h) => {
-            const ms = Date.parse(h);
-            if (Number.isNaN(ms) || !/[Zz]|[+-]\d{2}:\d{2}$/.test(h)) throw validation('hours', '時間格式必須是 ISO 8601 且含時區');
-            return taipeiHourKey(ms);
-          }),
-        );
-        gaps = gaps.filter((h) => want.has(h.hour));
-      }
-      if (!gaps.length) throw new AppError(409, 'NETOPS_BACKFILL_NOTHING', '這一天沒有需要補漏的小時');
-      const hours = gaps.map((h) => {
-        const ms = taipeiDayStartMs(h.hour.slice(0, 10)) + Number(h.hour.slice(11, 13)) * 3600_000;
-        return { hour: ms, files: r.filesForHour(ms) };
-      });
+      const want = req.body.hours?.length
+        ? new Set(
+            req.body.hours.map((h) => {
+              const ms = Date.parse(h);
+              if (Number.isNaN(ms) || !/[Zz]|[+-]\d{2}:\d{2}$/.test(h)) throw validation('hours', '時間格式必須是 ISO 8601 且含時區');
+              return taipeiHourKey(ms);
+            }),
+          )
+        : undefined;
+      const { hours, noFiles } = planBackfill(rec, r.filesForHour, want);
+      if (!hours.length) throw new AppError(409, 'NETOPS_BACKFILL_NOTHING', '這一天沒有需要補漏的小時');
       // 找不到涵蓋的 FTP 檔就不建工作(否則會「完成」但什麼都沒補)
-      const noFiles = hours.filter((h) => !h.files.length);
-      if (noFiles.length) throw new AppError(409, 'NETOPS_RECON_PENDING', '有缺口的小時找不到已分析的 FTP 檔,請先到「FTP Log 檔案」同步後再補漏');
+      if (noFiles) throw new AppError(409, 'NETOPS_RECON_PENDING', '有缺口的小時找不到已分析的 FTP 檔,請先到「FTP Log 檔案」同步後再補漏');
       const job = await queue.enqueue(day, hours, ownerOf(req.identity)).catch(() => {
         throw redisDown();
       });

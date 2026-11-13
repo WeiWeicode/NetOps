@@ -538,7 +538,8 @@ ARCHITECTURE D33、D43、手冊 `PA-LOG-CLICKHOUSE-GUIDE.md` §11:FTP 只做對�
 
 - **對帳**:每小時比 FTP 摘要的筆數(已分析的 FTP 檔的每小時統計,不另外讀 FTP)與 ClickHouse 每小時彙總的筆數。差異 = (FTP − ClickHouse) / FTP;> 0.5% 為 `gap`、< −0.5% 為 `excess`(可能重複)、FTP 沒有該小時為 `ftp-missing`、其他 `ok`。ClickHouse 開始收資料之前的小時、以及開始的那一小時(通常只收到一部分)不比。FTP 的筆數是各匯出檔摘要的加總;若 PA 匯出檔時間範圍互相重疊會把 FTP 算多(補漏時依 seqno 去重,補不出列、缺口仍在),此時請人工確認。
 - 一天的 `status`:`ok`、`gap`(有缺口)、`pending`(FTP 這一天的匯出檔還沒同步分析完:隔天也要有已分析的檔案、沒有讀不到的摘要、沒有在分析中;不判斷缺口)、`not-covered`(ClickHouse 這天沒有資料)。
-- 每天台灣時間 `NETOPS_RECON_HOUR`(預設 **1**,-1 = 不自動)起自動對帳前 3 天並存檔;有缺口時服務日誌記 warn。**對帳要的 FTP 分析由對帳流程自己確保**:FTP 檔還沒分析完時先同步(只排 TRAFFIC 檔,30 分鐘最多一次),之後每 10 分鐘再試,直到不是 `pending`。PA 前一天的匯出檔實際約 **07:45** 才出現在 FTP,所以前一天通常 07:45 之後才對得到帳(01:00–07:45 為 `pending`)。
+- 每天台灣時間 `NETOPS_RECON_TIME`(`HH:MM`,預設 **08:10**,需求方 2026-11-13 決定;`-1` = 不自動;舊的 `NETOPS_RECON_HOUR` 整點設定仍可用,`NETOPS_RECON_TIME` 優先)起自動對帳前 3 天並存檔;有缺口時服務日誌記 warn。**對帳要的 FTP 分析由對帳流程自己確保**:FTP 檔還沒分析完時先同步(只排 TRAFFIC 檔,30 分鐘最多一次),之後每 10 分鐘再試,直到不是 `pending`。PA 前一天的匯出檔實際約 **07:45** 才出現在 FTP,所以預設 08:10 開始;若 08:10 時檔還沒出現,先為 `pending` 再每 10 分鐘重試。
+- **自動補漏**(需求方 2026-11-13 決定;`NETOPS_RECON_AUTO_BACKFILL=0` 關閉):自動對帳發現 `gap` 時,同手動 `POST /pa/backfills` 的流程送出補漏工作,`createdBy` 為 `system:recon`,工作 id 記在該天對帳結果的 `backfills`。缺口小時還找不到已分析的 FTP 檔、上一個補漏還在排隊或執行中、佇列已滿或 netops-redis 失敗時,照 `pending` 的規則每 10 分鐘再試;自動補漏全系統同時只有 1 個在排隊或執行(不佔滿佇列、不擋人工補漏)。補漏完成 20 分鐘後(等每小時彙總追上)重新判斷,沒缺口就結束,仍有缺口再送,同一天每天最多自動送 3 次(之後記 warn,改人工)。FTP 只保留 `NETOPS_FTP_RETENTION_DAYS`(預設 10,最多 30)天:4 天前到保留期限前一天、上次對帳仍有缺口或 `pending` 的日子每天自動再對帳、再補;到了保留期限仍有缺口或 `pending` 時記 warn(FTP 檔已刪或即將被刪,無法再補)。部署注意:Compose 一律給 `NETOPS_RECON_TIME`,原本在 `.env` 用 `NETOPS_RECON_HOUR=-1` 關閉自動對帳的,要改成 `NETOPS_RECON_TIME=-1`。
 - **補漏**:`netops-ingest` 一次做一個工作,逐小時查 ClickHouse 已有的 seqno,從 FTP 逐列讀涵蓋該小時的 TRAFFIC CSV,**只補寫 seqno 不在 ClickHouse 的列**(`source = 'ftp'`;不刪除、不覆蓋既有資料;沒有 seqno 的列無法去重,略過並計數)。每小時彙總由物化檢視自動補上,總覽的每小時摘要偵測到筆數變了會重建。佇列最多 10 個工作。
 - `hours`(選填):只補其中幾個缺口小時(ISO 8601 含時區);不是缺口的小時忽略。
 

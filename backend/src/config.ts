@@ -92,8 +92,15 @@ export interface Config {
   clickhouse: { url: string; user: string; password: string; timeoutMs: number } | null;
   /** ClickHouse 每小時摘要(總覽排行用):保留 / 補建幾天、每幾分鐘檢查一次(0 = 不建) */
   chSummary: { days: number; minutes: number };
-  /** FTP 與 ClickHouse 每日對帳(C3,D43):每天幾點(台灣時間)開始對帳前 3 天,FTP 檔還沒有時之後每 10 分鐘再試;-1 = 不自動(仍可手動) */
-  reconHour: number;
+  /**
+   * FTP 與 ClickHouse 每日對帳(C3,D43):每天幾點幾分(台灣時間,當天的第幾分鐘)開始對帳前 3 天,FTP 檔還沒有時之後每 10 分鐘再試;
+   * -1 = 不自動(仍可手動)。NETOPS_RECON_TIME=HH:MM(預設 08:10,需求方 2026-11-13 決定);舊的 NETOPS_RECON_HOUR 仍可用
+   */
+  reconAt: number;
+  /** 對帳發現缺口時自動送補漏(NETOPS_RECON_AUTO_BACKFILL,預設開;0 關閉) */
+  reconAutoBackfill: boolean;
+  /** FTP 上 PA log 保留天數(NETOPS_FTP_RETENTION_DAYS,預設 10):期限內的缺口每天自動補,超過期限仍有缺口記 warn */
+  ftpRetentionDays: number;
   /**
    * ClickHouse 原始表保留天數(V-a 時段明細的熱 / 冷分界,docs/VIZ-RULES-DESIGN.md §4.3.1)。要和 deploy/clickhouse/apply-schema.sh 一致:
    * 正式區 TRAFFIC 30、威脅 90(CQ12);測試區與本機 3。NETOPS_TTL_TRAFFIC_DAYS / _THREAT_DAYS 可覆寫
@@ -136,6 +143,33 @@ function int(env: NodeJS.ProcessEnv, key: string, fallback: number, min: number,
   const n = Number(raw);
   if (!Number.isInteger(n) || n < min || n > max) throw new GatewayEnvError(`${key} 必須是 ${min}–${max} 的整數:${raw}`);
   return n;
+}
+
+/** 開關(有預設值):沒設定時用 fallback,其他同 bool */
+function boolDefault(env: NodeJS.ProcessEnv, key: string, fallback: boolean): boolean {
+  return str(env, key) ? bool(env, key) : fallback;
+}
+
+/** 對帳預設 08:10(需求方 2026-11-13 決定) */
+export const DEFAULT_RECON_AT = 8 * 60 + 10;
+
+/**
+ * 每天自動對帳的時間(當天的第幾分鐘;-1 = 不自動):
+ * NETOPS_RECON_TIME=HH:MM 或 -1 優先;沒有時用舊的 NETOPS_RECON_HOUR(整點,-1 = 不自動);都沒有為 08:10。格式錯誤啟動失敗
+ */
+export function loadReconAt(env: NodeJS.ProcessEnv): number {
+  const raw = str(env, 'NETOPS_RECON_TIME');
+  if (raw) {
+    if (raw === '-1') return -1;
+    const m = raw.match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
+    if (!m) throw new GatewayEnvError(`NETOPS_RECON_TIME 必須是 HH:MM(00:00–23:59)或 -1:${raw}`);
+    return Number(m[1]) * 60 + Number(m[2]);
+  }
+  if (str(env, 'NETOPS_RECON_HOUR')) {
+    const h = int(env, 'NETOPS_RECON_HOUR', 8, -1, 23);
+    return h < 0 ? -1 : h * 60;
+  }
+  return DEFAULT_RECON_AT;
 }
 
 /** 開關:只接受 1 / 0 / true / false,其他值啟動失敗(避免寫錯時悄悄關掉加密) */
@@ -288,8 +322,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, cwd?: string): 
     clickhouse: loadClickHouse(env, gateway.gwEnv),
     // 正式區 TRAFFIC 保留 30 天(CQ12);測試區 TTL 3 天,多的天數只是查不到
     chSummary: { days: int(env, 'NETOPS_CH_SUMMARY_DAYS', 30, 1, 92), minutes: int(env, 'NETOPS_CH_SUMMARY_MINUTES', 5, 0, 60) },
-    // 需求方 2026-11-11 決定 01:00 開始;PA 前一天的匯出檔實測約 07:45 才出現在 FTP,在那之前每 10 分鐘再試(reconcile.ts)
-    reconHour: int(env, 'NETOPS_RECON_HOUR', 1, -1, 23),
+    // 需求方 2026-11-13 決定 08:10 開始(PA 前一天的匯出檔實測約 07:45 才出現在 FTP);FTP 檔還沒有時每 10 分鐘再試(reconcile.ts)
+    reconAt: loadReconAt(env),
+    reconAutoBackfill: boolDefault(env, 'NETOPS_RECON_AUTO_BACKFILL', true),
+    ftpRetentionDays: int(env, 'NETOPS_FTP_RETENTION_DAYS', 10, 1, 30),
     paTtlDays: loadPaTtlDays(env, gateway.gwEnv),
     clickhouseCold: loadClickHouseCold(env, gateway.gwEnv),
   };

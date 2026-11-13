@@ -2,6 +2,12 @@
 
 > `backend/`、`deploy/` 的修改;新紀錄加在最上方,格式見 `AGENT.md` §11。
 
+## 2026-11-13 對帳改每天 08:10、缺口自動補漏
+- 工作項目:C3(需求方 2026-11-13 決定)
+- 內容:對帳時間支援分鐘(`NETOPS_RECON_TIME=HH:MM`,預設 08:10;舊 `NETOPS_RECON_HOUR` 相容,`-1` 不自動)。自動對帳發現 `gap` 時同手動補漏的流程送出工作(`createdBy` = `system:recon`;`planBackfill` 手動與自動共用),補漏排隊 / 執行中、FTP 還沒分析、佇列滿時照對帳重試規則每 10 分鐘再試,同一天每天最多自動送 3 次、補完 20 分鐘後才重新判斷、全系統同時只有 1 個自動補漏(資安審查:不擋人工補漏);FTP 保留期限(`NETOPS_FTP_RETENTION_DAYS`,預設 10,最多 30)內的缺口與 pending 每天再補,到期仍未完成記 warn。`NETOPS_RECON_AUTO_BACKFILL=0` 關閉。
+- 檔案:`backend/src/config.ts`、`backend/src/app.ts`、`backend/src/modules/pa/reconcile.ts`、`backend/src/modules/pa/recon-routes.ts`、`deploy/docker-compose.yml`、`backend/test/unit/ch-recon.test.ts`、`backend/test/unit/ch-overview.test.ts`
+- 驗證:`npm run typecheck`、`npm test`、`npm run build`(見 MR)
+
 ## 2026-11-13 Log 明細查詢加威脅 log 與來源 / 目的國家(V-b2 驗收 C7 第二輪)
 - 工作項目:V-b2 驗收追加(需求方 2026-11-13 決定)
 - 內容:`POST /pa/log-searches` 加 `type`(TRAFFIC / THREAT)、`severity`、`threat`、`srcCountry`、`dstCountry`。THREAT 查 `pa_threat_logs`(log_type = threat;`reader.searchThreat`、`threatSearchWhere`、`threatCount`),資料列 `threat` 為威脅名稱、嚴重度 informational 回 info,匯出檔名 `PA_threat_`;TRAFFIC 帶 severity / threat 回 400。`trafficWhere` 加 srcCountry / dstCountry,`searchTraffic` 與 `searchThreat` 共用 `search()`。路由與權限不變。

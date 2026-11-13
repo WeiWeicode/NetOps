@@ -202,13 +202,26 @@ export async function buildApp(
   await app.register(paRoutes, { ch });
   await app.register(logRoutes, { limit: config.search.limit, seconds: config.search.seconds, ch });
   // FTP 對帳與補漏(C3,D33):對帳在本服務(只用已分析的 FTP 摘要);補漏工作交給 netops-ingest(Redis 佇列)
-  const recon = chReader && chBuilder ? createReconciler({ traffic, reader: chReader, builder: chBuilder, store: app.store.pa, log: app.log, hour: config.reconHour, now: deps.chNow }) : null;
+  const backfillQueue = deps.backfillQueue !== undefined ? deps.backfillQueue : config.redisUrl ? connectBackfillQueue(config.redisUrl) : null;
+  if (backfillQueue) app.addHook('onClose', async () => backfillQueue.close());
+  // 對帳發現缺口時自動送補漏(需求方 2026-11-13 決定;NETOPS_RECON_AUTO_BACKFILL=0 關閉)
+  const recon =
+    chReader && chBuilder
+      ? createReconciler({
+          traffic,
+          reader: chReader,
+          builder: chBuilder,
+          store: app.store.pa,
+          log: app.log,
+          at: config.reconAt,
+          backfill: { queue: backfillQueue, enabled: config.reconAutoBackfill, retentionDays: config.ftpRetentionDays },
+          now: deps.chNow,
+        })
+      : null;
   if (recon) {
     app.addHook('onReady', async () => recon.start());
     app.addHook('onClose', async () => recon.stop());
   }
-  const backfillQueue = deps.backfillQueue !== undefined ? deps.backfillQueue : config.redisUrl ? connectBackfillQueue(config.redisUrl) : null;
-  if (backfillQueue) app.addHook('onClose', async () => backfillQueue.close());
   await app.register(reconRoutes, { recon, queue: backfillQueue });
   // PA 精準查詢(C5,D31):netops-api 只驗證與送出,PA-560 由 netops-pa 查(PA_QUERY_ENABLED)
   const paQueryStore = deps.paQuery?.store !== undefined ? deps.paQuery.store : config.redisUrl ? connectPaQueryStore(config.redisUrl) : null;

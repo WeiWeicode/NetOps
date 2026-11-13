@@ -2,6 +2,13 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。範圍:`frontend/`。
 
+## 2026-11-13 前端部署建置失敗:假資料產生器移出 test/、CI 加建置內容檢查
+- 工作項目:V-b1 / V-b2 後續(develop pipeline 920 `deploy-web-test` job 2846 失敗,11-11 起前端沒有部署上去)
+- 原因:`vite.config.ts` 一定會載入 `mock/gateway.ts`(沒設 MOCK 也載入)→ `mock/viz.ts` → `../test/fixtures/viz/generate.ts`;`frontend/.dockerignore` 排除 `test`,Docker 建置找不到檔案(`UNRESOLVED_IMPORT`)。`check:frontend` 在完整 repo 裡 build,看得到 test/,所以 CI 沒抓到
+- 內容:① `test/fixtures/viz/generate.ts` 移到 `mock/fixtures/viz.ts`(內容不變),`mock/viz.ts` 與 `test/viz.test.ts`、`test/viz.mount.test.ts` 改從這裡 import;`.dockerignore` 不變(test 不進映像)。② `deploy/ci-web-build-context.sh`:把 frontend/ 版控內的檔案扣掉 `.dockerignore` 的路徑複製到 `frontend/.build-context/` 再 `npm run build`(套件沿用 `frontend/node_modules`),`check:frontend` 最後執行
+- 檔案:`frontend/mock/{viz.ts,fixtures/viz.ts}`、`frontend/test/{viz,viz.mount}.test.ts`、`deploy/ci-web-build-context.sh`、`.gitlab-ci.yml`、`.gitignore`、`docs/{HANDOFF-GEMINI-VIZ,PROJECT-MAP}.md`
+- 驗證:`npm run typecheck`、`npm test`(164 通過)、`npm run build`;刪掉 test/ 的副本 `npm ci` + `npm run build` 成功;`ci-web-build-context.sh` 在修正後通過,把 import 改回 `../test/fixtures/...` 時重現同一個 `UNRESOLVED_IMPORT` 而失敗
+
 ## 2026-11-12 C5 PA 精準查詢(邏輯層與最小介面)
 - 工作項目:C5
 - 內容:`api/paQuery.ts`、`composables/usePaQuery.ts`(按鈕權限才呼叫 API、送出 → 每 2 秒輪詢最多 90 秒、429 倒數、rejected / failed)、`components/PaQueryPanel.vue`(即時監控頁的樸素版,正式畫面交 Gemini,HANDOFF-GEMINI-VIZ §10)、`perms.ts` 加 `UI.paLiveQuery`、`API.paQueryRead`;假 Gateway `mock/paQuery.ts` 與 admin 的按鈕權限

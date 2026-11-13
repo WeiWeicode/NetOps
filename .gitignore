@@ -26,3 +26,5 @@ sse-probe*.jsonl
 
 # CodeGraph 本機索引
 .codegraph/
+# deploy/ci-web-build-context.sh 的暫存目錄(結束時刪除)
+frontend/.build-context/

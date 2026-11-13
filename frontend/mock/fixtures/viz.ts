@@ -1,6 +1,7 @@
 /**
  * 熱力圖 / 儀表板 / 時段明細的假資料產生器(V-b1;VIZ-RULES-DESIGN §8、HANDOFF-GEMINI-VIZ §2)。
- * 本機假 Gateway(mock/viz.ts,MOCK=admin npm run dev)與元件測試共用。只用 Date 與純函式,不 import src/(mock 在 Vite 設定階段載入)。
+ * 本機假 Gateway(mock/viz.ts,MOCK=admin npm run dev)與元件測試共用。
+ * 放在 mock/ 而不是 test/:vite.config.ts 一定會載入 mock/gateway.ts → mock/viz.ts → 這裡,而 Docker 建置的 .dockerignore 排除 test/(2026-11-13 部署建置失敗)。只用 Date 與純函式,不 import src/(mock 在 Vite 設定階段載入)。
  *   - 決定性:同樣的參數產生同樣的資料(偽亂數以時間為種子)
  *   - 年視圖 5 年每天、月視圖 31 天每小時、日視圖 1 天每 5 分鐘都能產生(since 之前 v = null,用來看「沒有資料」的樣式)
  *   - 上班時間流量高、夜間低;偶爾有 critical / high;每 17 格一個 partial

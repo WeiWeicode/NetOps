@@ -34,7 +34,7 @@
 | 元件介面 | `ui/charts/viz-types.ts` | 每個元件的 props / emits / 資料型別;**照型別實作,不改型別** |
 | ECharts 基底 | `ui/charts/GEChart.vue`、`echarts.ts` | 圖表元件內部都用 `GEChart`,傳 `option`、收 `pick` |
 | 路由與空頁 | `firewall/heatmap`、`firewall/insight`、`detect/alerts`、`detect/settings` | 你填頁面內容 |
-| 假資料 | `frontend/test/fixtures/viz/`(5 年每天、31 天每小時、1 天每 5 分鐘;儀表板兩個視角;告警與設定) | 本機開發與元件測試 |
+| 假資料 | `frontend/mock/fixtures/viz.ts`(5 年每天、31 天每小時、1 天每 5 分鐘;儀表板兩個視角;告警與設定) | 本機開發與元件測試 |
 
 ### 2.1 V-b1 已交付(2026-11-12):開工方式
 
@@ -48,7 +48,7 @@
 | 樸素版元件 | `ui/charts/GHeatmap.vue`、`ui/components/GDrawer.vue`、`GSourceBadge.vue` | 功能完整、樣式樸素;**畫面、tooltip、動畫由你改寫**,props / emits 不變(排版與鍵盤邏輯可保留) |
 | 路由與頁面 | `/firewall/heatmap`(`pages/firewall/Heatmap.vue`)、`/firewall/insight`(`Insight.vue`) | 兩頁目前是樸素示範(證明資料串得通),由你改寫內容;`SliceDrawer` 新增在 `components/SliceDrawer.vue` |
 | Token 名稱 | `ui/styles/tokens.css` 最後一段(`--heat-*`、`--glow-*`、`--badge-*`) | 起點值由既有色混出;你調四種組合的色值與對比 |
-| 假資料 | `frontend/test/fixtures/viz/generate.ts`(`heatmapResponse`、`sliceResult`、`trafficInsight`、`threatInsight`) | 元件測試直接用;本機假 Gateway 也用這份 |
+| 假資料 | `frontend/mock/fixtures/viz.ts`(`heatmapResponse`、`sliceResult`、`trafficInsight`、`threatInsight`) | 元件測試直接用;本機假 Gateway 也用這份 |
 
 **本機跑假資料**(不連測試區):
 

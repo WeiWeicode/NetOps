@@ -30,7 +30,7 @@ import GTrendDualAxis from '@/ui/charts/GTrendDualAxis.vue';
 import GWorldMap from '@/ui/charts/GWorldMap.vue';
 import GDrawer from '@/ui/components/GDrawer.vue';
 import GSourceBadge from '@/ui/components/GSourceBadge.vue';
-import { heatmapResponse, sliceResult, threatInsight, trafficInsight } from './fixtures/viz/generate';
+import { heatmapResponse, sliceResult, threatInsight, trafficInsight } from '../mock/fixtures/viz';
 
 const NOW = Date.parse('2026-11-11T10:07:30+08:00');
 

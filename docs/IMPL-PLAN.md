@@ -21,6 +21,7 @@
 | V-b | 儀表板與熱力圖畫面:V-b1 Claude 元件介面與 API,V-b2 Gemini 頁面與動畫 | **測試區上線(2026-11-13)**:V-b1 + V-b2 第一版 !78、部署建置修正 !82;**畫面驗收與調整待做**(新討論串,HANDOFF-GEMINI-VIZ §8)(D40、D41) |
 | V-c | 偵測規則引擎:PA 規則 1–7、冷卻、白名單、網段設定頁、告警頁 | **規劃已合併(2026-11-11,!70)**;前置 C3;**需求方提供網段清單與初始白名單**(X11)(D37、D38、D39) |
 | V-d | AD:AD 事件進 ClickHouse、AD 指標與圖表、規則 8–9 | **延後**(V4,D36) |
+| AC1–AC7 | AI 改用 ClickHouse、PA 頁面新增 AI 功能、IP 對照表(IP 自動帶出名稱) | **規劃(2026-11-13,需求方已決定範圍)**;AC1 可先開工(D44、D45) |
 | ~~後續~~ | ~~服務寫入資料庫~~ | 取消(D20;PA log 改寫 ClickHouse 見 C0–C6,D27) |
 | ~~後續~~ | ~~接入 AI 中控台~~ | 取消(D17 → D23) |
 
@@ -340,3 +341,146 @@ D13:骨架直接留用;AI 不在這次範圍,不做串流驗證(D7、D17)。
 4. 規則 8 `AD_BRUTE_FORCE_SPRAY`、規則 9 `AD_ACCOUNT_LOCKOUT_OR_PRIV`。
 
 **前置**:V-a–V-c 完成;需求方核准 AD 進 ClickHouse。**負責人**:Claude、Gemini;需求方核准與驗收。**完成條件**:另開規劃時定義。
+
+## AC AI 改用 ClickHouse、PA 頁面 AI 功能、IP 對照表(規劃 2026-11-13)
+
+> 需求方 2026-11-13 決定(HANDOFF「2026-11-13 需求方決定」第 4 項與「2026-11-13 AI 改用 ClickHouse 範圍討論」)。決策見 ARCHITECTURE D44、D45。
+
+**測試區與正式區**
+
+- **測試區只能驗 3 天內**:測試區 ClickHouse 原始表與熱力圖彙總 TTL 3 天。AC2 的長期間路徑(30 天內原始表 / 超過 30 天改彙總 / 最長 92 天、問答威脅 90 天、外部 IP 學習 30 天)以**整合測試 fixture**(假資料涵蓋 30 天以上、跨 5 分鐘 / 每小時 / 每天粒度與熱 / 彙總分界)驗證;測試區只實測 3 天內;長期間實測等正式區(C6)。
+- **正式區上線前提是 C6**(正式區 ClickHouse,等 E2 / E5)。C6 之前**正式區 AI 沿用舊路徑**(FTP 摘要;需求方 2026-11-13 AQ4「Keep old path」):AC2 起 AI 資料來源要能依環境切換(例如 `NETOPS_AI_SOURCE=clickhouse|ftp`,測試區 clickhouse、正式區 ftp),舊路徑程式碼保留到 C6;正式區 `FTP_SYNC_MINUTES` 照舊開著,AC7 收掉 `FTP_SYNC_MINUTES` 只在 C6 後套用到正式區。FTP 只留 10 天後,正式區問答掃不到 10 天前的原始 log(已知限制)。
+
+**上架步驟(每批適用)**
+
+- 新 API(`POST /ai/explanations`、`/ip-names`、`/ip-name-imports` 等)部署後,**需求方在 GigaItApp「服務與路由」發佈 netops-api 路由草稿**才呼叫得到。
+- 新權限代碼(`netops.ip-name.read|write`)、新 AI 按鈕節點、「網通知識 › IP 對照表」選單節點登記在 `deploy/gateway-rbac.yaml`,由 CI `rbac-test` 套用到測試區;正式區選單節點可能要手動調整。
+- **跨 repo 事項(需同意後才改)**:Gateway BACKEND-GUIDE「開發前…規劃權限代碼 → Gateway 負責人,登記於 §3.3」,新權限代碼 `netops.ip-name.read|write` 要先在 `giga-api-gateway-bff` 登記;本計畫不改該 repo,實作 AC3 前先取得同意。
+- 每批完成條件都包含:**需求方發佈路由草稿、確認選單 / 按鈕節點出現且權限正確**。
+
+**共通規則**
+
+- 送給 AI 的是統計與彙整,不送整份原始 log(AGENT §7.4)。問答保留最多 15 筆範例紀錄(D25 ③ 的例外)。
+- **IP 與姓名都不遮罩**(需求方 2026-11-13 AQ2:「不用遮 內部AI模型」,選「全部不遮,姓名也送」):
+  - 內部 / 外部 IP 照送;AC3 之後附上對照表的使用者姓名、部門、設備。
+  - 模型在公司內部 AI 主機(D23);帳密、Token 等機密仍不送。
+  - **個資**:姓名、部門屬個資,只送公司內部 AI 主機(D23),不寫進服務日誌與稽核內容;對照表內容視同機密不外送。
+- 新 AI 功能共用一支 SSE API:`POST /api/netops/ai/explanations`,`{ kind, params }`。
+  - 後端依 `params` **自己取資料**(優先用快取),不接受前端送來的統計,避免畫面可控文字進到提示詞。
+  - 和分析、問答共用同時回答上限(`AI_MAX_STREAMS`),寫法同 API.md §10.1(heartbeat、`x-timeout-ms: 60000`)。
+- AI 回答輸出前端一律經 DOMPurify。資料不完整(`coverage.partial`、ClickHouse 無法使用)時,回應與提示詞都要寫明。
+- 權限:每個新 AI 按鈕都是 `gateway-rbac.yaml` 的按鈕節點,`includes` 綁 `netops.ai.use` 和該頁的讀取權限;稽核 `x-audit-level: meta`。
+- 分工:API 與邏輯層由 Claude 負責;AI 按鈕與回答面板的版面、IP 對照表頁的版面由 Gemini 負責。每批先由 Claude 交付邏輯層與最小可用畫面,再交 Gemini。
+
+### AC1 對帳後同步解密 / GlobalProtect / User-ID / AD
+
+1. 每天對帳(08:10,D43)完成後,接著從 FTP 同步解密、GlobalProtect、User-ID 摘要與 AD 匯入;不再產生 TRAFFIC 與威脅類的 FTP 摘要(查詢已改 ClickHouse)。
+2. 前一天的檔案還沒出現或 FTP 失敗時,照對帳的重試規則;超過 FTP 保留期限(10 天)仍沒匯入時記 warn。可以用環境變數關閉。
+3. 寫入 API.md §5、ARCHITECTURE D43 / D44、Compose。
+
+**前置**:無(對帳 !91 已上線)。**負責人**:Claude。**完成條件**:
+- 測試區連續 3 天不用手動就自動匯入這四類。
+- FTP Log 檔案頁顯示已分析。
+- 單元測試涵蓋重試與 warn。
+
+### AC2 AI 分析、問答、外部 IP 學習改查 ClickHouse
+
+1. **期間分析**(最長 92 天):
+   - 30 天內用原始 TRAFFIC 表;超過 30 天改用每小時 / 每天彙總(`pa_heat_1h` / `_1d`、`pa_traffic_hourly*`、來源 IP 彙總 90 天)。
+   - `meta` 標示資料粒度,畫面註明「超過 30 天的資料較粗」。
+   - 其他 log 改查 ClickHouse 威脅類(90 天);解密 / GlobalProtect / User-ID 仍讀本機摘要。
+2. **問答**:
+   - 有 IP / Port 時查原始 TRAFFIC(30 天)與威脅類(90 天),取彙總加最多 15 筆範例紀錄。
+   - 拿掉 FTP 原始 log 掃描、連線組合統計與 FTP 掃描排隊;`scan` / `evidence` 事件改成 ClickHouse 的欄位(API.md §10.1 一併改)。
+   - 超過保留期限的部分明確標示。
+3. **外部 IP 學習**:天數上限改 30(原 1–60),從原始 TRAFFIC 取外部目的 IP 排行,不新增彙總表。
+4. ClickHouse 無法使用時:串流開始前回 503,開始後以 `error` 事件回傳;不改用 FTP(同 D43)。
+5. 更新 API.md §10、OpenAPI `x-gherkin`、AI-FEATURE-INVENTORY、ARCHITECTURE D25 ③。
+
+**前置**:AC1。**負責人**:Claude(`refactor-assistant` 先建立 `evidence.js` / `iplearn.js` 的測試基準)。**完成條件**:
+- 同一組問題在測試區新舊來源的筆數一致:新來源相對 FTP 對帳誤差 < 0.5%(測試區只驗 3 天內)。
+- 長期間路徑(30 天分界、92 天、威脅 90 天、IP 學習 30 天)由整合測試 fixture 驗證;長期間實測等正式區(C6)。
+- 問答回應不再掃 FTP,一天範圍 < 10 秒開始回答。
+- `security-auditor`(送 AI 的欄位不含機密)與 `code-reviewer` 審查完成。
+- 需求方發佈改動的 AI 路由草稿(若有新增或改路由)。
+
+### AC3 IP 對照表(IP 自動帶出名稱)
+
+1. **資料**:
+   - 一筆 = IP 或 CIDR → 使用者姓名、部門、設備名稱、設備類型、備註。
+   - **範例檔由我們制定**(AQ1):頁面提供 Excel / CSV 範本下載,網管填好上傳。欄位依序為 `IP或網段`(必填)、`使用者姓名`、`部門`、`設備名稱`、`設備類型`(下拉:筆電、桌機、伺服器、印表機、網路設備、其他)、`備註`;第一列是欄名,附 2 列填寫範例,匯入時略過範例列。
+   - 以最新為準,不記歷史。
+   - 網段重疊時範圍最小的優先。
+   - 經 `infra/store` 存取(`listIpNames`、`saveIpNames`)。
+2. **API**:
+   - `GET /api/netops/ip-names`(含匯出)權限 `netops.ip-name.read`。
+   - 匯入:`POST /ip-name-imports`,先回預覽差異(新增 / 修改 / 刪除),確認後才寫入。
+   - 單筆新增 / 修改 / 刪除:權限 `netops.ip-name.write`。
+   - 這兩個權限只給 `netops-admin`(網管),viewer 不含,例外同 D31。
+3. **帶出名稱**:
+   - PA 各 API(Log 明細 / 威脅 Log、時段明細、熱力圖提示、儀表板 Top IP、流量總覽、即時監控)在回應附上 `names`,只含本回應出現的 IP,沿用各 API 原本的權限(看得到 PA 的人就看得到名稱)。
+   - Log 明細匯出多一欄名稱。
+   - Log 明細可以用名稱 / 部門搜尋,**以效能為準**(AQ3):先做 API 端換成 IP / CIDR 清單再查 ClickHouse(單一 IP 用 `IN`、網段用範圍條件)。實測一天範圍 > 10 秒,或清單超過 1,000 筆時,改用 ClickHouse `ip_trie` 字典(對照表異動時同步)。
+4. **畫面**:
+   - 「網通知識 › IP 對照表」頁(選單節點只給網管)。
+   - 各 PA 畫面 IP 旁邊顯示名稱(Claude 先交元件與邏輯,版面交 Gemini)。
+5. **AI**:IP 附上使用者姓名、部門、設備送給 AI(D45)。
+
+**前置**:AC2 完成後再把名稱接進 AI;範本欄位需求方已同意(2026-11-13「欄位可以」)。**負責人**:Claude(API、邏輯層);Gemini(頁面版面);網管提供資料。**完成條件**:
+- 匯入預覽與確認、單筆編輯、匯出都有測試。
+- viewer 呼叫對照表 API 回 403,但在 PA 畫面看得到名稱。
+- 名稱搜尋結果和用 IP 搜尋相同。
+- 服務日誌與稽核內容不含姓名、部門(測試檢查)。
+- `security-auditor` 審查完成。
+- 權限代碼已在 Gateway 登記(跨 repo,取得同意後);需求方發佈路由草稿,「網通知識 › IP 對照表」選單只有網管看得到。
+
+### AC4 時段明細「AI 解讀這個時段」、分析儀表板「AI 摘要本期異常」
+
+1. `kind: 'slice'`:參數同 `GET /pa/slice`,後端用同一份查詢結果(30 分鐘內重用),送 summary 與各 Top 10。
+2. `kind: 'insight'`:參數同 `/pa/insight/{view}`,後端用儀表板快取,送趨勢摘要、Top 與前一期比較。
+3. 時段明細抽屜、分析儀表板(流量 / 威脅)各一個 AI 按鈕與回答面板。
+
+**前置**:AC2(共用 explanations API)。**負責人**:Claude;Gemini(按鈕與面板版面)。**完成條件**:
+- 送 AI 的內容不含機密、有字數上限(測試檢查)。
+- 快取命中時不重查 ClickHouse。
+- 需求方發佈 `POST /ai/explanations` 路由草稿,新 AI 按鈕節點出現且權限正確。
+- 測試區需求方驗收。
+
+### AC5 威脅「AI 說明這個威脅與處理建議」、熱力圖「AI 指出異常格」
+
+1. `kind: 'threat'`:
+   - 參數是威脅名稱 / ID 與期間。
+   - 後端彙總嚴重度、類別、方向、App / Port、國家、本期同名筆數、影響主機(IP 與名稱)。
+   - 入口:Log 明細查詢的威脅列、時段明細抽屜的威脅列。
+2. `kind: 'heatmap'`:
+   - 參數同 `GET /pa/heatmap`。
+   - 後端從格子挑出異常時段(壓縮成前幾名與統計,月視圖最多 744 格不全送)。
+   - 回答提到的時段可以點開時段明細抽屜,再用 AC4 的時段解讀。
+
+**前置**:AC4。**負責人**:Claude;Gemini。**完成條件**:同 AC4;異常格挑選有單元測試。
+
+### AC6 安全事件頁 AI 摘要
+
+1. `kind: 'events'`:期間內威脅、URL、資料過濾、WildFire 的統計摘要。
+
+**前置**:AC4。**負責人**:Claude;Gemini。**完成條件**:同 AC4。
+
+### AC7 每日自動 AI 摘要、收掉 `FTP_SYNC_MINUTES`
+
+1. AC1 同步完成後,自動產生前一天的 AI 摘要,經 `infra/store` 存檔,流量總覽顯示。
+2. 失敗重試一次,仍失敗時畫面標示「今天的摘要產生失敗」。
+3. 確認沒有功能再依賴 FTP 定時同步後,移除 `FTP_SYNC_MINUTES`(config、Compose、文件)。
+
+**前置**:AC1–AC4 上線、AI 主機負載確認。**負責人**:Claude;Gemini(總覽區塊版面)。**完成條件**:
+- 測試區連續 3 天自動產生。
+- AI 主機無法使用時不影響對帳與同步。
+- `FTP_SYNC_MINUTES` 已從設定與文件移除。
+
+### 待確認(實作前和需求方確認)
+
+| # | 問題 | 預設 |
+| --- | --- | --- |
+| AQ1 | 對照表匯入檔的欄位格式 | 已決定:「我們制定好範例檔，給網管填就好」→ AC3 第 1 步的範本欄位 |
+| AQ2 | 送 AI 是否遮罩 IP | 已決定:「不用遮 內部AI模型」→「全部不遮,姓名也送」 |
+| AQ3 | 名稱搜尋在 API 端換 IP 清單,或 ClickHouse 字典 | 已決定:「都可以，以效能為主」→ 先 API 端,實測不夠快改字典(AC3 第 3 步) |
+| AQ4 | C6(正式區 ClickHouse)上線前,正式區 AI 怎麼處理:A 沿用舊路徑(FTP 摘要,FTP 只留 10 天後問答掃不到 10 天前)、B AC 功能不開放到 C6 為止 | 已決定:「Keep old path」→ A 沿用舊路徑到 C6(見上方「測試區與正式區」) |

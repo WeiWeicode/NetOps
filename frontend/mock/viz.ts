@@ -1,5 +1,5 @@
 /**
- * 假 Gateway:活動熱力圖、時段明細、分析儀表板(docs/API.md §4.4、§4.5;V-b1)。資料來自 test/fixtures/viz/generate.ts。
+ * 假 Gateway:活動熱力圖、時段明細、分析儀表板(docs/API.md §4.4、§4.5;V-b1)。資料來自 mock/fixtures/viz.ts。
  * 用特定條件造出各種狀態(HANDOFF-GEMINI-VIZ §8 第 5 項):
  *   熱力圖  date 早於 2026-01-01:資料起點在 2026-01-01(之前的格子 v = null);日視圖超過 1 年:422
  *   時段明細 start 早於 29 天前:409 NETOPS_COLD_ARCHIVE_DISABLED(冷歸檔未提供)
@@ -8,7 +8,7 @@
  *           ip=10.0.0.97:source = cold(看冷資料徽章);ip=10.0.0.96:source = mixed
  *           ip=10.0.0.95:503 NETOPS_CLICKHOUSE_UNAVAILABLE
  */
-import { heatmapResponse, sliceResult, threatInsight, trafficInsight, type Granularity, type Metric } from '../test/fixtures/viz/generate.ts';
+import { heatmapResponse, sliceResult, threatInsight, trafficInsight, type Granularity, type Metric } from './fixtures/viz.ts';
 import type { MockCtx } from './types.ts';
 
 const DAY = 86_400_000;

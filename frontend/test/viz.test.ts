@@ -13,7 +13,7 @@ import { useHeatmap } from '@/composables/useHeatmap';
 import { useInsight } from '@/composables/useInsight';
 import { useSlice } from '@/composables/useSlice';
 import { formatRange } from '@/composables/vizTime';
-import { heatmapResponse, sliceResult, threatInsight, trafficInsight } from './fixtures/viz/generate';
+import { heatmapResponse, sliceResult, threatInsight, trafficInsight } from '../mock/fixtures/viz';
 
 const mocks = vi.hoisted(() => ({
   heatmapGet: vi.fn(),

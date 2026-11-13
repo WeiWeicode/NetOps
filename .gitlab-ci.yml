@@ -42,6 +42,8 @@ check:frontend:
     - npm run typecheck
     - npm test
     - npm run build
+    # 再用 Docker 建置看得到的檔案(扣掉 .dockerignore,例如 test/)build 一次:vite.config.ts 載入的檔案不能依賴被排除的檔案(2026-11-13 deploy-web-test 失敗)
+    - sh ../deploy/ci-web-build-context.sh
 
 # netops-pa(Python,R1):在映像的 test 階段跑 ruff 與 pytest(Python 3.12,與執行映像同一個基底;假 PA、fakeredis,不連外部主機)
 check:pa-collector:

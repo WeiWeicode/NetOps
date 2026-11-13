@@ -8,6 +8,7 @@
  * 補漏交給 netops-ingest:只補 seqno 不在 ClickHouse 的列(ingest/backfill.ts)。手動(POST /pa/backfills,netops.ftp.write),
  * 或自動對帳發現缺口時自動送出(需求方 2026-11-13 決定;createdBy = AUTO_BACKFILL_OWNER,NETOPS_RECON_AUTO_BACKFILL=0 關閉)。
  * FTP 只保留 10 天(NETOPS_FTP_RETENTION_DAYS):保留期限內有缺口的日子每天自動重試,超過期限仍有缺口記 warn。
+ * 每一輪自動對帳之後接著跑 after(AC1 每日同步解密 / GlobalProtect / User-ID / AD,modules/ftp/daily-sync.ts)。
  */
 import type { ClickHouseReader } from '../../infra/clickhouse/reader.js';
 import type { BackfillHour, BackfillQueue } from '../../infra/redis/backfill.js';
@@ -100,6 +101,7 @@ export function createReconciler({
   log,
   at,
   backfill = { queue: null, enabled: false, retentionDays: 10 },
+  after,
   now = Date.now,
 }: {
   traffic: TrafficImporter;
@@ -111,6 +113,8 @@ export function createReconciler({
   at: number;
   /** 自動補漏:queue 為 null 或 enabled = false 時不送;retentionDays = FTP 保留天數 */
   backfill?: { queue: BackfillQueue | null; enabled: boolean; retentionDays: number };
+  /** 每一輪自動對帳(到了 at 之後)結束後接著執行(AC1:同步解密 / GlobalProtect / User-ID / AD);錯誤只寫日誌 */
+  after?: () => Promise<void>;
   now?: () => number;
 }): Reconciler {
   let timer: NodeJS.Timeout | null = null;
@@ -184,10 +188,21 @@ export function createReconciler({
     running = true;
     try {
       await autoOnce();
+      // 對帳這一輪結束後接著每日同步(AC1);對帳失敗也照跑(兩者的 FTP 資料不同)
+      if (after && minuteOf(now()) >= at) {
+        try {
+          await after();
+        } catch (err) {
+          log.warn({ code: (err as { code?: unknown }).code }, '對帳後的每日同步失敗,下一輪再試');
+        }
+      }
     } finally {
       running = false;
     }
   }
+
+  /** 台灣時間當天的第幾分鐘 */
+  const minuteOf = (t: number) => Number(taipeiText(t).slice(11, 13)) * 60 + Number(taipeiText(t).slice(14, 16));
 
   const dayAgo = (today: string, i: number) => taipeiText(taipeiDayStartMs(today) - i * 86_400_000).slice(0, 10);
 
@@ -250,8 +265,7 @@ export function createReconciler({
   async function autoOnce() {
     const t = now();
     const today = taipeiText(t).slice(0, 10);
-    const minute = Number(taipeiText(t).slice(11, 13)) * 60 + Number(taipeiText(t).slice(14, 16));
-    if (minute < at) return;
+    if (minuteOf(t) < at) return;
     if (doneDay !== today) {
       doneDay = today;
       done = new Set();

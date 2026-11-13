@@ -76,6 +76,8 @@ describe('同一批假匯出檔:舊版與新版結果完全一致', () => {
   it('匯入的事件(UTF-16 / UTF-8、跨行訊息、去除重複)', async () => {
     const s = (await t.call({ url: '/v1/ftp/ad/status' })).json();
     assert.equal(s.lastSyncError, '');
+    // 沒有 ClickHouse(不自動對帳)時每日同步不跑(AC1)
+    assert.equal(s.daily.state, 'disabled');
     assert.deepEqual(s.lastResult.imported.map((x: { day: string }) => x.day).sort(), ['2026-11-01', '2026-11-02']);
     const { enrichEvent } = await legacy('adlog.js');
     for (const [day, files] of [['20261101', DAY1], ['20261102', DAY2]] as const) {

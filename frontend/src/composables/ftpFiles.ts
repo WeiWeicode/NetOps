@@ -1,7 +1,7 @@
 /**
  * FTP Log 檔案頁的純函式(畫面與測試共用;規則同舊版 src/views/FtpFiles.vue、AdFiles.vue)
  */
-import type { AdDay, PaFile, PaFileState, PaListing } from '@/api/ftp';
+import type { AdDay, DailyDayState, DailyRunState, DailySyncStatus, PaFile, PaFileState, PaListing } from '@/api/ftp';
 
 export const NO_DAY = '(無日期)';
 
@@ -112,4 +112,50 @@ export function chunk<T>(list: T[], size: number): T[][] {
   const out: T[][] = [];
   for (let i = 0; i < list.length; i += size) out.push(list.slice(i, i + size));
   return out;
+}
+
+// ---------- 對帳後每日同步(AC1;API.md §5.4) ----------
+
+/** 每一天的匯入狀態顯示 */
+export const DAILY_DAY_STATE: Record<DailyDayState, { label: string; tone: string; icon: string }> = {
+  done: { label: '已匯入', tone: 'success', icon: 'check' },
+  pending: { label: '處理中', tone: 'info', icon: 'clock' },
+  error: { label: '失敗', tone: 'danger', icon: 'x' },
+  none: { label: '尚無檔案', tone: 'neutral', icon: 'minus' },
+};
+
+/** 今天這一輪的狀態顯示 */
+export const DAILY_RUN_STATE: Record<DailyRunState, { label: string; tone: string }> = {
+  disabled: { label: '未啟用', tone: 'neutral' },
+  waiting: { label: '等待今天的對帳', tone: 'neutral' },
+  retrying: { label: '前一天尚未完成,稍後再試', tone: 'warning' },
+  done: { label: '今天已完成', tone: 'success' },
+  'gave-up': { label: '今天已停止重試', tone: 'danger' },
+};
+
+/** 只取指定類型(例如 AD 頁只看 ad);only 省略 = 全部 */
+export function dailyCategories(s: DailySyncStatus | null | undefined, only?: string[]): DailySyncStatus['categories'] {
+  return (s?.categories ?? []).filter((c) => !only || only.includes(c.key));
+}
+
+/** 表頭的日期(取第一個類型的日期;各類型相同,新的在前) */
+export const dailyDays = (cats: DailySyncStatus['categories']): string[] => cats[0]?.days.map((d) => d.day) ?? [];
+
+/** 前一天(最新一天)完成的類型數 */
+export function dailyLatest(cats: DailySyncStatus['categories']): { day: string; done: number; total: number } {
+  const day = dailyDays(cats)[0] ?? '';
+  return { day, done: cats.filter((c) => c.days[0]?.state === 'done').length, total: cats.length };
+}
+
+/** 保留期限內有失敗的 類型 · 日期(畫面提示用) */
+export function dailyErrors(cats: DailySyncStatus['categories']): string[] {
+  return cats.flatMap((c) => c.days.filter((d) => d.state === 'error').map((d) => `${c.label} ${d.day}`));
+}
+
+/** 表頭顯示:MM/DD 與星期 */
+export function dailyDayLabel(day: string): { md: string; wd: string } {
+  const [y, m, d] = day.split('-').map(Number);
+  if (!y || !m || !d) return { md: day, wd: '' };
+  const wd = '日一二三四五六'[new Date(Date.UTC(y, m - 1, d)).getUTCDay()]!;
+  return { md: `${String(m).padStart(2, '0')}/${String(d).padStart(2, '0')}`, wd };
 }

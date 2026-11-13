@@ -285,5 +285,18 @@ export function createAdImporter({ ftp, store, ftpConfig, log }: { ftp: Ftp; sto
   /** 是否有設定 FTP(沒有時同步、匯入直接回 503,不在背景才失敗) */
   const configured = () => Boolean(ftpConfig);
 
-  return { status, configured, days, listRemote, forget, sync, start, stop, summary, daysInRange, search, eventsInRange, adContext };
+  /**
+   * 某一天('yyyy/MM/dd')的匯入狀態(AC1 每日同步):done 已匯入;error 已匯入但有檔案讀取失敗;
+   * pending 還沒匯入、正在同步;none 還沒匯入(FTP 上還沒有這天的資料夾或還沒同步)
+   */
+  function dayState(day: string): 'done' | 'pending' | 'error' | 'none' {
+    const d = readDay(toKey(day));
+    if (d) return d.files.some((f) => f.error) ? 'error' : 'done';
+    return state.running ? 'pending' : 'none';
+  }
+
+  /** 有沒有匯入過任何一天(每日同步依此判斷要不要對過期的日子記 warn) */
+  const hasAnyDay = () => store.listDays().length > 0;
+
+  return { status, configured, days, listRemote, forget, sync, start, stop, summary, daysInRange, search, eventsInRange, adContext, dayState, hasAnyDay };
 }

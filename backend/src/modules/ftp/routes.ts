@@ -8,6 +8,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import type { Ftp, FtpEntry } from '../../infra/ftp/index.js';
 import type { EventImporter } from '../pa-events/importer.js';
 import type { RemoteFile, TrafficImporter } from '../pa/importer.js';
+import type { DailySyncStatus } from './daily-sync.js';
 import { ACCEPTED, looseObject } from '../../shared/schemas.js';
 import { dayOut, logTimeOut } from '../../shared/time.js';
 
@@ -16,11 +17,17 @@ export const fileOut = <T extends Pick<RemoteFile, 'day' | 'timeMin' | 'timeMax'
 
 const PATHS = { type: 'array', minItems: 1, maxItems: 500, items: { type: 'string', minLength: 1, maxLength: 1024 } } as const;
 
-const ftpRoutes: FastifyPluginAsync<{ ftp: Ftp; traffic: TrafficImporter; events: EventImporter; logDir: string; root: string; pattern: string }> = async (
-  app,
-  { ftp, traffic, events, logDir, root, pattern },
-) => {
-  const status = () => ({ traffic: traffic.status(), events: events.status() });
+const ftpRoutes: FastifyPluginAsync<{
+  ftp: Ftp;
+  traffic: TrafficImporter;
+  events: EventImporter;
+  /** 對帳後每日同步的狀態(AC1) */
+  daily: () => DailySyncStatus;
+  logDir: string;
+  root: string;
+  pattern: string;
+}> = async (app, { ftp, traffic, events, daily, logDir, root, pattern }) => {
+  const status = () => ({ traffic: traffic.status(), events: events.status(), daily: daily() });
 
   app.get<{ Querystring: { path?: string } }>(
     '/v1/ftp/pa/files',
@@ -67,11 +74,23 @@ const ftpRoutes: FastifyPluginAsync<{ ftp: Ftp; traffic: TrafficImporter; events
       schema: {
         operationId: 'netops.ftp.pa-status',
         summary: 'PA 匯入進度',
-        description: 'TRAFFIC 與其他類型 log 的匯入佇列、分析中的檔案與最近一次同步結果;同步與分析在背景執行,畫面輪詢此 API。',
+        description:
+          'TRAFFIC 與其他類型 log 的匯入佇列、分析中的檔案與最近一次同步結果;同步與分析在背景執行,畫面輪詢此 API。daily 為對帳後每日同步(解密、GlobalProtect、User-ID、AD;AC1)的狀態與 FTP 保留期限內每天的匯入狀態。',
         tags: ['FTP Log 檔案'],
         'x-permission': 'netops.ftp.read',
-        'x-gherkin': ['場景: 查詢匯入進度', '  當 呼叫 GET /api/netops/ftp/pa/status', '  那麼 回應 200', '  而且 回應含 traffic 與 events'].join('\n'),
-        response: { 200: looseObject('{ traffic: ImportStatus, events: ImportStatus }') },
+        'x-gherkin': [
+          '場景: 查詢匯入進度',
+          '  當 呼叫 GET /api/netops/ftp/pa/status',
+          '  那麼 回應 200',
+          '  而且 回應含 traffic、events 與 daily',
+          '',
+          '場景: 對帳後每日同步完成',
+          '  假如 今天自動對帳後,前一天的解密、GlobalProtect、User-ID 檔與 AD 資料夾都已匯入',
+          '  當 呼叫 GET /api/netops/ftp/pa/status',
+          '  那麼 daily.state 為 "done"',
+          '  而且 daily.categories 每個類型前一天的 state 為 "done"',
+        ].join('\n'),
+        response: { 200: looseObject('{ traffic: ImportStatus, events: ImportStatus, daily: DailySyncStatus }') },
       },
     },
     async () => status(),

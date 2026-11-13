@@ -9,7 +9,7 @@ import type { EventType, FtpConfig } from '../../config.js';
 import { cancelledError, type Ftp, type FtpStream } from '../../infra/ftp/index.js';
 import type { PaStore } from '../../infra/store/index.js';
 import { readLog } from '../pa/core/palog.js';
-import { errorText, MAX_QUEUE, modKey, queueFull, sumName, type FileListState, type FileState, type Log, type QueueItem, type RemoteFile } from '../pa/importer.js';
+import { errorText, fileDataDay, MAX_QUEUE, modKey, queueFull, sumName, type FileListState, type FileState, type Log, type QueueItem, type RemoteFile } from '../pa/importer.js';
 import { aggText, createEventSummary, EVENT_TYPES, EVENT_VERSION, mergeEventSummaries } from './core/paevents.js';
 
 interface EventFileState extends FileState {
@@ -212,27 +212,32 @@ export function createEventImporter({ ftp, store, ftpConfig, log }: { ftp: Ftp; 
     });
   }
 
-  /** 同步:每個類型目錄的新檔 / 已變更 / 失敗的檔案加入佇列;回傳 { found, added, errors } */
-  async function sync() {
+  /**
+   * 同步:每個類型目錄的新檔 / 已變更 / 失敗的檔案加入佇列;回傳 { found, added, errors }
+   *   types:只同步這些類型;days:只排檔名資料日期('yyyy/MM/dd',fileDataDay)在其中的檔(AC1 每日同步,檔名沒有日期的不排)
+   */
+  async function sync(opts: { types?: string[]; days?: Set<string> } = {}) {
     if (job.syncing) return { found: 0, added: 0, errors: [] as string[], busy: true };
     job.syncing = true;
     try {
-      return await syncDirs();
+      return await syncDirs(opts);
     } finally {
       job.syncing = false;
     }
   }
 
-  async function syncDirs() {
+  async function syncDirs({ types, days }: { types?: string[]; days?: Set<string> }) {
     let found = 0;
     const items: EventItem[] = [];
     const errors: string[] = [];
     for (const t of eventTypes()) {
+      if (types && !types.includes(t.type)) continue;
       try {
         const list = await listRemote(t.type);
         const logs = list.filter((f) => f.isLog);
         found += logs.length;
-        items.push(...logs.filter((f) => ['new', 'changed', 'error'].includes(f.state)).map((f) => ({ path: f.path, name: f.name, size: f.size, modified: f.modified, type: t.type })));
+        const want = logs.filter((f) => ['new', 'changed', 'error'].includes(f.state) && (!days || days.has(fileDataDay(f.name) ?? '')));
+        items.push(...want.map((f) => ({ path: f.path, name: f.name, size: f.size, modified: f.modified, type: t.type })));
       } catch (err) {
         errors.push(`${t.label}:${errorText(err)}`);
         log.error({ type: t.type, err, cause: (err as { cause?: unknown }).cause }, '[PA 其他 log] 同步失敗');
@@ -283,6 +288,25 @@ export function createEventImporter({ ftp, store, ftpConfig, log }: { ftp: Ftp; 
   /** 這個路徑是不是其他類型的 log(在類型目錄底下) */
   const isEventPath = (p: string) => Boolean(index.files[p]) || eventTypes().some((t) => path.posix.dirname(p) === t.dir);
   const eventTypeOfPath = (p: string) => index.files[p]?.type || typeOfDir(path.posix.dirname(p));
+
+  /**
+   * 某類型某一天('yyyy/MM/dd')的匯入狀態(AC1 每日同步):資料日期依檔名(fileDataDay),檔名沒有日期時用摘要的 day。
+   *   pending:有這天的檔在佇列或分析中;error:有這天的檔分析失敗;done:這天的檔都分析完;none:還沒有這天的檔(FTP 上還沒出現或還沒同步)
+   */
+  function dayState(type: string, day: string): 'done' | 'pending' | 'error' | 'none' {
+    const active = [...job.queue, ...(job.running ? [job.running] : [])];
+    if (active.some((it) => it.type === type && fileDataDay(it.name) === day)) return 'pending';
+    let done = false;
+    for (const f of Object.values(index.files)) {
+      if (f.type !== type || (fileDataDay(f.name) ?? f.day) !== day) continue;
+      if (f.status === 'error') return 'error';
+      if (f.status === 'done') done = true;
+    }
+    return done ? 'done' : 'none';
+  }
+
+  /** 某類型有沒有分析過任何檔(沒有 = PA 可能沒有匯出這個類型;每日同步依此判斷要不要對過期的日子記 warn) */
+  const hasAnyFile = (type: string) => Object.values(index.files).some((f) => f.type === type && f.status === 'done');
 
   /* ───────── 已分析的摘要 ───────── */
 
@@ -365,5 +389,5 @@ export function createEventImporter({ ftp, store, ftpConfig, log }: { ftp: Ftp; 
     return out.length ? `## PA 其他 log 摘要（${from} ~ ${to}）\n\n${out.join('\n\n')}` : '';
   }
 
-  return { eventTypes, typeOfDir, eventLogType, status, enqueue, cancel, listRemote, sync, start, stop, forget, isEventPath, eventTypeOfPath, overview, summary, eventsForIps, eventsContext };
+  return { eventTypes, typeOfDir, eventLogType, status, enqueue, cancel, listRemote, sync, start, stop, forget, dayState, hasAnyFile, isEventPath, eventTypeOfPath, overview, summary, eventsForIps, eventsContext };
 }

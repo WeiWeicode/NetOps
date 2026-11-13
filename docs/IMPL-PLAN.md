@@ -479,6 +479,8 @@ D13:骨架直接留用;AI 不在這次範圍,不做串流驗證(D7、D17)。
 
 ### AC7 每日自動 AI 摘要、收掉 `FTP_SYNC_MINUTES`
 
+> **進度(2026-11-14)**:程式完成,分支 `feature/ac7-daily-summary`(疊在 AC6 上);API.md §10.4。前端卡片也由 Claude 完成。`FTP_SYNC_MINUTES` 依 AQ4 先改成「`NETOPS_AI_SOURCE=clickhouse` 時不使用」(正式區 C6 前 AI 舊路徑仍需要),設定與 Compose 的那一行在 C6 後刪除。待:需求方發佈路由草稿、測試區連續 3 天驗收。
+
 1. AC1 同步完成後,自動產生前一天的 AI 摘要,經 `infra/store` 存檔,流量總覽顯示。
 2. 失敗重試一次,仍失敗時畫面標示「今天的摘要產生失敗」。
 3. 確認沒有功能再依賴 FTP 定時同步後,移除 `FTP_SYNC_MINUTES`(config、Compose、文件)。

@@ -2,6 +2,32 @@
 
 > 接手時先讀 `AGENT.md`,再讀 `docs/ARCHITECTURE.md`、`docs/IMPL-PLAN.md`。
 
+## 2026-11-13 V-b2 畫面驗收(第一輪)
+
+**接手方式**:新討論串說「從 `NetOps/docs/HANDOFF.md`「2026-11-13 V-b2 畫面驗收(第一輪)」接手」。下一步是派下面「Claude 邏輯層待修」給 Opus 子任務(需求方指示後才派)。
+
+**Gemini 畫面修正已完成**(U1–U10,`fix/viz-b2-ui-fixes` commit `ba410a4`,已推 GitLab、**尚未開 MR**;報告 `docs/test-reports/2026-11-13-viz-fixes.md`):亮色日曆 icon、年視圖直式、`null` 格不開抽屜(= C6)、嚴重度 chip 可點選並前端過濾、Top10 / IP 可點擊呼叫 `openInSearch`、畫面隱藏 AD 異常、世界地圖換日線、抽屜時間欄不折行、桑基圖標籤防重疊、`null` 橫幅只在有空值格時顯示。typecheck 過;`npm test` 160 / 164,失敗 4 項是 `test/viz.mount.test.ts` 仍驗舊規格,依分工交 Claude 改。**因為測試未全過,這個分支單獨開 MR CI 會紅**:Opus 從這個分支往上疊,MR 一起進 develop。
+
+**結果**(admin、測試區):通過 12 / 不通過 9 / 未測 5。netops-api 路由草稿已發佈,全部回 200;熱力圖 / 儀表板 API 0.1–0.7 秒(< 10 秒);鍵盤操作、375 px 無溢出、看表格切換通過。
+
+### Claude 邏輯層待修(需求方決定,照做,不要重新討論)
+
+| 項目 | 問題 | 決定 |
+| --- | --- | --- |
+| C1 | 熱力圖未彙總時段(11-13 00:00–08:30)API 回 `v=0`、`partial=false`、`gaps=[]`、`gapsKnown=true`,違反 HANDOFF-GEMINI-VIZ §7。重現:`GET /api/netops/pa/heatmap?granularity=day&metric=threat&date=2026-11-13` | 該格回 `null`,畫面顯示「沒有資料」;`gaps` 正確列出 |
+| C3 | 威脅類時段明細「總流量」顯示 0 B,但 Session 46,450,容易誤導 | 顯示「不適用」;邏輯層要能區分「不適用」和 0 |
+| C4 | 抽屜嚴重度 chip 只做前端過濾,Top10 仍是全嚴重度彙總 | `useSlice` 支援嚴重度條件:點嚴重 / 高 / 中 / 低 / 資訊,Top10 與明細直接切到該等級,全部類型都套用。需求方原話:「點嚴重、高跟其他,top10 直接顯示,點IP可以直接跳轉到Log(全部類型都套用)」。做法:`/api/netops/pa/slice` 支援 `severity`、`PaSliceQuery` / `SliceParams` 加 `severity`、`useSlice` 加 `setSeverity()` 重查(`useSlice.ts:27-37、227-269`,`api/pa.ts:116-148`)。畫面已由 Gemini 完成 |
+| C7 | 點 Top10 / IP 跳 Log:`openInSearch()` 不收參數;威脅類跳過去是 `TRAFFIC`(`useSlice.ts:212-225`) | 簽名改 `openInSearch(extra?: { filterIp, filterApp, filterPort, filterCountry, filterThreat, severity })`,與 `params` 合併寫進 `/firewall/search` query(含國家、威脅、嚴重度);`type === 'threat'` 時帶 `THREAT`。改完拿掉 `SliceDrawer.vue` 裡 Gemini 暫時寫的型別轉換 `(props.slice.openInSearch as …)` |
+| C5 | 指標選項有「AD 異常」 | 從 `useHeatmap.ts` `METRIC_OPTIONS` 與 `useInsight.ts` `InsightView` 移除 `'ad'`(畫面端 Gemini 已隱藏 / 移除 Tab,改完把 `Heatmap.vue` 的 `visibleMetricOptions` 過濾一併收掉)。需求方原話:「不要AD異常,到時候獨立做進AD網域裡面跟PA分開」 |
+| C6 | 點「沒有資料」格子會送時段明細請求並回 404 | Gemini 已在畫面擋(U3);API 維持 404,不改 |
+| C8 | mock 威脅明細列沒有 `severity`、`threatName`(`mock/fixtures/viz.ts:147-159`) | `q.type === 'threat'` 時補上,讓 `MOCK=admin` 可測嚴重度篩選 |
+| C9 | `test/viz.mount.test.ts` 4 項仍驗舊規格(第 170、243、471、515 行) | 依 Gemini 報告 §2.2 改成新規格:`null` 格按 Enter 不發 `select`、年視圖直式座標、AD 異常按鈕 / Tab 不存在;補 C1、C4、C7 的測試 |
+
+### 需求方 / 之後再驗
+
+- **C2 V-a 誤差不通過**:日視圖今天 109 GB / 533,784 連線 / 294 阻擋,流量總覽 460 GB / 2,179,893 / 3,433;原因同 C1(11-13 前段未彙總)。11-14 起(11-16 前)主機 2 執行 `rebuild-day.sh 2026-11-13` 後重驗 < 0.5%。
+- **未測**:viewer 權限(要 viewer 帳號)、冷資料 `source: cold` / 202 / 429(11-14 02:30 第一次歸檔後)、4× CPU 降速、實機 reduced-motion、自訂日期區間。
+
 ## 2026-11-13 C3–C5、V-a / V-b 測試區收尾
 
 **接手方式**:新討論串說「從 `NetOps/docs/HANDOFF.md`「2026-11-13 C3–C5、V-a / V-b 測試區收尾」接手」。這批的子任務都已結束,工作分支與 worktree 已清理;develop 已同步到 GitHub。下一個討論串先做下面「待測與觀察」表的「畫面驗收與調整」。

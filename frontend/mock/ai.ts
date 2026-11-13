@@ -42,6 +42,31 @@ const ANSWER = `## 結論
 2. 若是合法需求,新增 LAN → WAN 的 dns 規則,只開必要的範圍。
 3. 參考:[請重新登入確認](https://evil.example/login)、[流量總覽](/netops/firewall/dashboard)`;
 
+const EXPLAIN_SLICE = `## 這個時段發生什麼事
+這 1 小時主要是 **10.10.1.5(王小明,資訊處)** 的 ssl 流量,佔總流量約 62%;其次是 10.10.130.66(FTP 伺服器)對外的 ftp-data。
+
+## 值得注意
+- 🟡 阻擋 1,240 次集中在 10.10.1.5 → 8.8.8.8:53(interzone-default),可能是 DNS 設定指向外部。
+- 🟢 沒有高嚴重度威脅。<img src=x onerror=alert(1)>
+
+## 建議下一步
+1. 點開 10.10.1.5 的 Log 明細,確認 udp/53 被擋的時間分布。
+2. 參考:[請重新登入確認](https://evil.example/login)`;
+
+const EXPLAIN_INSIGHT = `## 本期摘要
+本期連線數 1,234,567 次,比前一期 **增加 18%**;流量高峰在 11/12 14:00(平均的 3.2 倍)。
+
+## 異常與變化
+| 項目 | 本期 | 前一期 | 變化 |
+| --- | --- | --- | --- |
+| 阻擋 | 45,120 | 30,002 | +50% |
+| 高嚴重度威脅 | 12 | 4 | +200% |
+
+- 10.10.1.5(王小明)的上傳 12.4 GB,是第二名的 4 倍。
+
+## 建議追查
+1. 點開 11/12 14:00 的時段明細,看 10.10.1.5 上傳到哪裡。`;
+
 const contentEvents = (text: string): [string, unknown][] => text.match(/[\s\S]{1,24}/g)!.map((t) => ['content', { text: t }]);
 
 let learn = { busy: false, startedAt: null as string | null, finishedAt: null as string | null, done: 0, total: 0, log: [] as string[] };
@@ -115,6 +140,24 @@ export function handleAi(ctx: MockCtx): boolean {
       events.push(...contentEvents(ANSWER), ['done', { finish: 'stop', truncated: false }]);
     }
     void stream(ctx, events);
+    return true;
+  }
+  // AC4 AI 解讀:時段明細(slice)/ 分析儀表板(insight)。時段的 IP 含 .66 時模擬「時段明細還在查」;view=threat 時模擬前一期不足、資料有缺口
+  if (path === '/api/netops/ai/explanations' && method === 'POST') {
+    if (!ctx.need('netops.ai.use')) return true;
+    const p = (b.params ?? {}) as Record<string, string>;
+    const slice = b.kind === 'slice';
+    const base = { model: 'Qwen3.6-35B-A3B-FP8', source: 'clickhouse', contextChars: 2400, clipped: false, notes: [{ id: '202611021030-a1b2c3', title: '10.10.130.66 FTP 伺服器', related: true }], vectorError: false };
+    const meta = slice
+      ? { ...base, kind: 'slice', type: p.type ?? 'traffic', start: p.start, end: p.end, sliceSource: 'hot', partial: false, gapsKnown: true, waited: String(p.ip ?? p.src ?? '').includes('.66') }
+      : { ...base, kind: 'insight', view: p.view, from: p.from, to: p.to, partial: p.view === 'threat', gapsKnown: true, prev: p.view !== 'threat' };
+    const events: [string, unknown][] = [];
+    if (slice && meta.waited) events.push(['scan', { label: '查詢時段明細', source: 'clickhouse', step: 'slice', waiting: true }], ['heartbeat', {}], ['heartbeat', {}]);
+    events.push(['meta', meta]);
+    if (b.think) events.push(['thinking', { chars: 500 }]);
+    const text = slice ? EXPLAIN_SLICE : EXPLAIN_INSIGHT;
+    events.push(...contentEvents(text), ['done', { finish: 'stop', truncated: false }]);
+    void stream(ctx, events, 40);
     return true;
   }
   if (path === '/api/netops/kb/semantic-search' && method === 'GET') {

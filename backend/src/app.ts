@@ -276,7 +276,8 @@ export async function buildApp(
   });
   await app.register(heatRoutes, { svc: heatSvc, syncMs: deps.heat?.syncMs });
   // 分析儀表板(V-b1):彙總表與威脅原始表,最長 90 天
-  await app.register(insightRoutes, { svc: createInsightService({ heat: heatReader, cache, recon, log: app.log, now: deps.heat?.now }) });
+  const insightSvc = createInsightService({ heat: heatReader, cache, recon, log: app.log, now: deps.heat?.now });
+  await app.register(insightRoutes, { svc: insightSvc });
   await app.register(paEventRoutes, { events, ch });
   await app.register(adRoutes, { ad });
   await app.register(adFtpRoutes, { ad, daily: daily.status });
@@ -284,7 +285,9 @@ export async function buildApp(
   await app.register(kbRoutes, { kb });
   await app.register(ipNameRoutes, { svc: app.ipNames });
   // AI 分析、問答、語意搜尋、外部 IP 自動學習(IMPL-PLAN A1;deps.ai 只給測試注入假 AI 主機)
-  await registerAi(app, { config, traffic, events, ad, kb, ftp, paStore: app.store.pa, chReader, chBuilder, now: deps.chNow, ...deps.ai });
+  // AC4:AI 解讀用時段明細(同一人同條件重用 pa-slice 工作)與儀表板快取
+  const explain = { slice: heatSvc.slice, insight: insightSvc };
+  await registerAi(app, { config, traffic, events, ad, kb, ftp, paStore: app.store.pa, chReader, chBuilder, now: deps.chNow, explain, ...deps.ai });
   await app.register(ftpRoutes, {
     ftp,
     traffic,

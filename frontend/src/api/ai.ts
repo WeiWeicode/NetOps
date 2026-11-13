@@ -1,12 +1,14 @@
 /**
  * AI 分析、問答與知識庫的 AI 功能(docs/API.md §10;IMPL-PLAN A1;翻譯與整理筆記依 2026-11-09 決定不搬,D25)
  *   分析 / 問答回 SSE(POST,EventSource 只能 GET):以 fetch 讀串流,帶 Cookie 與 CSRF、不帶 Bearer(同 gateway.ts download)
- *   權限:netops.ai.use(按鈕 netops.pa-ask.use、netops.ad-ask.use、netops.pa-dashboard.ai)
+ *   權限:netops.ai.use(按鈕 netops.pa-ask.use、netops.ad-ask.use、netops.pa-dashboard.ai;AC4 netops.pa-heatmap.ai、netops.pa-insight.ai)
+ *   AC4 AI 解讀(POST /ai/explanations):kind slice(時段明細)/ insight(分析儀表板);後端依 params 自己取資料
  * 串流開始前的錯誤(400 / 404 / 409 / 429)丟 ApiError;開始後的錯誤是 error 事件(呼叫端丟出 AiStreamError)。
  */
 import { ApiError, readCookie, redirectToLogin, refreshSession } from '@giganexus/web-kit';
 import { http, type ApiPath } from './gateway';
 import type { KbNote } from './kb';
+import type { SliceQuery } from './slice';
 
 export interface AiStatus {
   enabled: boolean;
@@ -154,6 +156,37 @@ export interface IpLearnStatus {
   lastRun?: { at: string; by: string; range: string; candidates: number; looked: number; cached: number; manualSkip: number; failed: number; groups: number; notes: number } | null;
 }
 
+/** AC4 AI 解讀的參數:時段明細同 GET /pa/slice;分析儀表板同 GET /pa/insight/{view} */
+export type ExplainInput = { kind: 'slice'; params: SliceQuery } | { kind: 'insight'; params: { view: 'traffic' | 'threat'; from: string; to: string } };
+
+/** AI 解讀的 meta 事件(docs/API.md §10.3) */
+export interface ExplainMeta {
+  kind: 'slice' | 'insight';
+  model: string;
+  source: 'clickhouse';
+  /** 資料落在已知缺口(對帳發現少資料) */
+  partial: boolean;
+  /** false = 尚未完成每日 FTP 對帳 */
+  gapsKnown: boolean;
+  contextChars: number;
+  /** 資料太多,後面的排行沒有送 */
+  clipped: boolean;
+  notes: { id: string; title: string; related: boolean }[];
+  vectorError: boolean;
+  /** slice */
+  type?: 'traffic' | 'threat';
+  start?: string;
+  end?: string;
+  sliceSource?: 'hot' | 'cold' | 'mixed';
+  waited?: boolean;
+  /** insight */
+  view?: 'traffic' | 'threat';
+  from?: string;
+  to?: string;
+  /** 有沒有前一期可比較 */
+  prev?: boolean;
+}
+
 export const ai = {
   status: () => http.get<AiStatus>('/api/netops/ai/status'),
   /** 期間分析:from / to 為 YYYY-MM-DD */
@@ -162,6 +195,8 @@ export const ai = {
   /** 問答:from / to 為 ISO 8601 含時區 */
   ask: (body: { from: string; to: string; question: string; history: HistoryItem[]; think: boolean; source: 'pa' | 'ad' }, onEvent: (e: SseEvent) => void, signal?: AbortSignal) =>
     streamPost('/api/netops/ai/questions', body, onEvent, signal),
+  /** AC4 AI 解讀(時段明細、分析儀表板) */
+  explain: (body: ExplainInput & { think: boolean }, onEvent: (e: SseEvent) => void, signal?: AbortSignal) => streamPost('/api/netops/ai/explanations', body, onEvent, signal),
   semanticSearch: (q: string) => http.get<{ items: (KbNote & { score: number })[]; vector: VectorStatus }>('/api/netops/kb/semantic-search', { query: { q } }),
   vectorStatus: () => http.get<VectorStatus>('/api/netops/kb/vector-status'),
   vectorSync: () => http.post<VectorStatus>('/api/netops/kb/vector-syncs'),

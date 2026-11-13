@@ -10,6 +10,7 @@ import { computed, ref, watch } from 'vue';
 import { fmtNum, fmtShort, fmtSize } from '@/api/format';
 import { ApiError, describeError } from '@/api/gateway';
 import type { HeatCell, PaHeatMetric } from '@/api/heatmap';
+import { UI } from '@/api/perms';
 import SliceDrawer from '@/components/SliceDrawer.vue';
 import { useHeatmap } from '@/composables/useHeatmap';
 import { useSlice } from '@/composables/useSlice';
@@ -279,6 +280,7 @@ function drillFromDrawer() {
       :slice="s"
       :cell="selectedCell"
       :can-drill="canDrillSelected"
+      :ai-perm="UI.paHeatmapAi"
       @drill="drillFromDrawer"
     />
   </div>

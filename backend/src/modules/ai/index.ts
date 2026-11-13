@@ -27,7 +27,7 @@ import type { ClickHouseReader } from '../../infra/clickhouse/reader.js';
 import type { ChSummaryBuilder } from '../pa/ch-summary.js';
 import { createChAiSource } from './ch-source.js';
 import aiRoutes from './routes.js';
-import { createAiService } from './service.js';
+import { createAiService, type ExplainSources } from './service.js';
 import { createSseHub } from './sse.js';
 import { aiNamesSection } from '../ip-names/service.js';
 
@@ -53,6 +53,8 @@ export interface AiDeps {
   fetch?: typeof fetch;
   /** 測試時縮短 SSE 心跳 */
   heartbeatMs?: number;
+  /** AC4 AI 解讀的資料來源(時段明細、分析儀表板) */
+  explain?: ExplainSources;
 }
 
 export async function registerAi(app: FastifyInstance, deps: AiDeps) {
@@ -191,6 +193,7 @@ export async function registerAi(app: FastifyInstance, deps: AiDeps) {
     ch,
     // AC3(D45):提示詞附 IP 對照(姓名、部門只送公司內部 AI 主機,不寫日誌)
     ipNames: (text) => aiNamesSection(app.ipNames, text),
+    explain: deps.explain,
   });
   const hub = createSseHub(app, { maxStreams: cfg.maxStreams, maxPerUser: cfg.maxStreamsPerUser, heartbeatMs: deps.heartbeatMs });
   await app.register(aiRoutes, { ai, hub });

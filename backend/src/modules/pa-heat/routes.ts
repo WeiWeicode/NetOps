@@ -14,6 +14,30 @@ import { SLICE_SYNC_MS, type HeatService, type SliceQuery } from './service.js';
 /** 只接受單一 IP 或 CIDR(不接受萬用字元;手冊 §7.4 的 BETWEEN 做法) */
 const IP_OR_CIDR = { type: 'string', maxLength: 64, pattern: '^[0-9a-fA-F:.]+(/\\d{1,3})?$' } as const;
 const text = (max: number) => ({ type: 'string', maxLength: max, pattern: '^[^\\u0000-\\u001f]*$' });
+/** 時段明細的條件(GET /pa/slice 的 querystring;AC4 的 POST /ai/explanations kind: 'slice' 的 params 共用) */
+export const SLICE_QUERY = {
+  type: 'object',
+  required: ['start', 'end'],
+  additionalProperties: false,
+  properties: {
+    start: TIME,
+    end: TIME,
+    type: { type: 'string', enum: ['traffic', 'threat'], default: 'traffic' },
+    ip: IP_OR_CIDR,
+    src: IP_OR_CIDR,
+    dst: IP_OR_CIDR,
+    app: text(100),
+    fromZone: text(100),
+    toZone: text(100),
+    dport: { type: 'integer', minimum: 0, maximum: 65535 },
+    action: { type: 'string', enum: ['allow', 'block'] },
+    country: text(100),
+    severity: { type: 'string', enum: ['critical', 'high', 'medium', 'low', 'info'] },
+    threatName: text(200),
+    rows: { type: 'integer', minimum: 0, maximum: 200, default: 100 },
+    sort: { type: 'string', enum: ['time', 'bytes'], default: 'time' },
+  },
+} as const;
 const ID = { type: 'object', required: ['id'], properties: { id: { type: 'string', format: 'uuid' } } } as const;
 
 const heatRoutes: FastifyPluginAsync<{ svc: HeatService; syncMs?: number }> = async (app, { svc, syncMs = SLICE_SYNC_MS }) => {
@@ -131,29 +155,7 @@ const heatRoutes: FastifyPluginAsync<{ svc: HeatService; syncMs?: number }> = as
           '  那麼 回應 404 NETOPS_COLD_ARCHIVE_NOT_FOUND',
           '  而且 details.missing 列出 type、day 與 status(missing / failed / expired / unreadable),不含檔案路徑',
         ].join('\n'),
-        querystring: {
-          type: 'object',
-          required: ['start', 'end'],
-          additionalProperties: false,
-          properties: {
-            start: TIME,
-            end: TIME,
-            type: { type: 'string', enum: ['traffic', 'threat'], default: 'traffic' },
-            ip: IP_OR_CIDR,
-            src: IP_OR_CIDR,
-            dst: IP_OR_CIDR,
-            app: text(100),
-            fromZone: text(100),
-            toZone: text(100),
-            dport: { type: 'integer', minimum: 0, maximum: 65535 },
-            action: { type: 'string', enum: ['allow', 'block'] },
-            country: text(100),
-            severity: { type: 'string', enum: ['critical', 'high', 'medium', 'low', 'info'] },
-            threatName: text(200),
-            rows: { type: 'integer', minimum: 0, maximum: 200, default: 100 },
-            sort: { type: 'string', enum: ['time', 'bytes'], default: 'time' },
-          },
-        },
+        querystring: SLICE_QUERY,
         response: { 200: looseObject('時段明細(docs/API.md §4.4)'), 202: looseObject('工作狀態(docs/API.md §1.1)') },
       },
     },

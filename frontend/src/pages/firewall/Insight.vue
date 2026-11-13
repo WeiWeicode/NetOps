@@ -8,10 +8,15 @@
  *   - 每個圖表皆提供「看表格」無障礙切換(同一份資料,點擊列同樣開啟時段明細)
  *   - 429 NETOPS_INSIGHT_BUSY 時顯示中性提示並倒數自動重試
  *   - 任何圖表元素點擊 → useChartPick.toSliceQuery → useSlice.open(SliceDrawer)
+ *   - AC4「AI 摘要本期異常」:標題列按鈕(權限 netops.pa-insight.ai)開對話框,摘要目前頁籤與期間(後端用儀表板快取);
+ *     時段明細抽屜的「AI 解讀這個時段」用同一個按鈕權限
  */
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { fmtNum, fmtSize } from '@/api/format';
-import { ApiError, describeError } from '@/api/gateway';
+import type { ExplainInput } from '@/api/ai';
+import { ApiError, can, describeError } from '@/api/gateway';
+import { UI } from '@/api/perms';
+import AiExplainPanel from '@/components/AiExplainPanel.vue';
 import type { CountryCount, TopApp, TopIp, TopIpTraffic, TopThreatName } from '@/api/insight';
 import SliceDrawer from '@/components/SliceDrawer.vue';
 import { useChartPick } from '@/composables/useChartPick';
@@ -47,6 +52,16 @@ const customFrom = ref(traffic.range.value.from);
 const customTo = ref(traffic.range.value.to);
 
 const activeInsight = computed(() => (activeTab.value === 'traffic' ? traffic : threat));
+
+/* ───── AC4 AI 摘要本期異常(目前頁籤 + 期間;後端用儀表板快取) ───── */
+const canAi = computed(() => can(UI.paInsightAi));
+const aiOpen = ref(false);
+const aiInput = computed<ExplainInput>(() => ({ kind: 'insight', params: { view: activeTab.value, from: activeInsight.value.range.value.from, to: activeInsight.value.range.value.to } }));
+const aiReady = computed(() => !!activeInsight.value.data.value && !activeInsight.value.rangeError.value);
+const aiSubtitle = computed(() => {
+  const p = aiInput.value.params as { view: string; from: string; to: string };
+  return `${p.view === 'traffic' ? '流量' : '安全威脅'} · ${p.from}${p.to !== p.from ? ` ~ ${p.to}` : ''}`;
+});
 
 /** 切換到威脅 Tab 或期間改變時同步威脅視角 */
 function syncThreatIfNeeded() {
@@ -447,6 +462,7 @@ const topNameRows = computed(() =>
       <GButton size="sm" variant="secondary" icon="refresh" :loading="activeInsight.loading.value" @click="refreshActive()">
         重新整理
       </GButton>
+      <GButton v-if="canAi" size="sm" variant="primary" icon="sparkles" :disabled="!aiReady" @click="aiOpen = true">AI 摘要本期異常</GButton>
     </GPageHeader>
 
     <!-- 視角 Tab 與期間選擇列 -->
@@ -818,7 +834,20 @@ const topNameRows = computed(() =>
     </div>
 
     <!-- 時段明細抽屜 -->
-    <SliceDrawer v-model="drawer" :slice="s" />
+    <SliceDrawer v-model="drawer" :slice="s" :ai-perm="UI.paInsightAi" />
+
+    <!-- AC4:AI 摘要本期異常(開啟時自動開始;換頁籤或期間時清掉舊回答) -->
+    <GModal v-if="canAi" v-model:open="aiOpen" title="AI 摘要本期異常" :subtitle="aiSubtitle" icon="sparkles" width="880px">
+      <AiExplainPanel
+        v-if="aiOpen"
+        :input="aiInput"
+        title="本期異常摘要"
+        start-label="開始摘要"
+        hint="只把儀表板的統計、Top 10 與前一期比較(不是原始 log)送到公司內部的 AI 服務,不會傳到外部"
+        frame="plain"
+        auto-start
+      />
+    </GModal>
   </div>
 </template>
 

@@ -2,6 +2,12 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。
 
+## 2026-11-13 AI 改用 ClickHouse、PA 頁面 AI 功能、IP 對照表(規劃)
+- 工作項目:AC1–AC7(新階段)
+- 內容:需求方決定 AI 分析 / 問答 / 外部 IP 學習改查 ClickHouse、解密等在對帳後自動同步、PA 頁面新增 6 項 AI 功能、新增 IP 對照表(IP 自動帶出名稱)。只寫計畫,未改程式。
+- 檔案:`docs/IMPL-PLAN.md`(AC)、`docs/ARCHITECTURE.md`(D44、D45、Q8)、`docs/HANDOFF.md`
+- 驗證:文件變更,無程式測試
+
 ## 2026-11-13 對帳 08:10、自動補漏(FTP 只保留 10 天)
 - 工作項目:C3
 - 內容:需求方決定 FTP 只保留 10 天、對帳改每天 08:10、對帳發現缺口自動補漏(可用環境變數關閉,超過 FTP 保留期限仍有缺口記 warn)。細節見 API.md §5.3、ARCHITECTURE D43。

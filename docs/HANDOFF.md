@@ -2,6 +2,29 @@
 
 > 接手時先讀 `AGENT.md`,再讀 `docs/ARCHITECTURE.md`、`docs/IMPL-PLAN.md`。
 
+## 2026-11-13 AI 改用 ClickHouse 範圍討論(AC1–AC7 計畫)
+
+**接手方式**:新討論串說「從 `NetOps/docs/HANDOFF.md`「2026-11-13 AI 改用 ClickHouse 範圍討論」接手」。計畫在 IMPL-PLAN「AC」,決策 ARCHITECTURE D44、D45。下一步:派 AC1(對帳後同步)給 Claude 子任務;AC3 等網管提供 IP 對照表範例檔(AQ1)。
+
+**需求方決定(2026-11-13,照做,不要重新討論;引號內是原話或選項原文)**
+
+- 新增 AI(「照建議都加入計劃」):
+  - 時段明細「AI 解讀這個時段」、分析儀表板「AI 摘要本期異常」(AC4)。
+  - 威脅「AI 說明這個威脅與處理建議」(「遮罩 IP,只送統計」)、熱力圖「AI 指出異常格」(和時段解讀「分開,兩個都做」)(AC5)。
+  - 安全事件頁 AI 摘要(AC6)。
+  - 每日自動 AI 摘要(「加入,放最後一批」,AC7)。
+  - 即時監控不加 AI;AD 不納入(V-d)。
+- 解密 / GlobalProtect / User-ID / AD:「每天對帳後一併同步」(AC1)。原因:測試區 `FTP_SYNC_MINUTES=0`,這些目前只靠手動匯入,FTP 只留 10 天會遺失。
+- AI 分析期間:「維持 92 天,超過改用彙總」;問答:「保留 15 筆,內部 IP 換代號」;外部 IP 學習:「上限改 30 天」(AC2)。
+- IP 對照表,需求方原話:「另外規劃IP自動帶出名稱，網管之後會匯入IP跟使用者名稱，可能要新增一個頁面給網管用」(AC3):
+  - 「固定 IP + 使用者 / 設備」。
+  - 「Excel / CSV 匯入 + 頁面內單筆編輯」。
+  - 「全部 PA 畫面」與「匯出檔也帶名稱」。
+  - 送 AI「只送部門 / 設備類型」。
+  - 頁面「網通知識群組;看 PA 的人都看得到名稱,只有網管能改」。
+
+**待確認**:IMPL-PLAN「AC 待確認」AQ1–AQ3。AQ3 名稱搜尋改在 API 端換成 IP 清單,和討論時說的「同步到 ClickHouse」不同,需求方確認。
+
 ## 2026-11-13 需求方決定:FTP 保留 10 天、對帳 08:10、自動補漏、AI 改用 ClickHouse
 
 **決定(需求方 2026-11-13,照做,不要重新討論)**
@@ -9,7 +32,7 @@
 1. **FTP 只保留 10 天**:需求方之後會寫排程自動刪 FTP 上的 PA log(回答 IMPL-PLAN E1)。長期原始 log 只剩 C4 的 NAS Parquet 歸檔,正式區 E2(NAS 150 GB / 年)必須申請。AD log(`/AD_Log_Backup`)在同一台 FTP:刪除排程若包含它,刪之前要先匯入。
 2. **對帳改每天 08:10**(PA 前一天匯出檔約 07:45 才出現):目前設定只有小時(`NETOPS_RECON_HOUR`,`backend/src/config.ts:292`),要支援分鐘(例如 `NETOPS_RECON_TIME=08:10`,保留舊變數相容),Compose、API.md §5.3、ARCHITECTURE D43 一併改。**已做(!91):`NETOPS_RECON_TIME` 預設 08:10,`-1` 不自動。**
 3. **加自動補漏**(已做:!91,`NETOPS_RECON_AUTO_BACKFILL=0` 關閉):對帳發現 `gap` 時自動送補漏工作(同 `POST /api/netops/pa/backfills`,`createdBy` 標示系統),失敗或 FTP 還沒分析完時照對帳的重試規則;要能用環境變數關閉。FTP 只留 10 天,缺口要在期限內補完,超過時記 warn。
-4. **AI 分析 / 問答 / 外部 IP 學習改用 ClickHouse 查**(取代 FTP 摘要、連線組合統計與事件彙總;D43 的「後續改」)。改完才能把 `FTP_SYNC_MINUTES` 收掉;解密、GlobalProtect、User-ID 仍讀 FTP 摘要,FTP 只留 10 天後的影響要一併評估。改動大,先寫計畫(IMPL-PLAN 新階段)再實作。
+4. **AI 分析 / 問答 / 外部 IP 學習改用 ClickHouse 查**(**計畫已寫:IMPL-PLAN AC1–AC7**,見下一段)(取代 FTP 摘要、連線組合統計與事件彙總;D43 的「後續改」)。改完才能把 `FTP_SYNC_MINUTES` 收掉;解密、GlobalProtect、User-ID 仍讀 FTP 摘要,FTP 只留 10 天後的影響要一併評估。改動大,先寫計畫(IMPL-PLAN 新階段)再實作。
 
 **現況說明**(回覆需求方時用):11/11 以前的資料目前匯不進來。補漏只補 ClickHouse 已有資料的日子(其他日子對帳是 `not-covered`),而且測試區 TTL 3 天,匯了也會被刪;歷史匯入留到正式區 C6 再評估。
 

@@ -2,6 +2,15 @@
 
 > 接手時先讀 `AGENT.md`,再讀 `docs/ARCHITECTURE.md`、`docs/IMPL-PLAN.md`。
 
+## 2026-11-14 AC4 AI 解讀時段 / 摘要本期異常(程式完成,待合併)
+
+**接手方式**:新討論串說「從 `NetOps/docs/HANDOFF.md`「2026-11-14 AC4」接手」。分支 `feature/ac4-ai-slice-insight` 疊在 AC3 上,**合併順序 !93 → !94 → !95 → AC4 的 MR**。下一步:AC5。
+
+- **後端**:`POST /ai/explanations`(`modules/ai/routes.ts`、`service.ts` 的 `prepareExplanation` / `explain`、純函式 `modules/ai/core/explain.ts`);時段明細重用 `HeatService.slice` 的同人同條件工作,儀表板用 `InsightService`(新增 `trafficPrev`)。API.md §10.3。AC5 的 `threat`、`heatmap` 照同一支 API 加 kind。
+- **前端**:`components/AiExplainPanel.vue` + `composables/useAiExplain.ts`;時段明細抽屜 `aiPerm`(熱力圖 / 儀表板各自的按鈕權限)、分析儀表板標題列「AI 摘要本期異常」對話框;`mock/ai.ts` 有假回答(`MOCK=admin`;時段 IP 含 `.66` 看「還在查」、威脅頁籤看資料不完整提示)。
+- **權限**:`gateway-rbac.yaml` 新增按鈕 `netops.pa-heatmap.ai`、`netops.pa-insight.ai`(admin、viewer)。
+- **上架後(需求方)**:發佈 netops-api 路由草稿(新路徑 `POST /ai/explanations`)、確認兩個按鈕節點出現且 viewer / admin 都看得到;測試區驗收(3 天內的時段與儀表板)。
+
 ## 2026-11-14 AC3 IP 對照表(程式完成,待合併)
 
 **接手方式**:新討論串說「從 `NetOps/docs/HANDOFF.md`「2026-11-14 AC3」接手」。分支 `feature/ac3-ip-names` 疊在 AC2(`feature/ac2-ai-clickhouse`)上,**合併順序 !93(AC1)→ !94(AC2)→ AC3 的 MR**。下一步:AC4。

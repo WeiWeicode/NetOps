@@ -6,10 +6,11 @@
  *   409 / 404(冷歸檔未提供、沒有歸檔檔案)→ state = 'error',error.code 給畫面顯示中性提示
  *   s.isCold:開查前就依時間判斷(畫面先放冷資料過場);s.source:結果的 hot / cold / mixed
  *   s.summary:摘要;威脅類(type=threat)的 bytes / sent / recv 為 null = 不適用(不是 0;C3)
- *   s.setSeverity(sev):依嚴重度重查(C4)。威脅類只加 severity;流量類切成威脅類,只保留 IP 條件(同摘要 threats 的計算範圍);
- *     setSeverity(null) 回到點嚴重度之前的條件
+ *   s.supportsSeverity:目前是威脅類(只有威脅類抽屜顯示嚴重度 chip;需求方 2026-11-13 決定)
+ *   s.setSeverity(sev):威脅類依嚴重度重查(C4);setSeverity(null) 拿掉嚴重度。流量類不動作
  *   s.searchLink / s.openInSearch(extra?):在 Log 明細查詢開啟同樣條件,extra 為點選的項目(C7;威脅類帶 type=THREAT、threat、severity;
- *     來源 IP 用 filterSrc → src、目的 IP 用 filterDst → dst,不分方向才用 filterIp → ip)
+ *     來源 IP 用 filterSrc → src、目的 IP 用 filterDst → dst,不分方向才用 filterIp → ip;
+ *     來源國家 filterSrcCountry → srcCountry、目的國家 filterDstCountry → dstCountry,不分方向 filterCountry → country)
  *   網路錯誤或 SLICE_TIMEOUT_MS 內沒有回應 → state = 'error'(逾時為 SliceTimeoutError);s.retryable 為 true 時畫面可給「重試」按鈕呼叫 s.retry()
  * 離開頁面時自動取消進行中的工作(不佔每人 2 個的名額)。
  */
@@ -17,6 +18,7 @@ import { computed, getCurrentInstance, getCurrentScope, onScopeDispose, ref, sha
 import { useRouter, type RouteLocationRaw } from 'vue-router';
 import { ApiError } from '@/api/gateway';
 import { slice, type SliceJob, type SliceQuery, type SliceResult, type SliceSeverity, type SliceSource } from '@/api/slice';
+import { countryRange } from './searchQuery';
 import { useJob } from './useJob';
 import { dayStartMs, taipeiDay, taipeiLocal } from './vizTime';
 
@@ -51,10 +53,42 @@ export interface SearchExtra {
   filterDst?: string;
   filterApp?: string;
   filterPort?: number | string;
+  /** 不分方向的國家(Log 明細查詢的 country) */
   filterCountry?: string;
+  /** 來源國家(srcCountry) */
+  filterSrcCountry?: string;
+  /** 目的國家(dstCountry) */
+  filterDstCountry?: string;
   filterThreat?: string;
   severity?: SliceSeverity;
 }
+
+/**
+ * 抽屜點選的項目(Top 10 維度或明細表欄位)→ openInSearch 的條件(C7 第二輪):
+ *   來源 / 目的 IP → filterSrc / filterDst;來源 / 目的國家 → filterSrcCountry / filterDstCountry;
+ *   國家欄位是 PA 填的私有 / 保留網段(例 10.0.0.0-10.255.255.255,C7b)→ 改帶來源 / 目的 IP 的 CIDR;不是單一 CIDR 時回 null(不可點)
+ */
+export function searchExtraOf(dimKey: string, rawVal: string): SearchExtra | null {
+  const val = rawVal.replace(/^約\s+/, '').trim();
+  if (!val || val === '—') return null;
+  if (dimKey === 'src') return { filterSrc: val };
+  if (dimKey === 'dst') return { filterDst: val };
+  if (dimKey === 'ip') return { filterIp: val };
+  if (dimKey === 'srcCountry' || dimKey === 'dstCountry') {
+    const src = dimKey === 'srcCountry';
+    const range = countryRange(val);
+    if (range) return range.cidr ? (src ? { filterSrc: range.cidr } : { filterDst: range.cidr }) : null;
+    return src ? { filterSrcCountry: val } : { filterDstCountry: val };
+  }
+  if (dimKey === 'app') return { filterApp: val };
+  if (dimKey === 'dport') return { filterPort: val };
+  if (dimKey === 'name') return { filterThreat: val };
+  return null;
+}
+
+/** Top 10 項目的顯示文字:國家欄位是網段範圍時顯示「內部網路 10.0.0.0/8」(C7b) */
+export const topLabelOf = (dimKey: string, key: string): string =>
+  (dimKey === 'srcCountry' || dimKey === 'dstCountry' ? countryRange(key)?.label : undefined) ?? key;
 
 export function useSlice(opts: { now?: () => number; pollMs?: number; timeoutMs?: number } = {}) {
   const now = opts.now ?? Date.now;
@@ -113,11 +147,7 @@ export function useSlice(opts: { now?: () => number; pollMs?: number; timeoutMs?
     }, 1000);
   }
 
-  /** 點嚴重度之前的條件(setSeverity(null) 回到這裡;open 新條件時清掉) */
-  let severityBase: SliceQuery | null = null;
-
   async function open(q: SliceQuery): Promise<void> {
-    severityBase = null;
     return run(q);
   }
 
@@ -180,24 +210,15 @@ export function useSlice(opts: { now?: () => number; pollMs?: number; timeoutMs?
   /** 忙碌倒數結束後重試同一個條件(倒數中呼叫不會送出) */
   const retry = (): Promise<void> => (query.value && retryAfter.value === 0 ? run(query.value) : Promise.resolve());
 
-  /** 依嚴重度重查(C4;Top 10 與明細都由後端依嚴重度計算)。null = 取消,回到點嚴重度之前的條件 */
+  /** 只有威脅類可以依嚴重度篩選(流量類抽屜不顯示嚴重度 chip;需求方 2026-11-13 決定) */
+  const supportsSeverity = computed(() => query.value?.type === 'threat');
+
+  /** 威脅類依嚴重度重查(C4;Top 10 與明細都由後端依嚴重度計算)。null = 拿掉嚴重度;流量類不動作 */
   async function setSeverity(sev: SliceSeverity | null): Promise<void> {
     const q = query.value;
-    if (!q || (q.severity ?? null) === sev) return;
-    if (sev === null) {
-      const base: SliceQuery = { ...(severityBase ?? q) };
-      delete base.severity;
-      severityBase = null;
-      return run(base);
-    }
-    severityBase ??= q;
-    const base = severityBase;
-    const next: SliceQuery =
-      (base.type ?? 'traffic') === 'threat'
-        ? { ...base, severity: sev }
-        : // 流量類的摘要 threats 只套用 IP 條件(API.md §4.4),切成威脅類時條件一致
-          { start: base.start, end: base.end, type: 'threat', severity: sev, ip: base.ip, src: base.src, dst: base.dst, rows: base.rows };
-    for (const k of Object.keys(next) as (keyof SliceQuery)[]) if (next[k] === undefined) delete next[k];
+    if (!q || q.type !== 'threat' || (q.severity ?? null) === sev) return;
+    const next: SliceQuery = { ...q, severity: sev ?? undefined };
+    if (sev === null) delete next.severity;
     return run(next);
   }
 
@@ -242,6 +263,8 @@ export function useSlice(opts: { now?: () => number; pollMs?: number; timeoutMs?
       ['filterApp', 'app'],
       ['filterPort', 'port'],
       ['filterCountry', 'country'],
+      ['filterSrcCountry', 'srcCountry'],
+      ['filterDstCountry', 'dstCountry'],
       ['filterThreat', 'threat'],
       ['severity', 'severity'],
     ];
@@ -268,5 +291,5 @@ export function useSlice(opts: { now?: () => number; pollMs?: number; timeoutMs?
       stopCountdown();
     });
 
-  return { query, state, source, isCold, result, summary, error, retryable, retryAfter, open, retry, close, setSeverity, cancel: () => job.cancel(), searchLink, searchTarget, openInSearch, job: job.job };
+  return { query, state, source, isCold, result, summary, error, retryable, retryAfter, open, retry, close, supportsSeverity, setSeverity, cancel: () => job.cancel(), searchLink, searchTarget, openInSearch, job: job.job };
 }

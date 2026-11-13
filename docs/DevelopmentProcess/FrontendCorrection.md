@@ -2,6 +2,12 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。範圍:`frontend/`。
 
+## 2026-11-13 Log 明細查詢接威脅 log、抽屜嚴重度只在威脅類、國家分方向與內部網段(V-b2 驗收 C7 第二輪、C7b)
+- 工作項目:V-b2 驗收追加(需求方 2026-11-13 決定)
+- 內容:`PA_SEARCH_KEYS` 加 type、threat、severity、srcCountry、dstCountry;Log 明細查詢頁加類型 / 威脅名稱 / 嚴重度 / 來源國家 / 目的國家欄位與威脅結果欄位(最小可用版,樣式交 Gemini),「未套用」提示只留無法套用的條件;`useSlice` 加 `supportsSeverity`(流量類抽屜不顯示嚴重度 chip)、`setSeverity` 只對威脅類;`searchExtraOf` / `topLabelOf`:來源 / 目的國家分方向,PA 國家欄位是網段範圍時顯示「內部網路 10.0.0.0/8」並改帶 src / dst CIDR(`searchQuery.countryRange`)。mock 支援 type=THREAT。
+- 檔案:`frontend/src/api/pa.ts`、`frontend/src/composables/searchQuery.ts`、`frontend/src/composables/useSlice.ts`、`frontend/src/components/SliceDrawer.vue`、`frontend/src/pages/firewall/Search.vue`、`frontend/mock/paLog.ts`、`frontend/test/*`
+- 驗證:`npm run typecheck`、`npm test`、`npm run build`(見 MR)
+
 ## 2026-11-13 C7 第二輪:來源 / 目的 IP 帶入方向、未套用提示保留、時段明細逾時可重試
 
 - 內容:`SearchExtra` 加 `filterSrc` / `filterDst`(抽屜來源 / 目的 IP 改用);`searchQuery.ignoredThreatCond()` 抽成純函式,Log 明細頁進頁時算一次;`slice.get` 可帶 `signal`,`useSlice` 加 45 秒逾時(`SLICE_TIMEOUT_MS`、`SliceTimeoutError`)與 `retryable`。抽屜的一般錯誤區塊目前沒有「重試」按鈕,交 Gemini 依 `retryable` 補(呼叫 `slice.retry()`)。

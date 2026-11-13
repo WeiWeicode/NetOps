@@ -3,6 +3,8 @@
  *   舊版同步等待最長 180 秒,超過路由上限,改成工作模式(ARCHITECTURE D6):送出 → 輪詢 → 分頁取結果 / 匯出 CSV
  *   C3(2026-11-11 需求方決定,ARCHITECTURE D43):只查 ClickHouse 原始 log(期間 ≤ 30 天),不再掃 FTP;
  *   條件語意同舊版 core/palog.js buildFilter(SQL 在 infra/clickhouse/reader.ts 的 trafficWhere)
+ *   V-b2 C7 第二輪(需求方 2026-11-13 決定):type = THREAT 時改查威脅 log(log_type = threat,threatSearchWhere),
+ *   另可用嚴重度、威脅名稱;國家可分來源 / 目的(srcCountry / dstCountry,country 仍為任一方)
  */
 import type { FastifyPluginAsync } from 'fastify';
 import { JobRunner, ownerOf } from '../../infra/jobs/index.js';
@@ -12,6 +14,7 @@ import { logTimeOut, taipeiTimeMs, timeIn, validation } from '../../shared/time.
 import { cancelQuietly } from '../ftp/ad-routes.js';
 import { AppError } from '../../errors.js';
 import { ClickHouseError } from '../../infra/clickhouse/index.js';
+import { SEARCH_SEVERITIES, type LogRecord } from '../../infra/clickhouse/reader.js';
 import { ROW_FIELDS } from './core/palog.js';
 import { checkCoverage, need, unavailable, viaClickHouse, type ChOverviewDeps } from './ch-overview.js';
 import { SOURCE } from './routes.js';
@@ -47,15 +50,36 @@ interface SearchBody {
   toZone?: string;
   user?: string;
   country?: string;
+  srcCountry?: string;
+  dstCountry?: string;
+  /** TRAFFIC(預設)或 THREAT */
+  type?: SearchType;
+  /** 威脅名稱(包含;只有 THREAT) */
+  threat?: string;
+  /** 嚴重度(只有 THREAT) */
+  severity?: string;
   q?: string;
   limit?: number;
   /** 只有 clickhouse(相容用,可省略) */
   source?: string;
 }
 
+export const SEARCH_TYPES = ['TRAFFIC', 'THREAT'] as const;
+type SearchType = (typeof SEARCH_TYPES)[number];
+/**
+ * 有條件的欄位(只有關鍵字 q 時限 1 天;資安審查 M2)。嚴重度、威脅名稱篩選力低(威脅名稱也是全掃描的包含比對),
+ * 和 q 一起用時仍當成「只用關鍵字」(資安審查 2026-11-13)
+ */
+const COND_KEYS = ['src', 'dst', 'ip', 'port', 'proto', 'app', 'rule', 'action', 'fromZone', 'toZone', 'user', 'country', 'srcCountry', 'dstCountry'] as const;
+
+/** 威脅 log 的列 → 明細欄位(ROW_FIELDS;威脅名稱 name → threat,沒有的欄位空白) */
+export const threatRow = (rec: LogRecord): LogRecord => ({ ...rec, threat: rec.name ?? '', severity: rec.severity === 'informational' ? 'info' : (rec.severity ?? '') });
+
 /** 工作結果(rows 只在伺服器端保留,狀態查詢不回傳) */
 interface SearchResult {
   source: 'clickhouse';
+  /** 查的是 TRAFFIC 或威脅 log */
+  type: SearchType;
   from: string;
   to: string;
   total: number;
@@ -101,7 +125,7 @@ const logRoutes: FastifyPluginAsync<{ limit: number; seconds: number; ch: ChOver
       schema: {
         operationId: 'netops.pa-log.search',
         summary: 'PA Log 明細查詢(送出工作)',
-        description: `依時間與條件查 ClickHouse 的 PA TRAFFIC 原始 log(IP 支援完全相同、萬用字元與 CIDR,並比對 NAT 位址);回 202 與工作狀態,完成後分頁取結果或匯出 CSV。依時間由舊到新取前 limit 筆(預設與上限 ${limit}),還有更多時 stopReason 為 limit;執行上限 ${CH_SEARCH_SECONDS} 秒。期間最長 ${SEARCH_MAX_DAYS} 天,只用關鍵字 q 時最長 1 天。期間整個超過保留期限回 404 NETOPS_PA_OUT_OF_RETENTION;期間內沒有資料回 404 NETOPS_PA_NO_DATA;ClickHouse 無法使用回 503 NETOPS_CLICKHOUSE_UNAVAILABLE。`,
+        description: `依時間與條件查 ClickHouse 的 PA 原始 log:type 省略或 TRAFFIC 查 TRAFFIC;THREAT 查威脅 log(log_type = threat),另可用 severity(critical / high / medium / low / info)與 threat(威脅名稱包含),TRAFFIC 帶這兩個條件回 400。IP 支援完全相同、萬用字元與 CIDR,並比對 NAT 位址;country 為來源或目的任一方,srcCountry / dstCountry 只比對來源 / 目的。回 202 與工作狀態,完成後分頁取結果或匯出 CSV。依時間由舊到新取前 limit 筆(預設與上限 ${limit}),還有更多時 stopReason 為 limit;執行上限 ${CH_SEARCH_SECONDS} 秒。期間最長 ${SEARCH_MAX_DAYS} 天,只用關鍵字 q 時最長 1 天。期間整個超過保留期限回 404 NETOPS_PA_OUT_OF_RETENTION;期間內沒有資料回 404 NETOPS_PA_NO_DATA;ClickHouse 無法使用回 503 NETOPS_CLICKHOUSE_UNAVAILABLE。`,
         tags: ['PA Log 明細'],
         'x-permission': 'netops.pa-log.read',
         'x-audit-level': 'meta',
@@ -120,6 +144,16 @@ const logRoutes: FastifyPluginAsync<{ limit: number; seconds: number; ch: ChOver
           '  假如 ClickHouse 從 2026-11-11 起有資料',
           '  當 呼叫 POST /api/netops/pa/log-searches 的期間在 2026-10-01',
           '  那麼 回應 404 NETOPS_PA_OUT_OF_RETENTION',
+          '',
+          '場景: 查威脅 log',
+          '  假如 ClickHouse 有 2026-11-13 的威脅 log',
+          '  當 呼叫 POST /api/netops/pa/log-searches 帶 type "THREAT"、severity "high" 與 src',
+          '  那麼 回應 202',
+          '  而且 完成後的資料列都是嚴重度 high 的威脅 log,threat 欄為威脅名稱',
+          '',
+          '場景: TRAFFIC 帶嚴重度',
+          '  當 呼叫 POST /api/netops/pa/log-searches 不帶 type 但帶 severity "high"',
+          '  那麼 回應 400 VALIDATION_FAILED',
           '',
           '場景: 明細期間超過 30 天',
           '  當 呼叫 POST /api/netops/pa/log-searches 的期間 31 天',
@@ -144,6 +178,11 @@ const logRoutes: FastifyPluginAsync<{ limit: number; seconds: number; ch: ChOver
             toZone: text(100),
             user: text(100),
             country: text(100),
+            srcCountry: text(100),
+            dstCountry: text(100),
+            type: { type: 'string', enum: [...SEARCH_TYPES] },
+            threat: text(200),
+            severity: { type: 'string', enum: [...SEARCH_SEVERITIES] },
             q: text(200),
             limit: { type: 'integer', minimum: 1, maximum: limit },
             source: SOURCE,
@@ -163,13 +202,20 @@ const logRoutes: FastifyPluginAsync<{ limit: number; seconds: number; ch: ChOver
       const toMs = taipeiTimeMs(to) + 60_000;
       if (toMs - fromMs > SEARCH_MAX_DAYS * 86400_000 + 60_000) throw validation('to', `查詢期間最長 ${SEARCH_MAX_DAYS} 天`);
       // 只有關鍵字 q、沒有其他條件:用不到排序鍵,會掃完整段期間;只接受 1 天內(資安審查 M2)
-      const qOnly = Boolean(b.q?.trim()) && !['src', 'dst', 'ip', 'port', 'proto', 'app', 'rule', 'action', 'fromZone', 'toZone', 'user', 'country'].some((k) => String(b[k as keyof SearchBody] ?? '').trim());
+      const type: SearchType = b.type ?? 'TRAFFIC';
+      // 嚴重度、威脅名稱只有威脅 log 有:TRAFFIC 帶了不靜默忽略(AGENT.md §5)
+      if (type === 'TRAFFIC') for (const k of ['threat', 'severity'] as const) if (String(b[k] ?? '').trim()) throw validation(k, '只有 type = THREAT 可以用這個條件');
+      const qOnly = Boolean(b.q?.trim()) && !COND_KEYS.some((k) => String(b[k] ?? '').trim());
       if (qOnly && toMs - fromMs > 86400_000 + 60_000) throw validation('q', '只用關鍵字查詢時期間最長 1 天,請加上 IP、Port 等條件或縮短期間');
       const max = Math.min(b.limit ?? limit, limit);
-      const cov = await checkCoverage(ch, 'traffic', fromMs, toMs);
-      const n = await viaClickHouse(() => reader.trafficCount(fromMs, toMs));
-      if (!n) throw new AppError(404, 'NETOPS_PA_NO_DATA', '這段時間 ClickHouse 沒有 log');
-      const filter = { fromMs, toMs, src: b.src, dst: b.dst, ip: b.ip, port: b.port, proto: b.proto, app: b.app, rule: b.rule, action: b.action, fromZone: b.fromZone, toZone: b.toZone, user: b.user, country: b.country, q: b.q };
+      const threat = type === 'THREAT';
+      const cov = await checkCoverage(ch, threat ? 'threat' : 'traffic', fromMs, toMs);
+      const n = await viaClickHouse(() => (threat ? reader.threatCount(fromMs, toMs) : reader.trafficCount(fromMs, toMs)));
+      if (!n) throw new AppError(404, 'NETOPS_PA_NO_DATA', threat ? '這段時間 ClickHouse 沒有威脅 log' : '這段時間 ClickHouse 沒有 log');
+      const filter = {
+        fromMs, toMs, src: b.src, dst: b.dst, ip: b.ip, port: b.port, proto: b.proto, app: b.app, rule: b.rule, action: b.action, fromZone: b.fromZone, toZone: b.toZone,
+        user: b.user, country: b.country, srcCountry: b.srcCountry, dstCountry: b.dstCountry, q: b.q, threat: b.threat, severity: b.severity,
+      };
       const secs = Math.min(seconds, CH_SEARCH_SECONDS);
       const job = jobs.submit<SearchResult>(
         KIND,
@@ -179,7 +225,7 @@ const logRoutes: FastifyPluginAsync<{ limit: number; seconds: number; ch: ChOver
           const t0 = Date.now();
           let r: Awaited<ReturnType<typeof reader.searchTraffic>>;
           try {
-            r = await reader.searchTraffic(filter, max, secs, signal);
+            r = threat ? await reader.searchThreat(filter, max, secs, signal) : await reader.searchTraffic(filter, max, secs, signal);
           } catch (err) {
             if (signal.aborted || !(err instanceof ClickHouseError)) throw err;
             // 159 TIMEOUT_EXCEEDED:超過秒數上限;其他:連線或查詢失敗。原文只寫日誌(只記代碼)
@@ -189,6 +235,7 @@ const logRoutes: FastifyPluginAsync<{ limit: number; seconds: number; ch: ChOver
           }
           return {
             source: 'clickhouse' as const,
+            type,
             from: logTimeOut(from),
             to: logTimeOut(to),
             total: r.rows.length,
@@ -199,7 +246,7 @@ const logRoutes: FastifyPluginAsync<{ limit: number; seconds: number; ch: ChOver
             seconds: Math.round((Date.now() - t0) / 100) / 10,
             stopReason: r.more ? ('limit' as const) : ('' as const),
             ...cov,
-            rows: r.rows.map((rec) => FIELDS.map((k) => rec[k] ?? '')),
+            rows: r.rows.map((rec) => (threat ? threatRow(rec) : rec)).map((rec) => FIELDS.map((k) => rec[k] ?? '')),
           };
         },
         { timeoutMs: (secs + 30) * 1000 },
@@ -270,7 +317,7 @@ const logRoutes: FastifyPluginAsync<{ limit: number; seconds: number; ch: ChOver
       const r = jobsOf(req.params.id, owner).result<SearchResult>(req.params.id, owner, KIND);
       const rows = r.rows.map((row) => row.map((v, i) => (i === TIME_INDEX ? logTimeOut(String(v)) : v)));
       // 期間有一部分超過保留期限時檔名標出來(AGENT.md §5)
-      const name = `PA_log_${r.from.slice(0, 16).replace(/\D/g, '')}_${r.to.slice(0, 16).replace(/\D/g, '')}${r.partial ? '_部分期間超過保留期限' : ''}.csv`;
+      const name = `PA_${r.type === 'THREAT' ? 'threat' : 'log'}_${r.from.slice(0, 16).replace(/\D/g, '')}_${r.to.slice(0, 16).replace(/\D/g, '')}${r.partial ? '_部分期間超過保留期限' : ''}.csv`;
       return reply
         .header('content-type', 'text/csv; charset=utf-8')
         .header('content-disposition', `attachment; filename*=UTF-8''${encodeURIComponent(name)}`)

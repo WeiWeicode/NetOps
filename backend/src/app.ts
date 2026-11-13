@@ -37,7 +37,7 @@ import { swaggerOptions } from './openapi.js';
 import { createClickHouseReader, type ClickHouseReader } from './infra/clickhouse/reader.js';
 import { connectDashboardCache, createDashboardCache, type DashboardCache } from './infra/redis/cache.js';
 import { createChSummaryBuilder, type ChSummaryBuilder } from './modules/pa/ch-summary.js';
-import type { ChOverviewDeps } from './modules/pa/ch-overview.js';
+import { eventsForAi, type ChOverviewDeps } from './modules/pa/ch-overview.js';
 import { createReconciler } from './modules/pa/reconcile.js';
 import { createDailySync } from './modules/ftp/daily-sync.js';
 import reconRoutes from './modules/pa/recon-routes.js';
@@ -286,7 +286,14 @@ export async function buildApp(
   await app.register(ipNameRoutes, { svc: app.ipNames });
   // AI 分析、問答、語意搜尋、外部 IP 自動學習(IMPL-PLAN A1;deps.ai 只給測試注入假 AI 主機)
   // AC4:AI 解讀用時段明細(同一人同條件重用 pa-slice 工作)與儀表板快取;AC5:熱力圖(同 GET /pa/heatmap 快取)與威脅彙總
-  const explain = { slice: heatSvc.slice, insight: insightSvc, heatmap: heatSvc.heatmap, threat: heatSvc.threatProfile };
+  // AC6:安全事件頁四類總覽(同 GET /pa-events/overview 快取)
+  const explain = {
+    slice: heatSvc.slice,
+    insight: insightSvc,
+    heatmap: heatSvc.heatmap,
+    threat: heatSvc.threatProfile,
+    events: (q: { from: string; to: string }) => eventsForAi(ch, q.from, q.to),
+  };
   await registerAi(app, { config, traffic, events, ad, kb, ftp, paStore: app.store.pa, chReader, chBuilder, now: deps.chNow, explain, ...deps.ai });
   await app.register(ftpRoutes, {
     ftp,

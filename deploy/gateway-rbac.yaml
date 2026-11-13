@@ -74,6 +74,8 @@ permissions:
   - { code: netops.pa-heatmap.ai, name: AI 解讀時段 / 指出異常格 / 說明威脅, kind: button, parent: netops.pa-heatmap.read, sort: 10, includes: [netops.ai.use, netops.pa.read, netops.pa-log.read, netops.kb.read] }
   - { code: netops.pa-insight.ai, name: AI 摘要本期異常 / 解讀時段 / 說明威脅, kind: button, parent: netops.pa-insight.read, sort: 10, includes: [netops.ai.use, netops.pa.read, netops.pa-log.read, netops.kb.read] }
   - { code: netops.pa-search.ai, name: AI 說明威脅, kind: button, parent: netops.pa-search.read, sort: 10, includes: [netops.ai.use, netops.pa-log.read, netops.kb.read] }
+  # AC6(IMPL-PLAN「AC」AC6):安全事件頁「AI 摘要安全事件」新增 netops.pa-events.ai:資料是四類安全事件的總覽統計 + 知識庫筆記,綁 netops.pa.read、netops.kb.read
+  - { code: netops.pa-events.ai, name: AI 摘要安全事件, kind: button, parent: netops.pa-events.read, sort: 10, includes: [netops.ai.use, netops.pa.read, netops.kb.read] }
 
 roles:
   - code: netops-admin
@@ -111,6 +113,8 @@ roles:
       - netops.pa-insight.ai
       # AC5
       - netops.pa-search.ai
+      # AC6
+      - netops.pa-events.ai
   - code: netops-viewer
     name: 資訊網通管理系統檢視者
     description: 資訊網通管理系統全部畫面唯讀(不含 FTP 同步 / 分析與知識庫編輯;含 AI 分析與問答)
@@ -138,3 +142,5 @@ roles:
       - netops.pa-insight.ai
       # AC5
       - netops.pa-search.ai
+      # AC6
+      - netops.pa-events.ai

@@ -453,3 +453,95 @@ export const HEATMAP_TASK = `請指出熱力圖中的異常時段，依以下章
 （依資料推測，例如備份、系統更新、掃描、攻擊、斷線；要標明「可能」）
 ## 建議追查
 （要點開哪個時段的時段明細確認、看哪個 IP；畫面下方有異常時段按鈕，可直接開啟時段明細）`;
+
+/* ───────── 安全事件(AC6) ───────── */
+
+/** 安全事件頁 AI 摘要涵蓋的類型(只有進 ClickHouse 的四類;解密、GlobalProtect、User-ID 不在範圍) */
+export const EVENT_AI_TYPES = ['threat', 'url', 'data', 'wildfire'] as const;
+export type EventAiType = (typeof EVENT_AI_TYPES)[number];
+export const EVENT_AI_LABELS: Record<EventAiType, string> = { threat: '威脅', url: 'URL 過濾', data: '資料過濾', wildfire: 'WildFire' };
+
+interface KeyN {
+  key: string;
+  n: number;
+}
+/** 單一類型的總覽(同 GET /pa-events/overview 的 ClickHouse 結果;時間為核心字串 'yyyy/MM/dd HH:mm:ss') */
+export interface EventOverviewForAi {
+  rows: number;
+  timeMin: string;
+  timeMax: string;
+  hours: { hour: string; n: number }[];
+  kpis: { key: string; title: string; items: KeyN[] }[];
+  tops: { key: string; title: string; items: KeyN[] }[];
+  /** 每小時摘要還沒建好的小時數 */
+  missing: number;
+  topsUntil: string;
+  topsState: string;
+  coverage: { from: string; to: string };
+  /** 期間開始早於最早有資料的日期 */
+  partial: boolean;
+}
+export interface EventsForAi {
+  from: string;
+  to: string;
+  /** 每個類型一筆:有資料時 overview,沒有資料或超過保留期限時 empty(說明文字) */
+  types: { type: EventAiType; overview: EventOverviewForAi | null; empty: string | null }[];
+}
+
+/** 每個類型最多列幾個 KPI 值、排行幾名 */
+const EVENT_KPI_MAX = 6;
+const EVENT_TOP_MAX = 8;
+/** 欄位是 IP 的排行(其他欄位是 PA 文字,截斷較長) */
+const EVENT_IP_TOPS = new Set(['src', 'dst', 'blockSrc', 'upSrc']);
+const coreHm = (t: string) => clean(t, 19).slice(0, 16);
+
+/** 安全事件(四類)→ 送給模型的資料:先放各類型的筆數、KPI 與高峰(都會送到),排行放後面(超過上限時從最後省略) */
+export function eventsContext(d: EventsForAi, max = EXPLAIN_MAX_CHARS): { text: string; clipped: boolean } {
+  const head = [`## 安全事件 ${clean(d.from, 10)} ~ ${clean(d.to, 10)}（威脅、URL 過濾、資料過濾、WildFire 四類 log 的統計；解密、GlobalProtect、User-ID 不在範圍）`];
+  const sums: string[] = [];
+  const tops: string[] = [];
+  for (const t of d.types) {
+    const label = EVENT_AI_LABELS[t.type];
+    const o = t.overview;
+    if (!o) {
+      sums.push(`## ${label}\n- ${clean(t.empty ?? '沒有資料', 200)}`);
+      continue;
+    }
+    const lines = [`## ${label}`, `- 筆數：${n(o.rows)}${o.rows ? `（${coreHm(o.timeMin)} ~ ${coreHm(o.timeMax)}）` : ''}`];
+    if (!o.rows) lines.push('- 這段期間沒有這類 log');
+    const notes: string[] = [];
+    if (o.partial) notes.push(`期間開始早於最早有資料的日期（${clean(o.coverage.from, 10)}），之前的部分沒有資料，不能當成 0`);
+    if (o.missing) notes.push(`有 ${n(o.missing)} 小時的每小時摘要還沒建好，KPI 與排行可能不完整`);
+    if (o.topsState !== 'ok') notes.push(o.topsState === 'stale' ? '每小時摘要太久沒更新（ClickHouse 可能停止），排行只到 ' + coreHm(o.topsUntil) : '服務剛啟動，每小時摘要還在建立，排行可能不完整');
+    if (notes.length) lines.push(`- 資料不完整：${notes.join('；')}`);
+    for (const k of o.kpis) {
+      if (!k.items.length) continue;
+      const items = k.items.slice(0, EVENT_KPI_MAX).map((x) => `${clean(x.key, 60) || '（空白）'} ${n(x.n)}`);
+      lines.push(`- ${clean(k.title, 40)}：${items.join('、')}${k.items.length > EVENT_KPI_MAX ? ' …' : ''}`);
+    }
+    const pk = peaks(
+      o.hours.map((h) => ({ t: h.hour, n: h.n })),
+      (x) => x.n,
+      3,
+    );
+    if (pk.length && o.rows) {
+      const avg = o.rows / Math.max(1, o.hours.length);
+      lines.push(`- 最多的小時（有資料的小時平均 ${n(Math.round(avg))} 筆）：${pk.map((x) => `${coreHm(x.t)} ${n(x.v)} 筆`).join('、')}`);
+    }
+    sums.push(lines.join('\n'));
+    for (const top of o.tops) {
+      if (!top.items.length) continue;
+      const w = EVENT_IP_TOPS.has(top.key) ? 64 : FIELD_MAX;
+      tops.push(`## ${label}：Top ${EVENT_TOP_MAX} ${clean(top.title, 40)}\n${top.items.slice(0, EVENT_TOP_MAX).map((x, i) => `${i + 1}. ${clean(x.key, w) || '（空白）'}｜${n(x.n)} 筆`).join('\n')}`);
+    }
+  }
+  return joinCapped([head.join('\n'), ...sums, ...tops], max);
+}
+
+export const EVENTS_TASK = `請摘要這段期間的安全事件，依以下章節輸出：
+## 本期摘要
+（2–4 句：四類事件的整體狀況與最值得注意的一件事）
+## 值得注意
+（依重要性列出：高風險威脅、被擋或非良性的檔案、可疑的上傳、集中在少數 IP / 網站 / 使用者的情況；寫出 IP、名稱與筆數；某類沒有資料或不完整時說明）
+## 建議追查
+（具體列出要到哪個頁面查什麼，例如 Log 明細查詢某個 IP 或威脅名稱、熱力圖看某個時段；要通知誰）`;

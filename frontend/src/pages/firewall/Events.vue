@@ -5,6 +5,8 @@
  *   KPI、每小時事件數、排行;資料來自 FTP 各類型目錄,「FTP Log 檔案」同步分析後才有。?type= 記住目前類型。
  *   點排行中含 IP 的項目 → 到 AI 問答並帶入問題(由使用者送出;IMPL-PLAN A1)。沒有 AI 問答權限時不可點。
  *   分析中、摘要讀不到的檔案(missing)都要提示結果不完整(AGENT.md §5)。
+ *   AC6「AI 摘要安全事件」(按鈕權限 netops.pa-events.ai):目前期間的威脅、URL 過濾、資料過濾、WildFire 四類一起摘要
+ *   (只送期間;後端自己取四類總覽統計,docs/API.md §10.3 kind: events)。回答下方列出四類筆數,點了切換到該類型。
  */
 import { computed, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
@@ -17,6 +19,9 @@ import { coverageText } from '@/composables/dateRange';
 import { checkDayRange } from '@/composables/dates';
 import { UI } from '@/api/perms';
 import { askLink } from '@/composables/aiChat';
+import type { ExplainEventType, ExplainInput, ExplainMeta } from '@/api/ai';
+import AiExplainPanel from '@/components/AiExplainPanel.vue';
+import { EVENT_TYPE_LABELS } from '@/composables/useAiExplain';
 
 const MAX_DAYS = 92;
 const route = useRoute();
@@ -159,12 +164,34 @@ async function refresh() {
 }
 
 onMounted(refresh);
+
+// ---------- AC6 AI 摘要安全事件 ----------
+const canAi = computed(() => can(UI.paEventsAi));
+const aiOpen = ref(false);
+/** 期間有效才可用;四類一起摘要,和目前選的類型無關(解密等 FTP 類型的期間也可以用,沒有資料的類型由後端註明) */
+const aiInput = computed<ExplainInput | null>(() => (rangeCheck.value.ok && range.from ? { kind: 'events', params: { from: range.from, to: range.to || range.from } } : null));
+const aiSubtitle = computed(() => {
+  const p = aiInput.value?.params as { from: string; to: string } | undefined;
+  return p ? `期間 ${p.from}${p.to !== p.from ? ` ~ ${p.to}` : ''}(威脅、URL 過濾、資料過濾、WildFire)` : '';
+});
+/** 回答下方的四類筆數:有這個類型(頁面上的分段)才可點 */
+const aiTypes = (m: ExplainMeta | null) => (m?.kind === 'events' ? (m.types ?? []) : []);
+const typeState = (t: ExplainEventType) => (t.empty ? '沒有資料' : t.partial ? '不完整' : '');
+const canSwitch = (t: ExplainEventType) => types.value.some((x) => x.type === t.type);
+function switchType(t: ExplainEventType) {
+  if (!canSwitch(t)) return;
+  aiOpen.value = false;
+  type.value = t.type;
+}
+const typeAria = (t: ExplainEventType) =>
+  [EVENT_TYPE_LABELS[t.type], `${fmtNum(t.rows)} 次`, typeState(t), canSwitch(t) ? '切換到這個類型' : ''].filter(Boolean).join(',');
 </script>
 
 <template>
   <div class="stack" style="--gap: 16px">
     <Teleport to="#page-actions" defer>
       <GButton icon="refresh" :loading="loading || typesLoading" @click="() => void refresh()">重新整理</GButton>
+      <GButton v-if="canAi && types.length" variant="primary" icon="sparkles" :disabled="!aiInput" @click="aiOpen = true">AI 摘要安全事件</GButton>
     </Teleport>
 
     <GAlert v-if="typesError" tone="danger" title="無法取得 log 類型">{{ describeError(typesError) }}</GAlert>
@@ -251,6 +278,41 @@ onMounted(refresh);
       </div>
       <p v-if="canAsk" class="xs faint"><GIcon name="sparkles" :size="12" /> 點排行中含 IP 的項目,會到 AI 問答並帶入問題(同時參考防火牆流量與這些 log)。</p>
     </template>
+
+    <!-- AC6:AI 摘要安全事件(開啟時自動開始;換期間時清掉舊回答) -->
+    <GModal v-if="canAi" v-model:open="aiOpen" title="AI 摘要安全事件" :subtitle="aiSubtitle" icon="sparkles" width="880px">
+      <AiExplainPanel
+        v-if="aiOpen"
+        :input="aiInput"
+        title="安全事件摘要"
+        start-label="開始摘要"
+        hint="只把四類安全事件的筆數、分布與排行(不是原始 log)送到公司內部的 AI 服務,不會傳到外部"
+        frame="plain"
+        auto-start
+      >
+        <template #default="{ meta }">
+          <div v-if="aiTypes(meta).length" class="ev-ai">
+            <p class="xs faint ev-ai__hint">AI 看到的四類筆數(點了切換到該類型)</p>
+            <ul class="ev-ai__list" aria-label="四類安全事件筆數">
+              <li v-for="t in aiTypes(meta)" :key="t.type">
+                <button
+                  type="button"
+                  class="ev-ai__type"
+                  :class="{ 'is-empty': t.empty, 'is-warn': t.partial }"
+                  :disabled="!canSwitch(t)"
+                  :aria-label="typeAria(t)"
+                  @click="switchType(t)"
+                >
+                  <span class="ev-ai__label">{{ EVENT_TYPE_LABELS[t.type] }}</span>
+                  <span class="num ev-ai__rows">{{ t.empty ? '—' : fmtShort(t.rows) }}</span>
+                  <span v-if="typeState(t)" class="ev-ai__tag">{{ typeState(t) }}</span>
+                </button>
+              </li>
+            </ul>
+          </div>
+        </template>
+      </AiExplainPanel>
+    </GModal>
   </div>
 </template>
 
@@ -298,7 +360,84 @@ onMounted(refresh);
 .tops {
   grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
 }
+.ev-ai {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+}
+.ev-ai__hint {
+  margin: 0;
+}
+.ev-ai__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+.ev-ai__type {
+  --type-tone: var(--c-primary);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, var(--type-tone) 30%, var(--line));
+  background: color-mix(in srgb, var(--type-tone) 6%, var(--glass-soft));
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    transform 0.15s ease;
+}
+.ev-ai__type.is-warn {
+  --type-tone: var(--c-warning);
+}
+.ev-ai__type.is-empty {
+  --type-tone: var(--text-3);
+}
+.ev-ai__type:hover:not(:disabled) {
+  border-color: var(--type-tone);
+  transform: translateY(-1px);
+}
+.ev-ai__type:focus-visible {
+  outline: 2px solid var(--c-primary);
+  outline-offset: 2px;
+}
+.ev-ai__type:disabled {
+  cursor: default;
+}
+.ev-ai__label {
+  font-size: var(--fs-sm, 0.875rem);
+}
+.ev-ai__rows {
+  margin-left: auto;
+  font-weight: 600;
+}
+.ev-ai__tag {
+  flex-basis: 100%;
+  font-size: var(--fs-xs, 0.75rem);
+  color: color-mix(in srgb, var(--type-tone) 70%, var(--text));
+}
+@media (prefers-reduced-motion: reduce) {
+  .ev-ai__type {
+    transition: none;
+  }
+  .ev-ai__type:hover:not(:disabled) {
+    transform: none;
+  }
+}
 @media (max-width: 760px) {
+  .ev-ai__list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
   .date {
     flex: 1 1 100%;
     width: auto;

@@ -68,6 +68,18 @@ const EXPLAIN_INSIGHT = `## 本期摘要
 ## 建議追查
 1. 點開 11/12 14:00 的時段明細,看 10.10.1.5 上傳到哪裡。`;
 
+const EXPLAIN_EVENTS = `## 本期摘要
+本期共 1,284 筆威脅、5,230 筆 URL 過濾、37 筆資料過濾；WildFire 這段期間沒有資料。最值得注意的是 **10.10.1.3（王小明，NB-01）** 被外部 IP 203.0.113.9 嘗試 SSH 暴力破解。
+
+## 值得注意
+- **SSH Brute Force(40015)** 共 412 筆，來源 203.0.113.9（JP），動作 reset-both，已攔下。
+- URL 過濾被擋最多的是 10.10.2.15（賭博類網站 380 筆）。
+- 資料過濾有 12 筆上傳 .xlsx 到 dropbox，來源 10.10.3.21。
+- WildFire 沒有資料，可能還沒收到這類 log，不代表沒有送檢。
+
+## 建議追查
+1. 到 **Log 明細查詢** 查來源 203.0.113.9，確認 10.10.1.3 的 SSH 服務是否需要對外。
+2. 確認 10.10.3.21 上傳 .xlsx 的內容是否合規，必要時通知部門主管。`;
 const EXPLAIN_THREAT = `## 這是什麼威脅
 **SSH Brute Force Attempt(40015)** 是 SSH 暴力破解:短時間內大量嘗試登入 SSH(tcp/22),通常是外部掃描或殭屍網路。<img src=x onerror=alert(1)>
 
@@ -200,6 +212,22 @@ export function handleAi(ctx: MockCtx): boolean {
     if (!ctx.need('netops.ai.use')) return true;
     const p = (b.params ?? {}) as Record<string, string>;
     const slice = b.kind === 'slice';
+    // AC6:安全事件摘要(WildFire 模擬沒有資料;期間超過一天時 URL 過濾模擬統計不完整)
+    if (b.kind === 'events') {
+      const multi = String(p.from) !== String(p.to ?? p.from);
+      const types = [
+        { type: 'threat', rows: 1284, empty: false, partial: false },
+        { type: 'url', rows: 5230, empty: false, partial: multi },
+        { type: 'data', rows: 37, empty: false, partial: false },
+        { type: 'wildfire', rows: 0, empty: true, partial: false },
+      ];
+      const meta = { model: 'Qwen3.6-35B-A3B-FP8', source: 'clickhouse', contextChars: 3100, clipped: false, notes: [], vectorError: false, kind: 'events', from: p.from, to: p.to ?? p.from, partial: multi, types };
+      const events: [string, unknown][] = [['meta', meta]];
+      if (b.think) events.push(['thinking', { chars: 500 }]);
+      events.push(...contentEvents(EXPLAIN_EVENTS), ['done', { finish: 'stop', truncated: false }]);
+      void stream(ctx, events, 40);
+      return true;
+    }
     // AC5:威脅說明(名稱含 old 時模擬一部分超過保留期限)、熱力圖異常格
     if (b.kind === 'threat' || b.kind === 'heatmap') {
       const base5 = { model: 'Qwen3.6-35B-A3B-FP8', source: 'clickhouse', contextChars: 1800, clipped: false, notes: [], vectorError: false, gapsKnown: true };

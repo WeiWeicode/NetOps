@@ -158,13 +158,25 @@ export interface IpLearnStatus {
 
 /**
  * AI 解讀的參數(docs/API.md §10.3):時段明細同 GET /pa/slice;分析儀表板同 GET /pa/insight/{view};
- * AC5 威脅 { name(威脅名稱或只有數字的威脅 ID), from, to(ISO 含時區,最長 31 天) };熱力圖同 GET /pa/heatmap
+ * AC5 威脅 { name(威脅名稱或只有數字的威脅 ID), from, to(ISO 含時區,最長 31 天) };熱力圖同 GET /pa/heatmap;
+ * AC6 安全事件 { from, to }(YYYY-MM-DD,同 GET /pa-events/overview,最長 92 天;四類一起)
  */
 export type ExplainInput =
   | { kind: 'slice'; params: SliceQuery }
   | { kind: 'insight'; params: { view: 'traffic' | 'threat'; from: string; to: string } }
   | { kind: 'threat'; params: { name: string; from: string; to: string } }
-  | { kind: 'heatmap'; params: { granularity: 'year' | 'month' | 'day'; metric: 'traffic' | 'deny' | 'threat'; date?: string } };
+  | { kind: 'heatmap'; params: { granularity: 'year' | 'month' | 'day'; metric: 'traffic' | 'deny' | 'threat'; date?: string } }
+  | { kind: 'events'; params: { from: string; to: string } };
+
+/** AC6 安全事件 meta.types:四類各自的筆數與狀態 */
+export interface ExplainEventType {
+  type: 'threat' | 'url' | 'data' | 'wildfire';
+  rows: number;
+  /** 沒有這類 log 或整段超過保留期限 */
+  empty: boolean;
+  /** 期間早於資料、每小時摘要沒建好或太久沒更新 */
+  partial: boolean;
+}
 
 /** AC5 熱力圖 meta.cells:系統挑出送給 AI 的異常時段(畫面列成按鈕,點了開時段明細) */
 export interface ExplainCell {
@@ -180,7 +192,7 @@ export interface ExplainCell {
 
 /** AI 解讀的 meta 事件(docs/API.md §10.3) */
 export interface ExplainMeta {
-  kind: 'slice' | 'insight' | 'threat' | 'heatmap';
+  kind: 'slice' | 'insight' | 'threat' | 'heatmap' | 'events';
   model: string;
   source: 'clickhouse';
   /** 資料落在已知缺口(對帳發現少資料) */
@@ -217,6 +229,8 @@ export interface ExplainMeta {
   /** 沒有資料的格數 */
   nulls?: number;
   cells?: ExplainCell[];
+  /** events(AC6) */
+  types?: ExplainEventType[];
 }
 
 export const ai = {
@@ -227,7 +241,7 @@ export const ai = {
   /** 問答:from / to 為 ISO 8601 含時區 */
   ask: (body: { from: string; to: string; question: string; history: HistoryItem[]; think: boolean; source: 'pa' | 'ad' }, onEvent: (e: SseEvent) => void, signal?: AbortSignal) =>
     streamPost('/api/netops/ai/questions', body, onEvent, signal),
-  /** AI 解讀(AC4 時段明細、分析儀表板;AC5 威脅、熱力圖) */
+  /** AI 解讀(AC4 時段明細、分析儀表板;AC5 威脅、熱力圖;AC6 安全事件) */
   explain: (body: ExplainInput & { think: boolean }, onEvent: (e: SseEvent) => void, signal?: AbortSignal) => streamPost('/api/netops/ai/explanations', body, onEvent, signal),
   semanticSearch: (q: string) => http.get<{ items: (KbNote & { score: number })[]; vector: VectorStatus }>('/api/netops/kb/semantic-search', { query: { q } }),
   vectorStatus: () => http.get<VectorStatus>('/api/netops/kb/vector-status'),

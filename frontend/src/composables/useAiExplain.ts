@@ -1,12 +1,12 @@
 /**
  * AI 解讀的狀態與串流(docs/API.md §10.3):AC4 時段明細「AI 解讀這個時段」、分析儀表板「AI 摘要本期異常」;
- *   AC5 威脅「AI 說明這個威脅與處理建議」、熱力圖「AI 指出異常格」(anomalyChips:異常時段按鈕)。
+ *   AC5 威脅「AI 說明這個威脅與處理建議」、熱力圖「AI 指出異常格」(anomalyChips:異常時段按鈕);AC6 安全事件頁「AI 摘要安全事件」。
  *   POST /api/netops/ai/explanations(SSE);後端依參數自己取資料,畫面只送條件(不送統計)
  *   phase:idle → preparing(取資料 / 等時段明細工作)→ thinking → writing → done;error 保留已收到的內容並標示不完整
  *   換了條件(key 改變)時清掉舊的回答;元件卸載時中斷串流
  */
 import { computed, getCurrentScope, onScopeDispose, ref, shallowRef } from 'vue';
-import { ai, AiStreamError, type ExplainCell, type ExplainInput, type ExplainMeta } from '@/api/ai';
+import { ai, AiStreamError, type ExplainCell, type ExplainEventType, type ExplainInput, type ExplainMeta } from '@/api/ai';
 import { describeError } from '@/api/gateway';
 
 export type ExplainPhase = 'idle' | 'preparing' | 'thinking' | 'writing' | 'done' | 'error';
@@ -18,14 +18,32 @@ export const explainKey = (input: ExplainInput | null) => (input ? JSON.stringif
 export function explainNotices(m: ExplainMeta | null): { tone: 'warning' | 'info'; text: string }[] {
   if (!m) return [];
   const out: { tone: 'warning' | 'info'; text: string }[] = [];
+  if (m.kind === 'events') return [...eventNotices(m), ...common(m)];
   if (m.partial) out.push({ tone: 'warning', text: '資料落在已知缺口內(FTP 對帳發現少資料),AI 看到的數量可能少於實際' });
   else if (!m.gapsKnown) out.push({ tone: 'info', text: '這段資料尚未完成每日 FTP 對帳檢查' });
   if (m.kind === 'insight' && m.prev === false) out.push({ tone: 'info', text: '前一期資料不足,這次不和前一期比較' });
   if (m.kind === 'threat' && m.skipped) out.push({ tone: 'warning', text: `${fmtStart(m.skipped.from)} ~ ${fmtStart(m.skipped.to)} 超過威脅 log 保留期限,沒有查(不代表沒有發生)` });
   if (m.kind === 'threat' && m.count === 0) out.push({ tone: 'info', text: '這段期間沒有這個威脅的紀錄' });
   if (m.kind === 'heatmap' && m.nulls) out.push({ tone: 'info', text: `有 ${m.nulls.toLocaleString()} 格沒有資料(不是 0),沒有算進統計` });
+  return [...out, ...common(m)];
+}
+function common(m: ExplainMeta) {
+  const out: { tone: 'warning' | 'info'; text: string }[] = [];
   if (m.clipped) out.push({ tone: 'info', text: '排行較多,只送前面的部分給 AI' });
   if (m.vectorError) out.push({ tone: 'info', text: '知識庫語意搜尋失敗,筆記改用關鍵字比對' });
+  return out;
+}
+
+/** AC6 安全事件的類型名稱(同安全事件頁) */
+export const EVENT_TYPE_LABELS: Record<ExplainEventType['type'], string> = { threat: '威脅', url: 'URL 過濾', data: '資料過濾', wildfire: 'WildFire' };
+/** AC6:四類各自的資料限制(安全事件沒有 FTP 對帳缺口,不提示對帳) */
+function eventNotices(m: ExplainMeta) {
+  const out: { tone: 'warning' | 'info'; text: string }[] = [];
+  const names = (f: (t: ExplainEventType) => boolean) => (m.types ?? []).filter(f).map((t) => EVENT_TYPE_LABELS[t.type] ?? t.type);
+  const partial = names((t) => t.partial);
+  const empty = names((t) => t.empty);
+  if (partial.length) out.push({ tone: 'warning', text: `${partial.join('、')} 的統計不完整(期間早於最早的資料或統計還沒建好),AI 看到的數量可能少於實際` });
+  if (empty.length) out.push({ tone: 'info', text: `${empty.join('、')} 這段期間沒有資料(還沒收到這類 log 或超過保留期限),不代表沒有發生` });
   return out;
 }
 

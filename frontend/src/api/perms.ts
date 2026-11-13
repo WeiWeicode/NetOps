@@ -42,6 +42,8 @@ export const UI = {
   paInsightAi: 'netops.pa-insight.ai',
   // AC5:熱力圖「AI 指出異常格」與時段明細威脅列沿用上面兩個;Log 明細查詢威脅列「AI 說明威脅」
   paSearchAi: 'netops.pa-search.ai',
+  // AC6:安全事件頁「AI 摘要安全事件」(四類一起)
+  paEventsAi: 'netops.pa-events.ai',
 } as const;
 
 export const API = {

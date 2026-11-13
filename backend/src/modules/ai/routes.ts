@@ -52,8 +52,15 @@ const HEATMAP_PARAMS = {
   additionalProperties: false,
   properties: { granularity: { type: 'string', enum: ['year', 'month', 'day'] }, metric: { type: 'string', enum: ['traffic', 'deny', 'threat'] }, date: DAY },
 } as const;
-const KINDS = ['slice', 'insight', 'threat', 'heatmap'] as const;
-const PARAMS_OF = { slice: SLICE_QUERY, insight: INSIGHT_PARAMS, threat: THREAT_PARAMS, heatmap: HEATMAP_PARAMS } as const;
+/** AC6 events 的 params(同 GET /pa-events/overview 的期間,最長 92 天;四類一起摘要) */
+const EVENTS_PARAMS = {
+  type: 'object',
+  required: ['from'],
+  additionalProperties: false,
+  properties: { from: DAY, to: DAY },
+} as const;
+const KINDS = ['slice', 'insight', 'threat', 'heatmap', 'events'] as const;
+const PARAMS_OF = { slice: SLICE_QUERY, insight: INSIGHT_PARAMS, threat: THREAT_PARAMS, heatmap: HEATMAP_PARAMS, events: EVENTS_PARAMS } as const;
 
 const aiRoutes: FastifyPluginAsync<{ ai: AiService; hub: SseHub }> = async (app, { ai, hub }) => {
   app.get(
@@ -223,10 +230,10 @@ const aiRoutes: FastifyPluginAsync<{ ai: AiService; hub: SseHub }> = async (app,
         operationId: 'netops.ai.explain',
         summary: 'AI 解讀畫面上的統計(SSE)',
         description:
-          'PA 頁面的 AI 按鈕共用(AC4、AC5,ARCHITECTURE D44 ③;細節見 docs/API.md §10.3)。後端依 params 自己取資料(不接受前端送來的統計),只送統計與排行給模型,以 SSE 回答;不送原始 log。' +
+          'PA 頁面的 AI 按鈕共用(AC4–AC6,ARCHITECTURE D44 ③;細節見 docs/API.md §10.3)。後端依 params 自己取資料(不接受前端送來的統計),只送統計與排行給模型,以 SSE 回答;不送原始 log。' +
           'kind:slice = 時段明細(params 同 GET /pa/slice,重用同一人同條件的工作);insight = 分析儀表板(params { view, from, to },用儀表板快取);' +
-          'threat = 威脅說明與處理建議(params { name, from, to }:名稱完全相同,或只有數字時當威脅 ID 比對名稱結尾;最長 31 天);heatmap = 熱力圖異常格(params 同 GET /pa/heatmap,metric 不含 ad;只送統計與異常格,meta.cells 列出異常時段)。' +
-          '事件:open、meta、scan、thinking、content、done、error、heartbeat。錯誤:參數 400;時段明細照 GET /pa/slice;儀表板 429 NETOPS_INSIGHT_BUSY;威脅整段超過保留期限 404 NETOPS_PA_OUT_OF_RETENTION;日視圖超過 1 年 422;ClickHouse 503;未設定 AI 409 NETOPS_AI_DISABLED;名額 429 NETOPS_STREAM_BUSY。',
+          'threat = 威脅說明與處理建議(params { name, from, to }:名稱完全相同,或只有數字時當威脅 ID 比對名稱結尾;最長 31 天);heatmap = 熱力圖異常格(params 同 GET /pa/heatmap,metric 不含 ad;只送統計與異常格,meta.cells 列出異常時段);events = 安全事件摘要(params { from, to? } 同 GET /pa-events/overview,威脅、URL 過濾、資料過濾、WildFire 四類一起;meta.types 為各類筆數與是否不完整)。' +
+          '事件:open、meta、scan、thinking、content、done、error、heartbeat。錯誤:參數 400;時段明細照 GET /pa/slice;儀表板 429 NETOPS_INSIGHT_BUSY;威脅整段(events 為四類都)超過保留期限 404 NETOPS_PA_OUT_OF_RETENTION;日視圖超過 1 年 422;ClickHouse 503;未設定 AI 409 NETOPS_AI_DISABLED;名額 429 NETOPS_STREAM_BUSY。',
         tags: ['AI'],
         'x-permission': 'netops.ai.use',
         'x-audit-level': 'meta',
@@ -259,6 +266,12 @@ const aiRoutes: FastifyPluginAsync<{ ai: AiService; hub: SseHub }> = async (app,
           '  那麼 送給模型的異常格最多 10 格(另加最多 3 格異常低)',
           '  而且 meta.cells 列出這些格子的時間,畫面可點開時段明細',
           '',
+          '場景: 安全事件摘要四類一起',
+          '  假如 使用者在安全事件頁選了 2026-11-12 ~ 2026-11-13',
+          '  當 呼叫 POST /api/netops/ai/explanations 帶 { kind: "events", params: { from: "2026-11-12", to: "2026-11-13" } }',
+          '  那麼 meta.types 列出 threat、url、data、wildfire 的筆數',
+          '  而且 送給模型的資料只有筆數、KPI 與排行,沒有原始 log 列',
+          '',
           '場景: 資料有字數上限',
           '  假如 排行的名稱很長',
           '  當 呼叫 POST /api/netops/ai/explanations',
@@ -273,8 +286,8 @@ const aiRoutes: FastifyPluginAsync<{ ai: AiService; hub: SseHub }> = async (app,
           required: ['kind', 'params'],
           additionalProperties: false,
           properties: {
-            kind: { type: 'string', enum: KINDS, description: 'slice = 時段明細;insight = 分析儀表板;threat = 威脅說明(AC5);heatmap = 熱力圖異常格(AC5)' },
-            params: { type: 'object', description: 'slice 同 GET /pa/slice 的條件;insight { view, from, to };threat { name, from, to };heatmap 同 GET /pa/heatmap' },
+            kind: { type: 'string', enum: KINDS, description: 'slice = 時段明細;insight = 分析儀表板;threat = 威脅說明(AC5);heatmap = 熱力圖異常格(AC5);events = 安全事件摘要(AC6)' },
+            params: { type: 'object', description: 'slice 同 GET /pa/slice 的條件;insight { view, from, to };threat { name, from, to };heatmap 同 GET /pa/heatmap;events { from, to? }' },
             think: { type: 'boolean', default: false, description: '深入思考(比較久)' },
           },
           allOf: KINDS.map((k) => ({ if: { properties: { kind: { const: k } } }, then: { properties: { params: PARAMS_OF[k] } } })),

@@ -188,3 +188,28 @@ export async function eventOverview(d: ChOverviewDeps, type: ChEventType, from: 
   );
   return { ...r, ...cov, tops: r.tops.map((t: { items: unknown[] }) => ({ ...t, items: t.items.slice(0, topN) })) };
 }
+
+/**
+ * AC6 安全事件頁 AI 摘要:四類(威脅、URL 過濾、資料過濾、WildFire)各取一次總覽(同 GET /pa-events/overview 的快取)。
+ * 某類沒有資料 / 超過保留期限只標 empty(資料中註明);四類都是這樣時照 GET /pa-events/overview 回同一個 404;
+ * ClickHouse 無法使用回 503。
+ */
+export async function eventsForAi(d: ChOverviewDeps, from: string, to: string, topN = 10) {
+  const types = ['threat', 'url', 'data', 'wildfire'] as const;
+  const out = await Promise.all(
+    types.map(async (type) => {
+      try {
+        const o = await eventOverview(d, type, from, to, topN);
+        return { type, overview: { ...o, timeMin: String(o.timeMin ?? ''), timeMax: String(o.timeMax ?? '') }, empty: null, err: null };
+      } catch (err) {
+        const code = (err as { code?: string }).code;
+        if (err instanceof AppError && (code === 'NETOPS_PA_NO_DATA' || code === 'NETOPS_PA_OUT_OF_RETENTION'))
+          return { type, overview: null, empty: code === 'NETOPS_PA_NO_DATA' ? 'ClickHouse 目前還沒有這類 log' : '這段期間超過這類 log 的保留期限，沒有資料（不代表沒有發生）', err };
+        throw err;
+      }
+    }),
+  );
+  if (out.every((x) => x.err)) throw out[0]!.err;
+  return { from: ymdOf(from), to: ymdOf(to), types: out.map(({ type, overview, empty }) => ({ type, overview, empty })) };
+}
+const ymdOf = (day: string) => day.replace(/\//g, '-');

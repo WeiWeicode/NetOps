@@ -100,6 +100,7 @@ export function createDailySummary({
   ready,
   log,
   now = Date.now,
+  signal,
 }: {
   /** NETOPS_AI_DAILY_SUMMARY 開著、有 LLM_URL、有自動對帳 */
   enabled: boolean;
@@ -112,6 +113,8 @@ export function createDailySummary({
   ready(): boolean;
   log: Log;
   now?: () => number;
+  /** 服務關閉時中斷:中斷造成的失敗不算次數、不存檔(下次啟動重做) */
+  signal?: AbortSignal;
 }): DailySummaryScheduler {
   let memDay = '';
   let tries = 0;
@@ -130,7 +133,7 @@ export function createDailySummary({
   };
 
   async function run() {
-    if (!enabled || running) return;
+    if (!enabled || running || signal?.aborted) return;
     const day = yesterday();
     if (memDay !== day) {
       memDay = day;
@@ -148,6 +151,10 @@ export function createDailySummary({
       lastError = null;
       log.info({ day, tries, partial: result.partial, chars: result.text.length }, 'AI 每日摘要已產生');
     } catch (err) {
+      if (signal?.aborted) {
+        tries--;
+        return;
+      }
       lastFailMs = now();
       lastError = summaryError(err);
       // 只記錯誤代碼(不記內容與上游原文)

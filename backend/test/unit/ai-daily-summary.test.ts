@@ -137,6 +137,27 @@ describe('排程(createDailySummary)', () => {
     assert.equal(off.status().at, null);
   });
 
+  it('服務關閉時中斷:不算次數、不存檔', async () => {
+    const ac = new AbortController();
+    const store = memStore();
+    const s = createDailySummary({
+      enabled: true,
+      at: 490,
+      generate: async () => {
+        ac.abort();
+        throw new Error('aborted');
+      },
+      store,
+      ready: () => true,
+      log: quiet,
+      now: () => NOW,
+      signal: ac.signal,
+    });
+    await s.run();
+    assert.equal(store.files.size, 0);
+    assert.equal(s.status().state, 'waiting');
+  });
+
   it('錯誤分類:AppError 照訊息、其他只留固定文字', () => {
     assert.deepEqual(summaryError(new AppError(503, 'NETOPS_CLICKHOUSE_UNAVAILABLE', 'ClickHouse 暫時無法使用')), { code: 'NETOPS_CLICKHOUSE_UNAVAILABLE', message: 'ClickHouse 暫時無法使用' });
     assert.equal(summaryError(new Error('/data/secret path')).code, 'NETOPS_AI_DAILY_FAILED');

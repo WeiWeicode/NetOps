@@ -201,15 +201,19 @@ export async function registerAi(app: FastifyInstance, deps: AiDeps): Promise<{ 
     ipNames: (text) => aiNamesSection(app.ipNames, text),
     explain: deps.explain,
   });
+  // 關閉服務時中斷產生中的每日摘要(不等模型回答;沒存檔,下次啟動重做)
+  const dailyAbort = new AbortController();
+  app.addHook('onClose', async () => dailyAbort.abort());
   // AC7:對帳與每日同步後自動產生前一天的摘要(要有 LLM_URL、自動對帳、AI 解讀的資料來源;NETOPS_AI_DAILY_SUMMARY)
   const daily = createDailySummary({
     enabled: cfg.dailySummary && Boolean(llm) && Boolean(deps.daily?.autoRecon) && Boolean(deps.explain?.insight && deps.explain.events),
     at: config.reconAt,
-    generate: (day) => ai.dailySummary(day),
+    generate: (day) => ai.dailySummary(day, dailyAbort.signal),
     store: paStore,
     ready: () => deps.daily?.syncReady() ?? true,
     log: app.log,
     now: deps.now,
+    signal: dailyAbort.signal,
   });
   const hub = createSseHub(app, { maxStreams: cfg.maxStreams, maxPerUser: cfg.maxStreamsPerUser, heartbeatMs: deps.heartbeatMs });
   await app.register(aiRoutes, { ai, hub, daily });

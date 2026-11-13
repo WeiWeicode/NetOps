@@ -600,7 +600,7 @@ export function createAiService(deps: {
    * 產生某一天(YYYY-MM-DD)的每日摘要:前一天的流量(儀表板快取 + 前一天比較)與四類安全事件(總覽快取)。
    * 其中一段取不到時只在資料中註明;兩段都取不到時丟出(排程記失敗並重試)。不送原始 log。
    */
-  async function dailySummary(day: string): Promise<DailySummaryResult> {
+  async function dailySummary(day: string, signal?: AbortSignal): Promise<DailySummaryResult> {
     const llm = llmOf();
     const src = deps.explain;
     if (!src?.insight || !src.events) throw noSource();
@@ -639,6 +639,7 @@ export function createAiService(deps: {
         { role: 'user', content: `${DAILY_TASK}\n\n---\n以下是系統查到的資料：\n\n${text}${deps.ipNames?.(text) ?? ''}${kbSection(kbNotes)}` },
       ],
       maxTokens: 3000,
+      signal,
     });
     if (!answer.trim()) throw new AppError(502, 'NETOPS_AI_EMPTY', 'AI 沒有回答內容');
     const ev = 'error' in events ? null : events;

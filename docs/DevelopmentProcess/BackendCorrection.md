@@ -2,6 +2,13 @@
 
 > `backend/`、`deploy/` 的修改;新紀錄加在最上方,格式見 `AGENT.md` §11。
 
+## 2026-11-13 ClickHouse 建表:舊表也能升級(測試區部署失敗修正)
+- 工作項目:V-a、C1(`BugFix.md` 同日紀錄)
+- 內容:① `deploy/clickhouse/schema.sql`:`pa_traffic_hourly_src_mv` 之前先 `ALTER TABLE netops.pa_traffic_hourly_src ADD COLUMN IF NOT EXISTS bytes_sent / bytes_recv`;檔頭補規則「MV 用到 migration 才加的欄位,MV 之前要先補欄位」。其他 MV 檢查過:`pa_traffic_hourly_app_mv` 沒用到新欄位;熱力圖 6 個 MV 的目標表是 V-a 新表、來源欄位(`pa_traffic_logs.bytes_sent / bytes_recv`、`pa_threat_logs.severity / log_type / src`)C1 起就有;`migrations/001`(threat 欄位)沒有 MV 依賴;`002` 只改設定。② `deploy/clickhouse/test-upgrade.sh` 與 `upgrade-test/before-va.sql`(V-a 合併前 e0a8e79 的 schema + 001、002):套舊版 → 寫一列 → `apply-schema.sh` 兩次 → 檢查欄位、8 個 MV、003 的新查詢、升級後的寫入有進來源彙總與 3 個熱力圖表 → 刪資料庫;只能對 `netops-int-*` 容器執行。③ `.gitlab-ci.yml` `check:ingest-int` 在原本的空資料庫建表之前跑升級測試。
+- 資料影響(主機 2 唯讀查詢,2026-11-13):測試區沒有 `pa_heat_5m / 1h / 1d` 與 6 個熱力圖 MV;`pa_traffic_hourly_src` 沒有上傳 / 下載欄位,MV 仍是舊查詢(sessions、bytes 有在寫);原始 TRAFFIC 從 2026-11-11 08:36 起。合併部署後用 `rebuild-day.sh` 回填(需求方同意後執行),步驟見 MR。
+- 檔案:`deploy/clickhouse/{schema.sql,test-upgrade.sh,upgrade-test/before-va.sql}`、`.gitlab-ci.yml`
+- 驗證:`sh -n`、CI `check:ingest-int`(本機沒有 ClickHouse)
+
 ## 2026-11-12 V-b1 測試:儀表板並行上限測試不再卡住 CI
 - 工作項目:V-b1(CI pipeline 901 job 2776 卡在 `test/unit/pa-insight.test.ts` 超過 10 分鐘,最後 Force cancel)
 - 根因(本機重現):兩件事加在一起。① 「全系統同時 2 個」測試固定等 30ms 就送第 3 個請求;機器慢時第 3 個比前兩個先進到計算,也卡在測試的 gate 上,`await` 永遠不回來,`finally` 的 `close()` 不會執行。② 測試沒有逾時,而測試 app 的 JWKS server(127.0.0.1)只有 `close()` 會關;它一直 listen,`node --test` 就一直等。實測:一個請求永遠卡住時,舊 helper 有沒有加測試逾時都卡住;新 helper 加逾時 6 秒內失敗結束

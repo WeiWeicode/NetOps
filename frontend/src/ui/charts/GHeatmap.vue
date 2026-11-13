@@ -46,17 +46,17 @@ function local(iso: string) {
 
 const bucketSec = computed(() => (props.granularity === 'year' ? 86400 : props.granularity === 'month' ? 3600 : 300));
 
-/** 年視圖:from 那天在週內的位置(第一欄從 from 所在週的週起點開始,同一欄不跨兩週;程式碼審查 #4) */
+/** 年視圖:from 那天在週內的位置(同週同一列不跨兩週;U2 改為直式:週一～週日為 7 欄、週次由新到舊由上往下排列) */
 const yearLead = computed(() => {
   const ms = Date.parse(props.from);
   return Number.isNaN(ms) ? 0 : (local(props.from).dow - props.weekStart + 7) % 7;
 });
-const yearCol = (iso: string) => Math.floor((Math.round((Date.parse(iso) - Date.parse(props.from)) / DAY_MS) + yearLead.value) / 7);
+const yearWeek = (iso: string) => Math.max(0, Math.floor((Math.round((Date.parse(iso) - Date.parse(props.from)) / DAY_MS) + yearLead.value) / 7));
+const lastWeek = computed(() => (props.cells.length ? yearWeek(props.cells[props.cells.length - 1]!.t) : 0));
 
 const shape = computed(() => {
   if (props.granularity === 'year') {
-    const last = props.cells.length ? yearCol(props.cells[props.cells.length - 1]!.t) : 0;
-    return { cols: Math.max(53, last + 1), rows: 7 };
+    return { cols: 7, rows: Math.max(1, lastWeek.value + 1) };
   }
   if (props.granularity === 'month') {
     const days = Math.max(1, Math.round((Date.parse(props.to) - Date.parse(props.from)) / DAY_MS));
@@ -69,7 +69,10 @@ const shape = computed(() => {
 function place(c: HeatCell): { col: number; row: number } {
   const l = local(c.t);
   if (props.granularity === 'year') {
-    return { col: Math.max(0, yearCol(c.t)), row: (l.dow - props.weekStart + 7) % 7 };
+    return {
+      col: (l.dow - props.weekStart + 7) % 7,
+      row: Math.max(0, lastWeek.value - yearWeek(c.t)),
+    };
   }
   if (props.granularity === 'month') return { col: l.day - 1, row: l.hour };
   return { col: Math.floor(l.minute / 5), row: l.hour };
@@ -97,25 +100,14 @@ const placed = computed(() =>
 );
 const byPos = computed(() => new Map(placed.value.map((p) => [`${p.col}:${p.row}`, p.i])));
 
-/** 上方欄標頭(年=月份、月=日期、日=5分鐘刻度) */
+/** 上方欄標頭(年=星期、月=日期、日=5分鐘刻度) */
 const colHeaders = computed(() => {
   if (props.granularity === 'year') {
-    const headers: { col: number; text: string }[] = [];
-    const fromMs = Date.parse(props.from);
-    if (Number.isNaN(fromMs)) return headers;
-    let prevMonth = -1;
-    for (let col = 0; col < shape.value.cols; col++) {
-      // 該欄第一天(週起點;第一欄的週起點可能早於 from)
-      const d = new Date(fromMs + (col * 7 - yearLead.value) * DAY_MS + OFFSET_MS);
-      const m = d.getUTCMonth() + 1;
-      if (m !== prevMonth) {
-        if (headers.length === 0 || col - headers[headers.length - 1]!.col >= 3) {
-          headers.push({ col, text: `${m}月` });
-        }
-        prevMonth = m;
-      }
-    }
-    return headers;
+    const names =
+      props.weekStart === 1
+        ? ['週一', '週二', '週三', '週四', '週五', '週六', '週日']
+        : ['週日', '週一', '週二', '週三', '週四', '週五', '週六'];
+    return names.map((text, col) => ({ col, text }));
   }
   if (props.granularity === 'month') {
     return Array.from({ length: shape.value.cols }, (_, col) => ({
@@ -129,11 +121,31 @@ const colHeaders = computed(() => {
   }));
 });
 
-/** 左側列標頭(年=星期、月/日=小時) */
+/** 左側列標頭(年=月份由新到舊、月/日=小時) */
 const rowHeaders = computed(() => {
   if (props.granularity === 'year') {
-    const names = props.weekStart === 1 ? ['週一', '週二', '週三', '週四', '週五', '週六', '週日'] : ['週日', '週一', '週二', '週三', '週四', '週五', '週六'];
-    return names.map((text, row) => ({ row, text }));
+    const headers: { row: number; text: string }[] = [];
+    const fromMs = Date.parse(props.from);
+    if (Number.isNaN(fromMs)) return headers;
+    let prevMonth = -1;
+    let prevYear = -1;
+    for (let row = 0; row < shape.value.rows; row++) {
+      const w = lastWeek.value - row;
+      const d = new Date(fromMs + (w * 7 - yearLead.value) * DAY_MS + OFFSET_MS);
+      const y = d.getUTCFullYear();
+      const m = d.getUTCMonth() + 1;
+      if (m !== prevMonth) {
+        if (headers.length === 0 || row - headers[headers.length - 1]!.row >= 2) {
+          headers.push({
+            row,
+            text: y !== prevYear ? `${y}/${String(m).padStart(2, '0')}` : `${m}月`,
+          });
+          prevYear = y;
+        }
+        prevMonth = m;
+      }
+    }
+    return headers;
   }
   return Array.from({ length: 24 }, (_, row) => ({
     row,
@@ -262,6 +274,11 @@ const DBLCLICK_MS = 250;
 let clickTimer: ReturnType<typeof setTimeout> | undefined;
 
 function onCellClick(e: MouseEvent, c: HeatCell) {
+  // U3: 沒有資料(v === null)的斜線格不開啟抽屜、不送請求;觸控仍可看 tooltip
+  if (c.v === null) {
+    if (lastTouchType.value) showTip(c, e.currentTarget);
+    return;
+  }
   if (lastTouchType.value) {
     if (touchArmedT.value !== c.t) {
       touchArmedT.value = c.t;
@@ -279,6 +296,7 @@ function onCellClick(e: MouseEvent, c: HeatCell) {
 
 function onCellDblClick(c: HeatCell) {
   clearTimeout(clickTimer);
+  if (c.v === null) return;
   emit('drill', c);
 }
 
@@ -312,6 +330,7 @@ function onKey(e: KeyboardEvent, i: number, c: HeatCell) {
     focusAt(e.key === 'Home' ? 0 : placed.value.length - 1);
   } else if (e.key === 'Enter') {
     e.preventDefault();
+    if (c.v === null) return;
     if (e.shiftKey) emit('drill', c);
     else emit('select', c);
   } else if (e.key === 'Escape') {
@@ -374,6 +393,7 @@ function onKey(e: KeyboardEvent, i: number, c: HeatCell) {
             :style="p.style"
             :tabindex="p.i === focusIndex ? 0 : -1"
             :aria-label="p.label"
+            :aria-disabled="p.c.v === null ? 'true' : undefined"
             @pointerdown="onPointerDown"
             @click="onCellClick($event, p.c)"
             @dblclick="onCellDblClick(p.c)"
@@ -486,6 +506,29 @@ function onKey(e: KeyboardEvent, i: number, c: HeatCell) {
   gap: 3px;
   padding: 2px;
 }
+/* 直式年視圖(U2):7 欄(週一～週日)自适应容器寬度,不需左右捲動 */
+.is-year .g-heatmap__scroll {
+  overflow-x: hidden;
+}
+.is-year .g-heatmap__frame {
+  min-width: 0;
+  width: 100%;
+  max-width: 760px;
+}
+.is-year .g-heatmap,
+.is-year .g-heatmap__cols {
+  --cell-w: 0px;
+  --cell-h: 16px;
+  grid-template-columns: repeat(var(--cols), minmax(0, 1fr));
+}
+.is-year .g-heatmap__rows {
+  --cell-h: 16px;
+  min-width: 46px;
+}
+.is-year .g-heatmap__col-lbl {
+  text-align: center;
+  font-weight: 600;
+}
 .is-month .g-heatmap,
 .is-month .g-heatmap__cols {
   --cell-w: 18px;
@@ -515,7 +558,7 @@ function onKey(e: KeyboardEvent, i: number, c: HeatCell) {
     box-shadow 120ms ease-out,
     outline-color 120ms ease-out;
 }
-/* v === null(沒有資料):斜線底紋,與 level 0 淺色空格區分(§3.1、§7) */
+/* v === null(沒有資料):斜線底紋,與 level 0 淺色空格區分,不可點擊開啟明細(U3) */
 .g-heatmap__cell.is-null {
   background: repeating-linear-gradient(
     -45deg,
@@ -523,6 +566,7 @@ function onKey(e: KeyboardEvent, i: number, c: HeatCell) {
     transparent 2.5px 5px
   );
   border: 1px solid var(--line-strong);
+  cursor: not-allowed;
 }
 /* partial 格子:小標記 + 虛線外框(§3.1、§7) */
 .g-heatmap__cell.is-partial {

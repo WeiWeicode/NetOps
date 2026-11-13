@@ -2,6 +2,20 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。範圍:`frontend/`。
 
+## 2026-11-13 時段明細抽屜邏輯層:不適用、嚴重度重查、跳 Log 條件、移除 AD 異常(C3–C5、C7–C9)
+- 工作項目:V-b1(V-b2 第一輪驗收;Gemini U1–U10 `ba410a4` 的後續)
+- 內容:
+  - C3 `useSlice.summary`:威脅類的 `bytes` / `sent` / `recv` 為 `null`(API 回 0),抽屜總流量顯示「不適用」、不顯示上傳 / 下載。
+  - C4 `useSlice.setSeverity(sev | null)`:威脅類只加 `severity`;流量類切成威脅類並只保留 IP 條件(和摘要 threats 的計算範圍一致);`null` 回到點嚴重度之前的條件,`open()` 新條件時清掉。抽屜的 chip 與「清除篩選」改呼叫它,拿掉前端過濾(Top 10 與明細由後端依嚴重度計算)。
+  - C5 `useHeatmap.METRIC_OPTIONS` 移除 `ad`、`metric` 型別改 `PaHeatMetric`;`Heatmap.vue` 拿掉 `visibleMetricOptions` 過濾。`useInsight.InsightView` 已經沒有 `ad`。
+  - C7 `openInSearch(extra?: { filterIp, filterApp, filterPort, filterCountry, filterThreat, severity })`(另有 `searchTarget(extra)` 回傳路由):目前條件 + 點選項目寫進 `/firewall/search` query,點 IP 時以點選的 IP 取代來源 / 目的條件;威脅類帶 `type=THREAT`、`threat`、`severity`,`searchLink` 不再只限 TRAFFIC。抽屜拿掉 `(props.slice.openInSearch as …)` 型別轉換,威脅名稱改帶 `filterThreat`(原本從名稱抓 IP 或丟進關鍵字)。Log 明細查詢頁只查 TRAFFIC,收到這三個條件時顯示「未套用」提示(AGENT §5,不靜默忽略)。
+  - 抽屜威脅明細的名稱欄 key 由 `threatName` 改 `name`(API.md §4.4 threat 明細欄位是 `name`,原本真實資料這欄會是空的)。
+  - 程式碼審查:`useSlice` 內部的 `run` 先同步換掉 `query` 再取消舊工作(連點同一個 chip 取消不會被吞掉);`Search.vue` 的未套用提示改 `computed`。
+  - C8 mock `sliceResult`:`type=threat` 的明細列補 `severity`、`name`(依 API 欄位名,不用 `threatName`),並依 `severity` 篩選摘要、排行與明細;`mock/viz.ts` 轉送 `severity`。
+  - C9 `viz.mount.test.ts`:`null` 格按 Enter 不發 `select`、年視圖直式座標、AD 異常按鈕 / Tab 不存在;新增抽屜 C3 / C4 / C7 掛載測試;`viz.test.ts` 新增 `summary`、`setSeverity`、`searchTarget` 測試,AD 停用測試改成選項不存在。
+- 檔案:`frontend/src/composables/useSlice.ts`、`useHeatmap.ts`、`src/api/slice.ts`、`src/components/SliceDrawer.vue`、`src/pages/firewall/Heatmap.vue`、`Insight.vue`(註解)、`Search.vue`、`mock/fixtures/viz.ts`、`mock/viz.ts`、`test/viz.test.ts`、`test/viz.mount.test.ts`、`docs/VIZ-RULES-DESIGN.md` §6
+- 驗證:`npm run typecheck`、`npm test`、`npm run build` 通過(數字見 MR)
+
 ## 2026-11-13 前端部署建置失敗:假資料產生器移出 test/、CI 加建置內容檢查
 - 工作項目:V-b1 / V-b2 後續(develop pipeline 920 `deploy-web-test` job 2846 失敗,11-11 起前端沒有部署上去)
 - 原因:`vite.config.ts` 一定會載入 `mock/gateway.ts`(沒設 MOCK 也載入)→ `mock/viz.ts` → `../test/fixtures/viz/generate.ts`;`frontend/.dockerignore` 排除 `test`,Docker 建置找不到檔案(`UNRESOLVED_IMPORT`)。`check:frontend` 在完整 repo 裡 build,看得到 test/,所以 CI 沒抓到

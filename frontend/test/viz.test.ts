@@ -90,16 +90,9 @@ describe('useHeatmap', () => {
     expect(h.data.value?.granularity).toBe('month');
   });
 
-  it('AD 指標停用:不呼叫 API、error 說明', async () => {
-    mocks.heatmapGet.mockResolvedValue(heatmapResponse({ granularity: 'year', metric: 'threat', date: '2026-11-11', now: NOW }));
+  it('C5:指標選項沒有 AD 異常(之後獨立做進 AD 網域)', () => {
     const { h } = setup();
-    await flush();
-    mocks.heatmapGet.mockClear();
-    h.metric.value = 'ad';
-    await flush();
-    expect(mocks.heatmapGet).not.toHaveBeenCalled();
-    expect(h.error.value?.message).toContain('AD');
-    expect(h.metricOptions.find((m) => m.value === 'ad')?.disabled).toBe(true);
+    expect(h.metricOptions.map((m) => m.value)).toEqual(['threat', 'traffic', 'deny']);
   });
 
   it('下鑽:年 / 月格 → 日視圖;超過 1 年不下鑽;日格不下鑽;前後期不超過今天', async () => {
@@ -201,13 +194,72 @@ describe('useSlice', () => {
     expect(s.isCold.value).toBe(false);
   });
 
-  it('威脅類沒有明細查詢連結;close 清空', async () => {
+  it('C7:威脅類的明細查詢連結帶 type=THREAT、threat、severity;close 清空', async () => {
     mocks.sliceGet.mockResolvedValue({ kind: 'result', result });
     const { s } = setup();
-    await s.open({ ...q, type: 'threat' });
-    expect(s.searchLink.value).toBeNull();
+    await s.open({ ...q, type: 'threat', threatName: 'X(1)', severity: 'high', country: 'China' });
+    expect(s.searchLink.value).toEqual({
+      path: '/firewall/search',
+      query: { from: '2026-11-11T08:00', to: '2026-11-11T08:59', country: 'China', type: 'THREAT', threat: 'X(1)', severity: 'high' },
+    });
     await s.close();
     expect(s.state.value).toBe('idle');
+    expect(s.searchLink.value).toBeNull();
+  });
+
+  it('C7:openInSearch(extra) 合併點選的項目(IP 取代來源 / 目的條件、國家、威脅、嚴重度、Port)', async () => {
+    mocks.sliceGet.mockResolvedValue({ kind: 'result', result });
+    const { s } = setup();
+    await s.open({ ...q, src: '10.0.0.1', app: 'ssl' });
+    expect(s.searchTarget({ filterIp: '10.0.0.9', filterCountry: 'Japan', filterPort: 443 })).toEqual({
+      path: '/firewall/search',
+      query: { from: '2026-11-11T08:00', to: '2026-11-11T08:59', app: 'ssl', ip: '10.0.0.9', country: 'Japan', port: '443' },
+    });
+    await s.open({ ...q, type: 'threat' });
+    expect(s.searchTarget({ filterThreat: 'Y(2)', severity: 'critical', filterApp: ' ' })).toEqual({
+      path: '/firewall/search',
+      query: { from: '2026-11-11T08:00', to: '2026-11-11T08:59', type: 'THREAT', threat: 'Y(2)', severity: 'critical' },
+    });
+  });
+
+  it('C3:威脅類的流量摘要為 null(不適用),流量類照實', async () => {
+    const threat = sliceResult({ ...q, type: 'threat' }) as unknown as SliceResult;
+    mocks.sliceGet.mockResolvedValueOnce({ kind: 'result', result: threat });
+    const { s } = setup();
+    await s.open({ ...q, type: 'threat' });
+    expect(s.summary.value).toMatchObject({ bytes: null, sent: null, recv: null, sessions: threat.summary.sessions });
+    mocks.sliceGet.mockResolvedValueOnce({ kind: 'result', result });
+    await s.open(q);
+    expect(s.summary.value?.bytes).toBe(result.summary.bytes);
+  });
+
+  it('C4:setSeverity 重查;流量類切成威脅類只留 IP 條件,取消回到原條件', async () => {
+    mocks.sliceGet.mockResolvedValue({ kind: 'result', result });
+    const { s } = setup();
+    const base = { ...q, type: 'traffic' as const, ip: '10.0.0.1', app: 'ssl', action: 'block' as const, sort: 'bytes' as const };
+    await s.open(base);
+    await s.setSeverity('high');
+    expect(mocks.sliceGet).toHaveBeenLastCalledWith({ ...q, type: 'threat', severity: 'high', ip: '10.0.0.1' });
+    await s.setSeverity('critical');
+    expect(mocks.sliceGet).toHaveBeenLastCalledWith({ ...q, type: 'threat', severity: 'critical', ip: '10.0.0.1' });
+    // 同一個嚴重度不重查
+    const n = mocks.sliceGet.mock.calls.length;
+    await s.setSeverity('critical');
+    expect(mocks.sliceGet.mock.calls.length).toBe(n);
+    await s.setSeverity(null);
+    expect(mocks.sliceGet).toHaveBeenLastCalledWith(base);
+    expect(s.query.value).toEqual(base);
+    // 威脅類:保留全部條件只加 severity;open 新條件後取消不會回到舊條件
+    await s.open({ ...q, type: 'threat', country: 'China' });
+    await s.setSeverity('low');
+    expect(mocks.sliceGet).toHaveBeenLastCalledWith({ ...q, type: 'threat', country: 'China', severity: 'low' });
+    await s.setSeverity(null);
+    expect(mocks.sliceGet).toHaveBeenLastCalledWith({ ...q, type: 'threat', country: 'China' });
+    // 連點同一個 chip(第一次還在取消舊工作時就再點):第二次是取消,不會被吞掉
+    const first = s.setSeverity('medium');
+    const second = s.setSeverity(null);
+    await Promise.all([first, second]);
+    expect(s.query.value).toEqual({ ...q, type: 'threat', country: 'China' });
   });
 });
 

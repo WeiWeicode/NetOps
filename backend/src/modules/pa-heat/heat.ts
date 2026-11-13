@@ -3,7 +3,7 @@
  *   year   以 date 所在週(週一開始)為最後一欄往前 53 週,一格一天(pa_heat_1d)
  *   month  date 所在月,一格一小時(pa_heat_1h)
  *   day    date 當天,一格 5 分鐘(pa_heat_5m);只保留 1 年(V1)
- * 開始時間在「現在」之後的格子不回。v = null 表示沒有資料(彙總表最早的格子之前;AGENT.md §5:沒有資料不等於 0)。
+ * 開始時間在「現在」之後的格子不回。v = null 表示沒有資料(彙總表最早的格子之前,或彙總表沒有該格;AGENT.md §5:沒有資料不等於 0)。
  */
 import type { HeatGrain, HeatRow } from '../../infra/clickhouse/heat.js';
 import { logTimeOut, taipeiText } from '../../shared/time.js';
@@ -127,16 +127,29 @@ const metricValue = (m: PaMetric, r: HeatRow) => (m === 'traffic' ? r.bytes : m 
 
 const EMPTY: HeatRow = { t: 0, sessions: 0, bytes: 0, sent: 0, recv: 0, deny: 0, critical: 0, high: 0, medium: 0, low: 0, info: 0, topBytes: [], topDeny: [], topThreat: [] };
 
+/** 沒有彙總列的格子要等多久才列進 gaps(最後幾格可能還有遲到的寫入,不要一直閃「資料不完整」) */
+export const MISSING_GRACE_MS = 600_000;
+
 /**
  * 組格子。since:彙總表最早的格子(null = 表內沒有資料,全部 null);gaps:已知的缺口(格子與缺口重疊 → partial)
+ * 彙總表沒有該格的列 → v = null(沒有資料,不是 0;C1:例如彙總上線前的時段)。
+ * 前提:pa_heat_* 由 TRAFFIC 與威脅原始表的物化檢視寫入,是稀疏表;某格只要收到任何一筆 TRAFFIC 就有列。
+ * 防火牆整格 5 分鐘(或 1 小時、1 天)連一筆 TRAFFIC 都沒有,和「彙總沒寫入」一樣代表沒收到資料,不當成 0(AGENT §5)。
+ * since 之後、已結束超過 MISSING_GRACE_MS 卻沒有列的連續格子,合併成 reason = 'no-data' 的缺口,和 gaps 一起回傳 allGaps(依時間排序)。
+ * now 預設 Infinity:不算缺口(只給單元測試)。
  */
-export function buildCells(range: HeatRange, metric: PaMetric, rows: HeatRow[], since: number | null, gaps: GapMs[]) {
+export function buildCells(range: HeatRange, metric: PaMetric, rows: HeatRow[], since: number | null, gaps: GapMs[], now = Infinity) {
   const byT = new Map(rows.map((r) => [r.t, r]));
-  const raw = range.cells.map((t) => {
-    const hasData = since !== null && t >= since;
-    const r = byT.get(t) ?? (hasData ? { ...EMPTY, t } : null);
-    return { t, r };
-  });
+  const raw = range.cells.map((t) => ({ t, r: byT.get(t) ?? null }));
+  const missing: GapMs[] = [];
+  if (since !== null)
+    for (const { t, r } of raw) {
+      if (r || t < since || t + range.bucketMs > now - MISSING_GRACE_MS) continue;
+      const last = missing[missing.length - 1];
+      if (last && last.toMs === t) last.toMs = t + range.bucketMs;
+      else missing.push({ fromMs: t, toMs: t + range.bucketMs, reason: 'no-data' });
+    }
+  const allGaps = [...gaps, ...missing].sort((a, b) => a.fromMs - b.fromMs);
   const values = raw.filter((x) => x.r).map((x) => metricValue(metric, x.r!));
   const thresholds = metric === 'threat' ? [] : quantileThresholds(values);
   const cells: HeatCell[] = raw.map(({ t, r }) => {
@@ -147,7 +160,7 @@ export function buildCells(range: HeatRange, metric: PaMetric, rows: HeatRow[], 
       t: isoTaipei(t),
       v,
       level,
-      partial: gaps.some((g) => g.fromMs < t + range.bucketMs && g.toMs > t),
+      partial: allGaps.some((g) => g.fromMs < t + range.bucketMs && g.toMs > t),
       tip: {
         bytes: row.bytes,
         sessions: row.sessions,
@@ -157,5 +170,5 @@ export function buildCells(range: HeatRange, metric: PaMetric, rows: HeatRow[], 
       },
     };
   });
-  return { cells, levels: metric === 'threat' ? { method: 'severity' as const, thresholds: [] as number[] } : { method: 'quantile' as const, thresholds } };
+  return { cells, missing, allGaps, levels: metric === 'threat' ? { method: 'severity' as const, thresholds: [] as number[] } : { method: 'quantile' as const, thresholds } };
 }

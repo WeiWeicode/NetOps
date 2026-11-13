@@ -60,7 +60,7 @@ export function handleViz(c: MockCtx): boolean {
     const start = q('start') ?? '';
     const end = q('end') ?? '';
     const ip = q('ip');
-    const base = { start, end, type: q('type') as 'traffic' | 'threat' | undefined, rows: Number(q('rows') ?? 100) };
+    const base = { start, end, type: q('type') as 'traffic' | 'threat' | undefined, severity: (q('severity') || undefined) as Parameters<typeof sliceResult>[0]['severity'], rows: Number(q('rows') ?? 100) };
     if (Date.parse(start) < Date.now() - 29 * DAY) {
       c.send(409, { code: 'NETOPS_COLD_ARCHIVE_DISABLED', message: '這段時間的明細要從冷歸檔讀取,冷歸檔尚未提供', requestId: 'mock', details: { hotFrom: new Date(Date.now() - 29 * DAY).toISOString() } });
       return true;

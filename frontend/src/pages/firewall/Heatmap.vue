@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
  * 防火牆 › 活動熱力圖(V-b2;HANDOFF-GEMINI-VIZ §3.1、§3.2、§7):
- *   - 上方工具列:粒度(年/月/日)、指標(威脅等級/總流量/阻擋數/AD 異常停用並顯示「AD 階段開放」)、前後期、日期選擇、圖例(4 階 + 0 + 沒有資料 + 資料不完整)
+ *   - 上方工具列:粒度(年/月/日)、指標(威脅等級/總流量/阻擋數;AD 異常之後獨立做在 AD 網域)、前後期、日期選擇、圖例(4 階 + 0 + 沒有資料 + 資料不完整)
  *   - 日視圖超過 1 年(NETOPS_HEATMAP_OUT_OF_RETENTION):顯示「每 5 分鐘資料只保留 1 年,最早可查 {earliest}」
  *   - coverage.since 之前顯示「此日期前沒有資料」;partial 標示「此時段資料不完整」
  *   - 點格子 → 開 SliceDrawer(useSlice.open);雙擊或抽屜「下鑽」→ useHeatmap.drill
@@ -9,7 +9,7 @@
 import { computed, ref, watch } from 'vue';
 import { fmtNum, fmtShort, fmtSize } from '@/api/format';
 import { ApiError, describeError } from '@/api/gateway';
-import type { HeatCell, HeatMetric } from '@/api/heatmap';
+import type { HeatCell, PaHeatMetric } from '@/api/heatmap';
 import SliceDrawer from '@/components/SliceDrawer.vue';
 import { useHeatmap } from '@/composables/useHeatmap';
 import { useSlice } from '@/composables/useSlice';
@@ -26,7 +26,7 @@ watch([h.granularity, h.date], () => (selectedCell.value = null));
 
 const granularityOptions = h.granularityOptions.map((g) => ({ label: g.label, value: g.value }));
 
-function selectMetric(m: HeatMetric, disabled?: boolean) {
+function selectMetric(m: PaHeatMetric, disabled?: boolean) {
   if (disabled) return;
   h.metric.value = m;
 }
@@ -49,10 +49,9 @@ const periodLabel = computed(() => {
   return formatRange(d.from, d.to);
 });
 
+// U10: 只在目前顯示範圍內真有無資料格子(v === null)時才顯示提示橫幅
 const hasNullBeforeSince = computed(() => {
-  const d = h.data.value;
-  if (!d) return false;
-  if (d.coverage.since && Date.parse(d.coverage.since) > Date.parse(d.from)) return true;
+  if (!h.data.value) return false;
   return h.cells.value.some((c) => c.v === null);
 });
 
@@ -103,6 +102,7 @@ const canDrillSelected = computed(() => {
 });
 
 function onSelect(cell: HeatCell) {
+  if (cell.v === null) return;
   selectedCell.value = cell;
   if (!h.canSlice.value) return;
   const q = h.sliceQuery(cell);
@@ -111,6 +111,7 @@ function onSelect(cell: HeatCell) {
 }
 
 function onDrill(cell: HeatCell) {
+  if (cell.v === null) return;
   if (h.drill(cell)) {
     drawer.value = false;
     void s.close();
@@ -126,7 +127,7 @@ function drillFromDrawer() {
   <div class="viz-heatmap stack">
     <GPageHeader
       title="活動熱力圖"
-      subtitle="GitHub 風格長期活動視圖（年 53 週 / 月 24 小時 / 日 5 分鐘）；點擊格子開啟時段明細，雙擊或按 Shift+Enter 下鑽至日視圖"
+      subtitle="長期活動視圖（年 53 週直式由新到舊 / 月 24 小時 / 日 5 分鐘）；點擊有資料格子開啟時段明細，雙擊或按 Shift+Enter 下鑽至日視圖"
     >
       <GButton size="sm" variant="secondary" icon="refresh" :loading="h.loading.value" @click="h.refresh()">
         重新整理
@@ -216,7 +217,7 @@ function drillFromDrawer() {
       彙總表還沒有資料（此日期前沒有資料）。
     </GAlert>
     <GAlert v-else-if="hasNullBeforeSince" tone="info">
-      此日期前沒有資料{{ sinceLabel ? `（彙總資料起點：${sinceLabel}）` : '' }}；斜線底紋代表尚未建立彙總，不等於 0。
+      顯示範圍內含彙總資料起點{{ sinceLabel ? `（${sinceLabel}）` : '' }}之前的時段（此日期前沒有資料）；斜線底紋代表尚未建立彙總，不等於 0。
     </GAlert>
 
     <!-- 期間摘要列 -->
@@ -357,6 +358,7 @@ function drillFromDrawer() {
   color: var(--text);
   font: inherit;
   font-size: var(--fs-sm);
+  color-scheme: inherit;
 }
 .viz-heatmap__date:focus {
   outline: 2px solid var(--field-focus);

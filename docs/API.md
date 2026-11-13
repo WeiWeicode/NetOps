@@ -366,7 +366,7 @@ PA 匯入在背景佇列執行;同步、分析只是送進佇列,畫面輪詢狀
   "from": "2026-11-01T00:00:00+08:00", "to": "2026-12-01T00:00:00+08:00", "bucketSeconds": 3600,
   "coverage": {
     "since": "2026-11-10T15:00:00+08:00",   // 彙總表最早的格子;更早的格子 v = null(沒有資料,不是 0)。表內沒有資料時 null
-    "gaps": [ { "from": "2026-11-10T13:00:00+08:00", "to": "2026-11-10T14:00:00+08:00", "reason": "recon-gap" } ],  // §5.3 每日對帳的缺口小時
+    "gaps": [ { "from": "2026-11-10T13:00:00+08:00", "to": "2026-11-10T14:00:00+08:00", "reason": "recon-gap" } ],  // recon-gap:§5.3 每日對帳的缺口小時;no-data:彙總表沒有的連續格子
     "gapsKnown": true                       // false:沒有對帳(ClickHouse 未設定),缺口未檢查
   },
   "levels": { "method": "quantile", "thresholds": [120000000, 480000000, 1500000000] },  // level 2–4 的下限;threat 為 { "method": "severity", "thresholds": [] }
@@ -382,7 +382,8 @@ PA 匯入在背景佇列執行;同步、分析只是送進佇列,畫面輪詢狀
 
 - `level`:`traffic`、`deny` 依本視圖非 0 格的 25 / 50 / 75 百分位分 1–4(0 = 0 或 null);`threat` 依最高嚴重度:critical 4、high 3、medium 2、low / info 1。只有 info 的格子 `v = 0`(權重 0)但 `level = 1`,畫面以 `level` 上色、以 `tip.threats` 說明。
 - `coverage.since` 是整張彙總表最早的格子:上線當天(或 TTL 刪到一半的那天)的每天格只含部分時段,數字照實回、不標 `partial`(`partial` 只標已知的對帳缺口)。
-- `partial`:格子和 `coverage.gaps` 重疊。
+- `v = null`:`coverage.since` 之前,或彙總表沒有該格(例:彙總上線前的時段、彙總中斷;彙總表是稀疏表,整格收不到任何 TRAFFIC 也沒有列,同樣視為沒有收到資料,不當成 0)。`since` 之後的這種格子會合併成 `reason: "no-data"` 的缺口列進 `coverage.gaps`(結束未滿 10 分鐘的格子可能還有遲到的寫入,不列);畫面顯示「沒有資料」,不畫成 0(2026-11-13 驗收 C1)。
+- `partial`:格子和 `coverage.gaps` 重疊(含 `no-data`)。
 - 快取(Redis `netops:cache:pa-heat:*`):含現在或結束未滿 1 小時的期間 60 秒,更早結束的期間 1 小時;三個指標共用同一份。FTP 補漏或 `rebuild-day.sh` 重建之後,最多 1 小時才看到新的數字。
 - ClickHouse 未設定、連不上或查詢失敗回 503 `NETOPS_CLICKHOUSE_UNAVAILABLE`(同 §4.1)。
 
@@ -405,7 +406,7 @@ PA 匯入在背景佇列執行;同步、分析只是送進佇列,畫面輪詢狀
   "source": "hot",                        // hot | cold | mixed
   "type": "traffic", "start": "2026-11-11T08:00:00+08:00", "end": "2026-11-11T09:00:00+08:00",
   "filters": { "ip": "10.10.112.20" },    // 有帶的篩選條件
-  "summary": { "sessions": 41234, "bytes": 2345678901, "sent": 1234567, "recv": 2344444334, "deny": 312,   // type=threat 時 sessions 為威脅筆數、bytes / sent / recv 為 0
+  "summary": { "sessions": 41234, "bytes": 2345678901, "sent": 1234567, "recv": 2344444334, "deny": 312,   // type=threat 時 sessions 為威脅筆數、bytes / sent / recv 為 0(不適用;前端 useSlice.summary 轉成 null 顯示「不適用」)
                "threats": { "critical": 0, "high": 2, "medium": 5, "low": 11, "info": 40 } },             // 同時段 log_type=threat 的筆數(type=traffic 時只套用 IP 條件)
   "top": {                                // 各 Top 10;traffic:依位元組 { key, sessions, bytes };threat:依筆數 { key, count }(name 另有 severity)
     "src": [ { "key": "10.10.112.20", "sessions": 1200, "bytes": 1300000000 } ], "dst": [], "app": [], "dport": [], "dstCountry": []

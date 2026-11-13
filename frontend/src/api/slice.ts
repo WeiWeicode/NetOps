@@ -7,6 +7,7 @@ import type { Job } from './jobs';
 
 export type SliceType = 'traffic' | 'threat';
 export type SliceSource = 'hot' | 'cold' | 'mixed';
+export type SliceSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info';
 
 export interface SliceQuery {
   /** ISO 8601 含時區;end − start ≤ 1 天 */
@@ -23,7 +24,8 @@ export interface SliceQuery {
   dport?: number;
   action?: 'allow' | 'block';
   country?: string;
-  severity?: 'critical' | 'high' | 'medium' | 'low' | 'info';
+  /** 只對 type=threat */
+  severity?: SliceSeverity;
   threatName?: string;
   /** 0–200,預設 100 */
   rows?: number;

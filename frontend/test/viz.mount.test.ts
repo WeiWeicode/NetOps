@@ -5,7 +5,8 @@
  *   - GDrawer / GSourceBadge:Esc 關閉、Tab 焦點鎖定、hot / cold / mixed 徽章
  *   - SliceDrawer:冷資料掃描線過場、202 waiting-job、429 busy 倒數、409 冷歸檔未提供保留 cell 彙總、503 danger 錯誤、C5 前不顯示即時連線按鈕
  *   - 9 個圖表元件:GTrendDualAxis、GSankey、GTopBars、GAppShare(donut/treemap)、GAllowDeny、GSeverityCards、GThreatTimeline、GWorldMap、GTopCompare(right=null 顯示 notes)與 formatter XSS 跳脫
- *   - Heatmap.vue / Insight.vue:AD 停用提示、日視圖 422 保留期限提示、看表格無障礙切換、點擊聯動開啟 SliceDrawer
+ *   - SliceDrawer(C3 / C4 / C7):威脅類總流量「不適用」、嚴重度 chip 依嚴重度重查、點 Top 10 / IP 以該項目開 Log 明細查詢
+ *   - Heatmap.vue / Insight.vue:沒有 AD 異常(C5)、日視圖 422 保留期限提示、看表格無障礙切換、點擊聯動開啟 SliceDrawer
  */
 import { flushPromises, mount } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -165,12 +166,18 @@ describe('GHeatmap 熱力圖元件', () => {
     await buttons[0]!.trigger('keydown', { key: 'ArrowRight' });
     expect(buttons[1]!.attributes('tabindex')).toBe('0');
 
-    // Enter 觸發 select,Shift+Enter 觸發 drill
+    // U3 / C6:沒有資料(null)的格子按 Enter / Shift+Enter 不發 select / drill
     await buttons[1]!.trigger('keydown', { key: 'Enter' });
-    expect(w.emitted('select')?.[0]?.[0]).toEqual(res.cells[1]);
-
     await buttons[1]!.trigger('keydown', { key: 'Enter', shiftKey: true });
-    expect(w.emitted('drill')?.[0]?.[0]).toEqual(res.cells[1]);
+    expect(w.emitted('select')).toBeUndefined();
+    expect(w.emitted('drill')).toBeUndefined();
+
+    // 有資料的格子:Enter 觸發 select,Shift+Enter 觸發 drill
+    await buttons[20]!.trigger('keydown', { key: 'Enter' });
+    expect(w.emitted('select')?.[0]?.[0]).toEqual(res.cells[20]);
+
+    await buttons[20]!.trigger('keydown', { key: 'Enter', shiftKey: true });
+    expect(w.emitted('drill')?.[0]?.[0]).toEqual(res.cells[20]);
 
     // 滑鼠懸停顯示毛玻璃 tooltip,Top 1 IP 標「約」
     await buttons[20]!.trigger('mouseenter');
@@ -240,9 +247,10 @@ describe('GHeatmap 熱力圖元件', () => {
     });
     const b = w.findAll('button.g-heatmap__cell');
     const pos = (i: number) => [b[i]!.attributes('style')!.match(/grid-column: (\d+)/)![1], b[i]!.attributes('style')!.match(/grid-row: (\d+)/)![1]];
-    expect(pos(0)).toEqual(['1', '4']); // 週四 = 第 4 列
-    expect(pos(3)).toEqual(['1', '7']); // 週日仍在第 1 欄
-    expect(pos(4)).toEqual(['2', '1']); // 週一換到第 2 欄
+    // U2 直式年視圖:7 欄(週一到週日)× 週列,最新的週在最上面(第 1 列);14 天跨 3 週
+    expect(pos(0)).toEqual(['4', '3']); // 週四 = 第 4 欄,最舊的週在第 3 列
+    expect(pos(3)).toEqual(['7', '3']); // 週日仍在同一列
+    expect(pos(4)).toEqual(['1', '2']); // 週一換到上一列
     await b[0]!.trigger('keydown', { key: 'End' });
     expect(b[13]!.attributes('tabindex')).toBe('0');
     await b[13]!.trigger('keydown', { key: 'Home' });
@@ -257,6 +265,47 @@ describe('GHeatmap 熱力圖元件', () => {
 });
 
 describe('GSourceBadge 與 GDrawer / SliceDrawer', () => {
+  it('SliceDrawer 威脅類:總流量「不適用」、嚴重度 chip 重查(C3 / C4)、點 Top 10 與 IP 帶項目開 Log 明細查詢(C7)', async () => {
+    const q = { start: '2026-11-11T08:00:00+08:00', end: '2026-11-11T09:00:00+08:00' };
+    mocks.sliceGet.mockImplementation(async (x: { type?: 'traffic' | 'threat'; severity?: 'high' }) => ({ kind: 'result', result: sliceResult({ ...q, type: x.type, severity: x.severity }) }));
+    const s = useSlice({ now: () => NOW, pollMs: 1000 });
+    const openInSearch = vi.fn(async () => undefined);
+    const w = mount(SliceDrawer, {
+      props: { modelValue: true, slice: { ...s, openInSearch } },
+      global: { plugins: [ui], stubs: { teleport: true } },
+    });
+    await s.open({ ...q, type: 'traffic', ip: '10.10.112.20' });
+    await flushPromises();
+    expect(w.find('.slice-drawer__kpis').text()).not.toContain('不適用');
+
+    // 點「高」→ 切成威脅類、只留 IP 條件重查;總流量顯示「不適用」(不是 0 B)
+    await w.findAll('.slice-sev.is-interactive').find((b) => b.text().includes('高'))!.trigger('click');
+    await flushPromises();
+    expect(mocks.sliceGet).toHaveBeenLastCalledWith({ ...q, type: 'threat', severity: 'high', ip: '10.10.112.20' });
+    expect(w.find('.slice-drawer__kpis').text()).toContain('不適用');
+    expect(w.find('.slice-drawer__kpis').text()).not.toContain('0 B');
+    expect(w.find('.slice-sev.is-active').text()).toContain('高');
+    // 明細只有該嚴重度,威脅名稱欄有值
+    expect(w.findAll('tbody tr').length).toBeGreaterThan(0);
+    expect(w.find('tbody').text()).toContain('SMB Brute Force');
+    expect(w.find('tbody').text()).not.toContain('critical');
+
+    // Top 10 威脅名稱 → filterThreat;明細來源 IP → filterIp
+    await w.findAll('.slice-drawer__top-tab').find((b) => b.text() === '威脅名稱')!.trigger('click');
+    await w.find('.g-barlist button').trigger('click');
+    expect(openInSearch).toHaveBeenLastCalledWith({ filterThreat: 'SMB Brute Force(40004)' });
+    await w.find('.slice-ip-btn').trigger('click');
+    expect(openInSearch).toHaveBeenLastCalledWith({ filterIp: expect.any(String) });
+
+    // 清除篩選 → 回到原本的流量類條件
+    await w.find('.slice-sev__clear').trigger('click');
+    await flushPromises();
+    expect(mocks.sliceGet).toHaveBeenLastCalledWith({ ...q, type: 'traffic', ip: '10.10.112.20' });
+    expect(w.find('.slice-sev.is-active').exists()).toBe(false);
+    mocks.sliceGet.mockReset();
+    w.unmount();
+  });
+
   it('GSourceBadge 正確顯示 hot / cold / mixed 徽章', () => {
     const hot = mount(GSourceBadge, { props: { source: 'hot' } });
     expect(hot.text()).toContain('即時熱資料');
@@ -447,7 +496,7 @@ describe('9 個圖表元件與資安跳脫', () => {
 
 // 頁面級測試掛載 10 張以上圖表,全套件冷啟動時可能超過預設 5 秒(Claude 2026-11-12,程式碼審查)
 describe('Heatmap.vue 與 Insight.vue 頁面整合', { timeout: 15_000 }, () => {
-  it('Heatmap.vue 顯示停用的 AD 指標與提示、處理日視圖 422 超過保留期限、點擊格子開啟 SliceDrawer', async () => {
+  it('Heatmap.vue 沒有 AD 指標、處理日視圖 422 超過保留期限、點擊格子開啟 SliceDrawer', async () => {
     const res = heatmapResponse({
       granularity: 'year',
       metric: 'threat',
@@ -466,11 +515,10 @@ describe('Heatmap.vue 與 Insight.vue 頁面整合', { timeout: 15_000 }, () => 
     });
     await flushPromises();
 
-    // AD 異常按鈕存在、disabled 且顯示「AD 階段開放」
-    const adBtn = w.findAll('.viz-metric-seg__btn').find((b) => b.text().includes('AD 異常'));
-    expect(adBtn?.exists()).toBe(true);
-    expect(adBtn?.attributes('disabled')).toBeDefined();
-    expect(adBtn?.text()).toContain('AD 階段開放');
+    // U6 / C5:指標列沒有 AD 異常(之後獨立做進 AD 網域)
+    const metricBtns = w.findAll('.viz-metric-seg__btn');
+    expect(metricBtns.length).toBe(3);
+    expect(metricBtns.find((b) => b.text().includes('AD 異常'))).toBeUndefined();
 
     // since 之前沒有資料的提示
     expect(w.text()).toContain('此日期前沒有資料');
@@ -493,7 +541,7 @@ describe('Heatmap.vue 與 Insight.vue 頁面整合', { timeout: 15_000 }, () => 
     w.unmount();
   });
 
-  it('Insight.vue 支援流量 / 威脅 Tab 切換、AD Tab 停用、「看表格」無障礙切換與圖表點擊聯動', async () => {
+  it('Insight.vue 支援流量 / 威脅 Tab 切換、沒有 AD Tab、「看表格」無障礙切換與圖表點擊聯動', async () => {
     mocks.traffic.mockResolvedValue(trafficInsight({ from: '2026-11-05', to: '2026-11-11', now: NOW }));
     mocks.threat.mockResolvedValue(threatInsight({ from: '2026-11-05', to: '2026-11-11', now: NOW }));
     mocks.sliceGet.mockResolvedValue({
@@ -510,10 +558,8 @@ describe('Heatmap.vue 與 Insight.vue 頁面整合', { timeout: 15_000 }, () => 
     expect(mocks.traffic).toHaveBeenCalledTimes(1);
     expect(mocks.threat).not.toHaveBeenCalled();
 
-    // AD Tab 停用且標示「AD 階段開放」
-    const adTab = w.findAll('.viz-tabs__tab').find((b) => b.text().includes('AD 異常'));
-    expect(adTab?.attributes('disabled')).toBeDefined();
-    expect(adTab?.text()).toContain('AD 階段開放');
+    // U6 / C5:沒有 AD 異常 Tab
+    expect(w.findAll('.viz-tabs__tab').find((b) => b.text().includes('AD 異常'))).toBeUndefined();
 
     // 切換「看表格」並點擊表格列開啟時段明細
     const tableBtn = w.findAll('button').find((b) => b.text().includes('看表格'))!;

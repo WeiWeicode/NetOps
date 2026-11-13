@@ -190,7 +190,7 @@ export function createHeatService(d: HeatDeps) {
       }), { longTtl: !live }),
     );
     const { gaps, known } = gapsIn(range.fromMs, range.toMs);
-    const { cells, levels } = buildCells(range, q.metric as PaMetric, data.rows, data.since, gaps);
+    const { cells, allGaps, levels } = buildCells(range, q.metric as PaMetric, data.rows, data.since, gaps, t);
     return {
       granularity: q.granularity,
       metric: q.metric,
@@ -198,7 +198,7 @@ export function createHeatService(d: HeatDeps) {
       from: isoTaipei(range.fromMs),
       to: isoTaipei(range.toMs),
       bucketSeconds: range.bucketMs / 1000,
-      coverage: { since: data.since === null ? null : isoTaipei(data.since), gaps: gaps.map(gapOut), gapsKnown: known },
+      coverage: { since: data.since === null ? null : isoTaipei(data.since), gaps: allGaps.map(gapOut), gapsKnown: known },
       levels,
       cells,
       generatedAt: new Date(t).toISOString(),

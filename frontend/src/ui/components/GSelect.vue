@@ -69,7 +69,7 @@ const id = useId();
 }
 .lead {
   margin-left: 12px;
-  color: var(--text-3);
+  color: var(--text-2);
   pointer-events: none;
 }
 select {
@@ -82,6 +82,7 @@ select {
   background: transparent;
   font: inherit;
   color: var(--text);
+  color-scheme: inherit;
   appearance: none;
   cursor: pointer;
 }
@@ -92,7 +93,7 @@ select option {
 .caret {
   position: absolute;
   right: 12px;
-  color: var(--text-3);
+  color: var(--text-2);
   pointer-events: none;
 }
 .err {

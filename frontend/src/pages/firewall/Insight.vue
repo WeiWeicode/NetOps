@@ -2,7 +2,7 @@
 /**
  * 防火牆 › 分析儀表板(V-b2;HANDOFF-GEMINI-VIZ §3.3、§4.2、§5、§7):
  *   - 期間選擇:今天 / 7 天 / 30 天 / 90 天 / 自訂(≤ 90 天),含今天時每 60 秒自動刷新
- *   - 頁籤:流量分析 / 威脅分析 / AD 異常(停用並顯示「AD 階段開放」)
+ *   - 頁籤:流量分析 / 威脅分析(AD 異常之後獨立做在 AD 網域)
  *   - 流量 Tab:GTrendDualAxis、GSankey、GTopBars、GAppShare(甜甜圈/Treemap 切換)、GAllowDeny
  *   - 威脅 Tab:GSeverityCards(含與前一期比較、count-up、呼吸光暈)、GThreatTimeline、GWorldMap、GTopCompare(含 notes)、Top 10 威脅名稱
  *   - 每個圖表皆提供「看表格」無障礙切換(同一份資料,點擊列同樣開啟時段明細)
@@ -451,7 +451,7 @@ const topNameRows = computed(() =>
 
     <!-- 視角 Tab 與期間選擇列 -->
     <div class="viz-insight__top">
-      <!-- 視角頁籤:流量 / 威脅 / AD(停用並標示「AD 階段開放」§3.3) -->
+      <!-- 視角頁籤:流量 / 威脅(U6:移除「AD 異常」頁籤,AD 之後獨立做在 AD 網域) -->
       <nav class="viz-tabs glass" role="tablist" aria-label="分析儀表板視角">
         <button
           type="button"
@@ -474,19 +474,6 @@ const topNameRows = computed(() =>
         >
           <GIcon name="shield-alert" :size="16" />
           <span>威脅分析</span>
-        </button>
-        <button
-          type="button"
-          role="tab"
-          class="viz-tabs__tab is-disabled"
-          disabled
-          aria-disabled="true"
-          :aria-selected="false"
-          title="AD 階段開放"
-        >
-          <GIcon name="users" :size="16" />
-          <span>AD 異常</span>
-          <span class="viz-tabs__hint">AD 階段開放</span>
         </button>
       </nav>
 
@@ -937,5 +924,6 @@ const topNameRows = computed(() =>
   color: var(--text);
   font: inherit;
   font-size: var(--fs-sm);
+  color-scheme: inherit;
 }
 </style>

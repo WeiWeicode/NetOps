@@ -713,7 +713,7 @@ export function getThreatInsight(range: DateRange): Promise<ThreatInsight>;
 | Composable | 回傳(主要) | 說明 |
 | --- | --- | --- |
 | `useHeatmap(opts?)` | `granularity`、`metric`、`date`(可寫的 ref)、`data`、`cells`、`loading`、`error`、`retention`(`dayEarliest`)、`metricOptions`(`ad` 為 `disabled: true, hint: 'AD 階段開放'`)、`prev()`、`next()`、`drill(cell)`、`refresh()` | 切換參數自動重查;`drill` 依粒度換到下一層(年 → 日、月 → 日;日格不下鑽,只開明細) |
-| `useSlice()` | `open(q)`、`close()`、`state`(`idle` \| `loading` \| `waiting-job` \| `done` \| `error` \| `busy`)、`source`、`isCold`(開查前就依時間判斷,讓畫面先放冷資料過場)、`result`、`error`、`retryAfter`、`cancel()`、`openInSearch()` | 自動處理 202 → 輪詢(`useJob`);429 時 `state = 'busy'` 與倒數 `retryAfter` |
+| `useSlice()` | `open(q)`、`close()`、`state`(`idle` \| `loading` \| `waiting-job` \| `done` \| `error` \| `busy`)、`source`、`isCold`(開查前就依時間判斷,讓畫面先放冷資料過場)、`result`、`summary`(威脅類的 bytes / sent / recv 為 null = 不適用)、`error`、`retryAfter`、`cancel()`、`setSeverity(sev \| null)`(依嚴重度重查;流量類切成威脅類只留 IP 條件,null 回到原條件)、`searchLink`、`openInSearch(extra?)`(`extra`:`filterIp`、`filterApp`、`filterPort`、`filterCountry`、`filterThreat`、`severity`;威脅類帶 `type=THREAT`) | 自動處理 202 → 輪詢(`useJob`);429 時 `state = 'busy'` 與倒數 `retryAfter` |
 | `useInsight(view, range)` | `data`、`loading`、`error`、`range`(預設 7 天;選項 今天 / 7 / 30 / 90 天 / 自訂 ≤ 90)、`refresh()` | 含今天時每 60 秒自動刷新(背景分頁放慢) |
 | `useChartPick()` | `toSliceQuery(pick, range)` | 把圖表點擊(桑基節點、長條、國家、威脅名稱)轉成時段明細的條件,統一點擊聯動 |
 | `useAlerts(filters)` | `items`、`total`、`page`、`loading`、`setStatus(id, status, note)`、`canManage` | `canManage` 依按鈕權限 `netops.alerts.manage` |

@@ -5,6 +5,7 @@
  *   送出 → 每 1.5 秒查詢進度 → 完成後分頁讀取結果(每頁 50 筆)、匯出 CSV(後端產生)。可隨時停止;離開頁面自動取消。
  *   流量總覽點選會帶 ?from=&to=&src=… 進來並自動查詢;網址條件只收白名單與格式正確的值(composables/searchQuery.ts)。
  *   期間最長 30 天(只用關鍵字最長 1 天);目的 Port 只能是數字與逗號(後端同樣檢查)。
+ *   時段明細抽屜的威脅類會帶 type=THREAT、threat、severity(useSlice.openInSearch;C7),本頁只查 TRAFFIC,這些條件不套用並提示(AGENT §5)。
  */
 import { computed, onMounted, reactive, ref, shallowRef, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
@@ -31,6 +32,15 @@ import { toast } from '@/ui';
 
 const PAGE_SIZE = 50;
 const route = useRoute();
+/** 網址帶了本頁不支援的威脅類條件(只查 TRAFFIC):提示未套用,不靜默忽略 */
+const ignoredThreatCond = computed(() => {
+  const q = route.query;
+  const parts: string[] = [];
+  if (q.type === 'THREAT') parts.push('類型 THREAT');
+  if (typeof q.threat === 'string' && q.threat) parts.push(`威脅名稱「${q.threat}」`);
+  if (typeof q.severity === 'string' && q.severity) parts.push(`嚴重度 ${q.severity}`);
+  return parts.join('、');
+});
 const router = useRouter();
 
 const form = reactive<Record<PaSearchKey, string> & { from: string; to: string }>({
@@ -228,6 +238,9 @@ const asRow = (r: unknown) => r as PaLogRow;
 
 <template>
   <div class="stack" style="--gap: 16px">
+    <GAlert v-if="ignoredThreatCond" tone="info">
+      Log 明細查詢目前只查 TRAFFIC,{{ ignoredThreatCond }} 未套用;結果是同一時段、同一 IP 等條件的流量紀錄。
+    </GAlert>
     <GCard padding="sm">
       <form class="stack" style="--gap: 12px" @submit.prevent="search">
         <div class="filters">

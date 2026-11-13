@@ -5,13 +5,16 @@
  *   429(冷查詢忙碌)→ state = 'busy',retryAfter 每秒倒數,到 0 後可 s.retry()
  *   409 / 404(冷歸檔未提供、沒有歸檔檔案)→ state = 'error',error.code 給畫面顯示中性提示
  *   s.isCold:開查前就依時間判斷(畫面先放冷資料過場);s.source:結果的 hot / cold / mixed
- *   s.searchLink / s.openInSearch():在 Log 明細查詢開啟同樣條件(只限 TRAFFIC)
+ *   s.summary:摘要;威脅類(type=threat)的 bytes / sent / recv 為 null = 不適用(不是 0;C3)
+ *   s.setSeverity(sev):依嚴重度重查(C4)。威脅類只加 severity;流量類切成威脅類,只保留 IP 條件(同摘要 threats 的計算範圍);
+ *     setSeverity(null) 回到點嚴重度之前的條件
+ *   s.searchLink / s.openInSearch(extra?):在 Log 明細查詢開啟同樣條件,extra 為點選的項目(C7;威脅類帶 type=THREAT、threat、severity)
  * 離開頁面時自動取消進行中的工作(不佔每人 2 個的名額)。
  */
 import { computed, getCurrentInstance, getCurrentScope, onScopeDispose, ref, shallowRef } from 'vue';
 import { useRouter, type RouteLocationRaw } from 'vue-router';
 import { ApiError } from '@/api/gateway';
-import { slice, type SliceJob, type SliceQuery, type SliceResult, type SliceSource } from '@/api/slice';
+import { slice, type SliceJob, type SliceQuery, type SliceResult, type SliceSeverity, type SliceSource } from '@/api/slice';
 import { useJob } from './useJob';
 import { dayStartMs, taipeiDay, taipeiLocal } from './vizTime';
 
@@ -22,6 +25,19 @@ const DEFAULT_HOT_DAYS = 29;
 const learnedHotFrom = ref<{ hotFrom: string; day: string } | null>(null);
 /** 冷查詢忙碌時預設幾秒後重試(後端 details.retryAfter 優先) */
 export const DEFAULT_RETRY_SEC = 10;
+
+/** 摘要:bytes / sent / recv 為 null 表示不適用(威脅類沒有流量欄位;C3) */
+export type SliceSummary = Omit<SliceResult['summary'], 'bytes' | 'sent' | 'recv'> & { bytes: number | null; sent: number | null; recv: number | null };
+
+/** openInSearch 的點選項目(C7);和目前的時段明細條件合併,同名條件以點選的為準 */
+export interface SearchExtra {
+  filterIp?: string;
+  filterApp?: string;
+  filterPort?: number | string;
+  filterCountry?: string;
+  filterThreat?: string;
+  severity?: SliceSeverity;
+}
 
 export function useSlice(opts: { now?: () => number; pollMs?: number } = {}) {
   const now = opts.now ?? Date.now;
@@ -76,14 +92,24 @@ export function useSlice(opts: { now?: () => number; pollMs?: number } = {}) {
     }, 1000);
   }
 
+  /** 點嚴重度之前的條件(setSeverity(null) 回到這裡;open 新條件時清掉) */
+  let severityBase: SliceQuery | null = null;
+
   async function open(q: SliceQuery): Promise<void> {
-    await job.cancel();
+    severityBase = null;
+    return run(q);
+  }
+
+  async function run(q: SliceQuery): Promise<void> {
+    // 先同步換掉條件,取消舊工作的等待期間連點(例:setSeverity 再點同一個 chip 取消)才看得到新條件(程式碼審查)
     stopCountdown();
     retryAfter.value = 0;
     query.value = q;
     direct.value = null;
     failure.value = null;
     loading.value = true;
+    await job.cancel();
+    if (query.value !== q) return;
     const my = q;
     try {
       const r = await slice.get(q);
@@ -110,7 +136,35 @@ export function useSlice(opts: { now?: () => number; pollMs?: number } = {}) {
   }
 
   /** 忙碌倒數結束後重試同一個條件(倒數中呼叫不會送出) */
-  const retry = (): Promise<void> => (query.value && retryAfter.value === 0 ? open(query.value) : Promise.resolve());
+  const retry = (): Promise<void> => (query.value && retryAfter.value === 0 ? run(query.value) : Promise.resolve());
+
+  /** 依嚴重度重查(C4;Top 10 與明細都由後端依嚴重度計算)。null = 取消,回到點嚴重度之前的條件 */
+  async function setSeverity(sev: SliceSeverity | null): Promise<void> {
+    const q = query.value;
+    if (!q || (q.severity ?? null) === sev) return;
+    if (sev === null) {
+      const base: SliceQuery = { ...(severityBase ?? q) };
+      delete base.severity;
+      severityBase = null;
+      return run(base);
+    }
+    severityBase ??= q;
+    const base = severityBase;
+    const next: SliceQuery =
+      (base.type ?? 'traffic') === 'threat'
+        ? { ...base, severity: sev }
+        : // 流量類的摘要 threats 只套用 IP 條件(API.md §4.4),切成威脅類時條件一致
+          { start: base.start, end: base.end, type: 'threat', severity: sev, ip: base.ip, src: base.src, dst: base.dst, rows: base.rows };
+    for (const k of Object.keys(next) as (keyof SliceQuery)[]) if (next[k] === undefined) delete next[k];
+    return run(next);
+  }
+
+  /** 摘要(威脅類的流量欄位為 null = 不適用;C3) */
+  const summary = computed<SliceSummary | null>(() => {
+    const r = result.value;
+    if (!r) return null;
+    return r.type === 'threat' ? { ...r.summary, bytes: null, sent: null, recv: null } : r.summary;
+  });
 
   async function close(): Promise<void> {
     stopCountdown();
@@ -122,20 +176,47 @@ export function useSlice(opts: { now?: () => number; pollMs?: number } = {}) {
     await job.cancel();
   }
 
-  /** Log 明細查詢頁的連結(只限 TRAFFIC;條件格式見 composables/searchQuery.ts,to 含該分鐘) */
-  const searchLink = computed<RouteLocationRaw | null>(() => {
+  /**
+   * Log 明細查詢頁的連結(條件格式見 composables/searchQuery.ts,to 含該分鐘;C7):
+   * 目前的時段明細條件 + extra(點選的項目);威脅類帶 type=THREAT、threat(威脅名稱)、severity
+   */
+  function searchTarget(extra: SearchExtra = {}): RouteLocationRaw | null {
     const q = query.value;
-    if (!q || (q.type ?? 'traffic') !== 'traffic') return null;
+    if (!q) return null;
     const cond: Record<string, string> = { from: taipeiLocal(q.start), to: taipeiLocal(new Date(Date.parse(q.end) - 60_000).toISOString()) };
     for (const k of ['ip', 'src', 'dst', 'app', 'fromZone', 'toZone', 'action', 'country'] as const) if (q[k]) cond[k] = String(q[k]);
     if (q.dport !== undefined) cond.port = String(q.dport);
+    if (q.type === 'threat') {
+      cond.type = 'THREAT';
+      if (q.threatName) cond.threat = q.threatName;
+      if (q.severity) cond.severity = q.severity;
+    }
+    const pick: [keyof SearchExtra, string][] = [
+      ['filterIp', 'ip'],
+      ['filterApp', 'app'],
+      ['filterPort', 'port'],
+      ['filterCountry', 'country'],
+      ['filterThreat', 'threat'],
+      ['severity', 'severity'],
+    ];
+    for (const [k, to] of pick) {
+      const v = extra[k];
+      if (v !== undefined && String(v).trim() !== '') cond[to] = String(v).trim();
+    }
+    // 點了 IP 時,和目前的來源 / 目的 IP 條件可能互相矛盾,以點選的為準
+    if (extra.filterIp) {
+      delete cond.src;
+      delete cond.dst;
+    }
     return { path: '/firewall/search', query: cond };
-  });
-  const openInSearch = async (): Promise<void> => {
-    if (searchLink.value && router) await router.push(searchLink.value);
+  }
+  const searchLink = computed<RouteLocationRaw | null>(() => searchTarget());
+  const openInSearch = async (extra?: SearchExtra): Promise<void> => {
+    const to = searchTarget(extra);
+    if (to && router) await router.push(to);
   };
 
   if (getCurrentScope()) onScopeDispose(stopCountdown);
 
-  return { query, state, source, isCold, result, error, retryAfter, open, retry, close, cancel: () => job.cancel(), searchLink, openInSearch, job: job.job };
+  return { query, state, source, isCold, result, summary, error, retryAfter, open, retry, close, setSeverity, cancel: () => job.cancel(), searchLink, searchTarget, openInSearch, job: job.job };
 }

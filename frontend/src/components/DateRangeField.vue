@@ -215,7 +215,7 @@ onBeforeUnmount(() => {
 }
 .lead,
 .caret {
-  color: var(--text-3);
+  color: var(--text-2);
   flex: none;
 }
 .err {
@@ -285,7 +285,7 @@ onBeforeUnmount(() => {
   color: var(--text);
   font: inherit;
   min-width: 0;
-  color-scheme: light dark;
+  color-scheme: inherit;
 }
 .actions {
   display: flex;

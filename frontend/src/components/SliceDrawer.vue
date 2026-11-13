@@ -13,9 +13,9 @@ import { computed, ref, watch } from 'vue';
 import { fmtNum, fmtSize, fmtTime } from '@/api/format';
 import { ApiError, describeError } from '@/api/gateway';
 import type { HeatCell } from '@/api/heatmap';
-import type { SliceTopItem } from '@/api/slice';
+import type { SliceSeverity, SliceTopItem } from '@/api/slice';
 import { useLivePaQuery } from '@/composables/useLivePaQuery';
-import type { useSlice } from '@/composables/useSlice';
+import type { SearchExtra, useSlice } from '@/composables/useSlice';
 import { formatRange } from '@/composables/vizTime';
 import type { Column } from '@/ui/components/GTable.vue';
 
@@ -64,10 +64,34 @@ const errorText = computed(() => {
   return describeError(err);
 });
 
+/** 嚴重度 chip 點選切換(U4:點選篩選、再點一次取消;C4:useSlice.setSeverity 依嚴重度重查 Top 10 與明細) */
+type SeverityKey = SliceSeverity;
+const SEVERITY_DEFS: readonly { key: SeverityKey; label: string }[] = [
+  { key: 'critical', label: '嚴重' },
+  { key: 'high', label: '高' },
+  { key: 'medium', label: '中' },
+  { key: 'low', label: '低' },
+  { key: 'info', label: '資訊' },
+];
+const selectedSeverity = ref<SeverityKey | null>(null);
+
+watch(
+  () => props.slice.query.value,
+  (q) => {
+    selectedSeverity.value = (q?.severity as SeverityKey | undefined) ?? null;
+  },
+  { immediate: true },
+);
+
+function toggleSeverity(sev: SeverityKey | null) {
+  void props.slice.setSeverity(selectedSeverity.value === sev ? null : sev);
+}
+
 /** 篩選條件標籤 */
 const filterChips = computed(() => {
   const q = props.slice.query.value;
   if (!q) return [];
+  const sevValue = selectedSeverity.value ?? q.severity;
   const labels: Record<string, string> = {
     type: q.type === 'threat' ? '類型: 威脅' : '類型: 流量',
     ip: `IP: ${q.ip}`,
@@ -79,13 +103,14 @@ const filterChips = computed(() => {
     dport: `Port: ${q.dport}`,
     action: q.action === 'block' ? '動作: 阻擋' : `動作: ${q.action}`,
     country: `國家: ${q.country}`,
-    severity: `嚴重度: ${q.severity}`,
+    severity: `嚴重度: ${sevValue}`,
     threatName: `威脅: ${q.threatName}`,
   };
   const out: string[] = [labels.type!];
-  for (const k of ['ip', 'src', 'dst', 'app', 'fromZone', 'toZone', 'dport', 'action', 'country', 'severity', 'threatName'] as const) {
+  for (const k of ['ip', 'src', 'dst', 'app', 'fromZone', 'toZone', 'dport', 'action', 'country', 'threatName'] as const) {
     if (q[k] !== undefined && q[k] !== '') out.push(labels[k]!);
   }
+  if (sevValue) out.push(labels.severity!);
   return out;
 });
 
@@ -139,21 +164,34 @@ const activeTopItems = computed(() => {
   }));
 });
 
-/** 明細表欄位 */
+/** U5 / C7:點選 Top 10 項目或明細表 IP,以該項目開啟 Log 明細查詢 */
+function openItemInSearch(dimKey: string, rawVal: string) {
+  const val = rawVal.replace(/^約\s+/, '').trim();
+  if (!val || val === '—') return;
+  const extra: SearchExtra = {};
+  if (dimKey === 'src' || dimKey === 'dst' || dimKey === 'ip') extra.filterIp = val;
+  else if (dimKey === 'srcCountry' || dimKey === 'dstCountry') extra.filterCountry = val;
+  else if (dimKey === 'app') extra.filterApp = val;
+  else if (dimKey === 'dport') extra.filterPort = val;
+  else if (dimKey === 'name') extra.filterThreat = val;
+  void props.slice.openInSearch(extra);
+}
+
+/** 明細表欄位(U8:時間欄加寬並搭配 nowrap 不換行) */
 const tableColumns = computed<Column[]>(() => {
   const r = props.slice.result.value;
   if (r?.type === 'threat') {
     return [
-      { key: 'time', label: '時間', width: '150px', mono: true },
+      { key: 'time', label: '時間', width: '164px', mono: true },
       { key: 'severity', label: '嚴重度', width: '84px' },
-      { key: 'threatName', label: '威脅名稱' },
+      { key: 'name', label: '威脅名稱' },
       { key: 'src', label: '來源 IP', mono: true },
       { key: 'dst', label: '目的 IP', mono: true },
       { key: 'action', label: '動作', width: '76px' },
     ];
   }
   return [
-    { key: 'time', label: '時間', width: '150px', mono: true },
+    { key: 'time', label: '時間', width: '164px', mono: true },
     { key: 'action', label: '動作', width: '76px' },
     { key: 'src', label: '來源 IP', mono: true },
     { key: 'dst', label: '目的 IP', mono: true },
@@ -163,12 +201,13 @@ const tableColumns = computed<Column[]>(() => {
   ];
 });
 
-const tableRows = computed(() =>
-  (props.slice.result.value?.rows ?? []).map((row, idx) => ({
+const tableRows = computed(() => {
+  const rows = props.slice.result.value?.rows ?? [];
+  return rows.map((row, idx) => ({
     _id: `${idx}-${row.time ?? ''}`,
     ...row,
-  })),
-);
+  }));
+});
 
 function onDrawerToggle(v: boolean) {
   emit('update:modelValue', v);
@@ -286,9 +325,11 @@ function onDrawerToggle(v: boolean) {
       <div class="slice-drawer__kpis">
         <div class="slice-kpi">
           <span class="slice-kpi__lbl">總流量</span>
-          <strong class="slice-kpi__val num">{{ fmtSize(slice.result.value.summary.bytes) }}</strong>
-          <span class="slice-kpi__sub num">
-            ↑ {{ fmtSize(slice.result.value.summary.sent) }} · ↓ {{ fmtSize(slice.result.value.summary.recv) }}
+          <!-- C3:威脅類沒有流量欄位,顯示「不適用」(不是 0 B) -->
+          <strong v-if="slice.summary.value?.bytes == null" class="slice-kpi__val">不適用</strong>
+          <strong v-else class="slice-kpi__val num">{{ fmtSize(slice.summary.value.bytes) }}</strong>
+          <span v-if="slice.summary.value?.bytes != null" class="slice-kpi__sub num">
+            ↑ {{ fmtSize(slice.summary.value.sent ?? 0) }} · ↓ {{ fmtSize(slice.summary.value.recv ?? 0) }}
           </span>
         </div>
         <div class="slice-kpi">
@@ -302,26 +343,40 @@ function onDrawerToggle(v: boolean) {
         </div>
       </div>
 
-      <!-- 各嚴重度威脅統計(critical / high 呼吸光暈 §5) -->
-      <div class="slice-drawer__threats" aria-label="各嚴重度威脅數量">
-        <span class="slice-sev is-critical" :class="{ 'is-glow': slice.result.value.summary.threats.critical > 0 }">
-          嚴重 <strong class="num">{{ fmtNum(slice.result.value.summary.threats.critical) }}</strong>
-        </span>
-        <span class="slice-sev is-high" :class="{ 'is-glow': slice.result.value.summary.threats.high > 0 }">
-          高 <strong class="num">{{ fmtNum(slice.result.value.summary.threats.high) }}</strong>
-        </span>
-        <span class="slice-sev is-medium">
-          中 <strong class="num">{{ fmtNum(slice.result.value.summary.threats.medium) }}</strong>
-        </span>
-        <span class="slice-sev is-low">
-          低 <strong class="num">{{ fmtNum(slice.result.value.summary.threats.low) }}</strong>
-        </span>
-        <span class="slice-sev is-info">
-          資訊 <strong class="num">{{ fmtNum(slice.result.value.summary.threats.info) }}</strong>
-        </span>
+      <!-- 各嚴重度威脅統計:可點選與取消選取(U4;critical / high 呼吸光暈 §5) -->
+      <div class="slice-drawer__threats" role="group" aria-label="各嚴重度威脅數量（點擊可篩選或取消）">
+        <button
+          v-for="sev in SEVERITY_DEFS"
+          :key="sev.key"
+          type="button"
+          class="slice-sev is-interactive"
+          :class="[
+            `is-${sev.key}`,
+            {
+              'is-glow': (sev.key === 'critical' || sev.key === 'high') && slice.result.value.summary.threats[sev.key] > 0,
+              'is-active': selectedSeverity === sev.key,
+              'is-dimmed': selectedSeverity !== null && selectedSeverity !== sev.key,
+            },
+          ]"
+          :aria-pressed="selectedSeverity === sev.key"
+          :title="selectedSeverity === sev.key ? `取消「${sev.label}」嚴重度篩選` : `依「${sev.label}」嚴重度篩選`"
+          @click="toggleSeverity(sev.key)"
+        >
+          <span class="slice-sev__dot" aria-hidden="true" />
+          <span>{{ sev.label }}</span>
+          <strong class="num">{{ fmtNum(slice.result.value.summary.threats[sev.key]) }}</strong>
+        </button>
+        <button
+          v-if="selectedSeverity"
+          type="button"
+          class="slice-sev__clear xs"
+          @click="toggleSeverity(null)"
+        >
+          清除篩選
+        </button>
       </div>
 
-      <!-- Top 10 排行 -->
+      <!-- Top 10 排行(U5:點項目直接開 Log 明細查詢) -->
       <GCard v-if="topKeys.length" title="Top 10 排行" padding="sm">
         <template #actions>
           <div class="slice-drawer__top-tabs" role="tablist" aria-label="Top 10 維度">
@@ -339,11 +394,18 @@ function onDrawerToggle(v: boolean) {
             </button>
           </div>
         </template>
-        <GBarList v-if="activeTopItems.length" :items="activeTopItems" colorful />
-        <GEmpty v-else compact title="此時段無排行資料" />
+        <GBarList
+          v-if="activeTopItems.length"
+          :items="activeTopItems"
+          colorful
+          clickable
+          pick-hint="點擊在 Log 明細查詢開啟"
+          @pick="(item) => openItemInSearch(activeTopKey, item.label)"
+        />
+        <GEmpty v-else compact :title="selectedSeverity ? '此嚴重度下無排行資料' : '此時段無排行資料'" />
       </GCard>
 
-      <!-- 明細表(最多 200 列;rowsTruncated 提示) -->
+      <!-- 明細表(最多 200 列;rowsTruncated 提示;U8 時間欄不換行;U5 點 IP 開 Log 明細查詢) -->
       <GCard title="時段明細紀錄" padding="none">
         <template #actions>
           <span v-if="slice.result.value.rowsTruncated" class="faint xs">
@@ -353,16 +415,41 @@ function onDrawerToggle(v: boolean) {
         </template>
         <GTable :columns="tableColumns" :rows="tableRows" row-key="_id" :page-size="10" dense empty-title="此時段查無明細紀錄">
           <template #cell-time="{ value }">
-            <span class="mono xs">{{ fmtTime(String(value ?? '')) }}</span>
+            <span class="mono xs nowrap">{{ fmtTime(String(value ?? '')) }}</span>
+          </template>
+          <template #cell-src="{ value }">
+            <button
+              v-if="value"
+              type="button"
+              class="slice-ip-btn mono xs nowrap"
+              :title="`在 Log 明細查詢來源 IP ${value}`"
+              @click.stop="openItemInSearch('src', String(value))"
+            >
+              {{ value }}
+            </button>
+            <span v-else class="mono xs nowrap">—</span>
+          </template>
+          <template #cell-dst="{ value }">
+            <button
+              v-if="value"
+              type="button"
+              class="slice-ip-btn mono xs nowrap"
+              :title="`在 Log 明細查詢目的 IP ${value}`"
+              @click.stop="openItemInSearch('dst', String(value))"
+            >
+              {{ value }}
+            </button>
+            <span v-else class="mono xs nowrap">—</span>
           </template>
           <template #cell-action="{ value }">
             <GBadge :tone="value === 'allow' ? 'success' : 'danger'">{{ value }}</GBadge>
           </template>
           <template #cell-severity="{ value }">
-            <GBadge :tone="value === 'critical' ? 'danger' : value === 'high' ? 'warning' : 'info'">{{ value }}</GBadge>
+            <GBadge v-if="value" :tone="value === 'critical' ? 'danger' : value === 'high' ? 'warning' : 'info'">{{ value }}</GBadge>
+            <span v-else class="faint xs">—</span>
           </template>
           <template #cell-bytes="{ value }">
-            <span class="num">{{ fmtSize(typeof value === 'number' ? value : Number(value ?? 0)) }}</span>
+            <span class="num nowrap">{{ fmtSize(typeof value === 'number' ? value : Number(value ?? 0)) }}</span>
           </template>
         </GTable>
       </GCard>
@@ -499,6 +586,7 @@ function onDrawerToggle(v: boolean) {
 .slice-drawer__threats {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
 }
 .slice-sev {
@@ -507,18 +595,90 @@ function onDrawerToggle(v: boolean) {
   gap: 6px;
   padding: 5px 11px;
   border-radius: 999px;
+  font: inherit;
   font-size: var(--fs-xs);
   font-weight: 600;
+  color: var(--text);
   background: var(--glass-soft);
   border: 1px solid var(--line);
+  transition:
+    background var(--dur) var(--ease),
+    border-color var(--dur) var(--ease),
+    box-shadow var(--dur) var(--ease),
+    opacity var(--dur) var(--ease);
+}
+.slice-sev.is-interactive {
+  cursor: pointer;
+}
+.slice-sev.is-interactive:hover {
+  background: var(--glass-hover);
+  border-color: var(--line-strong);
+}
+.slice-sev__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-3);
 }
 .slice-sev.is-critical {
   color: color-mix(in srgb, var(--c-danger) 70%, var(--text));
   border-color: color-mix(in srgb, var(--c-danger) 40%, transparent);
 }
+.slice-sev.is-critical .slice-sev__dot {
+  background: var(--c-danger);
+}
 .slice-sev.is-high {
   color: color-mix(in srgb, var(--c-warning) 65%, var(--text));
   border-color: color-mix(in srgb, var(--c-warning) 40%, transparent);
+}
+.slice-sev.is-high .slice-sev__dot {
+  background: var(--c-warning);
+}
+.slice-sev.is-medium .slice-sev__dot {
+  background: var(--c-info);
+}
+.slice-sev.is-low .slice-sev__dot {
+  background: var(--c-cyan);
+}
+.slice-sev.is-active {
+  background: color-mix(in srgb, var(--c-primary) 16%, var(--glass-strong));
+  border-color: var(--c-primary);
+  box-shadow: 0 0 0 2px var(--focus-ring);
+}
+.slice-sev.is-critical.is-active {
+  background: color-mix(in srgb, var(--c-danger) 18%, var(--glass-strong));
+  border-color: var(--c-danger);
+}
+.slice-sev.is-high.is-active {
+  background: color-mix(in srgb, var(--c-warning) 18%, var(--glass-strong));
+  border-color: var(--c-warning);
+}
+.slice-sev.is-dimmed {
+  opacity: 0.52;
+}
+.slice-sev__clear {
+  border: 0;
+  background: transparent;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font: inherit;
+  color: var(--c-primary-text);
+  font-weight: 600;
+  cursor: pointer;
+}
+.slice-sev__clear:hover {
+  text-decoration: underline;
+}
+.slice-ip-btn {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--c-primary-text);
+  cursor: pointer;
+  text-align: left;
+}
+.slice-ip-btn:hover {
+  text-decoration: underline;
 }
 .slice-sev.is-critical.is-glow {
   animation: pulseCritical 2.4s ease-in-out infinite;

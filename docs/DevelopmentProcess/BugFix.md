@@ -2,6 +2,12 @@
 
 > Bug 修改;新紀錄加在最上方,格式見 `AGENT.md` §11。
 
+## 2026-11-13 V-b2 第一輪驗收:熱力圖未彙總時段畫成 0、嚴重度篩選與跳 Log 條件(C1、C3–C5、C7–C9)
+- 工作項目:V-a、V-b1(`docs/HANDOFF.md`「2026-11-13 V-b2 畫面驗收(第一輪)」;Gemini 畫面修正 U1–U10 commit `ba410a4` 一起進 MR)
+- 內容:C1 熱力圖 11-13 00:00–08:30(彙總上線前)回 `v=0`、`gaps=[]`,違反「沒有資料不等於 0」:彙總表沒有該格一律 `v=null`,並把 `since` 之後的連續缺格列進 `coverage.gaps`(`reason: no-data`)。C3 威脅類時段明細總流量顯示 0 B:`useSlice.summary` 把威脅類的流量欄位轉成 `null`,抽屜顯示「不適用」。C4 嚴重度 chip 只做前端過濾:`useSlice.setSeverity()` 帶 `severity` 重查(後端早已支援)。C5 移除 AD 異常指標。C7 `openInSearch(extra?)` 帶點選的項目與威脅類條件。C8 mock 威脅明細補 `severity`、`name`。C9 `viz.mount.test.ts` 4 項舊規格改新規格。前後端細節見 `BackendCorrection.md`、`FrontendCorrection.md` 同日紀錄。
+- 檔案:同上
+- 驗證:見前後端紀錄
+
 ## 2026-11-13 冷歸檔 NAS 準備腳本:權限檢查誤報
 - 工作項目:C4
 - 內容:`deploy/host2-setup-pa-archive.sh` 的群組權限檢查 `case "$G" in "1000 d???r?x"*)` 把萬用字元 `?` 放在引號內,被當成字面字元,永遠比對不到,權限正確(群組 1000、`r-x`)也印 WARN(需求方 2026-11-13 在主機 2 執行時發現)。改成 `"1000 d"???r?x*`(引號外才是萬用字元)。只影響提示訊息:目錄、標記檔與寫入測試本來就正確,不需要重跑腳本。

@@ -285,8 +285,8 @@ export async function buildApp(
   await app.register(kbRoutes, { kb });
   await app.register(ipNameRoutes, { svc: app.ipNames });
   // AI 分析、問答、語意搜尋、外部 IP 自動學習(IMPL-PLAN A1;deps.ai 只給測試注入假 AI 主機)
-  // AC4:AI 解讀用時段明細(同一人同條件重用 pa-slice 工作)與儀表板快取
-  const explain = { slice: heatSvc.slice, insight: insightSvc };
+  // AC4:AI 解讀用時段明細(同一人同條件重用 pa-slice 工作)與儀表板快取;AC5:熱力圖(同 GET /pa/heatmap 快取)與威脅彙總
+  const explain = { slice: heatSvc.slice, insight: insightSvc, heatmap: heatSvc.heatmap, threat: heatSvc.threatProfile };
   await registerAi(app, { config, traffic, events, ad, kb, ftp, paStore: app.store.pa, chReader, chBuilder, now: deps.chNow, explain, ...deps.ai });
   await app.register(ftpRoutes, {
     ftp,

@@ -9,7 +9,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { AppError } from '../../errors.js';
 import { ClickHouseError } from '../../infra/clickhouse/index.js';
-import type { HeatReader, SliceData, SliceFilter, SliceType } from '../../infra/clickhouse/heat.js';
+import type { HeatReader, SliceData, SliceFilter, SliceType, ThreatProfile } from '../../infra/clickhouse/heat.js';
 import type { LogRecord } from '../../infra/clickhouse/reader.js';
 import { JobRunner, type JobView } from '../../infra/jobs/index.js';
 import type { ColdLock } from '../../infra/redis/cold-lock.js';
@@ -68,6 +68,28 @@ export interface SliceQuery {
   threatName?: string;
   rows?: number;
   sort?: 'time' | 'bytes';
+}
+
+/** AC5 AI 說明威脅的條件:name 為威脅名稱(完全相同)或威脅 ID(只有數字;比對名稱結尾「(ID)」);期間 [from, to) */
+export interface ThreatProfileQuery {
+  name: string;
+  from: string;
+  to: string;
+}
+/** 威脅彙總期間上限(同 Log 明細查詢 30 天再加 1 天的餘裕) */
+export const THREAT_PROFILE_MAX_MS = 31 * DAY_MS;
+/** 期間 2 天以內依小時列筆數,更長依天 */
+const THREAT_PROFILE_HOURLY_MS = 2 * DAY_MS;
+export interface ThreatProfileResult {
+  name: string;
+  match: 'name' | 'id';
+  from: string;
+  to: string;
+  /** 超過原始表保留期限、沒有查的部分(沒有時 null) */
+  skipped: { from: string; to: string } | null;
+  timeGrain: 'hour' | 'day';
+  profile: ThreatProfile;
+  coverage: { partial: boolean; gaps: Gap[]; gapsKnown: boolean };
 }
 
 export interface SliceResult {
@@ -218,6 +240,50 @@ export function createHeatService(d: HeatDeps) {
     if (endMs <= startMs) throw bad('end', '結束時間必須晚於開始時間');
     if (endMs - startMs > SLICE_MAX_MS) throw bad('end', '時段明細最長 1 天');
     return { startMs, endMs };
+  }
+
+  /**
+   * AC5:同一個威脅在期間內的彙總(原始威脅表;快取同熱力圖:含現在或剛結束 1 小時內 60 秒,更早 1 小時)。
+   * 整段超過原始表保留期限回 404 NETOPS_PA_OUT_OF_RETENTION;一部分超過時只查保留期限內,skipped 註明
+   */
+  async function threatProfile(q: ThreatProfileQuery): Promise<ThreatProfileResult> {
+    const bad = (field: string, message: string) => new AppError(400, 'VALIDATION_FAILED', '參數驗證失敗', [{ field, message }]);
+    const name = String(q.name ?? '').trim();
+    if (!name) throw bad('name', '請指定威脅名稱或 ID');
+    const id = /^\d{1,12}$/.test(name) ? name : null;
+    const startMs = Math.floor(Date.parse(q.from) / 60_000) * 60_000;
+    const endMs = Math.floor(Date.parse(q.to) / 60_000) * 60_000;
+    if (Number.isNaN(startMs)) throw bad('from', '時間不正確');
+    if (Number.isNaN(endMs)) throw bad('to', '時間不正確');
+    if (endMs <= startMs) throw bad('to', '結束時間必須晚於開始時間');
+    if (endMs - startMs > THREAT_PROFILE_MAX_MS) throw bad('to', '期間最長 31 天');
+    const floor = hotFloor('threat');
+    if (endMs <= floor)
+      throw new AppError(404, 'NETOPS_PA_OUT_OF_RETENTION', `這段期間超過威脅 log 保留期限:最早只能查 ${isoTaipei(floor)}`, [{ field: 'from', message: `最早 ${isoTaipei(floor)}` }]);
+    const fromMs = Math.max(startMs, floor);
+    const timeGrain = endMs - fromMs <= THREAT_PROFILE_HOURLY_MS ? 'hour' : 'day';
+    const live = endMs > now() - 3600_000;
+    const h = reader();
+    const profile = await viaCh(d.log, () =>
+      d.cache.cached(
+        'ai-threat',
+        { m: id ? `id:${id}` : `name:${name}`, from: fromMs, to: endMs, timeGrain },
+        live ? 60 : 3600,
+        () => h.threatProfile(id ? { idSuffix: `(${id})` } : { name }, fromMs, endMs, timeGrain, SLICE_CH_SECONDS),
+        { longTtl: !live },
+      ),
+    );
+    const { gaps, known } = gapsIn(fromMs, endMs);
+    return {
+      name,
+      match: id ? 'id' : 'name',
+      from: isoTaipei(startMs),
+      to: isoTaipei(endMs),
+      skipped: fromMs > startMs ? { from: isoTaipei(startMs), to: isoTaipei(fromMs) } : null,
+      timeGrain,
+      profile,
+      coverage: { partial: gaps.length > 0, gaps: gaps.map(gapOut), gapsKnown: known },
+    };
   }
 
   function toResult(q: SliceQuery, type: SliceType, source: SliceResult['source'], data: SliceData, rowsLimit: number, startMs: number, endMs: number, t0: number): SliceResult {
@@ -389,6 +455,7 @@ export function createHeatService(d: HeatDeps) {
   return {
     heatmap,
     slice,
+    threatProfile,
     /** 工作狀態(本人);完成時含 result */
     sliceJob: (id: string, owner: string) => jobsOf(id, owner).get<SliceResult>(id, owner, SLICE_KIND),
     /** 取消(冪等):進行中中止,已完成丟棄結果 */

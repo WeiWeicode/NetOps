@@ -4,6 +4,7 @@
  * 問題含「錯誤」時回 error 事件,含「忙碌」時回 429(看畫面的錯誤顯示)。
  */
 import type { MockCtx } from './types.ts';
+import { heatmapResponse, type Granularity, type Metric } from './fixtures/viz.ts';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -66,6 +67,58 @@ const EXPLAIN_INSIGHT = `## 本期摘要
 
 ## 建議追查
 1. 點開 11/12 14:00 的時段明細,看 10.10.1.5 上傳到哪裡。`;
+
+const EXPLAIN_THREAT = `## 這是什麼威脅
+**SSH Brute Force Attempt(40015)** 是 SSH 暴力破解:短時間內大量嘗試登入 SSH(tcp/22),通常是外部掃描或殭屍網路。<img src=x onerror=alert(1)>
+
+## 本期影響
+- 共 **1,284 筆**,集中在 08:00–09:00;方向是外部 → 內部(用戶端 → 伺服器)。
+- 影響主機:**10.10.130.66(FTP 伺服器)** 1,102 筆、10.10.1.5(王小明)182 筆。
+- 防火牆動作全部是 reset-both,**已攔下**。
+
+## 處理建議
+1. 確認 10.10.130.66 是否需要對外開 SSH;不需要就關閉或限制來源。
+2. 檢查 10.10.130.66 的登入紀錄,確認沒有成功登入。
+3. 參考:[請重新登入確認](https://evil.example/login)`;
+
+/** 熱力圖回答:提到前兩個異常時段(畫面上的按鈕會標「回答提到」) */
+const explainHeatmap = (labels: string[]) => `## 異常時段
+${labels
+  .slice(0, 2)
+  .map((l, i) => `${i + 1}. **${l}**:${i ? '阻擋數是同時段中位數的 6.2 倍,下班時間。' : '流量是同一小時中位數的 9.8 倍,集中在 10.10.1.5(王小明)。'}`)
+  .join('\n')}
+
+## 可能原因
+- 可能是排程備份或系統更新(下班時間大量下載)。<img src=x onerror=alert(1)>
+
+## 建議追查
+1. 點下方的異常時段按鈕開時段明細,看 10.10.1.5 連到哪裡。`;
+
+/** 假熱力圖的異常格:值最大的前 6 格(威脅指標先列有嚴重 / 高的) */
+function mockCells(p: Record<string, string>) {
+  const granularity = (p.granularity ?? 'year') as Granularity;
+  const metric = (p.metric ?? 'threat') as Metric;
+  const r = heatmapResponse({ granularity, metric, date: p.date ?? new Date().toISOString().slice(0, 10), now: Date.now() });
+  const step = r.bucketSeconds * 1000;
+  const cells = r.cells
+    .filter((c) => c.v !== null && c.v > 0)
+    .sort((a, b) => (b.v ?? 0) - (a.v ?? 0))
+    .slice(0, 6)
+    .map((c, i) => ({
+      t: c.t,
+      end: new Date(Date.parse(c.t) + step + 8 * 3600_000).toISOString().replace('Z', '+08:00').replace('.000', ''),
+      v: c.v ?? 0,
+      kind: metric === 'threat' ? 'severity' : 'high',
+      ratio: metric === 'threat' ? null : Math.round((9.8 - i) * 10) / 10,
+      offHours: i % 2 === 1,
+      partial: i === 3,
+    }));
+  // 流量另加一格「偏低」
+  const low = metric === 'traffic' ? r.cells.find((c) => c.v !== null && c.v > 0 && !cells.some((x) => x.t === c.t)) : undefined;
+  if (low) cells.push({ t: low.t, end: new Date(Date.parse(low.t) + step + 8 * 3600_000).toISOString().replace('Z', '+08:00').replace('.000', ''), v: low.v ?? 0, kind: 'low', ratio: 0.1, offHours: false, partial: false });
+  const start = (t: string) => (granularity === 'year' ? t.slice(0, 10) : t.slice(0, 16)).replace(/-/g, '/').replace('T', ' ');
+  return { r, cells, labels: cells.map((c) => start(c.t)) };
+}
 
 const contentEvents = (text: string): [string, unknown][] => text.match(/[\s\S]{1,24}/g)!.map((t) => ['content', { text: t }]);
 
@@ -147,6 +200,26 @@ export function handleAi(ctx: MockCtx): boolean {
     if (!ctx.need('netops.ai.use')) return true;
     const p = (b.params ?? {}) as Record<string, string>;
     const slice = b.kind === 'slice';
+    // AC5:威脅說明(名稱含 old 時模擬一部分超過保留期限)、熱力圖異常格
+    if (b.kind === 'threat' || b.kind === 'heatmap') {
+      const base5 = { model: 'Qwen3.6-35B-A3B-FP8', source: 'clickhouse', contextChars: 1800, clipped: false, notes: [], vectorError: false, gapsKnown: true };
+      let meta: Record<string, unknown>;
+      let text: string;
+      if (b.kind === 'threat') {
+        const old = String(p.name ?? '').toLowerCase().includes('old');
+        meta = { ...base5, kind: 'threat', name: p.name, match: /^\d+$/.test(String(p.name)) ? 'id' : 'name', from: p.from, to: p.to, count: 1284, partial: false, skipped: old ? { from: p.from, to: '2026-11-04T00:00:00+08:00' } : null };
+        text = EXPLAIN_THREAT;
+      } else {
+        const m = mockCells(p);
+        meta = { ...base5, kind: 'heatmap', granularity: m.r.granularity, metric: m.r.metric, date: m.r.date, from: m.r.from, to: m.r.to, partial: m.cells.some((c) => c.partial), nulls: m.r.cells.filter((c) => c.v === null).length, cells: m.cells };
+        text = explainHeatmap(m.labels);
+      }
+      const events: [string, unknown][] = [['meta', meta]];
+      if (b.think) events.push(['thinking', { chars: 500 }]);
+      events.push(...contentEvents(text), ['done', { finish: 'stop', truncated: false }]);
+      void stream(ctx, events, 40);
+      return true;
+    }
     const base = { model: 'Qwen3.6-35B-A3B-FP8', source: 'clickhouse', contextChars: 2400, clipped: false, notes: [{ id: '202611021030-a1b2c3', title: '10.10.130.66 FTP 伺服器', related: true }], vectorError: false };
     const meta = slice
       ? { ...base, kind: 'slice', type: p.type ?? 'traffic', start: p.start, end: p.end, sliceSource: 'hot', partial: false, gapsKnown: true, waited: String(p.ip ?? p.src ?? '').includes('.66') }

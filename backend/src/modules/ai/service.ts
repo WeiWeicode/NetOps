@@ -27,8 +27,25 @@ import { ASK_PROMPT, buildContext, EVENT_Q, kbSection, SYSTEM_PROMPT } from './c
 import { buildCondition, createCollector, parseQuestion } from './core/evidence.js';
 import type { SseStream } from './sse.js';
 import type { AiSource, ChAiSource } from './ch-source.js';
-import { EXPLAIN_PROMPT, INSIGHT_TASK, SLICE_TASK, sliceContext, threatInsightContext, trafficInsightContext, type SliceForAi, type ThreatInsightForAi, type TrafficInsightForAi, type TrafficPrev } from './core/explain.js';
-import type { SliceQuery } from '../pa-heat/service.js';
+import {
+  EXPLAIN_PROMPT,
+  HEATMAP_TASK,
+  heatmapContext,
+  INSIGHT_TASK,
+  SLICE_TASK,
+  sliceContext,
+  THREAT_TASK,
+  threatContext,
+  threatInsightContext,
+  trafficInsightContext,
+  type SliceForAi,
+  type ThreatForAi,
+  type ThreatInsightForAi,
+  type TrafficInsightForAi,
+  type TrafficPrev,
+} from './core/explain.js';
+import { pickHeatAnomalies, type HeatmapForAi } from './core/anomaly.js';
+import type { SliceQuery, ThreatProfileQuery } from '../pa-heat/service.js';
 import { ipsInText } from '../ip-names/core.js';
 import { dayOut, logTimeOut } from '../../shared/time.js';
 
@@ -68,7 +85,7 @@ const forAi = notesForAi as unknown as (notes: unknown[], whole: unknown, max: n
 
 export type AiService = ReturnType<typeof createAiService>;
 
-/** AC4:AI 解讀的資料來源(pa-heat 時段明細、pa-insight 儀表板;未提供時回 503) */
+/** AC4 / AC5:AI 解讀的資料來源(pa-heat 時段明細、熱力圖、威脅彙總,pa-insight 儀表板;未提供時回 503) */
 export interface ExplainSources {
   /** 同 HeatService.slice:200 = 結果,202 = 工作狀態(還在查) */
   slice?: (owner: string, q: SliceQuery, waitMs: number) => Promise<{ status: 200 | 202; body: unknown }>;
@@ -77,9 +94,18 @@ export interface ExplainSources {
     threat(q: { from: string; to: string }): Promise<unknown>;
     trafficPrev(q: { from: string; to: string }): Promise<TrafficPrev | null>;
   };
+  /** AC5:同 HeatService.heatmap(Redis 快取) */
+  heatmap?: (q: HeatmapParams) => Promise<unknown>;
+  /** AC5:同 HeatService.threatProfile(Redis 快取) */
+  threat?: (q: ThreatProfileQuery) => Promise<ThreatForAi>;
 }
 export type InsightParams = { view: 'traffic' | 'threat'; from: string; to: string };
-export type ExplainInput = { kind: 'slice'; params: SliceQuery } | { kind: 'insight'; params: InsightParams };
+export type HeatmapParams = { granularity: 'year' | 'month' | 'day'; metric: 'traffic' | 'deny' | 'threat'; date?: string };
+export type ExplainInput =
+  | { kind: 'slice'; params: SliceQuery }
+  | { kind: 'insight'; params: InsightParams }
+  | { kind: 'threat'; params: ThreatProfileQuery }
+  | { kind: 'heatmap'; params: HeatmapParams };
 /** 時段明細工作最多等多久(工作本身 120 秒逾時;再加排隊的餘裕) */
 export const EXPLAIN_SLICE_WAIT_MS = 180_000;
 /** 等時段明細工作時每次等多久 */
@@ -424,7 +450,9 @@ export function createAiService(deps: {
 
   type ExplainCtx =
     | { kind: 'slice'; owner: string; params: SliceQuery; first: { status: 200 | 202; body: unknown } }
-    | { kind: 'insight'; params: InsightParams; data: TrafficInsightForAi | ThreatInsightForAi; prev: TrafficPrev | null; prevError: boolean };
+    | { kind: 'insight'; params: InsightParams; data: TrafficInsightForAi | ThreatInsightForAi; prev: TrafficPrev | null; prevError: boolean }
+    | { kind: 'threat'; data: ThreatForAi }
+    | { kind: 'heatmap'; data: HeatmapForAi };
 
   const noSource = () => new AppError(503, 'NETOPS_CLICKHOUSE_UNAVAILABLE', 'PA log 資料庫(ClickHouse)暫時無法使用,請稍後再試');
 
@@ -432,6 +460,8 @@ export function createAiService(deps: {
    * 驗證並取資料(串流開始前,錯誤回 4xx / 503):
    *   slice:送出(或重用)同一人同條件的時段明細工作,不等(還在查時串流裡再等);參數錯誤、冷資料未提供等錯誤照 GET /pa/slice
    *   insight:儀表板資料(快取命中不重查 ClickHouse);流量另取前一期合計,前一期取不到(忙碌、期間太早)只在資料中註明
+   *   threat(AC5):同一個威脅的彙總(快取;整段超過保留期限 404)
+   *   heatmap(AC5):熱力圖格子(同 GET /pa/heatmap 的快取)
    */
   async function prepareExplanation(input: ExplainInput, owner: string): Promise<ExplainCtx> {
     llmOf();
@@ -439,6 +469,14 @@ export function createAiService(deps: {
     if (input.kind === 'slice') {
       if (!src?.slice) throw noSource();
       return { kind: 'slice', owner, params: input.params, first: await src.slice(owner, input.params, 0) };
+    }
+    if (input.kind === 'threat') {
+      if (!src?.threat) throw noSource();
+      return { kind: 'threat', data: await src.threat(input.params) };
+    }
+    if (input.kind === 'heatmap') {
+      if (!src?.heatmap) throw noSource();
+      return { kind: 'heatmap', data: (await src.heatmap(input.params)) as HeatmapForAi };
     }
     if (!src?.insight) throw noSource();
     const p = input.params;
@@ -487,6 +525,30 @@ export function createAiService(deps: {
       ({ text, clipped } = sliceContext(r));
       task = SLICE_TASK;
       info = { kind: 'slice', type: r.type, start: r.start, end: r.end, sliceSource: r.source, partial: r.coverage.partial, gapsKnown: r.coverage.gapsKnown, waited: got.waited };
+    } else if (ctx.kind === 'threat') {
+      const r = ctx.data;
+      ({ text, clipped } = threatContext(r));
+      task = THREAT_TASK;
+      info = { kind: 'threat', name: r.name, match: r.match, from: r.from, to: r.to, count: r.profile.count, skipped: r.skipped, partial: r.coverage.partial, gapsKnown: r.coverage.gapsKnown };
+    } else if (ctx.kind === 'heatmap') {
+      const d = ctx.data;
+      const picked = pickHeatAnomalies(d);
+      ({ text, clipped } = heatmapContext(d, picked));
+      task = HEATMAP_TASK;
+      // 畫面依 cells 列出異常時段按鈕(點了開時段明細);只回時間與數值,不回 IP
+      const cell = (a: (typeof picked.anomalies)[number]) => ({ t: a.t, end: a.end, v: a.v, kind: a.kind, ratio: a.ratio, offHours: a.offHours, partial: a.partial });
+      info = {
+        kind: 'heatmap',
+        granularity: d.granularity,
+        metric: d.metric,
+        date: d.date,
+        from: d.from,
+        to: d.to,
+        partial: picked.stats.partial > 0,
+        gapsKnown: d.coverage.gapsKnown,
+        nulls: picked.stats.nulls,
+        cells: [...picked.anomalies.map(cell), ...picked.lows.map(cell)],
+      };
     } else {
       const d = ctx.data;
       ({ text, clipped } = d.view === 'traffic' ? trafficInsightContext(d, ctx.prev) : threatInsightContext(d));

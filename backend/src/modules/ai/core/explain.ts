@@ -2,12 +2,16 @@
  * AI 解讀(AC4,IMPL-PLAN「AC」、ARCHITECTURE D44 ③):POST /ai/explanations 的提示詞與資料整理(純函式)。
  *   slice    時段明細(GET /pa/slice 的結果):summary 與各 Top 10;**不送明細列(rows)**
  *   insight  分析儀表板(GET /pa/insight/{view} 的結果):趨勢摘要(合計、高峰)、Top 10、與前一期比較
+ *   threat   (AC5)同一個威脅在期間內的彙總:嚴重度、類別、方向、App / Port、國家、筆數、影響主機
+ *   heatmap  (AC5)熱力圖:整體統計與系統挑出的異常格(core/anomaly.ts;不送全部格子)
  * 規則(IMPL-PLAN AC 共通規則):
  *   - 只送統計與彙整,不送原始 log(AGENT.md §7.4);IP 與姓名不遮罩(AQ2),帳密、Token 等機密本來就不在統計裡
  *   - 後端自己取資料(呼叫端傳入的是後端查到的結果,不是前端送來的統計),畫面可控的文字不會進提示詞
  *   - PA 欄位(App、威脅名稱、國家、區域)是外部可影響的文字:去掉控制字元與換行、每欄截斷,整段資料有字數上限
  *   - 資料不完整(coverage 缺口、前一期資料不足)要寫進資料,模型回答時說明
  */
+import type { ProfileItem, ThreatProfile, ThreatProfileDim } from '../../../infra/clickhouse/heat.js';
+import type { AnomalyCell, HeatmapForAi, HeatStats } from './anomaly.js';
 import { ENV_NOTES, EV_NOTES } from './context.js';
 
 /** 送給模型的資料(不含系統提示、IP 對照、知識庫)字數上限 */
@@ -281,6 +285,128 @@ export function threatInsightContext(d: ThreatInsightForAi, max = EXPLAIN_MAX_CH
   );
 }
 
+/* ───────── 威脅(AC5) ───────── */
+
+export interface ThreatForAi {
+  name: string;
+  match: 'name' | 'id';
+  from: string;
+  to: string;
+  skipped: { from: string; to: string } | null;
+  timeGrain: 'hour' | 'day';
+  profile: ThreatProfile;
+  coverage: { partial: boolean; gaps: { from: string; to: string; reason: string }[]; gapsKnown: boolean };
+}
+
+const THREAT_DIM_LABELS: [ThreatProfileDim, string][] = [
+  ['severity', '嚴重度'],
+  ['category', '威脅類別'],
+  ['subtype', '子類型'],
+  ['direction', '方向'],
+  ['action', '防火牆動作'],
+  ['src', '來源 IP（影響主機）'],
+  ['dst', '目的 IP（影響主機）'],
+  ['app', 'App'],
+  ['port', '協定 / 目的 Port'],
+  ['srcCountry', '來源國家'],
+  ['dstCountry', '目的國家'],
+];
+/** PA 的方向值 → 中文(其他值照原文) */
+const DIRECTION_TEXT: Record<string, string> = { 'client-to-server': '用戶端 → 伺服器', 'server-to-client': '伺服器 → 用戶端' };
+/** UTC 毫秒 → 'yyyy/MM/dd HH:mm'(台灣) */
+const msText = (ms: number | null) => (ms === null ? '—' : hm(new Date(ms + 8 * 3600_000).toISOString()));
+
+export function threatContext(r: ThreatForAi, max = EXPLAIN_MAX_CHARS): { text: string; clipped: boolean } {
+  const p = r.profile;
+  const id = clean(r.name, 20);
+  const head = [
+    `## 威脅：${clean(r.name, 200)}（${hm(r.from)} ~ ${hm(r.to)}，只算威脅類 log）`,
+    `- 比對方式：${r.match === 'id' ? `威脅 ID ${id}（名稱結尾為「(${id})」的全部威脅）` : '名稱完全相同'}`,
+    `- 本期筆數：${n(p.count)} 筆（含 Repeat Count 共 ${n(p.repeat)} 次）`,
+    p.count ? `- 第一次 ${msText(p.first)}，最後一次 ${msText(p.last)}；不同來源 IP ${n(p.srcs)} 個、目的 IP ${n(p.dsts)} 個` : '- 這段期間沒有這個威脅的紀錄',
+  ];
+  const cov: string[] = [];
+  if (r.skipped) cov.push(`- ${hm(r.skipped.from)} ~ ${hm(r.skipped.to)} 超過威脅 log 保留期限，沒有查（不代表沒有發生）`);
+  if (r.coverage.partial)
+    cov.push(`- 資料不完整：期間內有 ${r.coverage.gaps.length} 段已知缺口（FTP 對帳發現少資料），實際筆數可能更多：${r.coverage.gaps.slice(0, 5).map((g) => `${hm(g.from)}~${hm(g.to)}`).join('、')}`);
+  else if (!r.coverage.gapsKnown) cov.push('- 這段期間尚未完成每日 FTP 對帳檢查，無法確認資料是否完整');
+  const list = (items: ProfileItem[], k: ThreatProfileDim) =>
+    items.slice(0, TOP).map(([key, cnt, rep], i) => {
+      const v = clean(key, k === 'src' || k === 'dst' ? 64 : FIELD_MAX) || '（空白）';
+      return `${i + 1}. ${k === 'direction' ? (DIRECTION_TEXT[v] ?? v) : v}｜${n(cnt)} 筆${rep !== cnt ? `（${n(rep)} 次）` : ''}`;
+    });
+  const names = r.match === 'id' && p.dims.name.length ? `## 符合的威脅名稱\n${list(p.dims.name, 'name').join('\n')}` : '';
+  const dims = THREAT_DIM_LABELS.filter(([k]) => p.dims[k]?.length).map(([k, label]) => `## ${label}\n${list(p.dims[k], k).join('\n')}`);
+  const unit = r.timeGrain === 'hour' ? '小時' : '日期';
+  const time = p.dims.time.length ? `## 每${r.timeGrain === 'hour' ? '小時' : '天'}筆數（沒列出的${unit}是 0 筆）\n${p.dims.time.map(([k, cnt]) => `- ${clean(k, 20).replace(/-/g, '/')}｜${n(cnt)} 筆`).join('\n')}` : '';
+  // 影響主機(IP)排在前面:超過上限時先省略後面的 App、國家與時間分布
+  return joinCapped([head.join('\n'), cov.length ? `## 資料完整度\n${cov.join('\n')}` : '', names, ...dims, time], max);
+}
+
+/* ───────── 熱力圖(AC5) ───────── */
+
+const METRIC_TEXT: Record<HeatmapForAi['metric'], string> = {
+  traffic: '總流量（位元組）',
+  deny: '阻擋數（非 allow 的連線數）',
+  threat: '威脅分數（10×嚴重 + 5×高 + 2×中 + 1×低，只算威脅類 log 的筆數）',
+};
+const GRAN_TEXT: Record<HeatmapForAi['granularity'], string> = { year: '年視圖（53 週，每格 1 天）', month: '月視圖（每格 1 小時）', day: '日視圖（每格 5 分鐘）' };
+const WEEK = ['日', '一', '二', '三', '四', '五', '六'];
+const BASELINE_TEXT: Record<HeatStats['baseline'], string> = {
+  'hour-of-day': '同一個小時（本月每天的同一小時）的中位數',
+  weekday: '平日或假日的中位數',
+  all: '整段期間的中位數',
+};
+
+/** 格子的時段文字(開始時間的寫法和畫面上的異常時段按鈕相同:yyyy/MM/dd HH:mm,年視圖 yyyy/MM/dd) */
+export function cellLabel(t: string, end: string, g: HeatmapForAi['granularity']): string {
+  const dow = WEEK[new Date(`${t.slice(0, 10)}T00:00:00Z`).getUTCDay()];
+  if (g === 'year') return `${hm(t).slice(0, 10)}（週${dow}）`;
+  return `${hm(t)}~${hm(end).slice(11)}（週${dow}）`;
+}
+
+export function heatmapContext(d: HeatmapForAi, picked: { stats: HeatStats; anomalies: AnomalyCell[]; lows: AnomalyCell[] }, max = EXPLAIN_MAX_CHARS): { text: string; clipped: boolean } {
+  const { stats, anomalies, lows } = picked;
+  const fmt = (v: number) => (d.metric === 'traffic' ? size(v) : d.metric === 'deny' ? `${n(Math.round(v))} 次` : `${n(Math.round(v))} 分`);
+  const head = [
+    `## 活動熱力圖：${GRAN_TEXT[d.granularity]}，${hm(d.from).slice(0, 10)} ~ ${hm(d.to).slice(0, 10)}（不含結束日）`,
+    `- 指標：${METRIC_TEXT[d.metric]}`,
+    `- 格子：共 ${n(stats.cells)} 格，有資料 ${n(stats.withData)} 格${stats.nulls ? `，沒有資料 ${n(stats.nulls)} 格（不能當成 0）` : ''}`,
+    d.coverage.since ? `- 彙總資料最早從 ${hm(d.coverage.since)} 開始` : '- 彙總表沒有資料',
+  ];
+  if (stats.partial)
+    head.push(
+      `- 資料不完整：${n(stats.partial)} 格落在已知缺口（FTP 對帳缺口或沒收到資料），數量可能少算：${d.coverage.gaps
+        .slice(0, 5)
+        .map((g) => `${hm(g.from)}~${hm(g.to).slice(11)}`)
+        .join('、')}${d.coverage.gaps.length > 5 ? ' …' : ''}`,
+    );
+  else if (!d.coverage.gapsKnown) head.push('- 尚未完成每日 FTP 對帳檢查，無法確認資料是否完整');
+  const sum = [
+    '## 整體統計（只算有資料的格子）',
+    `- 合計 ${fmt(stats.sum)}；平均每格 ${fmt(stats.mean)}；中位數 ${fmt(stats.median)}；P90 ${fmt(stats.p90)}`,
+    stats.max ? `- 最大值：${hm(stats.max.t)}｜${fmt(stats.max.v)}` : '',
+    `- 等級分布：0 級 ${n(stats.levels[0])} 格、1 級 ${n(stats.levels[1])} 格、2 級 ${n(stats.levels[2])} 格、3 級 ${n(stats.levels[3])} 格、4 級 ${n(stats.levels[4])} 格${d.metric === 'threat' ? '（4 = 有嚴重、3 = 有高、2 = 有中、1 = 只有低 / 資訊）' : '（依本視圖的 25 / 50 / 75 百分位）'}`,
+    `- 比較基準：${BASELINE_TEXT[stats.baseline]}；偏離程度以穩健標準差（MAD）為單位`,
+  ].filter(Boolean);
+  const line = (a: AnomalyCell, i: number) => {
+    const t = a.tip;
+    const ip = [t.topIp.traffic && `流量最多約 ${clean(t.topIp.traffic, 64)}`, t.topIp.deny && `阻擋最多約 ${clean(t.topIp.deny, 64)}`, t.topIp.threat && `威脅最多約 ${clean(t.topIp.threat, 64)}`]
+      .filter(Boolean)
+      .join('、');
+    return [
+      `${i + 1}. ${cellLabel(a.t, a.end, d.granularity)}${a.offHours ? '（下班時間 / 假日）' : ''}${a.partial ? '（資料不完整）' : ''}`,
+      `   ${fmt(a.v)}｜基準 ${fmt(a.baseline)}${a.ratio !== null ? `，${a.ratio} 倍` : ''}｜偏離 ${a.z}`,
+      `   連線 ${n(t.sessions)}、流量 ${size(t.bytes)}、阻擋 ${n(t.deny)}、威脅 ${sevText(t.threats)}${ip ? `｜${ip}` : ''}`,
+    ].join('\n');
+  };
+  const hi = anomalies.length
+    ? `## 異常格（系統依統計挑出，共 ${anomalies.length} 格${d.metric === 'threat' ? '；先列有嚴重 / 高風險威脅的格子' : '；依偏離程度排序'}）\n${anomalies.map(line).join('\n')}`
+    : '## 異常格\n- 依統計沒有明顯偏高的格子';
+  const lo = lows.length ? `## 異常低（明顯低於基準，可能是斷線、設備停機或資料缺漏）\n${lows.map(line).join('\n')}` : '';
+  return joinCapped([head.join('\n'), sum.join('\n'), hi, lo], max);
+}
+
 /* ───────── 提示詞 ───────── */
 
 export const EXPLAIN_PROMPT = `你是企業 IT 的資深網路與資安顧問，協助 MIS 人員解讀 Palo Alto PA-560 防火牆畫面上的統計。
@@ -311,3 +437,19 @@ export const INSIGHT_TASK = `請摘要本期的異常，依以下章節輸出：
 （和前一期比較的明顯增減、高峰時段、集中在少數 IP / App / 國家 / 威脅名稱的情況；前一期不比較時說明原因）
 ## 建議追查
 （具體列出要點開哪個時段或哪個 IP 的時段明細確認）`;
+
+export const THREAT_TASK = `請說明這個威脅並提供處理建議，依以下章節輸出：
+## 這是什麼威脅
+（依名稱、威脅 ID 與類別說明是哪一類攻擊或惡意行為；不確定時標明「可能」，不可編造 CVE 編號或資料中沒有的細節）
+## 本期影響
+（筆數與時間分布、方向（外部對內部 / 內部對外部）、影響的主機（IP，有 IP 對照表時寫出使用者或設備）、防火牆動作是否已攔下）
+## 處理建議
+（依優先順序列出：要不要立即處理、要檢查哪台主機、可調整的防火牆設定（例如安全設定檔、封鎖來源 IP / 國家）；動作已是 reset / drop / block 時說明已攔下，重點放在確認主機本身）`;
+
+export const HEATMAP_TASK = `請指出熱力圖中的異常時段，依以下章節輸出：
+## 異常時段
+（依重要性列出 3–6 個；每個照資料中的寫法寫出開始時間（例如 2026/11/11 08:00），再寫數值與為什麼異常。異常格只是系統依統計挑出的候選，你要判斷哪些真的值得注意；沒有明顯異常就直接說明）
+## 可能原因
+（依資料推測，例如備份、系統更新、掃描、攻擊、斷線；要標明「可能」）
+## 建議追查
+（要點開哪個時段的時段明細確認、看哪個 IP；畫面下方有異常時段按鈕，可直接開啟時段明細）`;

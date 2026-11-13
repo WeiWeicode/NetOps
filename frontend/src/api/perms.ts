@@ -40,6 +40,8 @@ export const UI = {
   // AC4:熱力圖的時段明細「AI 解讀這個時段」、儀表板「AI 摘要本期異常」與其時段明細(POST /ai/explanations)
   paHeatmapAi: 'netops.pa-heatmap.ai',
   paInsightAi: 'netops.pa-insight.ai',
+  // AC5:熱力圖「AI 指出異常格」與時段明細威脅列沿用上面兩個;Log 明細查詢威脅列「AI 說明威脅」
+  paSearchAi: 'netops.pa-search.ai',
 } as const;
 
 export const API = {

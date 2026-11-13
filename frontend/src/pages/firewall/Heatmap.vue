@@ -5,10 +5,16 @@
  *   - 日視圖超過 1 年(NETOPS_HEATMAP_OUT_OF_RETENTION):顯示「每 5 分鐘資料只保留 1 年,最早可查 {earliest}」
  *   - coverage.since 之前顯示「此日期前沒有資料」;partial 標示「此時段資料不完整」
  *   - 點格子 → 開 SliceDrawer(useSlice.open);雙擊或抽屜「下鑽」→ useHeatmap.drill
+ *   - AC5「AI 指出異常格」(按鈕權限 netops.pa-heatmap.ai):對話框送目前顯示的粒度 / 指標 / 日期,後端挑出異常格交給 AI;
+ *     回答下方列出異常時段按鈕(回答提到的排前面),點了關掉對話框、開該格的時段明細(可再用 AC4 時段解讀)
  */
 import { computed, ref, watch } from 'vue';
 import { fmtNum, fmtShort, fmtSize } from '@/api/format';
-import { ApiError, describeError } from '@/api/gateway';
+import type { ExplainInput, ExplainMeta } from '@/api/ai';
+import { ApiError, can, describeError } from '@/api/gateway';
+import AiExplainPanel from '@/components/AiExplainPanel.vue';
+import { anomalyChips, type AnomalyChip } from '@/composables/useAiExplain';
+import { toast } from '@/ui';
 import type { HeatCell, PaHeatMetric } from '@/api/heatmap';
 import { UI } from '@/api/perms';
 import SliceDrawer from '@/components/SliceDrawer.vue';
@@ -122,6 +128,34 @@ function onDrill(cell: HeatCell) {
 function drillFromDrawer() {
   if (selectedCell.value) onDrill(selectedCell.value);
 }
+
+/* ───── AC5:AI 指出異常格 ───── */
+const canAi = computed(() => can(UI.paHeatmapAi));
+const aiOpen = ref(false);
+/** 目前「顯示中」的熱力圖(不是工具列上還在載入的條件) */
+const aiInput = computed<ExplainInput | null>(() => {
+  const d = h.data.value;
+  return d ? { kind: 'heatmap', params: { granularity: d.granularity, metric: d.metric, date: d.date } } : null;
+});
+const METRIC_TEXT: Record<string, string> = { threat: '威脅等級', traffic: '總流量', deny: '阻擋數' };
+const aiSubtitle = computed(() => (h.data.value ? `${METRIC_TEXT[h.data.value.metric] ?? ''} · ${periodLabel.value}` : ''));
+const KIND_TEXT: Record<AnomalyChip['kind'], string> = { high: '偏高', low: '偏低', severity: '嚴重 / 高風險' };
+function chipValue(c: AnomalyChip, m: ExplainMeta | null): string {
+  const v = m?.metric === 'traffic' ? fmtSize(c.v) : m?.metric === 'deny' ? `${fmtNum(c.v)} 次` : `${fmtNum(c.v)} 分`;
+  return c.ratio !== null && c.kind !== 'severity' ? `${v}(${c.ratio} 倍)` : v;
+}
+function openAnomaly(c: AnomalyChip) {
+  const cell = h.cells.value.find((x) => x.t === c.t);
+  if (!cell) {
+    toast.info('熱力圖已換了期間,找不到這個時段');
+    return;
+  }
+  aiOpen.value = false;
+  onSelect(cell);
+}
+const CHIP_HINT = ',點選開啟時段明細(可再用「AI 解讀這個時段」)';
+const chipAria = (c: AnomalyChip, m: ExplainMeta | null) =>
+  [c.label, KIND_TEXT[c.kind], chipValue(c, m), c.mentioned ? 'AI 回答有提到' : '', c.partial ? '資料不完整' : '', '開啟時段明細'].filter(Boolean).join(',');
 </script>
 
 <template>
@@ -130,6 +164,9 @@ function drillFromDrawer() {
       title="活動熱力圖"
       subtitle="長期活動視圖（年 53 週直式由新到舊 / 月 24 小時 / 日 5 分鐘）；點擊有資料格子開啟時段明細，雙擊或按 Shift+Enter 下鑽至日視圖"
     >
+      <GButton v-if="canAi" size="sm" variant="primary" icon="sparkles" :disabled="!aiInput || h.loading.value" @click="aiOpen = true">
+        AI 指出異常格
+      </GButton>
       <GButton size="sm" variant="secondary" icon="refresh" :loading="h.loading.value" @click="h.refresh()">
         重新整理
       </GButton>
@@ -283,10 +320,162 @@ function drillFromDrawer() {
       :ai-perm="UI.paHeatmapAi"
       @drill="drillFromDrawer"
     />
+
+    <!-- AC5:AI 指出異常格(開啟時自動開始;關閉時中斷) -->
+    <GModal v-if="canAi" v-model:open="aiOpen" title="AI 指出異常格" :subtitle="aiSubtitle" icon="sparkles" width="880px">
+      <AiExplainPanel
+        v-if="aiOpen"
+        :input="aiInput"
+        title="熱力圖異常格"
+        start-label="開始分析"
+        hint="只把熱力圖的整體統計與系統挑出的異常格(不是全部格子、不是原始 log)送到公司內部的 AI 服務,不會傳到外部"
+        frame="plain"
+        auto-start
+      >
+        <template #default="{ meta, text }">
+          <div v-if="anomalyChips(meta, text).length" class="viz-ai-cells">
+            <p class="xs faint viz-ai-cells__hint">系統挑出的異常時段{{ h.canSlice.value ? CHIP_HINT : '' }}</p>
+            <ul class="viz-ai-cells__list" aria-label="異常時段">
+              <li v-for="c in anomalyChips(meta, text)" :key="c.t">
+                <button
+                  type="button"
+                  class="viz-ai-cell"
+                  :class="[`is-${c.kind}`, { 'is-mentioned': c.mentioned }]"
+                  :disabled="!h.canSlice.value"
+                  :aria-label="chipAria(c, meta)"
+                  @click="openAnomaly(c)"
+                >
+                  <span class="viz-ai-cell__dot" aria-hidden="true" />
+                  <span class="viz-ai-cell__time mono">{{ c.label }}</span>
+                  <span class="viz-ai-cell__meta">
+                    <span class="viz-ai-cell__kind">{{ KIND_TEXT[c.kind] }}</span>
+                    <span class="num">{{ chipValue(c, meta) }}</span>
+                  </span>
+                  <span v-if="c.mentioned" class="viz-ai-cell__tag">回答提到</span>
+                  <span v-if="c.partial" class="viz-ai-cell__tag is-warn">不完整</span>
+                  <span v-if="c.offHours" class="viz-ai-cell__tag is-muted">下班 / 假日</span>
+                </button>
+              </li>
+            </ul>
+          </div>
+        </template>
+      </AiExplainPanel>
+    </GModal>
   </div>
 </template>
 
 <style scoped>
+/* AC5 異常時段按鈕:顏色之外另有文字(偏高 / 偏低 / 嚴重)與標籤,不只靠顏色分辨 */
+.viz-ai-cells {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.viz-ai-cells__hint {
+  margin: 0;
+}
+.viz-ai-cells__list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.viz-ai-cell {
+  --cell-tone: var(--c-warning);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, var(--cell-tone) 35%, var(--line));
+  background: color-mix(in srgb, var(--cell-tone) 7%, var(--glass-soft));
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    background-color 0.15s ease,
+    transform 0.15s ease;
+}
+.viz-ai-cell.is-severity {
+  --cell-tone: var(--c-danger);
+}
+.viz-ai-cell.is-low {
+  --cell-tone: var(--c-info);
+}
+.viz-ai-cell.is-mentioned {
+  border-width: 2px;
+  padding: 7px 9px;
+}
+.viz-ai-cell:hover:not(:disabled) {
+  border-color: var(--cell-tone);
+  background: color-mix(in srgb, var(--cell-tone) 14%, var(--glass-soft));
+  transform: translateY(-1px);
+}
+.viz-ai-cell:focus-visible {
+  outline: 2px solid var(--c-primary);
+  outline-offset: 2px;
+}
+.viz-ai-cell:disabled {
+  cursor: default;
+  opacity: 0.8;
+}
+.viz-ai-cell__dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--cell-tone);
+}
+.viz-ai-cell__time {
+  font-size: var(--fs-sm, 0.875rem);
+  font-weight: 600;
+}
+.viz-ai-cell__meta {
+  display: inline-flex;
+  gap: 6px;
+  font-size: var(--fs-xs, 0.75rem);
+}
+.viz-ai-cell__kind {
+  color: var(--cell-tone);
+  font-weight: 600;
+}
+.viz-ai-cell__tag {
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: var(--fs-xs, 0.75rem);
+  line-height: 18px;
+  color: var(--c-primary);
+  background: color-mix(in srgb, var(--c-primary) 14%, transparent);
+}
+.viz-ai-cell__tag.is-warn {
+  color: var(--c-warning);
+  background: color-mix(in srgb, var(--c-warning) 14%, transparent);
+}
+.viz-ai-cell__tag.is-muted {
+  color: inherit;
+  opacity: 0.75;
+  background: color-mix(in srgb, currentColor 8%, transparent);
+}
+@media (prefers-reduced-motion: reduce) {
+  .viz-ai-cell {
+    transition: none;
+  }
+  .viz-ai-cell:hover:not(:disabled) {
+    transform: none;
+  }
+}
+@media (max-width: 480px) {
+  .viz-ai-cells__list {
+    grid-template-columns: 1fr;
+  }
+}
 .viz-heatmap__toolbar {
   display: flex;
   flex-wrap: wrap;

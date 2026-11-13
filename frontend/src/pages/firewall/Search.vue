@@ -7,11 +7,12 @@
  *   期間最長 30 天(只用關鍵字最長 1 天);目的 Port 只能是數字與逗號(後端同樣檢查)。
  *   type=THREAT 查威脅 log(需求方 2026-11-13 決定),可再用威脅名稱、嚴重度;國家可分來源 / 目的(srcCountry / dstCountry)。
  *   時段明細抽屜的威脅類會帶 type=THREAT、threat、severity(useSlice.openInSearch;C7);無法套用的條件(不認得的類型等)提示「未套用」(AGENT §5)。
+ *   AC5:威脅結果每列有「AI 說明」(按鈕權限 netops.pa-search.ai),明細對話框也有;期間是這次查詢的期間(ThreatAiDialog)。
  *   版面是最小可用版(類型、威脅名稱、嚴重度、來源 / 目的國家欄位與威脅欄位),樣式之後交 Gemini。
  */
 import { computed, onMounted, reactive, ref, shallowRef, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { describeError, download } from '@/api/gateway';
+import { can, describeError, download } from '@/api/gateway';
 import { fmtNum, fmtSize, fmtTime } from '@/api/format';
 import {
   actionOf,
@@ -29,6 +30,8 @@ import { cameFromApp, ignoredThreatCond as threatCondOf, isPorts, isSearchType, 
 import { useJob } from '@/composables/useJob';
 import { ipNameOf, ipNameTitle } from '@/composables/ipNames';
 import DateRangeField from '@/components/DateRangeField.vue';
+import ThreatAiDialog from '@/components/ThreatAiDialog.vue';
+import { UI } from '@/api/perms';
 import { coverageText } from '@/composables/dateRange';
 import type { Coverage } from '@/api/pa';
 import { toast } from '@/ui';
@@ -210,6 +213,18 @@ const detailFields = computed(() => {
     }));
 });
 
+// ---------- AC5:AI 說明這個威脅(期間 = 這次查詢的期間) ----------
+const canThreatAi = computed(() => can(UI.paSearchAi));
+const threatAi = ref<{ name: string; severity: string } | null>(null);
+const threatAiOpen = computed({ get: () => !!threatAi.value, set: (v) => !v && (threatAi.value = null) });
+function explainThreat(row: PaLogRow) {
+  const name = String(row.threat ?? '').trim();
+  if (!name || !result.value) return;
+  // 從明細對話框開啟時先關掉明細(不疊兩層對話框)
+  detail.value = null;
+  threatAi.value = { name, severity: String(row.severity ?? '') };
+}
+
 const pad = (n: number) => String(n).padStart(2, '0');
 const localMinute = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 
@@ -265,7 +280,7 @@ const THREAT_COLUMNS = [
   { key: 'app', label: '應用程式', hideSm: true },
   { key: 'srcCountry', label: '來源國家', hideSm: true },
 ];
-const columns = computed(() => (result.value?.type === 'THREAT' ? THREAT_COLUMNS : TRAFFIC_COLUMNS));
+const columns = computed(() => (result.value?.type === 'THREAT' ? [...THREAT_COLUMNS, ...(canThreatAi.value ? [{ key: 'ai', label: 'AI', width: '84px' }] : [])] : TRAFFIC_COLUMNS));
 const keyed = computed(() => rows.value.map((r, i) => ({ ...r, _k: `${page.value}:${i}` })));
 const asRow = (r: unknown) => r as PaLogRow;
 </script>
@@ -356,6 +371,9 @@ const asRow = (r: unknown) => r as PaLogRow;
         <template #cell-bytes="{ row }">
           <span class="small num">{{ fmtSize(asRow(row).bytes) }}</span>
         </template>
+        <template #cell-ai="{ row }">
+          <GButton v-if="asRow(row).threat" size="sm" variant="ghost" icon="sparkles" :aria-label="`AI 說明威脅 ${asRow(row).threat}`" @click.stop="explainThreat(asRow(row))">說明</GButton>
+        </template>
       </GTable>
     </GCard>
 
@@ -367,9 +385,12 @@ const asRow = (r: unknown) => r as PaLogRow;
         </template>
       </dl>
       <template #footer>
+        <GButton v-if="canThreatAi && result?.type === 'THREAT' && detail?.threat" variant="primary" icon="sparkles" @click="detail && explainThreat(detail)">AI 說明這個威脅</GButton>
         <GButton @click="detail = null">關閉</GButton>
       </template>
     </GModal>
+
+    <ThreatAiDialog v-if="canThreatAi && result" v-model:open="threatAiOpen" :name="threatAi?.name ?? ''" :severity="threatAi?.severity ?? ''" :from="result.from" :to="result.to" />
   </div>
 </template>
 

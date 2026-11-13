@@ -127,6 +127,29 @@ describe('時段明細(原始表)', () => {
     assert.equal(r.rows.length, 2);
     assert.equal(r.rows[0]!.severity, 'critical');
   });
+
+  it('AC5 威脅彙總:名稱完全相同 / 威脅 ID 結尾、各維度與每小時筆數(不含 url 類)', async () => {
+    const r = await heat.threatProfile({ name: 'VA Test(9)' }, H, H + HOUR, 'hour', 50);
+    assert.equal(r.count, 8);
+    assert.equal(r.repeat, 40, 'Repeat Count 5 × 8');
+    assert.equal(r.srcs, 1);
+    assert.equal(r.first, H);
+    assert.equal(r.last, H + 7 * 60_000);
+    assert.deepEqual(r.dims.src, [['198.51.100.7', 8, 40]]);
+    assert.deepEqual(r.dims.dst, [['10.88.0.1', 8, 40]]);
+    assert.deepEqual(r.dims.port, [['tcp/22', 8, 40]]);
+    assert.deepEqual(r.dims.action, [['alert', 8, 40]]);
+    assert.deepEqual(r.dims.severity.map(([k, n]) => [k, n]).sort(), [['critical', 2], ['high', 2], ['informational', 2], ['low', 2]]);
+    assert.equal(r.dims.time.length, 1);
+    assert.match(r.dims.time[0]![0], /^\d{4}-\d{2}-\d{2} \d{2}:00$/);
+    const byId = await heat.threatProfile({ idSuffix: '(9)' }, H, H + HOUR, 'day', 50);
+    assert.equal(byId.count, 8);
+    assert.deepEqual(byId.dims.name, [['VA Test(9)', 8, 40]]);
+    assert.match(byId.dims.time[0]![0], /^\d{4}-\d{2}-\d{2}$/);
+    const none = await heat.threatProfile({ name: 'VA Test' }, H, H + HOUR, 'hour', 50);
+    assert.equal(none.count, 0, '名稱要完全相同');
+    assert.deepEqual(none.dims.src, []);
+  });
 });
 
 describe('分析儀表板查詢(V-b1)', () => {

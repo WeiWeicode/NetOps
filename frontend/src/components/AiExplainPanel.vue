@@ -1,6 +1,8 @@
 <script setup lang="ts">
 /**
- * AC4 AI 解讀面板(時段明細抽屜「AI 解讀這個時段」、分析儀表板「AI 摘要本期異常」共用;docs/API.md §10.3)
+ * AI 解讀面板(docs/API.md §10.3):AC4 時段明細抽屜「AI 解讀這個時段」、分析儀表板「AI 摘要本期異常」;
+ *   AC5 威脅「AI 說明這個威脅與處理建議」、熱力圖「AI 指出異常格」共用
+ *   - 預設 slot(回答下方):slot props { meta, text, running },熱力圖用來放異常時段按鈕
  *   - 狀態與串流在 composables/useAiExplain.ts;回答一律經 AiMarkdown(DOMPurify)
  *   - 條件改變時清掉舊回答(進行中的回答先停止);autoStart 時掛上就開始(對話框用)
  *   - 只送條件,後端自己取統計;畫面註明只送統計到公司內部 AI
@@ -85,6 +87,8 @@ defineExpose({ start: run, stop: x.stop });
       <AiMarkdown :text="x.text.value" />
       <p v-if="x.truncated.value" class="xs c-warning">回答超過長度上限或連線中斷,內容可能不完整</p>
     </div>
+
+    <slot :meta="x.meta.value" :text="x.text.value" :running="x.running.value" />
 
     <footer v-if="x.text.value && !x.running.value" class="ai-explain__foot">
       <span v-if="x.meta.value?.notes?.length" class="xs faint">參考知識庫 {{ x.meta.value.notes.length }} 則</span>

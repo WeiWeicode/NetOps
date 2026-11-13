@@ -9,6 +9,20 @@
 - 審查修正(`code-reviewer`、`security-auditor` 2026-11-12,沒有 Critical / High):執行者端:非預期錯誤也把工作標 failed(不卡在 queued / running)、參數壞掉標 invalid;全域 10 秒間隔在執行者也強制,且只在真的送過 PA 請求才設;開工時把名額續到 90 秒;CPU 擋下(rejected)時歸還使用者冷卻;IPv4-mapped IPv6 轉成 IPv4。XML API 用戶端:不跟隨 3xx 轉址(urllib 會把 X-PAN-KEY 帶到新網址)、`call()` 只接受 log(查詢 / get / finish)與 op、Session 指令以完整正規式比對、PA 錯誤原文只寫日誌(畫面只顯示分類與 code)、結果寫進 Redis 上限 2 MB(超過截斷標 truncated)。netops-api:工號格式不符回 403(原本被包成 424)。需人工:PA API Key 的 Admin Role 只開 XML API Log + Operational Requests、管理介面 Permitted IP 限 netops 主機(MR 列為需求方 / 網通確認事項)
 - 驗證:pa-collector `ruff check`、`pytest`(本機 Python 3.14);backend `npm run typecheck`、`npm test`;`check-scenarios.mjs`;CI 見 MR
 
+## 2026-11-12 V-b1 測試:儀表板並行上限測試不再卡住 CI
+- 工作項目:V-b1(CI pipeline 901 job 2776 卡在 `test/unit/pa-insight.test.ts` 超過 10 分鐘,最後 Force cancel)
+- 根因(本機重現):兩件事加在一起。① 「全系統同時 2 個」測試固定等 30ms 就送第 3 個請求;機器慢時第 3 個比前兩個先進到計算,也卡在測試的 gate 上,`await` 永遠不回來,`finally` 的 `close()` 不會執行。② 測試沒有逾時,而測試 app 的 JWKS server(127.0.0.1)只有 `close()` 會關;它一直 listen,`node --test` 就一直等。實測:一個請求永遠卡住時,舊 helper 有沒有加測試逾時都卡住;新 helper 加逾時 6 秒內失敗結束
+- 修正:① 等兩個實際計算都進到 `insightFlows` 再送第 3 個(最多等 5 秒,計時器 `unref`),`finally` 先 `release()` 再 `close()`;這個測試逾時 20 秒。② `test/helpers.ts`:JWKS server `unref()`,`close()` 先關 JWKS(含 `closeAllConnections`)再關 app。③ `npm test` 加 `--test-timeout=60000`:任何測試卡住都會失敗,不會佔住 runner。沒有改門檻或跳過測試
+- 檔案:`backend/test/unit/pa-insight.test.ts`、`backend/test/helpers.ts`、`backend/package.json`(test script)
+- 驗證:`npx tsx --test test/unit/pa-insight.test.ts` 4 個同時跑 × 18 輪(72 次)都自己結束、沒有卡住;故意改壞斷言時回失敗並結束;`npm test` 全過
+
+## 2026-11-12 V-b1 分析儀表板 API、畫面節點
+- 工作項目:V-b1 第 1、2 步(VIZ-RULES-DESIGN §4.4、§4.8)
+- 內容:① `GET /v1/pa/insight/traffic`(趨勢、桑基、Top 10 頻寬 IP、Top 10 App、Allow vs Deny)、`/v1/pa/insight/threat`(計分卡含前一期、時序、國家 ISO2、內網來源 RFC 1918、Top 10 威脅名稱;伺服器網段 V-c 前回 null + notes),最長 90 天,快取含今天 60 秒、其他 10 分鐘。② `infra/clickhouse/heat.ts` 加 6 個查詢(`pa_traffic_hourly_app` / `_src`、`pa_threat_logs` 的 log_type 排序鍵);`reader.ts` 加表常數 `hourlySrc`。③ `modules/pa-insight/countries.ts`:PA 國家英文全名 → ISO2(i18n-iso-countries 名稱 + PAN-OS 寫法,測試區實際值已比對)。④ `deploy/gateway-rbac.yaml`:選單 `netops.pa-heatmap.read`(sort 12)、`netops.pa-insight.read`(sort 15),includes `netops.pa.read`、`netops.pa-log.read`,加進 netops-admin、netops-viewer。⑤ 時段明細 429 另帶 `details.retryAfter`(前端讀不到回應標頭)
+- 檔案:`backend/src/{app.ts,infra/clickhouse/{heat,reader}.ts,modules/pa-insight/,modules/pa-heat/service.ts}`、`backend/test/{unit/pa-insight.test.ts,unit/pa-heat.test.ts,integration/heat.int.test.ts}`、`deploy/gateway-rbac.yaml`
+- 審查修正(`code-reviewer`、`security-auditor` 2026-11-12):前一期是否完整改用每天表的資料起點(原本用 5 分鐘表,短期間時 prev 常被誤判 null);Allow / Deny 用自己粒度的資料起點、allow 不為負;威脅名稱的嚴重度改取最高(`any()` 每次可能不同);儀表板實際計算全系統同時 2 個,超過 429 `NETOPS_INSIGHT_BUSY`(換日期繞過快取時保護 ClickHouse);日期來回驗證(`2026-02-31`)與 5 年下限;`gateway-rbac.yaml` 註明選單 includes `pa-log.read` 的實際範圍。未改:查詢不隨使用者斷線中止(每支查詢有 20–30 秒上限)
+- 驗證:`npm run typecheck`、`npm test`(302 通過)、`check-scenarios.mjs`(119 / 119);CI `check:ingest-int` 見 MR
+
 ## 2026-11-11 C3:PA 查詢只用 ClickHouse、對帳 01:00
 - 工作項目:C3(ARCHITECTURE D43,需求方 2026-11-11 晚上決定)
 - 內容:① 總覽、篩選選項、有資料的日期、安全事件(威脅類)、Log 明細只查 ClickHouse;`source` 只接受 clickhouse;`NETOPS_PA_OVERVIEW_SOURCE`、`NETOPS_PA_DETAIL_SOURCE` 移除;test / prod 必須設定 `CLICKHOUSE_URL`。② 期間整個超過保留期限回 404 `NETOPS_PA_OUT_OF_RETENTION`;回應加 `coverage`、`partial`、`topsState`(摘要還沒建好時排行標不完整,筆數照回)。③ `/pa/days`、`/pa-events/types` 改列 ClickHouse 有資料的日期(新增 `trafficDays`、`threatDays`)。④ 明細移除 FTP 掃描路徑。⑤ 每日對帳 `NETOPS_RECON_HOUR` 預設 1,FTP 檔沒分析完時自己同步(30 分鐘最多一次)並每 10 分鐘再試;FTP 完整的判斷改回「有檔涵蓋到 23:50 以後或隔天有檔」(PA 前一天的檔約 07:45 才出現,隔天的檔要再等一天)。⑥ 每小時摘要:每段 2 萬列、每段最多等 180 秒(測試區 15 時一直逾時);失敗日誌記本程式組的原因文字。

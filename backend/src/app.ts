@@ -48,6 +48,8 @@ import { createHeatReader, type HeatReader } from './infra/clickhouse/heat.js';
 import type { ColdLock } from './infra/redis/cold-lock.js';
 import heatRoutes from './modules/pa-heat/routes.js';
 import { createHeatService, type ColdSlice } from './modules/pa-heat/service.js';
+import insightRoutes from './modules/pa-insight/routes.js';
+import { createInsightService } from './modules/pa-insight/service.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -222,6 +224,8 @@ export async function buildApp(
     now: deps.heat?.now,
   });
   await app.register(heatRoutes, { svc: heatSvc, syncMs: deps.heat?.syncMs });
+  // 分析儀表板(V-b1):彙總表與威脅原始表,最長 90 天
+  await app.register(insightRoutes, { svc: createInsightService({ heat: heatReader, cache, recon, log: app.log, now: deps.heat?.now }) });
   await app.register(paEventRoutes, { events, ch });
   await app.register(adRoutes, { ad });
   await app.register(adFtpRoutes, { ad });

@@ -18,6 +18,7 @@ import { handlePaEvents } from './paEvents.ts';
 import { handlePaLive, streamPaLive } from './paLive.ts';
 import { handlePaQuery } from './paQuery.ts';
 import type { MockCtx } from './types.ts';
+import { handleViz } from './viz.ts';
 
 type Role = 'admin' | 'viewer' | 'noapp' | 'anon';
 type LoggedIn = Exclude<Role, 'anon'>;
@@ -32,6 +33,9 @@ const MENUS = [
   // C5:PA 精準查詢按鈕(只給 admin;viewer 沒有 netops.pa-query.read)
   { code: 'netops.pa-live.query', name: '查詢 PA 即時連線 / 精準 log', kind: 'button', parentCode: 'netops.pa-live.read', sort: 20, icon: null },
   { code: 'netops.pa-dashboard.read', name: '流量總覽', kind: 'menu', parentCode: 'netops.group.firewall', sort: 10, icon: null },
+  // V-b1:活動熱力圖、分析儀表板(gateway-rbac.yaml sort 12、15)
+  { code: 'netops.pa-heatmap.read', name: '活動熱力圖', kind: 'menu', parentCode: 'netops.group.firewall', sort: 12, icon: null },
+  { code: 'netops.pa-insight.read', name: '分析儀表板', kind: 'menu', parentCode: 'netops.group.firewall', sort: 15, icon: null },
   { code: 'netops.pa-events.read', name: '安全事件', kind: 'menu', parentCode: 'netops.group.firewall', sort: 20, icon: null },
   { code: 'netops.pa-search.read', name: 'Log 明細查詢', kind: 'menu', parentCode: 'netops.group.firewall', sort: 30, icon: null },
   { code: 'netops.pa-files.read', name: 'FTP Log 檔案', kind: 'menu', parentCode: 'netops.group.firewall', sort: 40, icon: null },
@@ -96,7 +100,7 @@ async function readBody(req: IncomingMessage): Promise<unknown> {
 }
 
 /** 各模組的假 API(依序嘗試,處理了就回 true) */
-const HANDLERS: ((ctx: MockCtx) => boolean)[] = [handlePaQuery, handleAi, handleFtp, handleAd, handlePaEvents, handlePa, handlePaLog, handleKb, handlePaLive];
+const HANDLERS: ((ctx: MockCtx) => boolean)[] = [handleViz, handlePaQuery, handleAi, handleFtp, handleAd, handlePaEvents, handlePa, handlePaLog, handleKb, handlePaLive];
 const fail = (res: ServerResponse, status: number, code: string, message: string) => send(res, status, { code, message, requestId: rid() });
 
 export function mockGateway(role: string | undefined): Plugin | null {

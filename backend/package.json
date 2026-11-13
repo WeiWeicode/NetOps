@@ -15,7 +15,7 @@
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/src/server.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsx --test test/unit/*.test.ts",
+    "test": "tsx --test --test-timeout=60000 test/unit/*.test.ts",
     "test:int": "tsx --test --test-concurrency=1 test/integration/*.int.test.ts",
     "openapi": "tsx src/print-openapi.ts"
   },

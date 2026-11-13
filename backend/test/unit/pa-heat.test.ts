@@ -152,6 +152,12 @@ function fakeReader(opts: { since?: number | null; rows?: HeatRow[]; sliceDelayM
     async heatEarliest() {
       return opts.since === undefined ? parseDay('2026-11-01') : opts.since;
     },
+    insightFlows: async () => [],
+    insightTopApps: async () => [],
+    insightTopSrc: async () => [],
+    threatCountries: async () => [],
+    threatTopInternalSrc: async () => [],
+    threatTopNames: async () => [],
     async slice() {
       calls.slice++;
       if (opts.sliceDelayMs) await new Promise((r) => setTimeout(r, opts.sliceDelayMs));
@@ -309,6 +315,7 @@ describe('GET /v1/pa/slice', () => {
       assert.equal(r2.statusCode, 429);
       assert.equal(r2.json().code, 'NETOPS_COLD_QUERY_BUSY');
       assert.equal(r2.headers['retry-after'], '10');
+      assert.equal(r2.json().details.retryAfter, 10);
       release();
       await new Promise((r) => setTimeout(r, 50));
       const done = (await t.call({ url: `/v1/pa/slices/${r1.json().id}` })).json();

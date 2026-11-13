@@ -2,6 +2,12 @@
 
 > Bug 修改;新紀錄加在最上方,格式見 `AGENT.md` §11。
 
+## 2026-11-13 冷歸檔 NAS 準備腳本:權限檢查誤報
+- 工作項目:C4
+- 內容:`deploy/host2-setup-pa-archive.sh` 的群組權限檢查 `case "$G" in "1000 d???r?x"*)` 把萬用字元 `?` 放在引號內,被當成字面字元,永遠比對不到,權限正確(群組 1000、`r-x`)也印 WARN(需求方 2026-11-13 在主機 2 執行時發現)。改成 `"1000 d"???r?x*`(引號外才是萬用字元)。只影響提示訊息:目錄、標記檔與寫入測試本來就正確,不需要重跑腳本。
+- 檔案:`deploy/host2-setup-pa-archive.sh`
+- 驗證:同一段比對在本機 sh 與主機 2 WSL(dash)執行:`1000 drwxr-x---`、`1000 drwxr-xr-x`、`1000 drwxrwx---` 通過;`0 drwxr-x---`、`1000 drwx------`、`1000 drwxr-----`、`10000 drwxr-x---` 警告;`sh -n` 語法檢查
+
 ## 2026-11-13 測試區部署從 V-a 起卡在 ClickHouse 建表(熱力圖表沒建立)
 - 工作項目:V-a、C1(develop pipeline 884、889、890、910 失敗)
 - 內容:`deploy/clickhouse/apply-schema.sh` 先跑 `schema.sql` 再跑 `migrations/`。V-a 在 `schema.sql` 的 `pa_traffic_hourly_src_mv` 加了 `bytes_sent`、`bytes_recv`,這兩欄要等 `migrations/003` 才會加到既有的 `pa_traffic_hourly_src`;ClickHouse 26.3 即使 MV 已存在,`CREATE MATERIALIZED VIEW IF NOT EXISTS` 也會先檢查輸出欄位,所以失敗(`THERE_IS_NO_COLUMN`),003 與後面的熱力圖表 / MV 都沒有建立。CI 的整合測試只從空資料庫建表,所以沒抓到。修正:`schema.sql` 在這個 MV 之前先 `ADD COLUMN IF NOT EXISTS`(和 003 相同,可重複執行),檔頭寫明規則;CI 加升級測試(V-a 前的 schema → `apply-schema.sh`)。修正內容見 `BackendCorrection.md` 同日紀錄。

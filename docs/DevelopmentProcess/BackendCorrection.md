@@ -2,6 +2,12 @@
 
 > `backend/`、`deploy/` 的修改;新紀錄加在最上方,格式見 `AGENT.md` §11。
 
+## 2026-11-13 冷歸檔 NAS 準備腳本:權限檢查誤報
+- 工作項目:C4
+- 內容:`deploy/host2-setup-pa-archive.sh` 的群組權限檢查 `case "$G" in "1000 d???r?x"*)` 把萬用字元 `?` 放在引號內,被當成字面字元,永遠比對不到,權限正確(群組 1000、`r-x`)也印 WARN(需求方 2026-11-13 在主機 2 執行時發現)。改成 `"1000 d"???r?x*`(引號外才是萬用字元)。只影響提示訊息:目錄、標記檔與寫入測試本來就正確,不需要重跑腳本。
+- 檔案:`deploy/host2-setup-pa-archive.sh`
+- 驗證:同一段比對在本機 sh 與主機 2 WSL(dash)執行:`1000 drwxr-x---`、`1000 drwxr-xr-x`、`1000 drwxrwx---` 通過;`0 drwxr-x---`、`1000 drwx------`、`1000 drwxr-----`、`10000 drwxr-x---` 警告;`sh -n` 語法檢查
+
 ## 2026-11-13 ClickHouse 建表:舊表也能升級(測試區部署失敗修正)
 - 工作項目:V-a、C1(`BugFix.md` 同日紀錄)
 - 內容:① `deploy/clickhouse/schema.sql`:`pa_traffic_hourly_src_mv` 之前先 `ALTER TABLE netops.pa_traffic_hourly_src ADD COLUMN IF NOT EXISTS bytes_sent / bytes_recv`;檔頭補規則「MV 用到 migration 才加的欄位,MV 之前要先補欄位」。其他 MV 檢查過:`pa_traffic_hourly_app_mv` 沒用到新欄位;熱力圖 6 個 MV 的目標表是 V-a 新表、來源欄位(`pa_traffic_logs.bytes_sent / bytes_recv`、`pa_threat_logs.severity / log_type / src`)C1 起就有;`migrations/001`(threat 欄位)沒有 MV 依賴;`002` 只改設定。② `deploy/clickhouse/test-upgrade.sh` 與 `upgrade-test/before-va.sql`(V-a 合併前 e0a8e79 的 schema + 001、002):套舊版 → 寫一列 → `apply-schema.sh` 兩次 → 檢查欄位、8 個 MV、003 的新查詢、升級後的寫入有進來源彙總與 3 個熱力圖表 → 刪資料庫;只能對 `netops-int-*` 容器執行。③ `.gitlab-ci.yml` `check:ingest-int` 在原本的空資料庫建表之前跑升級測試。

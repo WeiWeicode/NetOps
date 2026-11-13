@@ -65,8 +65,8 @@ export type SliceJob = Job<SliceResult, Record<string, unknown>>;
 export const isSliceJob = (x: SliceResult | SliceJob): x is SliceJob => (x as SliceJob).kind === 'pa-slice';
 
 export const slice = {
-  get: async (q: SliceQuery): Promise<{ kind: 'result'; result: SliceResult } | { kind: 'job'; job: SliceJob }> => {
-    const r = await http.get<SliceResult | SliceJob>('/api/netops/pa/slice', { query: { ...q } });
+  get: async (q: SliceQuery, opts: { signal?: AbortSignal } = {}): Promise<{ kind: 'result'; result: SliceResult } | { kind: 'job'; job: SliceJob }> => {
+    const r = await http.get<SliceResult | SliceJob>('/api/netops/pa/slice', { query: { ...q }, signal: opts.signal });
     return isSliceJob(r) ? { kind: 'job', job: r } : { kind: 'result', result: r };
   },
   job: (id: string) => http.get<SliceJob>(`/api/netops/pa/slices/${encodeURIComponent(id)}`),

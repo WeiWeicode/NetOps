@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { filenameOf } from '@/api/gateway';
-import { isEventIds, localToIso, MAX_COND, pickQuery, toLocalInput } from '@/composables/searchQuery';
+import { ignoredThreatCond, isEventIds, localToIso, MAX_COND, pickQuery, toLocalInput } from '@/composables/searchQuery';
+
+describe('ignoredThreatCond(C7 第二輪)', () => {
+  it('列出本頁不支援的威脅類條件;沒有則空字串', () => {
+    expect(ignoredThreatCond({ type: 'THREAT', threat: 'X(1)', severity: 'high', src: '10.0.0.1' })).toBe('類型 THREAT、威脅名稱「X(1)」、嚴重度 high');
+    expect(ignoredThreatCond({ src: '10.0.0.1' })).toBe('');
+    expect(ignoredThreatCond({ type: 'TRAFFIC' })).toBe('');
+  });
+});
 
 describe('明細查詢的網址條件', () => {
   it('時間:日期補 00:00 / 23:59,接受舊版斜線格式,錯誤日期略過', () => {

@@ -2,6 +2,12 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。範圍:`frontend/`。
 
+## 2026-11-13 C7 第二輪:來源 / 目的 IP 帶入方向、未套用提示保留、時段明細逾時可重試
+
+- 內容:`SearchExtra` 加 `filterSrc` / `filterDst`(抽屜來源 / 目的 IP 改用);`searchQuery.ignoredThreatCond()` 抽成純函式,Log 明細頁進頁時算一次;`slice.get` 可帶 `signal`,`useSlice` 加 45 秒逾時(`SLICE_TIMEOUT_MS`、`SliceTimeoutError`)與 `retryable`。抽屜的一般錯誤區塊目前沒有「重試」按鈕,交 Gemini 依 `retryable` 補(呼叫 `slice.retry()`)。
+- 檔案:`composables/useSlice.ts`、`api/slice.ts`、`components/SliceDrawer.vue`、`composables/searchQuery.ts`、`pages/firewall/Search.vue`、`test/viz.test.ts`、`test/viz.mount.test.ts`、`test/searchQuery.test.ts`
+- 驗證:`npm run typecheck`、`npm test`、`npm run build`(見 MR)
+
 ## 2026-11-13 時段明細抽屜邏輯層:不適用、嚴重度重查、跳 Log 條件、移除 AD 異常(C3–C5、C7–C9)
 - 工作項目:V-b1(V-b2 第一輪驗收;Gemini U1–U10 `ba410a4` 的後續)
 - 內容:

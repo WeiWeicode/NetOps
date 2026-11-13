@@ -23,7 +23,7 @@ import {
   type PaSearchBody,
   type PaSearchKey,
 } from '@/api/pa';
-import { cameFromApp, isPorts, localToIso, pickQuery, toLocalInput } from '@/composables/searchQuery';
+import { cameFromApp, ignoredThreatCond as threatCondOf, isPorts, localToIso, pickQuery, toLocalInput } from '@/composables/searchQuery';
 import { useJob } from '@/composables/useJob';
 import DateRangeField from '@/components/DateRangeField.vue';
 import { coverageText } from '@/composables/dateRange';
@@ -32,15 +32,8 @@ import { toast } from '@/ui';
 
 const PAGE_SIZE = 50;
 const route = useRoute();
-/** 網址帶了本頁不支援的威脅類條件(只查 TRAFFIC):提示未套用,不靜默忽略 */
-const ignoredThreatCond = computed(() => {
-  const q = route.query;
-  const parts: string[] = [];
-  if (q.type === 'THREAT') parts.push('類型 THREAT');
-  if (typeof q.threat === 'string' && q.threat) parts.push(`威脅名稱「${q.threat}」`);
-  if (typeof q.severity === 'string' && q.severity) parts.push(`嚴重度 ${q.severity}`);
-  return parts.join('、');
-});
+/** 網址帶了本頁不支援的威脅類條件:進頁時算一次(自動查詢會改寫網址;C7 第二輪) */
+const ignoredThreatCond = threatCondOf(route.query);
 const router = useRouter();
 
 const form = reactive<Record<PaSearchKey, string> & { from: string; to: string }>({

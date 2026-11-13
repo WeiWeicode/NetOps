@@ -2,6 +2,18 @@
 
 > `backend/`、`deploy/` 的修改;新紀錄加在最上方,格式見 `AGENT.md` §11。
 
+## 2026-11-13 AI 分析、問答、外部 IP 學習改查 ClickHouse(AC2)
+- 工作項目:AC2(ARCHITECTURE D44)
+- 內容:
+  - 新增 `modules/ai/ch-source.ts`:分析(每小時摘要 + `pa_heat_1d` / 每小時彙總的粗摘要,`meta.grain`)、PA 其他 log(威脅類 30 天內每小時摘要、30–90 天原始表前 30 種組合;解密 / GlobalProtect / User-ID 仍讀 FTP 摘要)、問答證據(原始 TRAFFIC 依組合與小時累計最多 20,000 列 + 15 筆範例;威脅類依組合累計;超過保留期限標示 `skipped`)、外部 IP 學習的 `recentSummaries`(每小時摘要)。
+  - `infra/clickhouse/reader.ts`:新增 `aiTrafficFlows`、`aiTrafficSamples`、`aiThreatGroups`、`aiDays`、`aiTops` 與 `aiWhere`;IP 條件抽成 `ipClause`(`trafficWhere` 共用,行為不變)。值一律放 query_params。
+  - `modules/ai/service.ts`:依來源分流(`ftp` 舊流程原封保留);`prepareAnalysis` / `prepareQuestion` 改 async,ClickHouse 失敗在串流開始前回 503;AD 問題 ClickHouse 失敗時只略過防火牆資料。`meta` 加 `source` / `dataSource`、粒度;`scan` / `evidence` 加 ClickHouse 欄位。
+  - `config.ts`:`NETOPS_AI_SOURCE`(未設定時 test → clickhouse、prod / dev → ftp)、`IPLEARN_DAYS` 上限 30;`POST /kb/ip-learnings` 的 `days` 上限 30。
+  - `ai/core/context.js` `buildContext` 加選填 `opts.source`(來源說明;不給時同舊版)。`iplearn.js` 的 `recentSummaries` 可回 Promise(`await`,舊版測試基準仍相同)。`pa-events/importer.ts` `eventsForIps` 加 `types`。`evidence.js` 未改(與舊版逐字相同的測試仍通過)。
+  - Compose:`NETOPS_AI_SOURCE`(空白依 GW_ENV);`deploy/test.env.example` 加說明。
+- 檔案:`backend/src/modules/ai/ch-source.ts`、`backend/src/modules/ai/service.ts`、`backend/src/modules/ai/index.ts`、`backend/src/modules/ai/routes.ts`、`backend/src/modules/ai/core/context.js`、`backend/src/infra/clickhouse/reader.ts`、`backend/src/config.ts`、`backend/src/app.ts`、`backend/src/modules/kb/ai-routes.ts`、`backend/src/modules/iplearn/core/iplearn.js`、`backend/src/modules/pa-events/importer.ts`、`deploy/docker-compose.yml`、`deploy/test.env.example`、`backend/test/unit/ai-ch.test.ts`、`backend/test/integration/ai.int.test.ts`、`backend/test/fixtures/fake-ch.ts`
+- 驗證:見 MR(typecheck、`npm test`、`npm run build`;整合測試在 CI `check:ingest-int`)
+
 ## 2026-11-13 對帳後每日同步解密 / GlobalProtect / User-ID / AD(AC1)
 - 工作項目:AC1(ARCHITECTURE D43、D44)
 - 內容:新增 `modules/ftp/daily-sync.ts`:自動對帳每一輪結束後(`createReconciler` 新增 `after`)接著同步這四類;只排 FTP 保留期限內的日子(依檔名日期,`fileDataDay`),不同步 TRAFFIC 與威脅類。前一天沒全部匯入時照對帳規則每 10 分鐘再看、FTP 30 分鐘最多列一次、一天最多 90 次後停止並 warn;超過保留期限仍沒匯入記 warn(每類型每天一次,從沒匯入過的類型不記)。其他類型 log 的 `sync` 可只排指定類型與日期,新增 `dayState`、`hasAnyFile`;AD 新增 `dayState`、`hasAnyDay`。`GET /ftp/pa/status`、`GET /ftp/ad/status` 加 `daily`。新設定 `NETOPS_DAILY_SYNC`(預設 1)。

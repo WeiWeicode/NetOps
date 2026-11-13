@@ -854,12 +854,18 @@ AI 串流(§10.1)開始後的錯誤以 `error` 事件回傳 `{ code, message }`:
 | 方法 | 路徑 | 權限 | 說明 |
 | --- | --- | --- | --- |
 | GET | `/api/netops/ai/status` | `netops.ai.use` | `{ enabled, ok, model, message }`;不回主機位址 |
-| POST | `/api/netops/ai/analyses` | `netops.ai.use` | 期間分析;`{ from, to?, think?, question? }`(`YYYY-MM-DD`,最長 92 天) |
+| POST | `/api/netops/ai/analyses` | `netops.ai.use` | 期間分析;`{ from, to?, think?, question? }`(`YYYY-MM-DD`,最長 92 天;ClickHouse 來源超過 30 天的部分改用彙總,見下方「資料來源」) |
 | POST | `/api/netops/ai/questions` | `netops.ai.use` | 問答;`{ from, to, question, history?, think?, source? }`(ISO 8601,最長 31 天;`source: 'ad'` 只看 AD) |
 
 - **全部回 SSE**(`text/event-stream`):掃描 FTP 與模型回答可能超過路由逾時(AGENT.md §7.3),寫法依 S0(本文件 §3.1、`docs/test-reports/2026-11-05-s0-sse.md` §3.6):`x-timeout-ms: 60000`、立即送 `open`、每 15 秒 `heartbeat`、`X-Accel-Buffering: no`。POST,前端以 `fetch` 讀串流(`EventSource` 只能 GET);一次性回答,不重連。
+- **資料來源(AC2,ARCHITECTURE D44;批次 `feature/ac2-ai-clickhouse`)**:依 `NETOPS_AI_SOURCE` 切換,未設定時 **測試區 `clickhouse`、正式區與本機 `ftp`**(需求方 2026-11-13 AQ4「Keep old path」:正式區 C6 之前沿用 FTP 摘要;FTP 只留 10 天後,正式區問答掃不到 10 天前的原始 log,已知限制)。兩種來源送給模型的文字格式相同。
+  - `clickhouse`:
+    - **分析**:最近 30 天(`min(NETOPS_CH_SUMMARY_DAYS, ClickHouse TRAFFIC 保留天數)`;測試區 3 天)用 ClickHouse 原始 TRAFFIC 建的每小時摘要(排行同 FTP 摘要);**更早的部分改用彙總**:每天彙總 `pa_heat_1d`(連線數、阻擋、位元組、威脅嚴重度)與每小時彙總(動作、App、區域 13 個月;來源 IP 90 天),併入排行並另附每天一列,提示詞註明「資料較粗」。`meta.grain` 標示粒度,畫面註明「超過 30 天的資料較粗」。威脅類最近 30 天用每小時摘要,30–90 天列原始威脅表前 30 種組合;解密 / GlobalProtect / User-ID 仍讀本機 FTP 摘要(AC1 每天同步)。
+    - **問答**:有 IP / Port 時查原始 TRAFFIC(保留 30 天)依連線組合與小時累計(最多 20,000 列,超過標示 `partial`),加**最多 15 筆範例紀錄**(每種組合一筆,最新的在前);威脅類(保留 90 天)依組合累計。超過保留期限的部分不查,`evidence.skipped` 與提示詞明確標示「不代表沒有連線」。**不掃 FTP、不排隊**(拿掉 FTP 原始 log 掃描、連線組合統計與 FTP 掃描排隊)。沒有 IP / Port 時用期間的整體統計(同分析)。
+    - **ClickHouse 未設定或連不上**:串流開始前回 503 `NETOPS_CLICKHOUSE_UNAVAILABLE`,開始後以 `error` 事件回傳;**不改用 FTP**(同 D43)。分析整段超過保留期限回 404 `NETOPS_PA_OUT_OF_RETENTION`;ClickHouse 沒有任何資料回 404 `NETOPS_PA_NO_DATA`。AD 問題(含 PA 部分)ClickHouse 失敗時只略過防火牆資料,仍依 AD 事件回答。
+  - `ftp`:舊路徑(下面 FTP 掃描、排隊、`files` 等說明),程式保留到 C6。
 - 參數錯誤、沒有資料(404 `NETOPS_PA_NO_DATA`)、AI 未設定在串流開始前回 4xx;開始後的錯誤以 `error` 事件回傳(§8)。
-- 同時進行的 AI 回答(分析與問答共用名額)每人 2 個、全系統 6 個(`AI_MAX_STREAMS`、`AI_MAX_STREAMS_PER_USER`,程式預設值,compose 未列出),超過回 429 `NETOPS_STREAM_BUSY`;單一回答最長 15 分鐘;使用者關頁時中斷掃描與模型呼叫。問答需要從 FTP 掃原始 log 時,全系統同時只掃 1 個(FTP 連線與匯入、明細查詢共用),其餘排隊並送 `scan` 事件 `{ waiting: true }`;掃描並行數為 `FTP_MAX_CONNECTIONS`(舊版另開一條)。
+- 同時進行的 AI 回答(分析與問答共用名額)每人 2 個、全系統 6 個(`AI_MAX_STREAMS`、`AI_MAX_STREAMS_PER_USER`,程式預設值,compose 未列出),超過回 429 `NETOPS_STREAM_BUSY`;單一回答最長 15 分鐘;使用者關頁時中斷掃描與模型呼叫。`ftp` 來源的問答需要從 FTP 掃原始 log 時,全系統同時只掃 1 個(FTP 連線與匯入、明細查詢共用),其餘排隊並送 `scan` 事件 `{ waiting: true }`;掃描並行數為 `FTP_MAX_CONNECTIONS`(舊版另開一條)。
 - `history`:最多 100 則、每則 20,000 字;只送最近 6 則、每則前 4,000 字(同舊版)。問答的問題沒有 IP / Port 時沿用前面的條件(追問);同樣的條件 10 分鐘內不重複掃描(所有人共用,同舊版;資料不完整的結果不快取)。
 - **`netops.ai.use` 的資料範圍是 PA + AD + 知識庫**:問答依問題帶入 PA log 彙整、AD 事件與筆記標題,分析帶入 PA 摘要;所以 `gateway-rbac.yaml` 的三個 AI 按鈕都一併綁定 `netops.pa.read`、`netops.ad.read`、`netops.kb.read`。
 - 稽核:分析、問答、立即同步、外部 IP 學習都設 `x-audit-level: meta`。
@@ -868,9 +874,9 @@ AI 串流(§10.1)開始後的錯誤以 `error` 事件回傳 `{ code, message }`:
 | 事件 | 資料 | 出現在 |
 | --- | --- | --- |
 | `open` | `{ requestId, heartbeatSec }` | 全部 |
-| `meta` | 分析:`{ model, from, to, files, missing, rows, contextChars, notes, vectorError }`;問答:`{ model, from, to, files, ips, ports, source }` | 分析、問答 |
-| `scan` | `{ label, filesScanned, files, matched, rows?, mode? }`(`mode: 'flows'` = 查連線組合統計) | 問答(有 IP / Port) |
-| `evidence` | `{ label, matched, allow, block, flows, filesScanned, files, flowFiles, rows, seconds, partial, cached }`;沒有 IP 時 `{ label, summary: true, files, missing }` | 問答 |
+| `meta` | 分析:`{ model, from, to, files, missing, rows, contextChars, notes, vectorError, source }`;`source: 'clickhouse'` 時另有 `hours`(每小時摘要小時數)、`days`(每天彙總天數)、`grain: { detail: { from, to } \| null, coarse: { from, to } \| null, rawDays }`(日期 `YYYY-MM-DD`;`coarse` 有值 = 有較粗的期間)、`coverage`、`partial`(期間開始早於最早的資料)、`summaryState`(`ok` / `not-ready` / `stale`),`files` = `hours + days`、`missing` = 摘要還沒建好的小時數。問答:`{ model, from, to, files, ips, ports, source, dataSource }`(`source` 是 `pa` / `ad`;`dataSource` 是 `clickhouse` / `ftp`) | 分析、問答 |
+| `scan` | `ftp`:`{ label, filesScanned, files, matched, rows?, mode? }`(`mode: 'flows'` = 查連線組合統計);`clickhouse`:`{ label, source: 'clickhouse', step: 'traffic' \| 'threat' }`(開始查原始 TRAFFIC / 威脅類;沿用快取時不送 `traffic`) | 問答(有 IP / Port) |
+| `evidence` | `ftp`:`{ label, matched, allow, block, flows, filesScanned, files, flowFiles, rows, seconds, partial, cached }`,沒有 IP 時 `{ label, summary: true, files, missing }`;`clickhouse`:`{ label, source: 'clickhouse', matched, allow, block, flows, samples, from, to, skipped: { from, to } \| null, seconds, partial, cached }`(`from` / `to` 是實際查詢的期間 `yyyy/MM/dd HH:mm`,整段超過保留期限時 `from` 為空字串;`partial` = 連線組合超過 20,000 列只取前面),沒有 IP 時 `{ label, summary: true, source: 'clickhouse', hours, days, missing, grain }` | 問答 |
 | `events` | `{ hits: [{ type, label, total, kinds }] }` 或 `{ summary: true }` | 問答(PA 其他 log) |
 | `ad` | `{ label, total }`(`total` 0 = 沒有已匯入的 AD 事件) | 問答 |
 | `notes` | `{ used: [{ id, title, related }], omitted, vectorError }` | 問答 |
@@ -880,7 +886,7 @@ AI 串流(§10.1)開始後的錯誤以 `error` 事件回傳 `{ code, message }`:
 | `error` | `{ code, message }` | 全部 |
 | `heartbeat` | `{ time }` | 全部 |
 
-**資料不完整要明確標示**(AGENT.md §5):`missing` 是摘要檔讀不到的檔案數;`evidence.partial` 為 true 表示 FTP 掃描逾時;`vectorError` 為 true 表示向量庫失敗、筆記改用關鍵字 / IP 比對。模型收到的資料也會註明(舊版既有的文字,例如「掃描逾時…資料不完整」)。
+**資料不完整要明確標示**(AGENT.md §5):`missing` 是摘要檔讀不到的檔案數(`clickhouse`:摘要還沒建好的小時數);`evidence.partial` 為 true 表示 FTP 掃描逾時(`clickhouse`:連線組合太多只取前面);`evidence.skipped` 是超過原始 log 保留期限沒有查的期間;`meta.grain.coarse` 是只有彙總(較粗)的期間;`vectorError` 為 true 表示向量庫失敗、筆記改用關鍵字 / IP 比對。模型收到的資料也會註明(舊版既有的文字,例如「掃描逾時…資料不完整」)。
 
 與舊版不同:問答期間最長 31 天;參數超過長度上限回 400(舊版截斷);模型連不到時以 `error` 事件回傳(舊版串流前回 5xx);`meta` 的 `from` / `to` 改 ISO 8601;`status` 不回主機位址;錯誤訊息不含上游原文;`meta` / `evidence` / `notes` 多 `missing`、`vectorError`;沒有翻譯與整理筆記(D25)。
 
@@ -892,8 +898,8 @@ AI 串流(§10.1)開始後的錯誤以 `error` 事件回傳 `{ code, message }`:
 | GET | `/api/netops/kb/vector-status` | `netops.kb.read` | `{ enabled, sync, collection, ok, points, lastSync, error, syncing, upserted, deleted }` |
 | POST | `/api/netops/kb/vector-syncs` | `netops.kb.write` | 立即同步(202,背景);`VECTOR_SYNC=0` 回 409 `NETOPS_VECTOR_SYNC_DISABLED` |
 | GET | `/api/netops/kb/ip-learning` | `netops.kb.read` | 外部 IP 自動學習狀態(含 `hour`:每天自動執行的時間,-1 = 不自動) |
-| POST | `/api/netops/kb/ip-learnings` | `netops.kb.write` | `{ days?: 1–60, max?: 1–500, rewrite? }`;202,背景執行,畫面輪詢 `ip-learning` |
+| POST | `/api/netops/kb/ip-learnings` | `netops.kb.write` | `{ days?: 1–30, max?: 1–500, rewrite? }`(AC2 起天數上限 30,原 1–60);202,背景執行,畫面輪詢 `ip-learning` |
 
 - 向量庫沿用舊版 Qdrant `10.10.130.46:6333` 的 `NetOpsKb`(embedding 同為 Qwen3-Embedding-8B 4096 維,2026-11-05 查證)。**`VECTOR_SYNC` 預設 0**:舊版 IIS 仍在同步同一個 collection,兩邊都同步會互刪對方的筆記;關閉時只做語意搜尋,搜尋結果只回新版知識庫存在的筆記。D18 切換、舊版停止寫入後再開(D25;測試區一直關,正式區切換步驟見 AI-FEATURE-INVENTORY §4)。開啟時:筆記異動 3 秒後、啟動 5 秒後、每 30 分鐘同步(同舊版);一次要刪除超過現有 20%(至少 5 筆)或知識庫是空的時整次不同步。
-- 外部 IP 自動學習(D10):`IPLEARN_HOUR` 預設 -1(不自動,舊版 3 點;D25:舊版 IIS 停用後正式區改 3);管理者改過的自動學習筆記不覆寫;自動學習筆記上限 1,000 則。
+- 外部 IP 自動學習(D10):候選 IP 來自最近 N 天的 TRAFFIC 排行(目的 IP、被擋、上傳、外部連入);`clickhouse` 來源取 ClickHouse 原始 TRAFFIC 建的每小時摘要(不新增彙總表),`ftp` 來源取 FTP 摘要。`IPLEARN_DAYS` 上限 30。`IPLEARN_HOUR` 預設 -1(不自動,舊版 3 點;D25:舊版 IIS 停用後正式區改 3);管理者改過的自動學習筆記不覆寫;自動學習筆記上限 1,000 則。
 - 時間欄位(`lastSync`、`startedAt`、`finishedAt`)輸出 `+08:00`。

@@ -399,6 +399,8 @@ D13:骨架直接留用;AI 不在這次範圍,不做串流驗證(D7、D17)。
 4. ClickHouse 無法使用時:串流開始前回 503,開始後以 `error` 事件回傳;不改用 FTP(同 D43)。
 5. 更新 API.md §10、OpenAPI `x-gherkin`、AI-FEATURE-INVENTORY、ARCHITECTURE D25 ③。
 
+**狀態**:程式完成(`feature/ac2-ai-clickhouse`,疊在 AC1 `feature/ac1-recon-sync` 上):`modules/ai/ch-source.ts`(ClickHouse 來源)、`infra/clickhouse/reader.ts` 的 `aiTrafficFlows` / `aiTrafficSamples` / `aiThreatGroups` / `aiDays` / `aiTops`、`NETOPS_AI_SOURCE`(未設定時 test → clickhouse、prod / dev → ftp;舊路徑保留)、外部 IP 學習上限 30 天;畫面:分析對話框「超過 30 天的資料較粗」、問答的 ClickHouse evidence(範例數、略過的期間)。長期間路徑由 `test/unit/ai-ch.test.ts` 的 fixture 驗證(100 天假資料、原始表保留 30 / 90 天);SQL 由 `test/integration/ai.int.test.ts` 在真 ClickHouse 驗證。**上架後待驗**:測試區 3 天內「新來源相對 FTP 對帳誤差 < 0.5%」與「一天範圍 < 10 秒開始回答」(需求方實測;路由未新增或改路徑,不需發佈路由草稿)。
+
 **前置**:AC1。**負責人**:Claude(`refactor-assistant` 先建立 `evidence.js` / `iplearn.js` 的測試基準)。**完成條件**:
 - 同一組問題在測試區新舊來源的筆數一致:新來源相對 FTP 對帳誤差 < 0.5%(測試區只驗 3 天內)。
 - 長期間路徑(30 天分界、92 天、威脅 90 天、IP 學習 30 天)由整合測試 fixture 驗證;長期間實測等正式區(C6)。

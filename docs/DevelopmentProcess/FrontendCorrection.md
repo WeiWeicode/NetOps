@@ -2,6 +2,12 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。範圍:`frontend/`。
 
+## 2026-11-13 AI 分析與問答顯示 ClickHouse 來源(AC2)
+- 工作項目:AC2(需求方:這次前端 UI 也由 Claude 完成)
+- 內容:`components/AiAnalysis.vue`:ClickHouse 來源顯示每小時摘要小時數、每天彙總天數、摘要未建好 / 未更新、期間早於最早資料;有較粗的期間時以警告框註明「超過 30 天的資料較粗」與期間。`pages/ai/Ask.vue`:問答的查詢結果改顯示 ClickHouse 欄位(符合筆數、允許 / 阻擋、組合數、範例數、查詢秒數、組合太多不完整、超過保留期限沒有查的期間);整體統計顯示小時 / 天數與較粗提示。`composables/aiChat.ts`:`Evidence` 加 ClickHouse 欄位、`Grain`、`coarseNote()`;`scan` 的 ClickHouse 狀態文字。外部 IP 學習天數上限 30(`components/IpLearning.vue`)。mock 改為 ClickHouse 事件。FTP 來源(正式區 C6 前)的畫面不變。
+- 檔案:`frontend/src/components/AiAnalysis.vue`、`frontend/src/pages/ai/Ask.vue`、`frontend/src/composables/aiChat.ts`、`frontend/src/components/IpLearning.vue`、`frontend/mock/ai.ts`、`frontend/test/ai.test.ts`
+- 驗證:typecheck、`npm test`、build;mock 下 1440 / 375 px 與鍵盤操作
+
 ## 2026-11-13 FTP Log 檔案頁「每日自動同步」卡片(AC1)
 - 工作項目:AC1(需求方:這次前端 UI 也由 Claude 完成)
 - 內容:新增 `components/DailySyncCard.vue`:今天這一輪的狀態、前一天完成幾類、上次檢查 / 列 FTP 時間、FTP 保留期限內每類型每天的格子(已匯入 / 處理中 / 失敗 / 尚無檔案,含無障礙文字與圖例)、失敗與停止重試提示、未啟用說明;第一欄固定、窄螢幕表格內水平捲動,頁面不溢出。防火牆 › FTP Log 檔案顯示全部類型,AD 網域 › FTP Log 檔案只顯示 AD。`api/ftp.ts` 加 `DailySyncStatus`;`composables/ftpFiles.ts` 加顯示對照與純函式;mock 加 `daily`。

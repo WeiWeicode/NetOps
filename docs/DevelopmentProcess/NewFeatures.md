@@ -2,6 +2,12 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。
 
+## 2026-11-13 AI 分析、問答、外部 IP 學習改查 ClickHouse(AC2)
+- 工作項目:AC2(ARCHITECTURE D44、D25 ③;需求方 AQ2、AQ4)
+- 內容:AI 的資料來源依 `NETOPS_AI_SOURCE` 切換(測試區 clickhouse、正式區 C6 前 ftp,舊路徑保留)。ClickHouse 來源:分析最長 92 天,最近 30 天用原始 TRAFFIC 建的每小時摘要、更早用每天 / 每小時彙總並註明較粗;問答查原始 TRAFFIC 30 天與威脅類 90 天,15 筆範例,不再掃 FTP,超過保留期限的部分標示;外部 IP 學習上限 30 天。畫面:分析對話框「超過 30 天的資料較粗」、問答顯示 ClickHouse 的查詢結果與略過的期間。
+- 檔案:見 BackendCorrection、FrontendCorrection 同日紀錄;`docs/API.md` §10
+- 驗證:單元 / fixture 測試、整合測試(CI);測試區 3 天內筆數比對與回應時間待上架後確認
+
 ## 2026-11-13 對帳後每日同步解密 / GlobalProtect / User-ID / AD(AC1)
 - 工作項目:AC1
 - 內容:每天自動對帳後從 FTP 匯入這四類(不進 ClickHouse,FTP 只留 10 天);FTP Log 檔案頁顯示保留期限內每天是否已匯入。`NETOPS_DAILY_SYNC=0` 關閉。

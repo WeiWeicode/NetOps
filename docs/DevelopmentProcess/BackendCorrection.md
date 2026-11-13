@@ -2,6 +2,12 @@
 
 > `backend/`、`deploy/` 的修改;新紀錄加在最上方,格式見 `AGENT.md` §11。
 
+## 2026-11-13 對帳改每天 08:10、缺口自動補漏
+- 工作項目:C3(需求方 2026-11-13 決定)
+- 內容:對帳時間支援分鐘(`NETOPS_RECON_TIME=HH:MM`,預設 08:10;舊 `NETOPS_RECON_HOUR` 相容,`-1` 不自動)。自動對帳發現 `gap` 時同手動補漏的流程送出工作(`createdBy` = `system:recon`;`planBackfill` 手動與自動共用),補漏排隊 / 執行中、FTP 還沒分析、佇列滿時照對帳重試規則每 10 分鐘再試,同一天每天最多自動送 3 次、補完 20 分鐘後才重新判斷、全系統同時只有 1 個自動補漏(資安審查:不擋人工補漏);FTP 保留期限(`NETOPS_FTP_RETENTION_DAYS`,預設 10,最多 30)內的缺口與 pending 每天再補,到期仍未完成記 warn。`NETOPS_RECON_AUTO_BACKFILL=0` 關閉。
+- 檔案:`backend/src/config.ts`、`backend/src/app.ts`、`backend/src/modules/pa/reconcile.ts`、`backend/src/modules/pa/recon-routes.ts`、`deploy/docker-compose.yml`、`backend/test/unit/ch-recon.test.ts`、`backend/test/unit/ch-overview.test.ts`
+- 驗證:`npm run typecheck`、`npm test`、`npm run build`(見 MR)
+
 ## 2026-11-13 熱力圖:彙總表沒有的格子回 null 並列進 gaps(C1)
 - 工作項目:V-a(V-b2 第一輪驗收 C1)
 - 內容:`buildCells` 原本把 `coverage.since` 之後、彙總表沒有列的格子補成 0,11-13 00:00–08:30(彙總部署前)因此顯示 `v=0`、`partial=false`、`gaps=[]`。改成沒有列一律 `v=null`、`level=0`;`since` 之後、已結束超過 10 分鐘(`MISSING_GRACE_MS`,避免最後幾格遲到的寫入一直閃「不完整」)的連續缺格合併成 `{ reason: 'no-data' }`,併進 `coverage.gaps`,重疊的格子 `partial=true`。`gapsKnown` 仍只代表每日對帳。`docs/API.md` §4.4、OpenAPI `description` / `x-gherkin` 同步。時段明細 `severity` 後端原本就支援,不改。

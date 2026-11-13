@@ -82,8 +82,13 @@ services:
       CLICKHOUSE_USER: netops_reader
       CLICKHOUSE_PASSWORD_FILE: /run/secrets/ch_reader_password
       # PA 總覽、安全事件、明細只查 ClickHouse(ARCHITECTURE D43,2026-11-11);FTP 只做對帳與補漏、AD 與 AI
-      # 每日 FTP 對帳:台灣時間幾點開始(對帳流程自己同步分析 FTP 的 TRAFFIC 檔;PA 前一天的檔約 07:45 才有,之前每 10 分鐘再試)
-      NETOPS_RECON_HOUR: ${NETOPS_RECON_HOUR:-1}
+      # 每日 FTP 對帳:台灣時間 HH:MM 開始(需求方 2026-11-13 決定 08:10;PA 前一天的檔約 07:45 才有,還沒有時每 10 分鐘再試;-1 = 不自動)
+      #   舊的 NETOPS_RECON_HOUR 仍可用,但 NETOPS_RECON_TIME 優先(這裡一律給值,所以 .env 只設 NETOPS_RECON_HOUR 不再生效)
+      NETOPS_RECON_TIME: ${NETOPS_RECON_TIME:-08:10}
+      # 對帳發現缺口時自動送補漏(netops-ingest 從 FTP 補寫);0 = 關閉,只能手動補漏
+      NETOPS_RECON_AUTO_BACKFILL: ${NETOPS_RECON_AUTO_BACKFILL:-1}
+      # FTP 上 PA log 保留天數(需求方會排程刪除):期限內的缺口每天自動補,超過期限仍有缺口記 warn
+      NETOPS_FTP_RETENTION_DAYS: ${NETOPS_FTP_RETENTION_DAYS:-10}
       # ClickHouse 每小時摘要(總覽排行):保留天數同 ClickHouse TRAFFIC(正式區 30 天;測試區 TTL 3 天,多的天數沒有資料)
       NETOPS_CH_SUMMARY_DAYS: ${NETOPS_CH_SUMMARY_DAYS:-30}
       NETOPS_CH_SUMMARY_MINUTES: ${NETOPS_CH_SUMMARY_MINUTES:-5}

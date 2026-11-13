@@ -5,6 +5,10 @@
 --   {{TTL_HOURLY_SRC}}  每小時彙總(來源)  測試區 3 DAY、正式區 90 DAY
 -- 全部 IF NOT EXISTS,可重複執行;TTL 變更由 apply-schema.sh 另外 MODIFY TTL。
 -- 已建立的表要改欄位(C2 起)另寫 migration(deploy/clickhouse/migrations/),不要直接改這裡。
+-- 例外:物化檢視(MV)用到 migration 才加的欄位時,MV 之前要先 ALTER ... ADD COLUMN IF NOT EXISTS 補上。
+--   這個檔在 migrations/ 之前執行;ClickHouse 26.3 即使 MV 已存在,CREATE MATERIALIZED VIEW IF NOT EXISTS 也會先檢查
+--   SELECT 輸出的欄位在 TO 目標表存在,舊表少欄位就失敗,後面的 migrations 不會執行(2026-11-12 測試區部署失敗)。
+--   升級測試:deploy/clickhouse/test-upgrade.sh(CI check:ingest-int,從 V-a 前的 schema 套用)。
 
 CREATE DATABASE IF NOT EXISTS netops;
 
@@ -141,6 +145,11 @@ ENGINE = SummingMergeTree
 PARTITION BY toYYYYMM(hour)
 ORDER BY (hour, action, src)
 TTL hour + INTERVAL {{TTL_HOURLY_SRC}} DELETE;
+
+-- V-a 前建立的表沒有上傳 / 下載欄位:先補(同 migrations/003,可重複執行),下面的 MV 才建得起來(見檔頭)
+ALTER TABLE netops.pa_traffic_hourly_src
+    ADD COLUMN IF NOT EXISTS bytes_sent UInt64 DEFAULT 0 AFTER bytes,
+    ADD COLUMN IF NOT EXISTS bytes_recv UInt64 DEFAULT 0 AFTER bytes_sent;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS netops.pa_traffic_hourly_src_mv
 TO netops.pa_traffic_hourly_src AS

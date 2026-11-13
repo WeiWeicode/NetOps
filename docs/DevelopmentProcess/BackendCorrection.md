@@ -2,6 +2,13 @@
 
 > `backend/`、`deploy/` 的修改;新紀錄加在最上方,格式見 `AGENT.md` §11。
 
+## 2026-11-13 ClickHouse 建表:舊表也能升級(測試區部署失敗修正)
+- 工作項目:V-a、C1(`BugFix.md` 同日紀錄)
+- 內容:① `deploy/clickhouse/schema.sql`:`pa_traffic_hourly_src_mv` 之前先 `ALTER TABLE netops.pa_traffic_hourly_src ADD COLUMN IF NOT EXISTS bytes_sent / bytes_recv`;檔頭補規則「MV 用到 migration 才加的欄位,MV 之前要先補欄位」。其他 MV 檢查過:`pa_traffic_hourly_app_mv` 沒用到新欄位;熱力圖 6 個 MV 的目標表是 V-a 新表、來源欄位(`pa_traffic_logs.bytes_sent / bytes_recv`、`pa_threat_logs.severity / log_type / src`)C1 起就有;`migrations/001`(threat 欄位)沒有 MV 依賴;`002` 只改設定。② `deploy/clickhouse/test-upgrade.sh` 與 `upgrade-test/before-va.sql`(V-a 合併前 e0a8e79 的 schema + 001、002):套舊版 → 寫一列 → `apply-schema.sh` 兩次 → 檢查欄位、8 個 MV、003 的新查詢、升級後的寫入有進來源彙總與 3 個熱力圖表 → 刪資料庫;只能對 `netops-int-*` 容器執行。③ `.gitlab-ci.yml` `check:ingest-int` 在原本的空資料庫建表之前跑升級測試。
+- 資料影響(主機 2 唯讀查詢,2026-11-13):測試區沒有 `pa_heat_5m / 1h / 1d` 與 6 個熱力圖 MV;`pa_traffic_hourly_src` 沒有上傳 / 下載欄位,MV 仍是舊查詢(sessions、bytes 有在寫);原始 TRAFFIC 從 2026-11-11 08:36 起。合併部署後用 `rebuild-day.sh` 回填(需求方同意後執行),步驟見 MR。
+- 檔案:`deploy/clickhouse/{schema.sql,test-upgrade.sh,upgrade-test/before-va.sql}`、`.gitlab-ci.yml`
+- 驗證:`sh -n`、CI `check:ingest-int`(本機沒有 ClickHouse)
+
 ## 2026-11-12 C4 冷歸檔與時段明細冷路由
 - 工作項目:C4、V-a 第 5 步(ARCHITECTURE D30、D35;X1 = A 歸檔原始 log,CQ12、CQ14)
 - 內容:① `netops-ingest` 每天 02:30 起把前一天的 TRAFFIC 與威脅類匯出成 Parquet(IP 轉文字、ZSTD、row group 10 萬列),本機暫存(volume `netops_ingest_staging`)→ NAS `pa-archive/YYYY/` 的 `.tmp` → 重讀比對 SHA-256 → ClickHouse(`netops_cold`)讀回列數 = 來源 → 改名、`.sha256`、manifest `netops.pa_archive_manifest`(migration 004)。② 失敗每小時重試到資料被 TTL 刪除前;D+25(測試區 D+2)心跳 `archiveState=late`、日誌 error;沒有標記檔 `.giga-netops-archive` 不寫(`nas-missing`)。③ 每小時比對來源列數,補漏 / 去重後重新歸檔。④ 保留期限 `NETOPS_ARCHIVE_KEEP_DAYS`(測試區 14、正式區 0 或 ≥ 366)。⑤ 冷查詢鎖加 `refresh`,歸檔與冷明細共用。⑥ `netops-api` 時段明細冷路由:先查 manifest(缺任何一天 404 `NETOPS_COLD_ARCHIVE_NOT_FOUND`),再以 Parquet 子查詢跑和熱路由相同的查詢(`heat.ts` 抽出 `runSlice`、`queryRunner`,熱路由行為不變)。⑦ Compose:`netops-clickhouse` 唯讀掛 NAS 歸檔到 `user_files/archive`、`group_add: ["1000"]`;`netops-ingest` 讀寫掛載與暫存 volume;兩個服務加 `ch_cold_password`;`NETOPS_ARCHIVE_ENABLED`(預設 1)。⑧ CI `check:ingest-int` 的一次性 ClickHouse 掛暫存歸檔目錄、整合測試 `archive.int.test.ts`;`deploy-api-test` 檢查 `ch_cold_password` 並顯示歸檔狀態。⑨ 需求方腳本 `deploy/host2-setup-pa-archive.sh`(建目錄與標記檔)。

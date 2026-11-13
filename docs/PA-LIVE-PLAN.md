@@ -104,6 +104,10 @@ flowchart TB
 | `netops:ingest:gapbase` | Hash | 每種類型已回報過的遺失筆數(缺口判斷的基準;Redis 的 entries-read 不會補上被修剪跳過的筆數) | 無 |
 | `netops:ingest:gaps` | List(JSON) | 偵測到的缺口(Stream 被修剪、沒寫進 ClickHouse 的區間:`type`、`kind`(`pending-trimmed` 已送達未 ACK 被修剪 / `undelivered-trimmed` 還沒讀就被修剪)、`from`、`to`(不含)、`missed`(新發現的筆數,算不出時 null)、`detectedAt`),最新在前、最多 200 筆;C3 的 FTP 補漏讀這裡 | 無(長度上限) |
 | `netops:cache:{名稱}:{參數雜湊}` | String(JSON) | **C3(2026-11-11,D32)**:`netops-api` 儀表板快取(總覽、篩選選項、安全事件總覽);**V-a**:`pa-heat`(熱力圖格子)、`pa-slice`(時段明細) | 60 秒 TTL;`pa-heat` 已結束的期間 1 小時 |
+| `netops:paq:jobs` | List | **C5(D31)**:PA 精準查詢待執行的工作 id;`netops-api` LPUSH、`netops-pa` BRPOP | — |
+| `netops:paq:job:{id}` | Hash | **C5**:kind、params、emp、status、時間、結果;`netops-api` 建立、`netops-pa` 更新 | 10 分鐘 |
+| `netops:paq:active` | String | **C5**:全系統唯一的查詢名額(值 = 工作 id;`netops-api` SET NX,`netops-pa` 比對後刪除) | 90 秒 |
+| `netops:paq:cool:global`、`netops:paq:cool:{owner}` | String | **C5**:全域間隔(`netops-pa` 每個工作結束時設)、每人冷卻(`netops-api` 送出時設) | 10 秒、60 秒 |
 | `netops:cold:lock` | String | **V-a(D35、V3)**:冷查詢鎖,值 = 工作識別;全系統同時 1 個冷查詢(C4 冷明細、歸檔匯出共用)。C4 接上冷查詢前不使用 | 120 秒 PX(工作結束時釋放) |
 | `netops:backfill:queue` | List | **C3(D33)**:FTP 補漏工作 id;`netops-api` LPUSH、`netops-ingest` RPOP(一次一個),最多 10 個 | — |
 | `netops:backfill:running` | Set | **C3**:執行中的補漏工作 id;`netops-ingest` 重新啟動時把裡面的工作標失敗 | — |

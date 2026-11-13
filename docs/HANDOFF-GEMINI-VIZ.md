@@ -206,3 +206,19 @@ MOCK=admin npm run dev      # PowerShell:$env:MOCK='admin'; npm run dev
 ## 9. 交回 Claude 的事項
 
 MR 說明加「交給 Claude」段落,逐條寫:需要的 API 欄位 / composable 回傳 / 型別調整 / 新權限或路由、發現的邏輯錯誤(附重現步驟與檔案行號)。Claude 改完後你再接著做畫面。
+
+## 10. PA 精準查詢(C5,2026-11-12 交付)
+
+「查詢該 IP 當下 PA 即時連線」按鈕依賴的功能已完成(`feature/c5-pa-precise-query`,API.md §3.3)。
+
+| 交付 | 檔案 | 你怎麼用 |
+| --- | --- | --- |
+| Composable | `composables/usePaQuery.ts` | `canQuery`(按鈕權限 `netops.pa-live.query`,只給 admin;false 時按鈕不顯示)、`refreshState()` → `ready` / `waitSec` / `server.mgmtCpu`、`session(ip, 'src' \| 'dst')`、`recentLog(ip, 分鐘 ≤ 15, 'traffic' \| 'threat')`、`state`(idle / submitting / waiting / done / failed / rejected / busy / error)、`job.result.rows` |
+| 最小介面 | `components/PaQueryPanel.vue`(即時監控頁) | 樸素版;**畫面由你改寫**(輸入 IP、兩個按鈕、等待中、結果表格),composable 不變 |
+| 假資料 | `mock/paQuery.ts`(`MOCK=admin npm run dev`) | IP `10.0.0.98` → 429 倒數;`10.0.0.97` → rejected(CPU 過高);`10.0.0.96` → failed(逾時);其他約 3 秒後完成。`MOCK=viewer` 看不到面板 |
+
+畫面要點:
+- 等待中寫「查詢 PA-560 中…(最長 60 秒)」;`busy`(429)用中性提示並顯示倒數(`waitSec`),不是錯誤樣式;`rejected` 是「為保護設備沒有送出」(warning),`failed` 才是錯誤。
+- 冷卻規則要寫在按鈕旁:全系統一次一個、每人每分鐘一次;`server.mgmtCpu` 可顯示當下管理平面 CPU。
+- 熱力圖 / 儀表板抽屜裡的按鈕:V-b1(!78)合併後,Claude 會把 `useLivePaQuery` 改接 `usePaQuery`,你用同一個介面即可(`canQuery` 為 true 才顯示)。
+

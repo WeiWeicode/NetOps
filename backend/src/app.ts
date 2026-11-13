@@ -41,6 +41,9 @@ import type { ChOverviewDeps } from './modules/pa/ch-overview.js';
 import { createReconciler } from './modules/pa/reconcile.js';
 import reconRoutes from './modules/pa/recon-routes.js';
 import { connectBackfillQueue, type BackfillQueue } from './infra/redis/backfill.js';
+import { connectPaQueryStore, type PaQueryStore } from './infra/redis/pa-query.js';
+import paQueryRoutes from './modules/pa-query/routes.js';
+import { createPaQueryService } from './modules/pa-query/service.js';
 import { createHeatReader, type HeatReader } from './infra/clickhouse/heat.js';
 import type { ColdLock } from './infra/redis/cold-lock.js';
 import heatRoutes from './modules/pa-heat/routes.js';
@@ -86,6 +89,8 @@ export async function buildApp(
     backfillQueue?: BackfillQueue | null;
     /** 熱力圖與時段明細(V-a);測試注入假實作。冷資料(C4 前)沒有實作,冷路由回 409 */
     heat?: { reader?: HeatReader | null; cold?: ColdSlice | null; coldLock?: ColdLock | null; now?: () => number; syncMs?: number };
+    /** PA 精準查詢(C5);測試注入,null = 沒有 Redis */
+    paQuery?: { store?: PaQueryStore | null; now?: () => number };
   } = {},
 ): Promise<FastifyInstance> {
   const app = Fastify({
@@ -203,6 +208,9 @@ export async function buildApp(
   const backfillQueue = deps.backfillQueue !== undefined ? deps.backfillQueue : config.redisUrl ? connectBackfillQueue(config.redisUrl) : null;
   if (backfillQueue) app.addHook('onClose', async () => backfillQueue.close());
   await app.register(reconRoutes, { recon, queue: backfillQueue });
+  // PA 精準查詢(C5,D31):netops-api 只驗證與送出,PA-560 由 netops-pa 查(PA_QUERY_ENABLED)
+  const paQueryStore = deps.paQuery?.store !== undefined ? deps.paQuery.store : config.redisUrl ? connectPaQueryStore(config.redisUrl) : null;
+  await app.register(paQueryRoutes, { svc: createPaQueryService(paQueryStore, deps.paQuery?.now) });
   // 活動熱力圖、時段明細(V-a):只讀彙總表與 1 天內的原始表;冷資料要等 C4
   const heatReader = deps.heat?.reader !== undefined ? deps.heat.reader : config.clickhouse ? createHeatReader(config.clickhouse) : null;
   const heatSvc = createHeatService({

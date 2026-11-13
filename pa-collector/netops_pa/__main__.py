@@ -1,6 +1,7 @@
 """netops-pa 進入點:python -m netops_pa
 
-單一程序(PA-LIVE-PLAN §2):寫入執行緒(Redis)、輪詢執行緒(PA_POLL_ENABLED)、HTTP 與 Syslog 接收(PA_RECEIVE_ENABLED)。
+單一程序(PA-LIVE-PLAN §2):寫入執行緒(Redis)、輪詢執行緒(PA_POLL_ENABLED)、HTTP 與 Syslog 接收(PA_RECEIVE_ENABLED)、
+PA 精準查詢執行者(PA_QUERY_ENABLED,C5;一次一個,pa_query.py)。
 `python -m netops_pa health`:容器健康檢查(主迴圈 30 秒內有更新存活檔)。
 `python -m netops_pa check`:第一次接 PA-560 時的連線檢查(check.py)。
 """
@@ -17,6 +18,7 @@ import time
 from . import __version__
 from .config import ConfigError, load_config
 from .control import Control
+from .pa_query import QueryWorker, XmlApi
 from .pipeline import Pipeline
 from .poller import Poller, SdkClient
 from .receiver_http import HttpReceiver
@@ -60,8 +62,12 @@ def main() -> int:
         register_secret(cfg.poll.api_key)
     if cfg.receive:
         register_secret(cfg.receive.token)
+    if cfg.query:
+        register_secret(cfg.query.api_key)
     tls_on = bool(cfg.receive and cfg.receive.tls_cert)
-    status = Status(__version__, cfg.gw_env, cfg.poll is not None, cfg.receive is not None, receiveTls="1" if tls_on else "0")
+    # queryEnabled:netops-api 依這個欄位決定 PA 精準查詢能不能送出(沒有執行者時回 409,不讓工作卡在佇列)
+    status = Status(__version__, cfg.gw_env, cfg.poll is not None, cfg.receive is not None, receiveTls="1" if tls_on else "0",
+                    queryEnabled="1" if cfg.query else "0")
     store = RedisStore(connect(cfg.redis_url), cfg.top_n)
     # 測試區手動開關:只有 test(與本機 dev)讀,正式區不讀(control.py;allowlist)
     control = Control(store.read_control, enabled=cfg.gw_env in ("dev", "test"))
@@ -77,6 +83,14 @@ def main() -> int:
         log.info("SDK 輪詢已啟用:每 %d 秒(PA %s:%d)", cfg.poll.interval, cfg.poll.host, cfg.poll.port)
     else:
         log.info("SDK 輪詢未啟用(PA_POLL_ENABLED)")
+
+    query = None
+    if cfg.query:
+        query = QueryWorker(store.r, XmlApi(cfg.query), status, cfg.query.max_mgmt_cpu)
+        query.start()
+        log.info("PA 精準查詢已啟用:一次一個、管理平面 CPU 超過 %d%% 不送", cfg.query.max_mgmt_cpu)
+    else:
+        log.info("PA 精準查詢未啟用(PA_QUERY_ENABLED)")
 
     servers = []
     if cfg.receive:
@@ -96,7 +110,7 @@ def main() -> int:
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, lambda *_: stop.set())
     exit_code = 0
-    workers = [pipeline.alive, *(x.alive for x in servers), *([poller.alive] if poller else [])]
+    workers = [pipeline.alive, *(x.alive for x in servers), *([poller.alive] if poller else []), *([query.alive] if query else [])]
     while not stop.is_set():
         # 任一工作執行緒結束就結束程序(結束碼 1),由 Compose restart: unless-stopped 重啟
         # (Docker Engine 不會自動重啟 unhealthy 的容器,所以不能只靠健康檢查)
@@ -119,6 +133,8 @@ def main() -> int:
     time.sleep(1)
     if poller:
         poller.stop()
+    if query:
+        query.stop()
     pipeline.stop()
     return exit_code
 

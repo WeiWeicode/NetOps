@@ -63,3 +63,21 @@ HEARTBEAT = f"{PREFIX}:heartbeat"
 # Hash 欄位 pollPaused / receivePaused("1" 暫停、"0" 或沒有 = 繼續)、updatedAt、updatedBy。不設 TTL;
 # 正式區(GW_ENV=prod)netops-pa 不讀這個鍵,netops-api 也不允許寫入。
 CONTROL = f"{PREFIX}:control"
+
+# PA 精準查詢(C5;docs/PA-LOG-CLICKHOUSE-GUIDE.md §9、ARCHITECTURE D31)。netops-api 送出工作、netops-pa 執行;
+# 鍵格式同 backend/src/infra/redis/pa-query.ts,兩邊一起改。
+#   jobs          List:待執行的工作 id(netops-api LPUSH、netops-pa BRPOP)
+#   job:{id}      Hash:kind、params(JSON)、emp、status、時間、結果;TTL 10 分鐘(netops-api 建立,netops-pa 更新)
+#   active        String:全系統唯一的查詢名額(值 = 工作 id;netops-api SET NX,netops-pa 結束時比對後刪除);TTL 90 秒
+#   cool:global   String:全域最小間隔(netops-pa 每個工作結束時設 10 秒)
+#   cool:{emp}    String:每人冷卻(netops-api 送出時設 60 秒)
+PAQ_PREFIX = "netops:paq"
+PAQ_JOBS = f"{PAQ_PREFIX}:jobs"
+PAQ_ACTIVE = f"{PAQ_PREFIX}:active"
+PAQ_COOL_GLOBAL = f"{PAQ_PREFIX}:cool:global"
+PAQ_JOB_TTL = 600
+PAQ_COOL_GLOBAL_SEC = 10
+
+
+def paq_job(job_id: str) -> str:
+    return f"{PAQ_PREFIX}:job:{job_id}"

@@ -236,6 +236,8 @@ services:
   #   兩個開關(netops.env;測試區預設 0,測試時才開,2026-11-05 需求方決定):
   #     PA_POLL_ENABLED     只控制 SDK 輪詢 PA-560(需 PA_HOST、機密 pa_api_key)
   #     PA_RECEIVE_ENABLED  控制 HTTP 51293 / Syslog 51294 接收(需機密 pa_http_token、PA_ALLOWED_SOURCES)
+  #     PA_QUERY_ENABLED    PA 精準查詢執行者(C5,D31:需 PA_HOST、機密 pa_api_key,API 角色要有 XML API Log 權限 E4);
+  #                         測試區預設 0,由需求方手動開;PA_QUERY_MAX_MGMT_CPU 管理平面 CPU 門檻(預設 50,E4,實測前不放寬)
   #   port 只綁 WSL 的 127.0.0.1:Windows 以 portproxy 帶進來,Windows 防火牆只放行 PA-560(docs/PA-FORWARDING-SPEC.md 附錄 F)
   #   機密(NETOPS_SECRETS_DIR,uid 1000 可讀;deploy/host2-set-pa-secrets.sh):pa_api_key(空檔 = 尚未取得)、pa_http_token
   netops-pa:
@@ -264,6 +266,8 @@ services:
       # 測試區 PA-560 是自簽憑證、尚未取得憑證時才設 1(正式區設了會啟動失敗)
       PA_TLS_INSECURE: ${PA_TLS_INSECURE:-}
       PA_RECEIVE_ENABLED: ${PA_RECEIVE_ENABLED:-0}
+      PA_QUERY_ENABLED: ${PA_QUERY_ENABLED:-0}
+      PA_QUERY_MAX_MGMT_CPU: ${PA_QUERY_MAX_MGMT_CPU:-}
       PA_HTTP_TOKEN_FILE: /run/secrets/pa_http_token
       PA_ALLOWED_SOURCES: ${PA_ALLOWED_SOURCES:-}
       # 憑證(選用;檔案放在主機 NETOPS_PA_TLS_HOST_DIR,唯讀掛到 /run/pa-tls,檔名固定見 docs/PA-FORWARDING-SPEC.md 附錄 F.6):

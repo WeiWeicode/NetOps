@@ -2,6 +2,11 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。
 
+## 2026-11-12 C5 PA 精準查詢
+- 工作項目:C5(D31、CQ6、CQ7;E4 結果)
+- 內容:PA 精準查詢 API(`/pa-query/status`、`/pa-query/jobs`)、權限 `netops.pa-query.read`(只給 netops-admin)、按鈕 `netops.pa-live.query`;API.md §2、§3.3、§8;Gherkin `pa-query/query.feature`;PA-LIVE-PLAN §4 鍵表;HANDOFF-GEMINI-VIZ §10
+- 檔案:`docs/{API,IMPL-PLAN,PA-LIVE-PLAN,PROJECT-MAP,HANDOFF-GEMINI-VIZ}.md`、`docs/Gherkin/`
+
 ## 2026-11-11 C3:PA 查詢只用 ClickHouse(推翻並行 2 週)
 - 工作項目:C3
 - 內容:需求方決定捨棄 FTP 查詢路徑、對帳改 01:00;ARCHITECTURE D43;API.md §4.1–§4.3、§5.3、§8;Gherkin `pa/overview.feature`、`pa-events/overview.feature`、`pa-log-searches/search.feature` 改寫;IMPL-PLAN、HANDOFF。

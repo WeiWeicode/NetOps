@@ -101,13 +101,15 @@ export function useSlice(opts: { now?: () => number; pollMs?: number } = {}) {
   }
 
   async function run(q: SliceQuery): Promise<void> {
-    await job.cancel();
+    // 先同步換掉條件,取消舊工作的等待期間連點(例:setSeverity 再點同一個 chip 取消)才看得到新條件(程式碼審查)
     stopCountdown();
     retryAfter.value = 0;
     query.value = q;
     direct.value = null;
     failure.value = null;
     loading.value = true;
+    await job.cancel();
+    if (query.value !== q) return;
     const my = q;
     try {
       const r = await slice.get(q);

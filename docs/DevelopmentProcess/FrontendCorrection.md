@@ -10,6 +10,7 @@
   - C5 `useHeatmap.METRIC_OPTIONS` 移除 `ad`、`metric` 型別改 `PaHeatMetric`;`Heatmap.vue` 拿掉 `visibleMetricOptions` 過濾。`useInsight.InsightView` 已經沒有 `ad`。
   - C7 `openInSearch(extra?: { filterIp, filterApp, filterPort, filterCountry, filterThreat, severity })`(另有 `searchTarget(extra)` 回傳路由):目前條件 + 點選項目寫進 `/firewall/search` query,點 IP 時以點選的 IP 取代來源 / 目的條件;威脅類帶 `type=THREAT`、`threat`、`severity`,`searchLink` 不再只限 TRAFFIC。抽屜拿掉 `(props.slice.openInSearch as …)` 型別轉換,威脅名稱改帶 `filterThreat`(原本從名稱抓 IP 或丟進關鍵字)。Log 明細查詢頁只查 TRAFFIC,收到這三個條件時顯示「未套用」提示(AGENT §5,不靜默忽略)。
   - 抽屜威脅明細的名稱欄 key 由 `threatName` 改 `name`(API.md §4.4 threat 明細欄位是 `name`,原本真實資料這欄會是空的)。
+  - 程式碼審查:`useSlice` 內部的 `run` 先同步換掉 `query` 再取消舊工作(連點同一個 chip 取消不會被吞掉);`Search.vue` 的未套用提示改 `computed`。
   - C8 mock `sliceResult`:`type=threat` 的明細列補 `severity`、`name`(依 API 欄位名,不用 `threatName`),並依 `severity` 篩選摘要、排行與明細;`mock/viz.ts` 轉送 `severity`。
   - C9 `viz.mount.test.ts`:`null` 格按 Enter 不發 `select`、年視圖直式座標、AD 異常按鈕 / Tab 不存在;新增抽屜 C3 / C4 / C7 掛載測試;`viz.test.ts` 新增 `summary`、`setSeverity`、`searchTarget` 測試,AD 停用測試改成選項不存在。
 - 檔案:`frontend/src/composables/useSlice.ts`、`useHeatmap.ts`、`src/api/slice.ts`、`src/components/SliceDrawer.vue`、`src/pages/firewall/Heatmap.vue`、`Insight.vue`(註解)、`Search.vue`、`mock/fixtures/viz.ts`、`mock/viz.ts`、`test/viz.test.ts`、`test/viz.mount.test.ts`、`docs/VIZ-RULES-DESIGN.md` §6

@@ -255,6 +255,11 @@ describe('useSlice', () => {
     expect(mocks.sliceGet).toHaveBeenLastCalledWith({ ...q, type: 'threat', country: 'China', severity: 'low' });
     await s.setSeverity(null);
     expect(mocks.sliceGet).toHaveBeenLastCalledWith({ ...q, type: 'threat', country: 'China' });
+    // 連點同一個 chip(第一次還在取消舊工作時就再點):第二次是取消,不會被吞掉
+    const first = s.setSeverity('medium');
+    const second = s.setSeverity(null);
+    await Promise.all([first, second]);
+    expect(s.query.value).toEqual({ ...q, type: 'threat', country: 'China' });
   });
 });
 

@@ -33,14 +33,14 @@ import { toast } from '@/ui';
 const PAGE_SIZE = 50;
 const route = useRoute();
 /** 網址帶了本頁不支援的威脅類條件(只查 TRAFFIC):提示未套用,不靜默忽略 */
-const ignoredThreatCond = (() => {
+const ignoredThreatCond = computed(() => {
   const q = route.query;
   const parts: string[] = [];
   if (q.type === 'THREAT') parts.push('類型 THREAT');
   if (typeof q.threat === 'string' && q.threat) parts.push(`威脅名稱「${q.threat}」`);
   if (typeof q.severity === 'string' && q.severity) parts.push(`嚴重度 ${q.severity}`);
   return parts.join('、');
-})();
+});
 const router = useRouter();
 
 const form = reactive<Record<PaSearchKey, string> & { from: string; to: string }>({

@@ -190,8 +190,7 @@ export function createHeatService(d: HeatDeps) {
       }), { longTtl: !live }),
     );
     const { gaps, known } = gapsIn(range.fromMs, range.toMs);
-    const { cells, missing, levels } = buildCells(range, q.metric as PaMetric, data.rows, data.since, gaps, t);
-    const allGaps = [...gaps, ...missing].sort((a, b) => a.fromMs - b.fromMs);
+    const { cells, allGaps, levels } = buildCells(range, q.metric as PaMetric, data.rows, data.since, gaps, t);
     return {
       granularity: q.granularity,
       metric: q.metric,

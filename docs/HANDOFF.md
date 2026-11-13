@@ -4,7 +4,7 @@
 
 ## 2026-11-13 AI 改用 ClickHouse 範圍討論(AC1–AC7 計畫)
 
-**接手方式**:新討論串說「從 `NetOps/docs/HANDOFF.md`「2026-11-13 AI 改用 ClickHouse 範圍討論」接手」。計畫在 IMPL-PLAN「AC」,決策 ARCHITECTURE D44、D45。下一步:派 AC1(對帳後同步)給 Claude 子任務;AC3 的範本欄位實作前請需求方看過。
+**接手方式**:新討論串說「從 `NetOps/docs/HANDOFF.md`「2026-11-13 AI 改用 ClickHouse 範圍討論」接手」。計畫在 IMPL-PLAN「AC」,決策 ARCHITECTURE D44、D45。下一步:派 AC1(對帳後同步)給 Claude 子任務;AC3 範本欄位需求方已同意(「欄位可以」)。
 
 **需求方決定(2026-11-13,照做,不要重新討論;引號內是原話或選項原文)**
 

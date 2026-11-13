@@ -17,7 +17,7 @@
 | R1 | PA 即時監控(唯讀):`netops-pa`、`netops-redis`、即時監控頁 | **測試區完成(2026-11-10)**;正式區上線併入 D2(D19、D21、D24、D26) |
 | R2 | 封鎖 IP(DAG 動態標籤) | 未排程(D22) |
 | C0–C6 | PA log 高吞吐架構(ClickHouse + Parquet 冷歸檔 + PA 精準查詢) | **已核准(2026-11-10)**,C0 外部前置事項進行中;**C1 實測完成、MR 待合併**(D27–D33,[PA-LOG-CLICKHOUSE-GUIDE.md](PA-LOG-CLICKHOUSE-GUIDE.md)) |
-| V-a | 熱力圖資料層:長期彙總(5 分鐘 / 每小時 / 每天)、熱力圖 API、時段明細熱 / 冷路由 | **第 1–4、6 步實作完成、MR 待合併(`feature/viz-a-heatmap-data`)**;第 5 步冷路由等 C4 與 E2(介面已保留,現在回 409)(D34、D35) |
+| V-a | 熱力圖資料層:長期彙總(5 分鐘 / 每小時 / 每天)、熱力圖 API、時段明細熱 / 冷路由 | **第 1–4、6 步實作完成、MR 待合併(`feature/viz-a-heatmap-data`)**;第 5 步冷路由在 C4 MR(`feature/clickhouse-c4-archive`)(D34、D35) |
 | V-b | 儀表板與熱力圖畫面:V-b1 Claude 元件介面與 API,V-b2 Gemini 頁面與動畫 | **V-b1 實作完成、MR 待合併(`feature/viz-b1-insight-frontend`,堆疊在 V-a 之後)**;V-b2(Gemini)可在 V-b1 合併後開工(HANDOFF-GEMINI-VIZ §2.1)(D40、D41) |
 | V-c | 偵測規則引擎:PA 規則 1–7、冷卻、白名單、網段設定頁、告警頁 | **規劃已合併(2026-11-11,!70)**;前置 C3;**需求方提供網段清單與初始白名單**(X11)(D37、D38、D39) |
 | V-d | AD:AD 事件進 ClickHouse、AD 指標與圖表、規則 8–9 | **延後**(V4,D36) |
@@ -248,12 +248,14 @@ D13:骨架直接留用;AI 不在這次範圍,不做串流驗證(D7、D17)。
 
 **2026-11-11 晚上需求方改決定(ARCHITECTURE D43)**:不並行 2 週,查詢全部改用 ClickHouse(`feature/clickhouse-c3-ch-only`):總覽、安全事件、Top N、Log 明細只查 ClickHouse,超過保留期限回 `NETOPS_PA_OUT_OF_RETENTION`;FTP 只做每日對帳(01:00 起,自己同步分析 FTP)與補漏。完成條件「並行對帳 2 週無未處理缺口」改為「每日對帳持續運作、缺口可補」;誤差 < 0.5%、一天範圍明細 < 10 秒照舊。AI 分析 / 問答改用 ClickHouse 列為後續。前端日期改單一區間欄位(`feature/netops-date-range`)。
 
-## C4 冷歸檔(已核准,待 FTP 保留期限)
+## C4 冷歸檔(已核准;X1 = A 歸檔原始 log)
 
 1. 每天 02:30 匯出前一天 Parquet(本機暫存 → NAS `/mnt/nas-docker/giga-netops/{env}/pa-archive/YYYY/`)、SHA-256、manifest、重試到 D+25。歸檔原始 log 或只歸檔每小時彙總,依 E1 的結果(CQ3)。
 2. ClickHouse 唯讀掛載歸檔目錄,冷查詢(工作模式,最多 7 天)。
 
 **前置**:C2;**E1(FTP 保留期限)**,需要時 E2(NAS 空間);NAS 目錄與標記檔。**負責人**:Claude 寫;IT / NAS 管理者處理空間;需求方建目錄。**完成條件**:連續 7 天歸檔成功、雜湊核對通過;`file()` 查得到 7 天前資料;拔掉 NAS 時寫入不受影響、恢復後補歸檔。
+
+**狀態:程式完成,MR 待合併(2026-11-12,`feature/clickhouse-c4-archive`)**。`netops-ingest` 每天 02:30 起匯出前一天的 TRAFFIC 與威脅類 Parquet(本機暫存 → NAS `pa-archive/YYYY/`、SHA-256、ClickHouse 讀回列數核對、`.sha256`、manifest 表 `netops.pa_archive_manifest`,migration 004);失敗每小時重試到資料被 TTL 刪除前,D+25(測試區 D+2)心跳 `archiveState=late`;歸檔後來源列數變了(補漏、去重)自動重新歸檔;保留期限 `NETOPS_ARCHIVE_KEEP_DAYS`(測試區 14 天;正式區 0 = 不刪或至少 366)。冷查詢:V-a 時段明細冷路由(`netops_cold`、`file()`、最多 1 天、30 秒同步否則工作、全系統 1 個、缺歸檔 404)。測試區用現有 `docker-folder`(剩約 18 GB);**需求方步驟**:執行 `deploy/host2-setup-pa-archive.sh` 建目錄與標記檔。正式區要等 E2(NAS 空間),之前 `NETOPS_ARCHIVE_ENABLED=0`。完成條件(連續 7 天、7 天前可查、拔 NAS)在測試區觀察後補報告。
 
 ## C5 PA 精準查詢(已核准)
 
@@ -284,7 +286,7 @@ D13:骨架直接留用;AI 不在這次範圍,不做串流驗證(D7、D17)。
 2. 回填:上線時從原始表回填彙總表與 `_src` 新欄位;C3 的 FTP 補漏與 `dedupe-day.sh` 加入熱力圖表的重建(§3.6)。
 3. `GET /api/netops/pa/heatmap`:三粒度、三指標(`ad` 回 409 預留)、分級、`coverage`(`null` 和 0 分開)、Redis 快取(§4.2)。
 4. `GET /api/netops/pa/slice` 熱路由:1 天上限、Top 10、≤ 200 列、30 秒內同步、超過轉 `pa-slice` 工作、同人同條件重用(§4.3)。
-5. 冷路由(**前置 C4**;X1 決定歸檔原始 log,需 E2 的 NAS 空間):`netops_cold` 帳號 `file()` 讀 `archive/YYYY/…`、全系統 1 個冷查詢(Redis 鎖,和 C4 冷明細、歸檔匯出共用)、429 + `Retry-After`、檔案不存在 404。
+5. 冷路由(**前置 C4**;X1 決定歸檔原始 log,需 E2 的 NAS 空間):`netops_cold` 帳號 `file()` 讀 `archive/YYYY/…`、全系統 1 個冷查詢(Redis 鎖,和 C4 冷明細、歸檔匯出共用)、429 + `Retry-After`、檔案不存在 404。**C4 實作(2026-11-12,`feature/clickhouse-c4-archive`)**:`modules/pa-heat/cold.ts`;缺歸檔回 404 `NETOPS_COLD_ARCHIVE_NOT_FOUND`。
 6. API.md、OpenAPI(`x-permission`、`x-gherkin`、`x-timeout-ms: 40000`)、Gherkin、PA-LIVE-PLAN §4 鍵表、PROJECT-MAP。
 
 **前置**:C3(`infra/clickhouse`、查詢切換);第 5 步另需 C4。**負責人**:Claude;需求方審核與合併。**完成條件**:CI 整合測試證明三張彙總表的總數與原始表一致、重送不重複;測試區日視圖今天的格子和流量總覽數字誤差 < 0.5%;熱路由一天範圍 < 10 秒;冷路由(C4 後)30 秒內同步、超過轉工作、第 2 個冷查詢回 429;`security-auditor`(Log 明細、對外 API)與 `code-reviewer` 審查完成。

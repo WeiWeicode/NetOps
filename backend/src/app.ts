@@ -45,7 +45,9 @@ import { connectPaQueryStore, type PaQueryStore } from './infra/redis/pa-query.j
 import paQueryRoutes from './modules/pa-query/routes.js';
 import { createPaQueryService } from './modules/pa-query/service.js';
 import { createHeatReader, type HeatReader } from './infra/clickhouse/heat.js';
-import type { ColdLock } from './infra/redis/cold-lock.js';
+import { connectColdLock, type ColdLock } from './infra/redis/cold-lock.js';
+import { createColdFileClient } from './infra/clickhouse/archive.js';
+import { createColdSlice } from './modules/pa-heat/cold.js';
 import heatRoutes from './modules/pa-heat/routes.js';
 import { createHeatService, type ColdSlice } from './modules/pa-heat/service.js';
 import insightRoutes from './modules/pa-insight/routes.js';
@@ -211,15 +213,19 @@ export async function buildApp(
   // PA 精準查詢(C5,D31):netops-api 只驗證與送出,PA-560 由 netops-pa 查(PA_QUERY_ENABLED)
   const paQueryStore = deps.paQuery?.store !== undefined ? deps.paQuery.store : config.redisUrl ? connectPaQueryStore(config.redisUrl) : null;
   await app.register(paQueryRoutes, { svc: createPaQueryService(paQueryStore, deps.paQuery?.now) });
-  // 活動熱力圖、時段明細(V-a):只讀彙總表與 1 天內的原始表;冷資料要等 C4
+  // 活動熱力圖、時段明細(V-a):只讀彙總表與 1 天內的原始表;更早的時段讀 NAS 冷歸檔(C4,NETOPS_ARCHIVE_ENABLED=1 才開放)
   const heatReader = deps.heat?.reader !== undefined ? deps.heat.reader : config.clickhouse ? createHeatReader(config.clickhouse) : null;
+  const cold = deps.heat?.cold !== undefined ? deps.heat.cold : config.clickhouseCold ? createColdSlice(createColdFileClient(config.clickhouseCold), app.log) : null;
+  // 冷查詢鎖(全系統 1 個,和 netops-ingest 的歸檔匯出共用);沒有 Redis 時冷查詢一律回 429(不回 5xx)
+  const coldLock = deps.heat?.coldLock !== undefined ? deps.heat.coldLock : cold && config.redisUrl ? connectColdLock(config.redisUrl) : null;
+  if (coldLock) app.addHook('onClose', async () => coldLock.close());
   const heatSvc = createHeatService({
     heat: heatReader,
     cache,
     recon,
     ttlDays: config.paTtlDays,
-    cold: deps.heat?.cold ?? null,
-    coldLock: deps.heat?.coldLock ?? null,
+    cold,
+    coldLock,
     log: app.log,
     now: deps.heat?.now,
   });

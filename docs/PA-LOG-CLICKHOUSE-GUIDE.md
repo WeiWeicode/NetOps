@@ -802,6 +802,30 @@ SETTINGS max_threads = 1, max_execution_time = 50;
 
 ---
 
+### 8.6 實作差異(C4,2026-11-12)
+
+| 項目 | 手冊範例 | 實作 |
+| --- | --- | --- |
+| 用戶端 | `@clickhouse/client` | 同 C2,HTTP 介面 + Node 內建 fetch(`infra/clickhouse/archive.ts`),不加套件 |
+| 匯出設定 | `max_threads=1`、ZSTD | 另加 `output_format_parquet_row_group_size=100000`、`_bytes=64 MB`(預設 100 萬列整組放記憶體,C1 實測匯出 407 MiB) |
+| 列數核對 | 改名後讀正式檔、不符就刪 | 先讀 NAS 上的 `.tmp`,相符才改名:重新歸檔失敗時原本的正式檔不動 |
+| 冷查詢條件 | 直接比 IP 文字 | `file()` 外包一層子查詢把 IP 轉回 `IPv6`、時間轉回 `Asia/Taipei`,和熱查詢共用同一份條件與欄位(`heat.ts` `runSlice`);代價是 IP 條件不能裁切 row group(一天的檔整個讀) |
+| `file()` 路徑 | 參數化或驗證後組字串 | 驗證後組字串:路徑只由常數與 `YYYY-MM-DD`(真的日期)組成 |
+| manifest | `table_name` = `pa_traffic` / `pa_threat`、`sha256 FixedString(64)` | `traffic` / `threat`;`sha256 String`(失敗列是空字串);`status` 多 `expired`(保留期限刪檔) |
+| 重試與告警 | D+25 | 重試到原始表還完整的最後一天(今天 −(保留天數 − 1));告警 `INGEST_ARCHIVE_ALERT_DAYS` 預設 min(25, TRAFFIC 保留天數 − 1)(測試區 2) |
+| 補漏之後 | — | 每小時比對來源列數與 manifest,不同就重新歸檔(C3 的 FTP 補漏通常在歸檔之後) |
+| 鎖 | `netops:archive:lock` | 共用冷查詢鎖 `netops:cold:lock`(D35;單一容器,不另設歸檔鎖),每 30 秒延長 |
+| ClickHouse 讀 NAS | 唯讀掛載 | 主機 cifs 掛載是 uid / gid 1000、0640 / 0750:`netops-clickhouse` 加 `group_add: ["1000"]` |
+| 保留期限 | 至少 1 年 | 測試區 14 天(`NETOPS_ARCHIVE_KEEP_DAYS`,NAS 只剩約 18 GB);正式區 0 = 不刪,設定時至少 366;不能少於原始表保留天數 |
+| 冷讀欄位 | `SELECT *` | 明列欄位(`archive.ts` `COLD_COLUMNS`):表加欄位後新舊檔仍可跨日 UNION ALL;冷查詢要用新欄位時,舊檔要重新歸檔或補預設值 |
+| 歸檔優先 | — | 等鎖時寫預約鍵 `netops:cold:archive-wanted`(20 分鐘,一輪結束刪除),`netops-api` 看到就不接新的冷明細(429);一輪最多 6 個檔、檔與檔之間讓出 5 秒 |
+| 空間與大小 | — | 暫存與 NAS 剩餘 < 2 GB 不歸檔(`archiveState=disk-low`);單一檔超過 `INGEST_ARCHIVE_MAX_MB`(預設 4096)中止 |
+| 鎖遺失 | — | 延長失敗 90 秒(Redis 斷線)或被別人拿走就中止,改名前再確認,不覆蓋可能正在被讀的正式檔 |
+| manifest 版本 | `updated_at` = 現在 | 每個 (類型, 日) 遞增(時鐘回跳時仍比上一筆新,ReplacingMergeTree 才選得到最新) |
+| 匯出執行緒 | `max_threads=1` | 不帶:`netops_writer` 的 `max_threads` 是 const(2),帶了會被拒絕 |
+
+**已知限制 / 待需求方決定**(C4 資安審查):① `netops_cold` 權限可再收斂(`SELECT` 只給 `netops.pa_archive_manifest`;`READ ON FILE` 26.3 是否能限定 `archive/` 要實測)——要重產主機帳號檔(`host2-set-clickhouse-secrets.sh`,需求方執行),本 MR 不做。② 冷明細只看 manifest 是 `ok` 就讀,不重算檔案雜湊:能寫 NAS 的人(NAS 帳號、主機 uid 1000)可同時換掉 Parquet 與 `.sha256`;manifest 的 `sha256` 在 ClickHouse(NAS 改不到),之後可加定期抽查或 NAS 快照 / WORM。③ 心跳與 manifest 的錯誤只放短訊息(路徑換成 `<path>`、fs 錯誤只留代碼),原文寫容器日誌。
+
 ## 9. 模組四 PA SDK / API 的安全定位
 
 ### 9.1 什麼查哪裡

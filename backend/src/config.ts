@@ -99,6 +99,8 @@ export interface Config {
    * 正式區 TRAFFIC 30、威脅 90(CQ12);測試區與本機 3。NETOPS_TTL_TRAFFIC_DAYS / _THREAT_DAYS 可覆寫
    */
   paTtlDays: { traffic: number; threat: number };
+  /** 冷明細(C4,帳號 netops_cold);NETOPS_ARCHIVE_ENABLED 不是 1 時為 null(冷路由回 409 NETOPS_COLD_ARCHIVE_DISABLED) */
+  clickhouseCold: { url: string; user: string; password: string; timeoutMs: number } | null;
 }
 
 /**
@@ -288,9 +290,37 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, cwd?: string): 
     chSummary: { days: int(env, 'NETOPS_CH_SUMMARY_DAYS', 30, 1, 92), minutes: int(env, 'NETOPS_CH_SUMMARY_MINUTES', 5, 0, 60) },
     // 需求方 2026-11-11 決定 01:00 開始;PA 前一天的匯出檔實測約 07:45 才出現在 FTP,在那之前每 10 分鐘再試(reconcile.ts)
     reconHour: int(env, 'NETOPS_RECON_HOUR', 1, -1, 23),
-    paTtlDays: {
-      traffic: int(env, 'NETOPS_TTL_TRAFFIC_DAYS', gateway.gwEnv === 'prod' ? 30 : 3, 1, 3650),
-      threat: int(env, 'NETOPS_TTL_THREAT_DAYS', gateway.gwEnv === 'prod' ? 90 : 3, 1, 3650),
-    },
+    paTtlDays: loadPaTtlDays(env, gateway.gwEnv),
+    clickhouseCold: loadClickHouseCold(env, gateway.gwEnv),
   };
+}
+
+/** ClickHouse 原始表保留天數(netops-api 的熱 / 冷分界、netops-ingest 的歸檔重試範圍共用) */
+export function loadPaTtlDays(env: NodeJS.ProcessEnv, gwEnv: GwEnv): { traffic: number; threat: number } {
+  return {
+    traffic: int(env, 'NETOPS_TTL_TRAFFIC_DAYS', gwEnv === 'prod' ? 30 : 3, 1, 3650),
+    threat: int(env, 'NETOPS_TTL_THREAT_DAYS', gwEnv === 'prod' ? 90 : 3, 1, 3650),
+  };
+}
+
+/** 冷歸檔開關(C4):NETOPS_ARCHIVE_ENABLED=1 才歸檔 / 開放冷明細;0 或未設定 = 關閉(冷路由回 409) */
+export function archiveEnabled(env: NodeJS.ProcessEnv): boolean {
+  const v = str(env, 'NETOPS_ARCHIVE_ENABLED', '0');
+  if (v !== '0' && v !== '1') throw new GatewayEnvError(`NETOPS_ARCHIVE_ENABLED 只能是 0 或 1:${v}`);
+  return v === '1';
+}
+
+/**
+ * 冷明細(C4,帳號 netops_cold:可用 file() 讀 user_files/archive 的 Parquet)。冷歸檔開啟時 CLICKHOUSE_URL 與
+ * CLICKHOUSE_COLD_PASSWORD_FILE 必填;關閉時為 null
+ */
+function loadClickHouseCold(env: NodeJS.ProcessEnv, gwEnv: GwEnv): Config['clickhouseCold'] {
+  if (!archiveEnabled(env)) return null;
+  const u = url(env, 'CLICKHOUSE_URL');
+  if (!u) throw new GatewayEnvError('NETOPS_ARCHIVE_ENABLED=1 時必須設定 CLICKHOUSE_URL');
+  const password = readSecret(env, 'CLICKHOUSE_COLD_PASSWORD', gwEnv);
+  if (!password) throw new GatewayEnvError('NETOPS_ARCHIVE_ENABLED=1 時必須設定 CLICKHOUSE_COLD_PASSWORD_FILE');
+  const user = str(env, 'CLICKHOUSE_COLD_USER', 'netops_cold');
+  if (!/^[\w-]{1,64}$/.test(user)) throw new GatewayEnvError(`CLICKHOUSE_COLD_USER 只能是英數、底線與 -:${user}`);
+  return { url: u, user, password, timeoutMs: 60_000 };
 }

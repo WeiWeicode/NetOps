@@ -29,7 +29,8 @@ su -s /bin/sh -c "touch '$DIR/.write-test' && rm '$DIR/.write-test'" "$U1000" \
   && echo "uid 1000 可寫入 $DIR" || { echo "uid 1000 無法寫入 $DIR(檢查 NAS 帳號權限)" >&2; exit 1; }
 # 群組讀取:ClickHouse(uid 101、群組 1000)要能進目錄、讀檔
 G="$(stat -c '%g %A' "$DIR")"
-case "$G" in "1000 d???r?x"*) echo "群組 1000 可讀取目錄($G)" ;; *) echo "WARN 目錄群組或權限不是 1000 / r-x($G):netops-clickhouse 可能讀不到歸檔檔案" >&2 ;; esac
+# 萬用字元 ? 不能放在引號內(引號內是字面字元,永遠比對不到);群組欄 = 第 5–7 個權限字元
+case "$G" in "1000 d"???r?x*) echo "群組 1000 可讀取目錄($G)" ;; *) echo "WARN 目錄群組或權限不是 1000 / r-x($G):netops-clickhouse 可能讀不到歸檔檔案" >&2 ;; esac
 ls -la "$DIR"
 echo "完成。之後的 develop 部署(CI)會重建 netops-ingest 與 netops-clickhouse;已部署時手動重建:"
 echo "  docker compose --env-file /srv/giganexus/deploy/netops.env -f deploy/docker-compose.yml up -d --wait --force-recreate netops-clickhouse netops-ingest"

@@ -2,6 +2,61 @@
 
 > 接手時先讀 `AGENT.md`,再讀 `docs/ARCHITECTURE.md`、`docs/IMPL-PLAN.md`。
 
+## 2026-11-13 C3–C5、V-a / V-b 測試區收尾
+
+**接手方式**:新討論串說「從 `NetOps/docs/HANDOFF.md`「2026-11-13 C3–C5、V-a / V-b 測試區收尾」接手」。這批的子任務都已結束,工作分支與 worktree 已清理;develop 已同步到 GitHub。下一個討論串先做下面「待測與觀察」表的「畫面驗收與調整」。
+
+### 本批合併(2026-11-11 至 11-13)
+
+| MR | 內容 |
+| --- | --- |
+| !67、!68 | C2 寫入管線(收集器 `seqno` / `sessionId`、`netops-ingest`) |
+| !71–!73、!76 | C3 查詢切換;D43 改成只查 ClickHouse,FTP 只做 01:00 每日對帳與補漏 |
+| !77 | 前端日期改單一區間欄位、顯示 ClickHouse 可查範圍 |
+| !75 | V-a 熱力圖彙總表(`pa_heat_5m/1h/1d`)、熱力圖與時段明細 API |
+| !78 | V-b1 分析儀表板 API 與前端邏輯層 + V-b2(Gemini)頁面第一版 |
+| !79 | C5 PA 精準查詢(XML API log、Session Browser;測試區預設關閉) |
+| !80 | C4 冷歸檔(每天 02:30 Parquet 到 NAS)與時段明細冷路由 |
+| !81 | 修正:舊表套用 schema 時物化檢視先建失敗(從 V-a 起 develop 部署都停在 `apply-schema.sh`);CI 加升級測試 |
+| !82 | 修正:前端 Docker 建置找不到 `test/` 假資料(從 11-11 起前端與 RBAC 都沒部署);CI 加排除 `test/` 的建置檢查 |
+| !83 | 修正:`host2-setup-pa-archive.sh` 權限檢查誤報(只有提示訊息錯,目錄本來就正確) |
+
+**部署**:develop pipeline 926(!82)起 `deploy-api-test`、`deploy-web-test`、`rbac-test` 全部成功。11-11 08:26 到 11-13 08:50 之間 develop 部署都失敗在上面兩個問題,那段時間測試區前端停在 11-11 的版本。
+
+**資料**:熱力圖彙總從 11-13 08:35 左右部署成功後開始寫入;11-11、11-12 已用 `rebuild-day.sh` 回填(需求方同意),5 個彙總表與原始表的筆數、bytes、威脅嚴重度全部一致。11-10 只有威脅、沒有 TRAFFIC,不補(測試區 3 天後到期)。
+
+**需求方已做**:主機 2 `host2-setup-pa-archive.sh`(NAS 剩約 18 GB);!79 重建 `netops-pa` 後網通已再 Commit `netops-syslog`(11-13 08:40 TRAFFIC 持續寫入)。
+
+### 待測與觀察(依時間)
+
+| 項目 | 什麼時候 | 怎麼看 / 完成條件 |
+| --- | --- | --- |
+| 發佈 netops-api 路由草稿 | 現在 | GigaItApp「服務與路由」;熱力圖、儀表板、冷明細、PA 精準查詢、對帳 API 都要發佈,前端才呼叫得到 |
+| **畫面驗收與調整**(V-b2) | 下一個討論串 | 活動熱力圖、分析儀表板(流量 / 威脅)、時段明細抽屜、日期區間;HANDOFF-GEMINI-VIZ §8:四種風格 × 1440 / 375 px、reduced-motion、鍵盤、`null` / 冷資料 / 429 狀態。頁面與動畫交 Gemini,邏輯層需求交 Claude |
+| 回填 11-13 | 11-14 起(11-16 前) | 主機 2:`rebuild-day.sh 2026-11-13`,事後比對原始表與 5 個彙總表 |
+| C4 第一次歸檔 | 11-14 02:30 後 | `ls /mnt/nas-docker/giga-netops/test/pa-archive/2026/` 有 `pa_traffic_2026-11-13.parquet`、`pa_threat_…` 與 `.sha256`;`redis-cli hgetall netops:ingest:heartbeat` 的 `archive*`;`SELECT * FROM netops.pa_archive_manifest FINAL` |
+| C4 完成條件 | 連續 7 天(約 11-20) | 每天都歸檔成功、雜湊核對通過;熱力圖點 3 天前的格子看得到明細(`source: cold`);拔 NAS 不影響寫入、恢復後補歸檔;補報告 |
+| V-a 驗收 | 畫面驗收時一起 | 日視圖今天的格子和流量總覽誤差 < 0.5%;熱路由一天 < 10 秒;冷路由 30 秒內同步、超過轉工作、第 2 個冷查詢回 429 |
+| C3 驗收 | 每天 | `GET /api/netops/pa/reconciliations` 沒有未處理 `gap`(有就 `POST /api/netops/pa/backfills`);總覽與 FTP 摘要誤差 < 0.5%;一天範圍明細 < 10 秒 |
+| C2 報告 | 補寫 | `deploy/clickhouse/verify-ingest.sh` 連續 3 天每小時差 < 0.5%,補 `docs/test-reports/2026-11-10-clickhouse-c2.md` §5,IMPL-PLAN C2 改完成 |
+| C5 實機實測 | 和網通約時間 | 主機 2 `netops.env` 設 `PA_QUERY_ENABLED=1` 只重建 `netops-api`;單一 IP、15 分鐘、`nlogs` 500;看管理平面 CPU(> 50% 回 429)、第 2 個請求 429、viewer 403、結果與 PA Monitor 一致;測完改回 0 |
+| D1 未驗項目 | D2 開頭 | 見「2026-11-04 收工」 |
+
+### 後續工作(未排)
+
+- **C5 接到時段明細抽屜**:`SliceDrawer.vue` 仍用 `useLivePaQuery`(C5 前的佔位),改用 `usePaQuery`(Claude);`PaQueryPanel.vue` 正式畫面由 Gemini 改寫(HANDOFF-GEMINI-VIZ §10)。
+- **V-c 偵測規則引擎**:等需求方提供網段清單與初始白名單(X11)。
+- **V-d AD**:延後(V4)。
+- **AI 分析 / 問答 / 外部 IP 學習改用 ClickHouse**:在那之前 `FTP_SYNC_MINUTES` 要保留。
+- **C6 正式區**:等 E2(NAS 150 GB / 年)、E5(主機 3 資源);E1(FTP 保留期限)也還沒回覆。正式區 E2 核准前 `NETOPS_ARCHIVE_ENABLED=0`。
+- **D2 驗收與切換**。
+
+### 這批學到的(避免再犯)
+
+- develop 合併後**一定要看部署 pipeline**:CI 的 `check:*` 綠不代表部署成功(整合測試用全新資料庫、`check:frontend` 用完整 repo)。兩個破口已補 CI 檢查(升級測試、排除 `test/` 的建置)。
+- Runner 只有一個:測試結束時要關掉 server / timer / client,否則 `node --test` 不會結束而佔住 Runner(C4、V-b1 都發生過);取消後停在 canceling 時要到 GitLab 按 Force cancel。
+- 堆疊的 MR 合併後,其他 MR 常因修正紀錄、`PROJECT-MAP.md` 的「最後更新」行衝突;依 §9.3 每次回報需求方。
+
 ## 2026-11-12 C4 冷歸檔(`feature/clickhouse-c4-archive`)
 
 - `netops-ingest` 每天 02:30 起歸檔前一天的 TRAFFIC 與威脅類 Parquet 到 NAS(`/mnt/nas-docker/giga-netops/<env>/pa-archive/YYYY/`),SHA-256、ClickHouse 讀回核對、manifest 表;V-a 時段明細冷路由接上(缺歸檔 404)。細節:IMPL-PLAN C4、手冊 §8.6、API.md §4.4。

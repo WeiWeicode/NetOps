@@ -2,6 +2,11 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。
 
+## 2026-11-13 C3–C5、V-a / V-b 測試區收尾
+- 工作項目:C1–C5、V-a、V-b
+- 內容:IMPL-PLAN 狀態更新(C1–C5、V-a 測試區完成,V-b 上線待畫面驗收);HANDOFF 新增「2026-11-13」:本批合併、部署與資料回填、待測與觀察清單、後續工作
+- 檔案:`docs/IMPL-PLAN.md`、`docs/HANDOFF.md`
+
 ## 2026-11-12 C5 PA 精準查詢
 - 工作項目:C5(D31、CQ6、CQ7;E4 結果)
 - 內容:PA 精準查詢 API(`/pa-query/status`、`/pa-query/jobs`)、權限 `netops.pa-query.read`(只給 netops-admin)、按鈕 `netops.pa-live.query`;API.md §2、§3.3、§8;Gherkin `pa-query/query.feature`;PA-LIVE-PLAN §4 鍵表;HANDOFF-GEMINI-VIZ §10

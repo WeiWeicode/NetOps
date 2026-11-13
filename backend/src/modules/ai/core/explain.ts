@@ -512,7 +512,7 @@ export function eventsContext(d: EventsForAi, max = EXPLAIN_MAX_CHARS): { text: 
     const notes: string[] = [];
     if (o.partial) notes.push(`期間開始早於最早有資料的日期（${clean(o.coverage.from, 10)}），之前的部分沒有資料，不能當成 0`);
     if (o.missing) notes.push(`有 ${n(o.missing)} 小時的每小時摘要還沒建好，KPI 與排行可能不完整`);
-    if (o.topsState !== 'ok') notes.push(o.topsState === 'stale' ? '每小時摘要太久沒更新（ClickHouse 可能停止），排行只到 ' + coreHm(o.topsUntil) : '服務剛啟動，每小時摘要還在建立，排行可能不完整');
+    if (o.topsState !== 'ok') notes.push(o.topsState === 'stale' ? `每小時摘要太久沒更新（ClickHouse 可能停止）${o.topsUntil ? `，排行只到 ${coreHm(o.topsUntil)}` : ''}` : '服務剛啟動，每小時摘要還在建立，排行可能不完整');
     if (notes.length) lines.push(`- 資料不完整：${notes.join('；')}`);
     for (const k of o.kpis) {
       if (!k.items.length) continue;

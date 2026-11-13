@@ -377,6 +377,9 @@ const typeAria = (t: ExplainEventType) =>
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
 }
+.ev-ai__list li {
+  display: flex;
+}
 .ev-ai__type {
   --type-tone: var(--c-primary);
   display: flex;

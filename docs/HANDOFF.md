@@ -2,6 +2,15 @@
 
 > 接手時先讀 `AGENT.md`,再讀 `docs/ARCHITECTURE.md`、`docs/IMPL-PLAN.md`。
 
+## 2026-11-14 AC6 安全事件頁 AI 摘要(程式完成,待合併)
+
+**接手方式**:新討論串說「從 `NetOps/docs/HANDOFF.md`「2026-11-14 AC6」接手」。分支 `feature/ac6-ai-events` 疊在 AC5 上,**合併順序 !93 → !94 → !95 → !96 → !97 → AC6 的 MR**。下一步:AC7。
+
+- **後端**:`POST /ai/explanations` 加 `kind: 'events'`(`params { from, to? }` 同 `GET /pa-events/overview`);`modules/pa/ch-overview.ts` 的 `eventsForAi` 取威脅、URL 過濾、資料過濾、WildFire 四類總覽(沿用總覽快取,某類沒有資料只註明,四類都沒有回 404);資料整理 `core/explain.ts` 的 `eventsContext`(筆數 / KPI / 高峰在前,排行在後)。API.md §10.3。
+- **前端**:安全事件頁頁首「AI 摘要安全事件」對話框(期間 = 頁面目前期間,四類一起),回答下方四類筆數按鈕(點了切換類型);`explainNotices` 對 events 列出不完整 / 沒有資料的類型(不提示 FTP 對帳);`mock/ai.ts` 有假回答(WildFire 沒有資料;期間超過一天時 URL 過濾不完整)。
+- **權限**:新增 `netops.pa-events.ai`(admin、viewer)。
+- **上架後(需求方)**:發佈 netops-api 路由草稿(路徑沒變、request schema 有改)、確認 `netops.pa-events.ai` 出現且 viewer / admin 都看得到;測試區驗收 3 天內的安全事件摘要。
+
 ## 2026-11-14 AC5 AI 說明威脅 / 熱力圖指出異常格(程式完成,待合併)
 
 **接手方式**:新討論串說「從 `NetOps/docs/HANDOFF.md`「2026-11-14 AC5」接手」。分支 `feature/ac5-ai-threat-heatmap` 疊在 AC4 上,**合併順序 !93 → !94 → !95 → !96 → AC5 的 MR**。下一步:AC6。

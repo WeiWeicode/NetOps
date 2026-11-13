@@ -173,6 +173,43 @@ export function handleAi(ctx: MockCtx): boolean {
     ctx.send(200, { enabled: true, ok: true, model: 'Qwen3.6-35B-A3B-FP8(假)', message: '' });
     return true;
   }
+  // AC7 每日摘要:最近一份 11/13 完成;11/12 失敗;選 11/11 看較早的摘要
+  if (path === '/api/netops/ai/daily-summary' && method === 'GET') {
+    if (!ctx.need('netops.ai.use')) return true;
+    const day = ctx.url.searchParams.get('day');
+    const rec = (d: string) =>
+      d === '2026-11-12'
+        ? { day: d, state: 'failed', tries: 2, at: '2026-11-13T00:40:00.000Z', result: null, error: { code: 'NETOPS_AI_UNAVAILABLE', message: 'AI 服務無法使用:連線逾時' } }
+        : {
+            day: d,
+            state: 'done',
+            tries: 1,
+            at: `${d}T00:31:00.000Z`,
+            result: {
+              text: `## 昨日總結\n${d} 流量與前一天相近,威脅以 SSH 暴力破解為主,都已被 reset。\n\n## 需要注意\n1. **203.0.113.9**(JP)對 10.10.1.3(王小明 / 資訊處)SSH 嘗試 1,240 次\n2. 14:00 上傳流量高峰 2.3 GB,主要是 10.10.130.66(FTP 伺服器)\n3. URL 過濾擋下 gambling 類 32 次\n\n## 建議今天追查\n- Log 明細查詢 203.0.113.9\n- 分析儀表板看 14:00 時段明細`,
+              model: 'Qwen3.6-35B-A3B-FP8',
+              partial: d === '2026-11-11',
+              clipped: false,
+              contextChars: 5200,
+              counts: { sessions: 1_284_000, threat: 1302, url: 87, data: 0, wildfire: 3 },
+            },
+            error: null,
+          };
+    ctx.send(200, {
+      enabled: true,
+      at: '08:10',
+      target: '2026-11-13',
+      state: 'done',
+      error: null,
+      summary: rec(day ?? '2026-11-13'),
+      days: [
+        { day: '2026-11-13', state: 'done' },
+        { day: '2026-11-12', state: 'failed' },
+        { day: '2026-11-11', state: 'done' },
+      ],
+    });
+    return true;
+  }
   if (path === '/api/netops/ai/analyses' && method === 'POST') {
     if (!ctx.need('netops.ai.use')) return true;
     void stream(ctx, [

@@ -3,6 +3,7 @@
  * 防火牆 › 流量總覽(docs/API.md §4.1;舊版 src/views/PaDashboard.vue):
  *   合併期間內各 TRAFFIC log 檔的摘要(FTP Log 檔案頁分析後才有資料):KPI、每小時連線數 / 流量、流量排行、
  *   資料外流與 AI 應用、阻擋與風險、動作分布、疑似掃描。點排行 / 每小時長條 / KPI 帶條件到 Log 明細查詢(/firewall/search)。
+ *   AI 每日摘要(IMPL-PLAN AC7):篩選列下方的卡片(components/DailySummaryCard.vue;同 AI 分析按鈕權限 netops.pa-dashboard.ai)。
  *   AI 分析(IMPL-PLAN A1):按鈕開對話框分析目前期間(components/AiAnalysis.vue;按鈕權限 netops.pa-dashboard.ai)。期間最長 92 天;結果不完整時要提示(AGENT.md §5)。
  */
 import { computed, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from 'vue';
@@ -14,6 +15,7 @@ import DateRangeField from '@/components/DateRangeField.vue';
 import { coverageText } from '@/composables/dateRange';
 import { NETOPS, UI } from '@/api/perms';
 import AiAnalysis from '@/components/AiAnalysis.vue';
+import DailySummaryCard from '@/components/DailySummaryCard.vue';
 import TopList from '@/components/TopList.vue';
 import { daysBetween } from '@/composables/dates';
 import { PICK, scanVerdict, withApps, type SearchCond } from '@/composables/paDashboard';
@@ -220,6 +222,8 @@ const many = (n: number) => (n >= 1000 ? '1000+' : String(n));
       </div>
       <p v-if="rangeError" class="small c-danger err">{{ rangeError }}</p>
     </GCard>
+
+    <DailySummaryCard v-if="canAi" />
 
     <GAlert v-if="daysError && days.length" tone="danger">重新取得有資料的日期失敗,以下是上次的清單:{{ describeError(daysError) }}</GAlert>
     <GCard v-if="daysError && !days.length">

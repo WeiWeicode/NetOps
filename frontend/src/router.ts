@@ -229,6 +229,20 @@ const PAGES: PageDef[] = [
     },
     view: page(() => import('./pages/knowledge/Knowledge.vue')),
   },
+  {
+    // AC3:選單節點只給網管(netops-admin);PA 畫面的名稱看得到 PA 就看得到
+    path: 'knowledge/ip-names',
+    meta: {
+      permission: NETOPS.ipNamePage,
+      requires: [API.ipNameRead],
+      title: 'IP 對照表',
+      subtitle: 'IP Directory',
+      icon: 'users',
+      group: 'knowledge',
+      description: 'IP / 網段對應的使用者、部門與設備;PA 各畫面 IP 旁會顯示名稱,Log 明細可用名稱查詢',
+    },
+    view: page(() => import('./pages/knowledge/IpNames.vue')),
+  },
 ];
 
 /** 一般連結(另開分頁;D11、D18) */

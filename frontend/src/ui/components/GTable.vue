@@ -5,6 +5,7 @@
  * server 分頁時只拿到一頁資料,前端排序只會排這一頁、容易誤導,因此 sortable 會被忽略(需要排序請由 API 提供)。
  */
 import { computed, ref, watch } from 'vue';
+import GIpLabel from './GIpLabel.vue';
 
 export interface Column {
   key: string;
@@ -14,6 +15,8 @@ export interface Column {
   sortable?: boolean;
   mono?: boolean;
   hideSm?: boolean;
+  /** IP 欄:IP 旁邊顯示名稱(GIpLabel;名稱由應用注入,ui/ipLabel.ts) */
+  ip?: boolean;
 }
 
 const props = withDefaults(
@@ -107,7 +110,7 @@ watch(
         <tbody v-else-if="visible.length">
           <tr v-for="row in visible" :key="row[rowKey]" :class="{ clickable }" @click="clickable && emit('row-click', row)">
             <td v-for="c in columns" :key="c.key" :style="{ textAlign: c.align ?? 'left' }" :class="{ mono: c.mono, 'hide-sm': c.hideSm }">
-              <slot :name="`cell-${c.key}`" :row="row" :value="row[c.key]">{{ row[c.key] ?? '—' }}</slot>
+              <slot :name="`cell-${c.key}`" :row="row" :value="row[c.key]"><GIpLabel v-if="c.ip" :ip="row[c.key]" /><template v-else>{{ row[c.key] ?? '—' }}</template></slot>
             </td>
           </tr>
         </tbody>

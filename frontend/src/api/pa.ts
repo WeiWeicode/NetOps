@@ -86,7 +86,8 @@ export type PaSearchKey = (typeof PA_SEARCH_KEYS)[number];
 
 /** 送出的查詢:from / to 為 ISO 8601 含時區,其他條件選填 */
 /** source(C3):省略時依後端設定(預設 ftp,並行對帳 2 週後改 auto) */
-export type PaSearchBody = { from: string; to: string; limit?: number; source?: PaSource } & Partial<Record<PaSearchKey, string>>;
+/** name(AC3):IP 對照表的使用者姓名 / 部門 / 設備名稱;個資,不放進網址(不在 PA_SEARCH_KEYS) */
+export type PaSearchBody = { from: string; to: string; limit?: number; source?: PaSource; name?: string } & Partial<Record<PaSearchKey, string>>;
 
 export interface PaSearchResult {
   /** C3 D43:固定 clickhouse */

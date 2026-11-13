@@ -12,6 +12,7 @@ import { handleAd } from './ad.ts';
 import { handleAi } from './ai.ts';
 import { handleFtp } from './ftp.ts';
 import { handleKb } from './kb.ts';
+import { handleIpNames, withNames } from './ipNames.ts';
 import { handlePaLog } from './paLog.ts';
 import { handlePa } from './pa.ts';
 import { handlePaEvents } from './paEvents.ts';
@@ -46,6 +47,9 @@ const MENUS = [
   { code: 'netops.ad-files.manage', name: '管理', kind: 'button', parentCode: 'netops.ad-files.read', sort: 10, icon: null },
   { code: 'netops.kb-page.read', name: '知識庫', kind: 'menu', parentCode: 'netops.group.knowledge', sort: 10, icon: null },
   { code: 'netops.kb-page.write', name: '編輯', kind: 'button', parentCode: 'netops.kb-page.read', sort: 10, icon: null },
+  // AC3:IP 對照表(只給 admin;viewer 在 PA 畫面看得到名稱)
+  { code: 'netops.ip-name-page.read', name: 'IP 對照表', kind: 'menu', parentCode: 'netops.group.knowledge', sort: 20, icon: null },
+  { code: 'netops.ip-name-page.write', name: '新增 / 修改 / 刪除 / 匯入對照', kind: 'button', parentCode: 'netops.ip-name-page.read', sort: 10, icon: null },
   // A1:AI 問答與分析(netops.ai.use 由按鈕綁定;admin 與 viewer 都有)
   { code: 'netops.pa-ask.read', name: 'AI 問答', kind: 'menu', parentCode: 'netops.group.firewall', sort: 50, icon: null },
   { code: 'netops.pa-ask.use', name: '使用 AI 問答', kind: 'button', parentCode: 'netops.pa-ask.read', sort: 10, icon: null },
@@ -56,12 +60,14 @@ const MENUS = [
 const READ_API = ['netops.ping.read', 'netops.pa-realtime.read', 'netops.pa.read', 'netops.pa-log.read', 'netops.ftp.read', 'netops.ad.read', 'netops.ad-log.read', 'netops.kb.read', 'netops.ai.use'];
 /** viewer 也有的 AI 按鈕(netops.ai.use 給 admin 與 viewer,2026-11-05 決定) */
 const AI_BUTTONS = ['netops.pa-ask.use', 'netops.pa-dashboard.ai', 'netops.ad-ask.use'];
-const WRITE_API = ['netops.ftp.write', 'netops.kb.write', 'netops.pa-realtime.write', 'netops.pa-query.read'];
+const WRITE_API = ['netops.ftp.write', 'netops.kb.write', 'netops.pa-realtime.write', 'netops.pa-query.read', 'netops.ip-name.read', 'netops.ip-name.write'];
+/** 只給 admin 的選單(viewer 沒有;AC3 IP 對照表) */
+const ADMIN_ONLY = new Set(['netops.ip-name-page.read']);
 const BUTTONS = MENUS.filter((m) => m.kind === 'button').map((m) => m.code);
 const PAGES = MENUS.filter((m) => m.kind === 'app' || m.kind === 'menu').map((m) => m.code);
 
 function me(role: LoggedIn) {
-  const perms = role === 'admin' ? [...PAGES, ...BUTTONS, ...READ_API, ...WRITE_API] : role === 'viewer' ? [...PAGES, ...AI_BUTTONS, ...READ_API] : ['portal.app.access'];
+  const perms = role === 'admin' ? [...PAGES, ...BUTTONS, ...READ_API, ...WRITE_API] : role === 'viewer' ? [...PAGES.filter((p) => !ADMIN_ONLY.has(p)), ...AI_BUTTONS, ...READ_API] : ['portal.app.access'];
   const own = new Set(perms);
   return {
     user: { userId: 1, employeeNo: 'T000001', name: '測試人員', email: null, deptCode: 'IT', department: '資訊部', title: '工程師', authType: 'ad' },
@@ -100,7 +106,7 @@ async function readBody(req: IncomingMessage): Promise<unknown> {
 }
 
 /** 各模組的假 API(依序嘗試,處理了就回 true) */
-const HANDLERS: ((ctx: MockCtx) => boolean)[] = [handleViz, handlePaQuery, handleAi, handleFtp, handleAd, handlePaEvents, handlePa, handlePaLog, handleKb, handlePaLive];
+const HANDLERS: ((ctx: MockCtx) => boolean)[] = [handleViz, handlePaQuery, handleAi, handleFtp, handleAd, handlePaEvents, handlePa, handlePaLog, handleKb, handleIpNames, handlePaLive];
 const fail = (res: ServerResponse, status: number, code: string, message: string) => send(res, status, { code, message, requestId: rid() });
 
 export function mockGateway(role: string | undefined): Plugin | null {
@@ -134,7 +140,7 @@ export function mockGateway(role: string | undefined): Plugin | null {
           url,
           body: method === 'GET' ? undefined : await readBody(req),
           need,
-          send: (status, body) => send(res, status, body),
+          send: (status, body) => send(res, status, withNames(path, body)),
           fail: (status, code, message) => fail(res, status, code, message),
           user: `${m.user.employeeNo} ${m.user.name}`,
           raw: res,

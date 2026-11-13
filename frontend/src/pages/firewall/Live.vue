@@ -219,22 +219,22 @@ const logColumns = computed<Column[]>(() => {
     return [
       ...base,
       { key: 'action', label: 'Action', width: '84px' },
-      { key: 'src', label: '來源', mono: true },
-      { key: 'dst', label: '目的', mono: true },
+      { key: 'src', label: '來源', mono: true, ip: true },
+      { key: 'dst', label: '目的', mono: true, ip: true },
       { key: 'dport', label: 'Port', width: '70px', align: 'right' },
       { key: 'app', label: 'App' },
       { key: 'rule', label: '規則', hideSm: true },
       { key: 'bytes', label: '位元組', align: 'right', hideSm: true },
     ];
   if (logType.value === 'globalprotect')
-    return [...base, { key: 'status', label: '結果' }, { key: 'user', label: '帳號' }, { key: 'publicIp', label: '外部 IP', mono: true }, { key: 'eventId', label: '事件' }];
-  if (logType.value === 'userid') return [...base, { key: 'subtype', label: '事件' }, { key: 'ip', label: 'IP', mono: true }, { key: 'user', label: '使用者' }];
+    return [...base, { key: 'status', label: '結果' }, { key: 'user', label: '帳號' }, { key: 'publicIp', label: '外部 IP', mono: true, ip: true }, { key: 'eventId', label: '事件' }];
+  if (logType.value === 'userid') return [...base, { key: 'subtype', label: '事件' }, { key: 'ip', label: 'IP', mono: true, ip: true }, { key: 'user', label: '使用者' }];
   return [
     ...base,
     { key: 'action', label: 'Action', width: '84px' },
     { key: 'severity', label: '嚴重度', width: '84px' },
-    { key: 'src', label: '來源', mono: true },
-    { key: 'dst', label: '目的', mono: true },
+    { key: 'src', label: '來源', mono: true, ip: true },
+    { key: 'dst', label: '目的', mono: true, ip: true },
     // PA 的 HTTP Payload 要加 sport 變數才有值;沒有或為 0 顯示「—」
     { key: 'sport', label: '來源 Port', width: '84px', align: 'right', hideSm: true },
     // URL 過濾的 threatid 固定是 9999(名稱欄只會是「9999(9999)」),改顯示 URL 類別(驗收 2026-11-10 §4.4-4)

@@ -183,16 +183,16 @@ const tableColumns = computed<Column[]>(() => {
       { key: 'time', label: '時間', width: '164px', mono: true },
       { key: 'severity', label: '嚴重度', width: '84px' },
       { key: 'name', label: '威脅名稱' },
-      { key: 'src', label: '來源 IP', mono: true },
-      { key: 'dst', label: '目的 IP', mono: true },
+      { key: 'src', label: '來源 IP', mono: true, ip: true },
+      { key: 'dst', label: '目的 IP', mono: true, ip: true },
       { key: 'action', label: '動作', width: '76px' },
     ];
   }
   return [
     { key: 'time', label: '時間', width: '164px', mono: true },
     { key: 'action', label: '動作', width: '76px' },
-    { key: 'src', label: '來源 IP', mono: true },
-    { key: 'dst', label: '目的 IP', mono: true },
+    { key: 'src', label: '來源 IP', mono: true, ip: true },
+    { key: 'dst', label: '目的 IP', mono: true, ip: true },
     { key: 'dport', label: 'Port', width: '72px', align: 'right', mono: true },
     { key: 'app', label: 'App' },
     { key: 'bytes', label: '流量', width: '96px', align: 'right', sortable: true },

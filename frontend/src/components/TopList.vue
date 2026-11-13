@@ -7,6 +7,7 @@
  */
 import { computed } from 'vue';
 import { fmtNum, fmtSize } from '@/api/format';
+import { ipNameOf, ipNameText, ipNameTitle } from '@/composables/ipNames';
 
 export interface TopItem {
   key: string;
@@ -35,7 +36,15 @@ const emit = defineEmits<{ pick: [string] }>();
 const max = computed(() => Math.max(1, ...props.items.map((x) => (props.byBytes ? (x.bytes ?? 0) : x.n))));
 const canPick = (key: string) => !props.pickable || props.pickable(key);
 const value = (x: TopItem) => (props.byBytes ? (x.bytes ?? 0) : x.n);
-const label = (x: TopItem) => `${x.key}:${fmtNum(x.n)} 次${x.bytes ? `,${fmtSize(x.bytes)}` : ''}`;
+/** IP 項目在 IP 對照表的名稱(AC3;key 不是 IP 或沒有對照時空白) */
+const nameOf = (key: string) => {
+  const l = ipNameOf(key);
+  return l ? { text: ipNameText(l), title: ipNameTitle(l) } : null;
+};
+const label = (x: TopItem) => {
+  const n = nameOf(x.key);
+  return `${x.key}${n ? `(${n.title})` : ''}:${fmtNum(x.n)} 次${x.bytes ? `,${fmtSize(x.bytes)}` : ''}`;
+};
 </script>
 
 <template>
@@ -57,7 +66,7 @@ const label = (x: TopItem) => `${x.key}:${fmtNum(x.n)} 次${x.bytes ? `,${fmtSiz
           <span class="lbl">
             <span class="bar" :style="{ width: `${(value(x) / max) * 100}%` }" />
             <span class="text"
-              >{{ x.key }}<small v-if="x.sub" class="faint">{{ x.sub }}</small></span
+              >{{ x.key }}<span v-if="nameOf(x.key)?.text" class="who" aria-hidden="true">{{ nameOf(x.key)!.text }}</span><small v-if="x.sub" class="faint">{{ x.sub }}</small></span
             >
           </span>
           <span class="val num">{{ byBytes ? fmtSize(x.bytes) : fmtNum(x.n) }}</span>
@@ -69,6 +78,14 @@ const label = (x: TopItem) => `${x.key}:${fmtNum(x.n)} 次${x.bytes ? `,${fmtSiz
 </template>
 
 <style scoped>
+.who {
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 5px;
+  background: var(--grad-brand-soft);
+  color: var(--c-primary-text);
+  font-size: var(--fs-xs, 11px);
+}
 .empty {
   margin: 0;
   padding: var(--space-5) 0;

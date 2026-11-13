@@ -5,6 +5,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { after, before, describe, it } from 'node:test';
 import { trafficWhere } from '../../src/infra/clickhouse/reader.js';
@@ -115,6 +116,57 @@ describe('核心', () => {
   });
 });
 
+/** 模擬 Excel 存的檔:deflate 壓縮、sharedStrings(含 rich text 與注音)、工作表檔名不是 sheet1、rels 屬性順序不同 */
+function excelLike(): Buffer {
+  const ns = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
+  const rel = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+  const strings = [...COLUMNS, '10.20.1.5', '<r><t>林</t></r><r><rPr><b/></rPr><t>小美</t></r><rPh><t>リン</t></rPh>', '品保部', 'QA-PC-07', '桌機'];
+  const ss = strings.map((x) => (x.startsWith('<') ? `<si>${x}</si>` : `<si><t>${x}</t></si>`)).join('');
+  const c = (ref: string, i: number) => `<c r="${ref}" t="s"><v>${i}</v></c>`;
+  const row1 = COLUMNS.map((_, k) => c(`${String.fromCharCode(65 + k)}1`, k)).join('');
+  const row2 = `${c('A3', 6)}${c('B3', 7)}${c('C3', 8)}${c('D3', 9)}${c('E3', 10)}<c r="F3"><v>12</v></c>`;
+  const files: [string, string][] = [
+    ['xl/workbook.xml', `<workbook xmlns="${ns}" xmlns:r="${rel}"><sheets><sheet name="資料" sheetId="1" r:id="rId3"/></sheets></workbook>`],
+    ['xl/_rels/workbook.xml.rels', `<Relationships><Relationship Target="styles.xml" Id="rId1" Type="t"/><Relationship Target="worksheets/data.xml" Type="${rel}/worksheet" Id="rId3"/></Relationships>`],
+    ['xl/sharedStrings.xml', `<sst xmlns="${ns}">${ss}</sst>`],
+    ['xl/worksheets/data.xml', `<worksheet xmlns="${ns}"><sheetData><row r="1">${row1}</row><row r="2"/><row r="3">${row2}</row></sheetData></worksheet>`],
+  ];
+  const parts: Buffer[] = [];
+  const central: Buffer[] = [];
+  let off = 0;
+  for (const [name, text] of files) {
+    const data = Buffer.from(text, 'utf8');
+    const comp = zlib.deflateRawSync(data);
+    const n = Buffer.from(name);
+    const h = Buffer.alloc(30);
+    h.writeUInt32LE(0x04034b50, 0);
+    h.writeUInt16LE(8, 8);
+    h.writeUInt32LE(zlib.crc32(data), 14);
+    h.writeUInt32LE(comp.length, 18);
+    h.writeUInt32LE(data.length, 22);
+    h.writeUInt16LE(n.length, 26);
+    parts.push(h, n, comp);
+    const cd = Buffer.alloc(46);
+    cd.writeUInt32LE(0x02014b50, 0);
+    cd.writeUInt16LE(8, 10);
+    cd.writeUInt32LE(zlib.crc32(data), 16);
+    cd.writeUInt32LE(comp.length, 20);
+    cd.writeUInt32LE(data.length, 24);
+    cd.writeUInt16LE(n.length, 28);
+    cd.writeUInt32LE(off, 42);
+    central.push(cd, n);
+    off += 30 + n.length + comp.length;
+  }
+  const cdBuf = Buffer.concat(central);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(files.length, 8);
+  end.writeUInt16LE(files.length, 10);
+  end.writeUInt32LE(cdBuf.length, 12);
+  end.writeUInt32LE(off, 16);
+  return Buffer.concat([...parts, cdBuf, end]);
+}
+
 describe('Excel / CSV', () => {
   it('writeXlsx → readXlsx 來回一致(含特殊字元、跳欄)', () => {
     const rows = [[...COLUMNS], ['10.1.1.5', '王<小>明 & "A"', '', 'NB', '筆電', '=1+1']];
@@ -123,11 +175,11 @@ describe('Excel / CSV', () => {
   });
 
   it('readXlsx 讀 deflate 壓縮、sharedStrings 的檔(Excel 存檔格式)', () => {
-    const fixture = path.join(here, '../fixtures/ip-names.xlsx');
-    const rows = readXlsx(fs.readFileSync(fixture));
+    const rows = readXlsx(excelLike());
     assert.deepEqual(rows[0], [...COLUMNS]);
-    assert.equal(rows[1]![0], '10.20.1.5');
-    assert.equal(rows[1]![1], '林小美');
+    assert.deepEqual(rows[1], [], '空白列(<row/>)不可吃掉下一列');
+    assert.equal(rows[2]![0], '10.20.1.5');
+    assert.equal(rows[2]![1], '林小美');
   });
 
   it('不是 xlsx 丟 XlsxError;CSV 支援引號、欄內換行與 BOM', () => {
@@ -163,9 +215,9 @@ describe('API', () => {
     const doc = (await t.app.inject('/openapi.json')).json();
     const ops = Object.entries(doc.paths as Record<string, Record<string, Record<string, unknown>>>).flatMap(([p, m]) => Object.entries(m).map(([verb, op]) => ({ p, verb, op })));
     const mine = ops.filter((o) => o.p.startsWith('/v1/ip-name'));
-    assert.equal(mine.length, 8);
+    assert.equal(mine.length, 9);
     for (const { p, verb, op } of mine) {
-      assert.equal(op['x-permission'], verb === 'get' ? 'netops.ip-name.read' : 'netops.ip-name.write', `${verb} ${p}`);
+      assert.equal(op['x-permission'], verb === 'get' || p === '/v1/ip-name-searches' ? 'netops.ip-name.read' : 'netops.ip-name.write', `${verb} ${p}`);
       assert.notEqual(op['x-audit-level'], 'body', `${verb} ${p} 不可記錄內容`);
     }
     assert.equal(doc.paths['/v1/pa/log-searches/{id}/rows'].get['x-permission'], 'netops.pa-log.read');
@@ -191,7 +243,7 @@ describe('API', () => {
     const tmp = await t.call({ method: 'POST', url: '/v1/ip-names', payload: { ip: '10.10.9.9', name: '暫時' } });
     assert.equal((await t.call({ method: 'DELETE', url: `/v1/ip-names/${tmp.json().id}` })).statusCode, 204);
     assert.equal((await t.call({ method: 'DELETE', url: `/v1/ip-names/${tmp.json().id}` })).statusCode, 204);
-    const list = (await t.call({ url: '/v1/ip-names?q=業務' })).json();
+    const list = (await t.call({ method: 'POST', url: '/v1/ip-name-searches', payload: { q: '業務' } })).json();
     assert.deepEqual(list.items.map((e: IpNameEntry) => e.ip), ['10.10.1.0/24']);
     assert.equal((await t.call({ url: '/v1/ip-names' })).json().total, 2);
   });
@@ -247,6 +299,8 @@ describe('API', () => {
     assert.deepEqual(p2.counts, { added: 0, changed: 0, removed: 1, unchanged: 1 });
     await t.call({ method: 'POST', url: '/v1/ip-names', payload: { ip: '10.10.3.3', name: '新同仁' } });
     assert.equal((await t.call({ method: 'POST', url: `/v1/ip-name-imports/${p2.id}/confirm` })).json().code, 'NETOPS_IP_NAME_IMPORT_STALE');
+    const empty = await t.call({ method: 'POST', url: '/v1/ip-name-imports', payload: { fileName: 'e.csv', format: 'csv', data: b64(csvOf([...TEMPLATE_SAMPLES])) } });
+    assert.equal(empty.json().code, 'NETOPS_IP_NAME_IMPORT_INVALID', '只有範例列不可整份清空');
     const bad = await t.call({ method: 'POST', url: '/v1/ip-name-imports', payload: { fileName: 'c.csv', format: 'csv', data: b64('IP,姓名\r\n10.1.1.1,x') } });
     assert.equal(bad.json().code, 'NETOPS_IP_NAME_IMPORT_INVALID');
     assert.equal((await t.call({ method: 'POST', url: '/v1/ip-name-imports', payload: { fileName: 'c.xlsx', format: 'xlsx', data: b64('not a zip') } })).json().code, 'NETOPS_IP_NAME_IMPORT_INVALID');

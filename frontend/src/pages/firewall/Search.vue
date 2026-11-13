@@ -27,6 +27,7 @@ import {
 } from '@/api/pa';
 import { cameFromApp, ignoredThreatCond as threatCondOf, isPorts, isSearchType, isSeverity, localToIso, pickQuery, toLocalInput } from '@/composables/searchQuery';
 import { useJob } from '@/composables/useJob';
+import { ipNameOf, ipNameTitle } from '@/composables/ipNames';
 import DateRangeField from '@/components/DateRangeField.vue';
 import { coverageText } from '@/composables/dateRange';
 import type { Coverage } from '@/api/pa';
@@ -43,6 +44,8 @@ const form = reactive<Record<PaSearchKey, string> & { from: string; to: string }
   to: '',
   ...(Object.fromEntries(PA_SEARCH_KEYS.map((k) => [k, ''])) as Record<PaSearchKey, string>),
 });
+/** 使用者 / 部門(IP 對照表名稱搜尋,AC3):個資,不寫進網址,重新整理後要重填 */
+const nameQuery = ref('');
 /** ClickHouse 實際有資料的範圍(C3 D43) */
 const coverage = ref<Coverage | null>(null);
 const formError = computed(() => {
@@ -144,7 +147,7 @@ function search() {
   const cond = Object.fromEntries(PA_SEARCH_KEYS.filter((k) => !skip.has(k)).map((k) => [k, form[k].trim()]).filter(([, v]) => v)) as Partial<Record<PaSearchKey, string>>;
   // 條件記在網址:重新整理或分享連結可還原(時間用本地時間,不含時區)
   void router.replace({ query: { from: form.from, to: form.to, ...cond } });
-  const body: PaSearchBody = { from: localToIso(form.from), to: localToIso(form.to), ...cond };
+  const body: PaSearchBody = { from: localToIso(form.from), to: localToIso(form.to), ...cond, ...(nameQuery.value.trim() ? { name: nameQuery.value.trim() } : {}) };
   rowsSeq++;
   rows.value = [];
   total.value = 0;
@@ -154,6 +157,7 @@ function search() {
 
 function reset() {
   for (const k of PA_SEARCH_KEYS) form[k] = '';
+  nameQuery.value = '';
 }
 
 const stopText = computed(() => {
@@ -189,6 +193,12 @@ async function exportCsv() {
 const detail = ref<PaLogRow | null>(null);
 const detailOpen = computed({ get: () => !!detail.value, set: (v) => !v && (detail.value = null) });
 const BYTES = new Set(['bytes', 'sent', 'recv']);
+/** 明細的 IP 欄位附上 IP 對照表名稱(AC3) */
+const IP_FIELDS = new Set<keyof PaLogRow>(['src', 'dst', 'natSrc', 'natDst']);
+const withName = (v: string, isIp: boolean) => {
+  const l = isIp ? ipNameOf(v) : undefined;
+  return l ? `${v}(${ipNameTitle(l)})` : v;
+};
 const detailFields = computed(() => {
   const d = detail.value;
   if (!d) return [];
@@ -196,7 +206,7 @@ const detailFields = computed(() => {
     .filter((k) => d[k] !== '' && d[k] !== 0 && d[k] != null)
     .map((k) => ({
       label: PA_FIELD_LABELS[k],
-      value: k === 'time' ? fmtTime(d.time) : BYTES.has(k) ? `${fmtSize(d[k] as number)}(${fmtNum(d[k] as number)})` : String(d[k]),
+      value: k === 'time' ? fmtTime(d.time) : BYTES.has(k) ? `${fmtSize(d[k] as number)}(${fmtNum(d[k] as number)})` : withName(String(d[k]), IP_FIELDS.has(k)),
     }));
 });
 
@@ -233,8 +243,8 @@ onMounted(async () => {
 const TRAFFIC_COLUMNS = [
   { key: 'time', label: '時間', width: '170px' },
   { key: 'action', label: '動作', width: '100px' },
-  { key: 'src', label: '來源 IP', mono: true },
-  { key: 'dst', label: '目的 IP', mono: true },
+  { key: 'src', label: '來源 IP', mono: true, ip: true },
+  { key: 'dst', label: '目的 IP', mono: true, ip: true },
   { key: 'dport', label: 'Port', width: '90px' },
   { key: 'app', label: '應用程式', hideSm: true },
   { key: 'rule', label: '規則', hideSm: true },
@@ -249,8 +259,8 @@ const THREAT_COLUMNS = [
   { key: 'severity', label: '嚴重度', width: '90px' },
   { key: 'threat', label: '威脅名稱' },
   { key: 'action', label: '動作', width: '100px' },
-  { key: 'src', label: '來源 IP', mono: true },
-  { key: 'dst', label: '目的 IP', mono: true },
+  { key: 'src', label: '來源 IP', mono: true, ip: true },
+  { key: 'dst', label: '目的 IP', mono: true, ip: true },
   { key: 'dport', label: 'Port', width: '90px' },
   { key: 'app', label: '應用程式', hideSm: true },
   { key: 'srcCountry', label: '來源國家', hideSm: true },
@@ -270,6 +280,7 @@ const asRow = (r: unknown) => r as PaLogRow;
           <GInput v-model="form.src" label="來源 IP" placeholder="10.10.124.* 或 /16" clearable class="md" />
           <GInput v-model="form.dst" label="目的 IP" clearable class="md" />
           <GInput v-model="form.ip" label="任一方 IP" clearable class="md" />
+          <GInput v-model="nameQuery" label="使用者 / 部門" placeholder="IP 對照表的姓名、部門或設備" clearable class="md" />
           <GInput v-model="form.port" label="目的 Port" placeholder="443,3389" clearable class="sm" />
           <GSelect v-model="form.proto" label="協定" :options="PROTOS" placeholder="全部" class="sm" />
           <GSelect v-model="form.action" label="動作" :options="actionOptions" placeholder="全部" class="md" />
@@ -287,7 +298,7 @@ const asRow = (r: unknown) => r as PaLogRow;
           <GInput v-model="form.q" label="關鍵字" placeholder="IP、App、規則等欄位包含" clearable class="md" />
         </div>
         <div class="filters">
-          <span class="xs faint">查 ClickHouse({{ coverageText(coverage) }},最長 {{ PA_SEARCH_MAX_DAYS }} 天;只用關鍵字最長 1 天)。IP 可輸入 10.10.124.18、10.10.124.*、10.10.0.0/16</span>
+          <span class="xs faint">查 ClickHouse({{ coverageText(coverage) }},最長 {{ PA_SEARCH_MAX_DAYS }} 天;只用關鍵字最長 1 天)。IP 可輸入 10.10.124.18、10.10.124.*、10.10.0.0/16;「使用者 / 部門」查 IP 對照表換成 IP 後查詢</span>
           <div class="spacer" />
           <span v-if="formError && (form.from || form.to)" class="small c-danger">{{ formError }}</span>
           <GButton icon="reset" @click="reset">清除條件</GButton>

@@ -114,6 +114,8 @@ export function createIpNameService(store: IpNameStore, now: () => number = Date
       const parsed = rowsToInputs(rows);
       if (!parsed.inputs.length && parsed.errors.length && parsed.errors[0]!.row === 1)
         throw new AppError(400, 'NETOPS_IP_NAME_IMPORT_INVALID', parsed.errors[0]!.message);
+      // 空檔(只有欄名或全部有問題)會把對照表整份刪光:不接受,要清空請逐筆刪除
+      if (!parsed.inputs.length) throw new AppError(400, 'NETOPS_IP_NAME_IMPORT_INVALID', parsed.errors.length ? `檔案沒有可匯入的資料(${parsed.errors.length} 列有問題,第一個在第 ${parsed.errors[0]!.row} 列)` : '檔案沒有任何資料列');
       if (parsed.inputs.length > MAX_ENTRIES) throw new AppError(400, 'NETOPS_IP_NAME_IMPORT_INVALID', `對照表最多 ${MAX_ENTRIES} 筆,檔案有 ${parsed.inputs.length} 筆`);
       const c = current();
       const { diff, next } = diffImport(c.entries, parsed.inputs, { at: stampNow(), by, newId: randomUUID });

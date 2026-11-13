@@ -142,17 +142,19 @@ function unzip(buf: Buffer, wanted: (name: string) => boolean): Map<string, Buff
     const start = local + 30 + buf.readUInt16LE(local + 26) + buf.readUInt16LE(local + 28);
     if (start + csize > buf.length) throw new XlsxError('Excel 檔損壞');
     const raw = buf.subarray(start, start + csize);
-    total += usize;
-    if (total > MAX_INFLATED) throw new XlsxError('Excel 檔內容太大');
+    // 宣告的大小可能是假的:以實際解壓縮的量累計,每個檔最多只解到剩下的額度
+    if (total + usize > MAX_INFLATED) throw new XlsxError('Excel 檔內容太大');
     let data: Buffer;
     try {
       if (method === 0) data = Buffer.from(raw);
-      else if (method === 8) data = zlib.inflateRawSync(raw, { maxOutputLength: MAX_INFLATED });
+      else if (method === 8) data = zlib.inflateRawSync(raw, { maxOutputLength: Math.max(1, MAX_INFLATED - total) });
       else throw new XlsxError('不支援的 Excel 壓縮格式');
     } catch (err) {
       if (err instanceof XlsxError) throw err;
       throw new XlsxError('Excel 檔損壞或內容太大');
     }
+    total += data.length;
+    if (total > MAX_INFLATED) throw new XlsxError('Excel 檔內容太大');
     out.set(name, data);
   }
   return out;
@@ -195,13 +197,14 @@ export function readXlsx(buf: Buffer, maxRows = 50_000, maxCols = 20): string[][
   if (!sheet) throw new XlsxError('Excel 檔沒有工作表');
   const shared = [...(files.get('xl/sharedStrings.xml')?.toString('utf8') ?? '').matchAll(/<si>([\s\S]*?)<\/si>/g)].map((m) => textOf(m[1]!));
   const rows: string[][] = [];
-  for (const rm of sheet.toString('utf8').matchAll(/<row\b([^>]*)>([\s\S]*?)<\/row>|<row\b([^>]*)\/>/g)) {
+  // 空白列 <row .../> 要先比對,否則會被當成開頭吃掉下一列
+  for (const rm of sheet.toString('utf8').matchAll(/<row\b([^>]*?)\/>|<row\b([^>]*)>([\s\S]*?)<\/row>/g)) {
     if (rows.length >= maxRows) throw new XlsxError(`Excel 列數超過 ${maxRows} 列`);
-    const attrs = rm[1] ?? rm[3] ?? '';
+    const attrs = rm[1] ?? rm[2] ?? '';
     const rIdx = Number(/\br="(\d+)"/.exec(attrs)?.[1] ?? rows.length + 1) - 1;
     while (rows.length < rIdx) rows.push([]);
     const cells: string[] = [];
-    for (const cm of (rm[2] ?? '').matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)) {
+    for (const cm of (rm[3] ?? '').matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)) {
       const a = cm[1]!;
       const ref = /\br="([A-Z]+)\d+"/.exec(a)?.[1];
       const ci = ref ? colIndex(ref) : cells.length;

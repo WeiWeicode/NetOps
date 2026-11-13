@@ -2,6 +2,15 @@
 
 > 接手時先讀 `AGENT.md`,再讀 `docs/ARCHITECTURE.md`、`docs/IMPL-PLAN.md`。
 
+## 2026-11-14 AC3 IP 對照表(程式完成,待合併)
+
+**接手方式**:新討論串說「從 `NetOps/docs/HANDOFF.md`「2026-11-14 AC3」接手」。分支 `feature/ac3-ip-names` 疊在 AC2(`feature/ac2-ai-clickhouse`)上,**合併順序 !93(AC1)→ !94(AC2)→ AC3 的 MR**。下一步:AC4。
+
+- **後端**:`modules/ip-names/`(core 純函式、service、routes)、`shared/xlsx.ts`(不加套件的最小 .xlsx 讀寫、CSV 解析)、`infra/store/ip-names.ts`;`app.ts` 的 `preSerialization` 對標了 `config.ipNames` 的 PA API 回應附 `names`;即時監控串流在 `live-routes.ts` 的 `send` 附名稱;Log 明細 `name` 條件換成 IP 範圍(`reader.ts` 的 `ipRanges`);AI 提示詞附對照(`aiNamesSection`)。API.md §11。
+- **前端**:`pages/knowledge/IpNames.vue`(清單、單筆編輯、匯入預覽 / 確認、匯出、範本)、`ui/components/GIpLabel.vue` + `ui/ipLabel.ts`(GTable 欄位 `ip: true`)、`composables/ipNames.ts`(名稱快取,`api/gateway.ts` 收 `names`)、`TopList` 與 Log 明細「使用者 / 部門」欄位;`mock/ipNames.ts`(`MOCK=admin` 看畫面)。
+- **權限**:`deploy/gateway-rbac.yaml` 新增 `netops.ip-name-page.read`(選單)/ `.write`(按鈕),只給 `netops-admin`。
+- **上架後(需求方)**:Gateway 登記權限代碼(跨 repo)、發佈 netops-api 路由草稿(新路徑 `/ip-names*`、`/ip-name-*`)、確認「網通知識 › IP 對照表」只有網管看得到;viewer 打對照表 API 回 403、PA 畫面看得到名稱;名稱搜尋一天範圍 < 10 秒(AQ3,不夠快改 `ip_trie` 字典)。
+
 ## 2026-11-13 AC2 AI 改查 ClickHouse(程式完成,待合併)
 
 **接手方式**:新討論串說「從 `NetOps/docs/HANDOFF.md`「2026-11-13 AC2」接手」。分支 `feature/ac2-ai-clickhouse` 疊在 AC1(`feature/ac1-recon-sync`,!93)上,**合併順序 !93 → AC2 的 MR**。下一步:AC3(IP 對照表;權限代碼要先在 Gateway 登記,跨 repo 需同意)。

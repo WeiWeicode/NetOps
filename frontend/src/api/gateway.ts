@@ -6,6 +6,7 @@
  */
 import { ApiError, http as kit, readCookie, redirectToLogin, refreshSession, useAuth, type Me, type RequestOptions } from '@giganexus/web-kit';
 import { hasIcon } from '@/ui/icons';
+import { absorbNames } from '@/composables/ipNames';
 
 export { ApiError, loadMe, logout, redirectToLogin, refreshSession, useAuth } from '@giganexus/web-kit';
 
@@ -46,9 +47,16 @@ export function withQuery(path: string, query?: Query): string {
   return qs ? `${path}?${qs}` : path;
 }
 
+/** PA 回應的 names(IP 對照表名稱,AC3)收進快取;回傳原值 */
+const withNames = <T>(p: Promise<T>): Promise<T> =>
+  p.then((r) => {
+    absorbNames(r);
+    return r;
+  });
+
 export const http = {
-  get: <T = unknown>(path: ApiPath, opts: Opts = {}) => kit.get<T>(withQuery(path, opts.query), opts),
-  post: <T = unknown>(path: ApiPath, body?: unknown, opts: Opts = {}) => kit.post<T>(withQuery(path, opts.query), body, opts),
+  get: <T = unknown>(path: ApiPath, opts: Opts = {}) => withNames(kit.get<T>(withQuery(path, opts.query), opts)),
+  post: <T = unknown>(path: ApiPath, body?: unknown, opts: Opts = {}) => withNames(kit.post<T>(withQuery(path, opts.query), body, opts)),
   put: <T = unknown>(path: ApiPath, body?: unknown, opts: Opts = {}) => kit.put<T>(withQuery(path, opts.query), body, opts),
   patch: <T = unknown>(path: ApiPath, body?: unknown, opts: Opts = {}) => kit.patch<T>(withQuery(path, opts.query), body, opts),
   delete: <T = unknown>(path: ApiPath, opts: Opts = {}) => kit.delete<T>(withQuery(path, opts.query), opts),

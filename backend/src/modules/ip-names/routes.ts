@@ -53,23 +53,23 @@ const ipNameRoutes: FastifyPluginAsync<{ svc: IpNameService }> = async (app, { s
     return who;
   };
 
-  app.get<{ Querystring: { q?: string; page?: number; pageSize?: number; format?: 'json' | 'csv' | 'xlsx' } }>(
+  app.get<{ Querystring: { page?: number; pageSize?: number; format?: 'json' | 'csv' | 'xlsx' } }>(
     '/v1/ip-names',
     {
       schema: {
         operationId: 'netops.ip-name.list',
         summary: '查詢 / 匯出 IP 對照表',
         description:
-          'IP / 網段 → 使用者姓名、部門、設備名稱、設備類型、備註。q 比對全部欄位(包含、不分大小寫),依 IP 排序、分頁回傳 { items, total, page, pageSize, version }。format = csv / xlsx 時下載全部(不分頁,欄位同匯入範本,可直接改完再匯入)。內容含個資,只給網管(netops-admin)。',
+          'IP / 網段 → 使用者姓名、部門、設備名稱、設備類型、備註。依 IP 排序、分頁回傳 { items, total, page, pageSize, version }。format = csv / xlsx 時下載全部(不分頁,欄位同匯入範本,可直接改完再匯入)。內容含個資,只給網管(netops-admin)。關鍵字搜尋用 POST /ip-name-searches(姓名不放進網址,避免進入存取日誌)。',
         tags: ['IP 對照表'],
         'x-permission': 'netops.ip-name.read',
         'x-audit-level': 'meta',
         'x-gherkin': [
           '場景: 查詢對照表',
           '  假如 使用者擁有 netops.ip-name.read',
-          '  當 呼叫 GET /api/netops/ip-names?q=資訊處',
+          '  當 呼叫 GET /api/netops/ip-names?page=1',
           '  那麼 回應 200',
-          '  而且 items 只有姓名、部門或設備含「資訊處」的對照',
+          '  而且 回應含 items、total、page、pageSize',
           '',
           '場景: 匯出 Excel',
           '  當 呼叫 GET /api/netops/ip-names?format=xlsx',
@@ -85,7 +85,6 @@ const ipNameRoutes: FastifyPluginAsync<{ svc: IpNameService }> = async (app, { s
           type: 'object',
           additionalProperties: false,
           properties: {
-            q: { type: 'string', maxLength: 100 },
             page: { type: 'integer', minimum: 1, default: 1 },
             pageSize: { type: 'integer', minimum: 1, maximum: 100, default: 50 },
             format: FORMAT,
@@ -95,10 +94,39 @@ const ipNameRoutes: FastifyPluginAsync<{ svc: IpNameService }> = async (app, { s
       },
     },
     async (req, reply) => {
-      const { format = 'json', q = '', page = 1, pageSize = 50 } = req.query;
+      const { format = 'json', page = 1, pageSize = 50 } = req.query;
       if (format !== 'json') return sendFile(reply, format, `IP對照表_${new Date().toISOString().slice(0, 10).replace(/-/g, '')}`, svc.all().map(toRow), true);
-      return svc.list(q, page, pageSize);
+      return svc.list('', page, pageSize);
     },
+  );
+
+  app.post<{ Body: { q: string; page?: number; pageSize?: number } }>(
+    '/v1/ip-name-searches',
+    {
+      schema: {
+        operationId: 'netops.ip-name.search',
+        summary: '搜尋 IP 對照表',
+        description: '關鍵字比對 IP、姓名、部門、設備名稱、設備類型、備註(包含、不分大小寫),依 IP 排序、分頁回傳 { items, total, page, pageSize, version }。用 POST 是為了讓姓名等關鍵字不出現在網址與存取日誌;不改變資料。',
+        tags: ['IP 對照表'],
+        'x-permission': 'netops.ip-name.read',
+        'x-audit-level': 'meta',
+        'x-gherkin': [
+          '場景: 用部門搜尋',
+          '  假如 使用者擁有 netops.ip-name.read',
+          '  當 呼叫 POST /api/netops/ip-name-searches 帶 q "資訊處"',
+          '  那麼 回應 200',
+          '  而且 items 只有姓名、部門或設備含「資訊處」的對照',
+        ].join('\n'),
+        body: {
+          type: 'object',
+          required: ['q'],
+          additionalProperties: false,
+          properties: { q: { type: 'string', maxLength: 100 }, page: { type: 'integer', minimum: 1, default: 1 }, pageSize: { type: 'integer', minimum: 1, maximum: 100, default: 50 } },
+        },
+        response: { 200: looseObject('{ items, total, page, pageSize, version }') },
+      },
+    },
+    async (req) => svc.list(req.body.q, req.body.page ?? 1, req.body.pageSize ?? 50),
   );
 
   app.get<{ Querystring: { format?: 'csv' | 'xlsx' } }>(

@@ -293,6 +293,7 @@ PA 匯入在背景佇列執行;同步、分析只是送進佇列,畫面輪詢狀
 **ClickHouse 明細(C3,D43)**:期間最長 30 天;只用關鍵字 `q`、沒有其他條件時最長 1 天(超過回 400,`details` 指出 `q`);執行上限 50 秒,全系統同時 2 個、每人 1 個。`source` 只接受 `clickhouse`(或省略)。期間整個超過保留期限回 404 `NETOPS_PA_OUT_OF_RETENTION`;期間內沒有 log 回 404 `NETOPS_PA_NO_DATA`;ClickHouse 連不上回 503 `NETOPS_CLICKHOUSE_UNAVAILABLE`;執行中失敗或超過 50 秒時工作 `failed`,`error.code` 為 `NETOPS_CLICKHOUSE_UNAVAILABLE`。
 - 條件語意同舊版(IP 完全相同 / CIDR / 萬用字元並比對 NAT、Port、動作…);`q` 比對主要文字欄位(IP、Port、類型、協定、規則、使用者、App、區域、動作、URL 類別、國家、結束原因、主機名稱)串起來的字串,不是整列原始 CSV(數字欄位如位元組、Session ID 不在比對範圍)。IP 以位址值比較:IPv6 的 CIDR 用真正的範圍,`::1` 與 `0:0:0:1` 視為相同。
 - **威脅 log(V-b2 C7 第二輪,需求方 2026-11-13 決定)**:`type` 為 `TRAFFIC`(預設)或 `THREAT`。`THREAT` 查威脅 log(`pa_threat_logs` 的 `log_type = threat`,不含 url / data / wildfire),另可用 `severity`(`critical`、`high`、`medium`、`low`、`info`;`informational` 視同 `info`)與 `threat`(威脅名稱包含,不分大小寫);其他條件同 TRAFFIC(威脅表沒有的欄位 `sport`、`endReason`… 不在 `q` 比對範圍,改比對威脅名稱、URL、嚴重度)。`TRAFFIC` 帶 `severity` 或 `threat` 回 400(不靜默忽略)。期間內沒有威脅 log(`log_type = threat`)回 404 `NETOPS_PA_NO_DATA`;`coverage` / `partial` 依威脅類(threat、url、data、wildfire)整體的資料範圍(同 §4.2),所以某天只有 url 類時 coverage 會含那天、查詢則回 404。結果 `result.type` 為查詢的類型;資料列欄位同 `ROW_FIELDS`,`threat` 為威脅名稱、`severity` 為嚴重度,流量欄位(`bytes`、`sent`…)為空白;匯出檔名開頭 `PA_threat_`。
+- 名稱(AC3):`name` 比對 IP 對照表的姓名、部門、設備名稱,換成 IP 範圍後查(見 §11);和 IP 條件一樣算「有條件」(不受只用 `q` 的 1 天限制)。前端不把 `name` 寫進網址。
 - 國家:`country` 比對來源或目的任一方(相容);`srcCountry`、`dstCountry` 只比對來源 / 目的國家(包含,不分大小寫)。PA 對私有 / 保留位址的國家欄位填網段範圍(例 `10.0.0.0-10.255.255.255`),不是國家;畫面點選這類項目時改帶 `src` / `dst` 的 CIDR(C7b)。
 - 結果 `result.source` 固定 `clickhouse`;`files`、`filesScanned` 為 0(舊欄位),`scanned` 為 ClickHouse 讀過的列數,`stopReason` 為 `''` 或 `limit`,`coverage`、`partial` 同 §4.1(`partial` 時匯出檔名結尾加「_部分期間超過保留期限」);`progress` 只有 `{ found: 0 }`。
 
@@ -743,6 +744,10 @@ AI 相關(語意搜尋、向量同步、外部 IP 自動學習)見 §10.2(A1)。
 | 403 | `NETOPS_FTP_PATH_FORBIDDEN` | FTP 路徑超出可瀏覽的根目錄 |
 | 403 | `NETOPS_JOB_OWNER_UNKNOWN` | 身分沒有工號也沒有 sub,不能建立工作(正常經 Gateway 不會發生) |
 | 404 | `NETOPS_NOT_FOUND` | 找不到此 API |
+| 400 | `NETOPS_IP_NAME_IMPORT_INVALID` | IP 對照表匯入檔格式不符(欄名列、空檔、Excel 損壞;§11) |
+| 403 | `NETOPS_IP_NAME_AUTHOR_UNKNOWN` | 身分沒有工號與姓名,不能修改 IP 對照表 |
+| 404 | `NETOPS_IP_NAME_NOT_FOUND` / `NETOPS_IP_NAME_IMPORT_NOT_FOUND` | 找不到這筆對照 / 匯入預覽不存在或逾期 |
+| 409 | `NETOPS_IP_NAME_DUPLICATE` / `NETOPS_IP_NAME_LIMIT` / `NETOPS_IP_NAME_IMPORT_STALE` | IP 重複 / 超過 20,000 筆 / 預覽後對照表被改過 |
 | 404 | `NETOPS_JOB_NOT_FOUND` | 工作不存在、不是本人的、已逾期或服務重新啟動後失效 |
 | 404 | `NETOPS_PA_NO_DATA` | 期間內沒有已分析的 PA log 檔 |
 | 404 | `NETOPS_KB_NOTE_NOT_FOUND` | 找不到筆記 |
@@ -903,3 +908,27 @@ AI 串流(§10.1)開始後的錯誤以 `error` 事件回傳 `{ code, message }`:
 - 向量庫沿用舊版 Qdrant `10.10.130.46:6333` 的 `NetOpsKb`(embedding 同為 Qwen3-Embedding-8B 4096 維,2026-11-05 查證)。**`VECTOR_SYNC` 預設 0**:舊版 IIS 仍在同步同一個 collection,兩邊都同步會互刪對方的筆記;關閉時只做語意搜尋,搜尋結果只回新版知識庫存在的筆記。D18 切換、舊版停止寫入後再開(D25;測試區一直關,正式區切換步驟見 AI-FEATURE-INVENTORY §4)。開啟時:筆記異動 3 秒後、啟動 5 秒後、每 30 分鐘同步(同舊版);一次要刪除超過現有 20%(至少 5 筆)或知識庫是空的時整次不同步。
 - 外部 IP 自動學習(D10):候選 IP 來自最近 N 天的 TRAFFIC 排行(目的 IP、被擋、上傳、外部連入);`clickhouse` 來源取 ClickHouse 原始 TRAFFIC 建的每小時摘要(不新增彙總表),`ftp` 來源取 FTP 摘要。`IPLEARN_DAYS` 上限 30。`IPLEARN_HOUR` 預設 -1(不自動,舊版 3 點;D25:舊版 IIS 停用後正式區改 3);管理者改過的自動學習筆記不覆寫;自動學習筆記上限 1,000 則。
 - 時間欄位(`lastSync`、`startedAt`、`finishedAt`)輸出 `+08:00`。
+
+## 11. IP 對照表 — 批次 `feature/ac3-ip-names`(IMPL-PLAN AC3,ARCHITECTURE D45)
+
+IP / 網段 → 使用者姓名、部門、設備名稱、設備類型、備註。姓名、部門屬個資:只給網管(`netops-admin`),稽核一律 `x-audit-level: meta`(不記內容),服務日誌不記內容;關鍵字搜尋用 POST(姓名不出現在網址與存取日誌)。存檔 `ipnames/ip-names.json`(經 `infra/store` 的 `listIpNames` / `saveIpNames`),以最新為準、不記歷史,上限 20,000 筆。第一版只支援 IPv4。
+
+| 方法 | 路徑 | 權限 | 說明 |
+| --- | --- | --- | --- |
+| GET | `/api/netops/ip-names` | `netops.ip-name.read` | 分頁 `{ items, total, page, pageSize, version }`,依 IP 排序;`format=xlsx` / `csv` 下載全部(欄位同範本,可改完再匯入) |
+| POST | `/api/netops/ip-name-searches` | `netops.ip-name.read` | `{ q, page?, pageSize? }`:比對全部欄位(包含、不分大小寫),回應同上;不改變資料 |
+| GET | `/api/netops/ip-name-template` | `netops.ip-name.read` | 匯入範本(`format=xlsx` 預設 / `csv`):欄名列 `IP或網段、使用者姓名、部門、設備名稱、設備類型、備註` + 2 列範例(文件用位址 192.0.2.10、198.51.100.0/24,匯入時整列相同就略過);Excel 的設備類型是下拉清單 |
+| POST | `/api/netops/ip-names` | `netops.ip-name.write` | 新增一筆,201;IP 為 IPv4 或網段(主機位元改成網路位址、`/32` 寫成單一 IP、不接受前導 0);姓名 / 部門 / 設備名稱至少一項;設備類型 `筆電、桌機、伺服器、印表機、網路設備、其他` 或空白;重複 409 `NETOPS_IP_NAME_DUPLICATE` |
+| PUT | `/api/netops/ip-names/{id}` | `netops.ip-name.write` | 以請求內容取代(含 IP);不存在 404 `NETOPS_IP_NAME_NOT_FOUND` |
+| DELETE | `/api/netops/ip-names/{id}` | `netops.ip-name.write` | 204(冪等) |
+| POST | `/api/netops/ip-name-imports` | `netops.ip-name.write` | `{ fileName, format: xlsx|csv, data: base64 }`(檔案上限 2 MB)→ 預覽 `{ id, total, skipped, errors[{row, ip, message}], counts, diff{added, changed[{before, after}], removed, unchanged}, expiresAt }`,清單各最多 500 筆;**整份取代**(檔案沒有的視為刪除);不寫入。欄名列不符、沒有可匯入的資料列、Excel 損壞回 400 `NETOPS_IP_NAME_IMPORT_INVALID`;同一 IP 多列以最後一列為準(列進 errors 提醒) |
+| POST | `/api/netops/ip-name-imports/{id}/confirm` | `netops.ip-name.write` | 寫入預覽內容 `{ added, changed, removed, unchanged, total }`;只有上傳者本人、15 分鐘內;不存在 / 逾期 404 `NETOPS_IP_NAME_IMPORT_NOT_FOUND`;預覽後對照表被改過 409 `NETOPS_IP_NAME_IMPORT_STALE` |
+| DELETE | `/api/netops/ip-name-imports/{id}` | `netops.ip-name.write` | 丟棄自己的預覽,204(冪等) |
+
+**PA 各 API 附名稱**(沿用各 API 原本的權限,看得到 PA 的人就看得到名稱,不需要對照表權限):
+
+- 回應(物件)附 `names: { "<IPv4>": { name, department, device, deviceType } }`,只含本回應中「整個值就是 IPv4」的字串查得到的 IP;網段重疊時範圍最小的優先;不含備註與修改人。對照表讀取失敗時不附(原本的回應照常)。
+- 套用:`GET /pa/overview`、`/pa-events/overview`、`/pa/log-searches/{id}/rows`、`/pa/heatmap`、`/pa/slice`、`/pa/slices/{id}`、`/pa/insight/traffic`、`/pa/insight/threat`、`/pa-live/snapshot`、`/pa-live/top`、`/pa-live/logs`、`/pa-query/jobs/{id}`;即時監控串流的 `snapshot`、`logs` 事件有名稱時附 `names`。
+- Log 明細匯出(`/pa/log-searches/{id}/export`)最後多兩欄「來源名稱」「目的名稱」(姓名或設備名稱 / 部門,以匯出當下的對照表為準)。
+- Log 明細查詢 `name`(§4.3):比對對照表的姓名、部門、設備名稱(包含),API 端換成 IPv4 範圍(符合的對照扣掉包在裡面、更小且不符合的對照;相鄰合併)後查 ClickHouse,比對來源、目的與 NAT(同 `ip` 條件),結果和用 IP 查相同。對照表沒有符合的回 400(`details` 指出 `name`);範圍超過 1,000 個回 400(AQ3:實測一天 > 10 秒或常超過再改 ClickHouse `ip_trie` 字典)。
+- AI 分析 / 問答(§10.1):提示詞中出現、查得到名稱的 IP(最多 200 個)附「IP 對照表」段落,含姓名、部門、設備(AQ2 不遮罩;只送公司內部 AI 主機,不寫日誌)。

@@ -28,6 +28,11 @@ permissions:
   # 測試區暫停 / 繼續收集器(2026-11-09 需求方決定;只給 netops-admin)。正式區 API 回 403、畫面不顯示按鈕
   - { code: netops.pa-live.manage, name: 測試區暫停 / 繼續收集器, kind: button, parent: netops.pa-live.read, sort: 10, includes: [netops.pa-realtime.write] }
   - { code: netops.pa-dashboard.read, name: 流量總覽, kind: menu, parent: netops.group.firewall, sort: 10, includes: [netops.pa.read] }
+  # V-b1(VIZ-RULES-DESIGN §4.8,X15:熱力圖 sort 12、儀表板 sort 15;時段明細抽屜要 netops.pa-log.read)
+  # 「查詢即時連線」按鈕(netops.pa-heatmap.query / netops.pa-insight.query)等 C5 完成才登記
+  # 注意:includes netops.pa-log.read 等於同時開放「Log 明細查詢」API(時段明細抽屜要用);只授權這兩個選單的角色也能查原始 log(設計 §4.8 決定)
+  - { code: netops.pa-heatmap.read, name: 活動熱力圖, kind: menu, parent: netops.group.firewall, sort: 12, includes: [netops.pa.read, netops.pa-log.read] }
+  - { code: netops.pa-insight.read, name: 分析儀表板, kind: menu, parent: netops.group.firewall, sort: 15, includes: [netops.pa.read, netops.pa-log.read] }
   - { code: netops.pa-events.read, name: 安全事件, kind: menu, parent: netops.group.firewall, sort: 20, includes: [netops.pa.read] }
   - { code: netops.pa-search.read, name: Log 明細查詢, kind: menu, parent: netops.group.firewall, sort: 30, includes: [netops.pa-log.read] }
   - { code: netops.pa-files.read, name: FTP Log 檔案, kind: menu, parent: netops.group.firewall, sort: 40, includes: [netops.ftp.read] }
@@ -64,6 +69,8 @@ roles:
       - netops.pa-live.read
       - netops.pa-live.manage
       - netops.pa-dashboard.read
+      - netops.pa-heatmap.read
+      - netops.pa-insight.read
       - netops.pa-events.read
       - netops.pa-search.read
       - netops.pa-files.read
@@ -87,6 +94,8 @@ roles:
       - netops.app.access
       - netops.pa-live.read
       - netops.pa-dashboard.read
+      - netops.pa-heatmap.read
+      - netops.pa-insight.read
       - netops.pa-events.read
       - netops.pa-search.read
       - netops.pa-files.read

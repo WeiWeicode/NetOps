@@ -60,6 +60,19 @@ export interface HeatReader {
   heatRows(grain: HeatGrain, fromMs: number, toMs: number, signal?: AbortSignal): Promise<HeatRow[]>;
   /** 彙總表最早的格子(UTC 毫秒);沒有資料為 null(coverage.since) */
   heatEarliest(grain: HeatGrain, signal?: AbortSignal): Promise<number | null>;
+  /* ───── 分析儀表板(V-b1;docs/VIZ-RULES-DESIGN.md §4.4):期間 [fromMs, toMs),最長 90 天 ───── */
+  /** 來源區域 → App → 目的區域的位元組(pa_traffic_hourly_app);App 只取位元組前 topApps 名,其他併成 '' */
+  insightFlows(fromMs: number, toMs: number, topApps: number, signal?: AbortSignal): Promise<{ fromZone: string; app: string; toZone: string; bytes: number }[]>;
+  /** 位元組前 limit 名的 App(pa_traffic_hourly_app) */
+  insightTopApps(fromMs: number, toMs: number, limit: number, signal?: AbortSignal): Promise<{ app: string; bytes: number; sessions: number }[]>;
+  /** 位元組前 limit 名的來源 IP 與上傳 / 下載(pa_traffic_hourly_src,migrations/003 之前的列上傳 / 下載為 0) */
+  insightTopSrc(fromMs: number, toMs: number, limit: number, signal?: AbortSignal): Promise<{ ip: string; bytes: number; sent: number; recv: number; sessions: number }[]>;
+  /** 威脅(log_type = threat)依來源國家(PA 的英文全名) */
+  threatCountries(fromMs: number, toMs: number, signal?: AbortSignal): Promise<{ country: string; count: number; critical: number; high: number }[]>;
+  /** 威脅依來源 IP,只算 RFC 1918 內網(10/8、172.16/12、192.168/16) */
+  threatTopInternalSrc(fromMs: number, toMs: number, limit: number, signal?: AbortSignal): Promise<{ ip: string; count: number; high: number }[]>;
+  /** 威脅名稱排行 */
+  threatTopNames(fromMs: number, toMs: number, limit: number, signal?: AbortSignal): Promise<{ name: string; severity: string; count: number }[]>;
   /** 時段明細(熱資料:原始表);rows ≤ rowsLimit,sort 依時間新到舊或位元組大到小 */
   slice(type: SliceType, f: SliceFilter, rowsLimit: number, sort: 'time' | 'bytes', maxSeconds: number, signal?: AbortSignal): Promise<SliceData>;
 }
@@ -67,6 +80,16 @@ export interface HeatReader {
 const sec = (ms: number) => Math.floor(ms / 1000);
 const ipArr = (expr: string) => `arrayMap(x -> replaceRegexpOne(toString(x), '^::ffff:', ''), ${expr})`;
 const TOP_N = 10;
+/** 同一個威脅名稱有多種嚴重度時取最高的(any() 每次可能不同,快取與畫面會跳動;程式碼審查 V-b1 #4) */
+const MAX_SEVERITY = "arrayElement(['informational', 'low', 'medium', 'high', 'critical'], toUInt8(greatest(1, max(indexOf(['informational', 'low', 'medium', 'high', 'critical'], severity)))))";
+const HOUR_RANGE = 'hour >= toDateTime({from:UInt32}) AND hour < toDateTime({to:UInt32})';
+const THREAT_RANGE = `log_type = 'threat' AND event_time >= toDateTime({from:UInt32}) AND event_time < toDateTime({to:UInt32})`;
+/** RFC 1918(常數;不接受外部字串) */
+const PRIVATE_V4: [string, string][] = [
+  ['10.0.0.0', '10.255.255.255'],
+  ['172.16.0.0', '172.31.255.255'],
+  ['192.168.0.0', '192.168.255.255'],
+];
 const SEVERITIES = ['critical', 'high', 'medium', 'low', 'informational'] as const;
 
 
@@ -159,6 +182,66 @@ export function createHeatReader(cfg: ClickHouseConfig, fetchImpl: typeof fetch 
       const r = await rows<{ t: number; n: number }>(`SELECT toUnixTimestamp(min(bucket)) AS t, count() AS n FROM ${HEAT_TABLES[grain]}`, {}, 20, signal);
       return num(r[0]?.n) > 0 && num(r[0]?.t) > 0 ? num(r[0]?.t) * 1000 : null;
     },
+    async insightFlows(fromMs, toMs, topApps, signal) {
+      const r = await rows<{ fz: string; a: string; tz: string; b: number }>(
+        `WITH top AS (SELECT app FROM ${READ_TABLES.hourlyApp} WHERE ${HOUR_RANGE} GROUP BY app ORDER BY sum(bytes) DESC LIMIT {n:UInt16})
+         SELECT from_zone AS fz, if(app IN top, app, '') AS a, to_zone AS tz, sum(bytes) AS b FROM ${READ_TABLES.hourlyApp}
+         WHERE ${HOUR_RANGE} GROUP BY fz, a, tz HAVING b > 0 ORDER BY b DESC LIMIT 500`,
+        { from: sec(fromMs), to: sec(toMs), n: topApps },
+        20,
+        signal,
+      );
+      return r.map((x) => ({ fromZone: x.fz, app: x.a, toZone: x.tz, bytes: num(x.b) }));
+    },
+    async insightTopApps(fromMs, toMs, limit, signal) {
+      const r = await rows<{ a: string; b: number; n: number }>(
+        `SELECT app AS a, sum(bytes) AS b, sum(sessions) AS n FROM ${READ_TABLES.hourlyApp} WHERE ${HOUR_RANGE} GROUP BY a ORDER BY b DESC, a LIMIT {n:UInt16}`,
+        { from: sec(fromMs), to: sec(toMs), n: limit },
+        20,
+        signal,
+      );
+      return r.map((x) => ({ app: x.a, bytes: num(x.b), sessions: num(x.n) }));
+    },
+    async insightTopSrc(fromMs, toMs, limit, signal) {
+      const r = await rows<{ ip: string; b: number; bs: number; br: number; n: number }>(
+        `SELECT ${ipText('src')} AS ip, sum(bytes) AS b, sum(bytes_sent) AS bs, sum(bytes_recv) AS br, sum(sessions) AS n FROM ${READ_TABLES.hourlySrc}
+         WHERE ${HOUR_RANGE} GROUP BY src ORDER BY b DESC, ip LIMIT {n:UInt16}`,
+        { from: sec(fromMs), to: sec(toMs), n: limit },
+        20,
+        signal,
+      );
+      return r.map((x) => ({ ip: x.ip, bytes: num(x.b), sent: num(x.bs), recv: num(x.br), sessions: num(x.n) }));
+    },
+    async threatCountries(fromMs, toMs, signal) {
+      const r = await rows<{ c: string; n: number; cr: number; hi: number }>(
+        `SELECT src_country AS c, count() AS n, countIf(severity = 'critical') AS cr, countIf(severity = 'high') AS hi FROM ${READ_TABLES.threat}
+         WHERE ${THREAT_RANGE} GROUP BY c ORDER BY n DESC LIMIT 500`,
+        { from: sec(fromMs), to: sec(toMs) },
+        30,
+        signal,
+      );
+      return r.map((x) => ({ country: x.c, count: num(x.n), critical: num(x.cr), high: num(x.hi) }));
+    },
+    async threatTopInternalSrc(fromMs, toMs, limit, signal) {
+      const r = await rows<{ ip: string; n: number; hi: number }>(
+        `SELECT ${ipText('src')} AS ip, count() AS n, countIf(severity IN ('critical', 'high')) AS hi FROM ${READ_TABLES.threat}
+         WHERE ${THREAT_RANGE} AND (${PRIVATE_V4.map(([a, b]) => `src BETWEEN toIPv6('::ffff:${a}') AND toIPv6('::ffff:${b}')`).join(' OR ')})
+         GROUP BY src ORDER BY n DESC, ip LIMIT {n:UInt16}`,
+        { from: sec(fromMs), to: sec(toMs), n: limit },
+        30,
+        signal,
+      );
+      return r.map((x) => ({ ip: x.ip, count: num(x.n), high: num(x.hi) }));
+    },
+    async threatTopNames(fromMs, toMs, limit, signal) {
+      const r = await rows<{ k: string; sv: string; n: number }>(
+        `SELECT name AS k, ${MAX_SEVERITY} AS sv, count() AS n FROM ${READ_TABLES.threat} WHERE ${THREAT_RANGE} GROUP BY k ORDER BY n DESC, k LIMIT {n:UInt16}`,
+        { from: sec(fromMs), to: sec(toMs), n: limit },
+        30,
+        signal,
+      );
+      return r.map((x) => ({ name: x.k, severity: x.sv === 'informational' ? 'info' : x.sv, count: num(x.n) }));
+    },
     async slice(type, f, rowsLimit, sort, maxSeconds, signal) {
       const isTraffic = type === 'traffic';
       const table = isTraffic ? READ_TABLES.traffic : READ_TABLES.threat;
@@ -204,7 +287,7 @@ export function createHeatReader(cfg: ClickHouseConfig, fetchImpl: typeof fetch 
         : Promise.resolve([] as LogRecord[]);
       const topsP = async (): Promise<SliceData['top']> => {
         if (isTraffic) return { src: await topBy(ipText('src')), dst: await topBy(ipText('dst')), app: await topBy('app'), dport: await topBy('toString(dport)'), dstCountry: await topBy('dst_country') };
-        const name = (await q<{ k: string; sv: string; n: number }>(`SELECT name AS k, any(severity) AS sv, count() AS n FROM ${table} WHERE ${w} GROUP BY k ORDER BY n DESC, k LIMIT ${TOP_N}`)).map((x) => ({
+        const name = (await q<{ k: string; sv: string; n: number }>(`SELECT name AS k, ${MAX_SEVERITY} AS sv, count() AS n FROM ${table} WHERE ${w} GROUP BY k ORDER BY n DESC, k LIMIT ${TOP_N}`)).map((x) => ({
           key: String(x.k ?? ''),
           severity: x.sv === 'informational' ? 'info' : x.sv,
           count: num(x.n),

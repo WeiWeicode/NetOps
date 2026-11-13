@@ -128,3 +128,33 @@ describe('時段明細(原始表)', () => {
     assert.equal(r.rows[0]!.severity, 'critical');
   });
 });
+
+describe('分析儀表板查詢(V-b1)', () => {
+  it('來源 IP 的上傳 / 下載(migration 003 的 MV)、App 排行、桑基流向', async () => {
+    const top = await heat.insightTopSrc(H, H + HOUR, 100);
+    const ip9 = top.find((x) => x.ip === '10.88.0.9');
+    assert.ok(ip9, '10.88.0.9 在排行內');
+    assert.equal(ip9!.sent, 8 * 40);
+    assert.equal(ip9!.recv, 8 * 60);
+    const apps = await heat.insightTopApps(H, H + HOUR, 100);
+    assert.ok(apps.some((a) => a.app === 'va-int-app' && a.sessions >= N));
+    const flows = await heat.insightFlows(H, H + HOUR, 15);
+    assert.ok(flows.some((f) => f.fromZone === 'LAN' && f.toZone === 'WAN' && f.bytes > 0));
+  });
+
+  it('威脅:國家、內網來源(RFC 1918)、名稱排行', async () => {
+    const issues = { badTime: false };
+    await writer.insert(
+      'threat',
+      [toThreatRow('threat', { time: taipeiText(H + 600_000), src: '10.88.0.77', dst: '203.0.113.5', name: 'VA Internal(7)', severity: 'high', action: 'alert', srcCountry: '10.0.0.0-10.255.255.255', dport: 443, proto: 'tcp' }, H + 600_000, issues)],
+      `va-int-${randomUUID()}`,
+    );
+    const internal = await heat.threatTopInternalSrc(H, H + HOUR, 100);
+    assert.ok(internal.some((x) => x.ip === '10.88.0.77' && x.high >= 1));
+    assert.ok(!internal.some((x) => x.ip === '198.51.100.7'));
+    const names = await heat.threatTopNames(H, H + HOUR, 100);
+    assert.ok(names.some((x) => x.name === 'VA Test(9)' && x.count >= 8));
+    const countries = await heat.threatCountries(H, H + HOUR);
+    assert.ok(countries.length > 0);
+  });
+});

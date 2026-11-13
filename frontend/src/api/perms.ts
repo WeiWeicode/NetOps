@@ -7,6 +7,9 @@ export const NETOPS = {
   app: 'netops.app.access',
   paLive: 'netops.pa-live.read',
   paDashboard: 'netops.pa-dashboard.read',
+  // V-b1:活動熱力圖、分析儀表板(VIZ-RULES-DESIGN §4.8;點格子 / 圖表開時段明細要 netops.pa-log.read,節點已 includes)
+  paHeatmap: 'netops.pa-heatmap.read',
+  paInsight: 'netops.pa-insight.read',
   paEvents: 'netops.pa-events.read',
   paSearch: 'netops.pa-search.read',
   paFiles: 'netops.pa-files.read',

@@ -3,7 +3,7 @@
 > 以 Gherkin(繁體中文關鍵字,`# language: zh-TW`)描述 NetOps 新版(接入 Gateway 後)的**目標行為**。寫法沿用員工入口網 `giga-Portal/docs/Gherkin/`。
 > 依據:`backend/src` 各路由的 `x-gherkin`、[API.md](../API.md)、[ARCHITECTURE.md](../ARCHITECTURE.md)(D6、D8、D14–D18、§5)、[UI-GUIDE.md](../UI-GUIDE.md)。舊版 `server/`、`src/` 只作比對,行為不同處標 `@changed`。
 > AI 功能(問答、分析、語意搜尋、向量同步、外部 IP 自動學習)於 A1 搬移(D23,取代 D17),場景在 `ai/ai.feature`、`kb/ai.feature`;翻譯與整理筆記依 2026-11-09 決定不搬(D25)。
-> **最後更新:2026-11-11**(`feature/viz-a-heatmap-data`:V-a 熱力圖與時段明細 `pa/heatmap.feature`;`fix/pa-live-uat-1110`:`pa-live/realtime.feature` 串流每人上限 3、即時監控控制項、介面流量停止更新、URL 類別、串流 401 換發;`feature/pa-live-uat-1109`:`pa-live/realtime.feature` 加測試區收集器開關 API、收集器暫停、即時監控畫面場景;`feature/a1-ai-api`:A1 AI 場景 `ai/ai.feature`、`kb/ai.feature`;`feature/s0-sse`:S0 串流驗證場景 `pa-live/stream-test.feature`;`fix/d1-uat-findings`:D1 驗收修正的場景;2026-11-03 依 `develop` e3475f8:B0–B2 全部合併;前端依 `origin/feature/netops-f1-*`)。
+> **最後更新:2026-11-11**(`feature/viz-b1-insight-frontend`:V-b1 儀表板 `pa/insight.feature`;`feature/viz-a-heatmap-data`:V-a 熱力圖與時段明細 `pa/heatmap.feature`;`fix/pa-live-uat-1110`:`pa-live/realtime.feature` 串流每人上限 3、即時監控控制項、介面流量停止更新、URL 類別、串流 401 換發;`feature/pa-live-uat-1109`:`pa-live/realtime.feature` 加測試區收集器開關 API、收集器暫停、即時監控畫面場景;`feature/a1-ai-api`:A1 AI 場景 `ai/ai.feature`、`kb/ai.feature`;`feature/s0-sse`:S0 串流驗證場景 `pa-live/stream-test.feature`;`fix/d1-uat-findings`:D1 驗收修正的場景;2026-11-03 依 `develop` e3475f8:B0–B2 全部合併;前端依 `origin/feature/netops-f1-*`)。
 
 ## 1. 檔案一覽
 
@@ -26,6 +26,7 @@
 | `ui/requests.feature` | CSRF、不存 Token、下載、工作輪詢與取消、資料不完整提示、DOMPurify | FRONTEND-GUIDE §6;API.md §1 | F1 |
 | `ui/ai.feature` | AI 問答、AI 分析、知識庫 AI 功能的畫面:SSE 串流(CSRF)、按鈕權限、資料不完整提示、不連舊版 | API.md §10;D23 | A1 |
 | `ftp/pa-recon.feature` | C3 FTP 與 ClickHouse 每日對帳、補漏 | API.md §5.3;D33 | C3 |
+| `pa/insight.feature` | V-b1 分析儀表板 API(流量、威脅;國家 ISO2、伺服器網段未設定) | API.md §4.5;D40 | V-b1 |
 | `pa/heatmap.feature` | V-a 活動熱力圖(年 / 月 / 日、null 與 0、分級)、時段明細(30 秒轉工作、熱 / 冷分界、冷查詢 429) | API.md §4.4;D34、D35 | V-a |
 | `check-scenarios.mjs` | 比對 `x-gherkin` 與本目錄場景的腳本(§5) | — | — |
 
@@ -33,7 +34,7 @@
 
 | 標籤 | 意義 | 如何驗證 |
 | --- | --- | --- |
-| `@B0` `@B1` `@B2` `@F1` `@S0` `@A1` `@C3` `@V-a` | 所屬工作項目(IMPL-PLAN) | — |
+| `@B0` `@B1` `@B2` `@F1` `@S0` `@A1` `@C3` `@V-a` `@V-b1` | 所屬工作項目(IMPL-PLAN) | — |
 | `@auto` | 已有自動化測試涵蓋(測試名稱不一定與場景相同,§4 列對照) | `backend/`:`npm test`;`frontend/`:`npm test` |
 | `@manual` | 以瀏覽器或主控台操作驗證 | 修正紀錄或 MR 寫明步驟 |
 | `@e2e` | 要經 Gateway(BFF 檢查登入與 `x-permission`)才能驗證 | 測試區瀏覽器 |

@@ -347,12 +347,14 @@ export function createEventImporter({ ftp, store, ftpConfig, log }: { ftp: Ftp; 
    * AI 問答:問題中的 IP 在各類型 log 的紀錄(每小時組合依 IP 篩選)
    *   test(ip) → 是否符合;from / to 為 'yyyy/MM/dd HH:mm'
    * 回傳 { text, hits: [{ type, label, total, kinds }] };都沒有回傳 text = ''
+   * types:只看這些類型(AC2:AI 改查 ClickHouse 後,這裡只剩解密、GlobalProtect、User-ID);省略 = 全部
    */
-  function eventsForIps(from: string, to: string, test: (ip: string) => boolean) {
+  function eventsForIps(from: string, to: string, test: (ip: string) => boolean, types: readonly string[] | null = null) {
     const parts: string[] = [];
     const hits: { type: string; label: string; total: number; kinds: number }[] = [];
     const end = `${to}:59`;
     for (const t of eventTypes()) {
+      if (types && !types.includes(t.type)) continue;
       const def = TYPE_DEFS[t.type]!;
       const ipIdx = def.ips.map((k) => def.dims.findIndex(([d]) => d === k) + 1);
       const nd = def.dims.length;

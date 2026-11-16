@@ -262,7 +262,7 @@ describe('外部 IP 自動學習 API', () => {
     const s0 = (await t.call({ url: '/v1/kb/ip-learning' })).json();
     assert.equal(s0.enabled, true);
     assert.equal(s0.hour, -1);
-    const res = await t.call({ method: 'POST', url: '/v1/kb/ip-learnings', payload: { days: 60 } });
+    const res = await t.call({ method: 'POST', url: '/v1/kb/ip-learnings', payload: { days: 30 } });
     assert.equal(res.statusCode, 202);
     const again = await t.call({ method: 'POST', url: '/v1/kb/ip-learnings', payload: {} });
     assert.ok(again.statusCode === 409 || again.statusCode === 202);
@@ -272,7 +272,7 @@ describe('外部 IP 自動學習 API', () => {
     assert.equal(done.error, '');
     assert.ok(done.result, JSON.stringify(done.log));
     assert.match(done.finishedAt, /\+08:00$/);
-    assert.equal((await t.call({ method: 'POST', url: '/v1/kb/ip-learnings', payload: { days: 61 } })).statusCode, 400);
+    assert.equal((await t.call({ method: 'POST', url: '/v1/kb/ip-learnings', payload: { days: 31 } })).statusCode, 400);
   });
 });
 

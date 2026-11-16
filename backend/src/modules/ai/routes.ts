@@ -10,7 +10,7 @@ import { dayRange, timeIn, validation } from '../../shared/time.js';
 import type { AiService, HistoryItem } from './service.js';
 import { SSE_TIMEOUT_MS, type SseHub } from './sse.js';
 
-/** 問答期間上限(天):有 IP 時要從 FTP 重讀原始 log(同明細查詢 §4.3) */
+/** 問答期間上限(天):ftp 來源有 IP 時要從 FTP 重讀原始 log(同明細查詢 §4.3);clickhouse 來源沿用同一個上限 */
 export const ASK_MAX_DAYS = 31;
 
 const SSE_RESPONSE = (events: string) => ({
@@ -50,7 +50,9 @@ const aiRoutes: FastifyPluginAsync<{ ai: AiService; hub: SseHub }> = async (app,
         description:
           '把期間內 PA TRAFFIC 摘要(含前一段同長度期間比較)與其他類型 log 摘要整理成文字,連同知識庫筆記送給模型,以 SSE 串流回答。只送統計與彙整,不送原始 log。' +
           '事件:open、meta(model、files、missing、rows、notes、vectorError)、thinking(思考字數)、content(回答片段)、done(finish、truncated)、error、heartbeat(每 15 秒)。' +
-          '期間最長 92 天;沒有已分析的 log 回 404 NETOPS_PA_NO_DATA;未設定 AI 回 409 NETOPS_AI_DISABLED;同時進行的 AI 回答每人 2 個、全系統 6 個,超過回 429 NETOPS_STREAM_BUSY。',
+          '期間最長 92 天;沒有已分析的 log 回 404 NETOPS_PA_NO_DATA;未設定 AI 回 409 NETOPS_AI_DISABLED;同時進行的 AI 回答每人 2 個、全系統 6 個,超過回 429 NETOPS_STREAM_BUSY。' +
+          '資料來源依 NETOPS_AI_SOURCE(AC2,ARCHITECTURE D44;測試區 clickhouse、正式區 C6 前 ftp):clickhouse 時最近 30 天用 ClickHouse 原始 TRAFFIC 建的每小時摘要,更早的部分改用每天 / 每小時彙總(meta.grain 標示,資料較粗);' +
+          'ClickHouse 無法使用回 503 NETOPS_CLICKHOUSE_UNAVAILABLE(不改用 FTP),整段超過保留期限回 404 NETOPS_PA_OUT_OF_RETENTION。',
         tags: ['AI'],
         'x-permission': 'netops.ai.use',
         'x-audit-level': 'meta',
@@ -72,6 +74,19 @@ const aiRoutes: FastifyPluginAsync<{ ai: AiService; hub: SseHub }> = async (app,
           '  假如 使用者已有 2 個進行中的 AI 回答',
           '  當 再呼叫 POST /api/netops/ai/analyses',
           '  那麼 回應 429 NETOPS_STREAM_BUSY',
+          '',
+          '場景: ClickHouse 來源的期間超過 30 天時,超過的部分用彙總並標示較粗',
+          '  假如 NETOPS_AI_SOURCE 為 clickhouse',
+          '  而且 ClickHouse 原始 TRAFFIC 保留 30 天,彙總涵蓋整段期間',
+          '  當 呼叫 POST /api/netops/ai/analyses 帶 40 天前到昨天的期間',
+          '  那麼 meta 事件的 source 為 "clickhouse"',
+          '  而且 meta.grain.coarse 為 30 天以前的期間',
+          '  而且 送給模型的資料註明「資料較粗」',
+          '',
+          '場景: ClickHouse 無法使用',
+          '  假如 NETOPS_AI_SOURCE 為 clickhouse 而且 ClickHouse 連不上',
+          '  當 呼叫 POST /api/netops/ai/analyses',
+          '  那麼 回應 503 NETOPS_CLICKHOUSE_UNAVAILABLE(串流開始前,不改用 FTP)',
         ].join('\n'),
         body: {
           type: 'object',
@@ -89,7 +104,7 @@ const aiRoutes: FastifyPluginAsync<{ ai: AiService; hub: SseHub }> = async (app,
     },
     async (req, reply) => {
       const { from, to } = dayRange(req.body);
-      const ctx = ai.prepareAnalysis(from, to);
+      const ctx = await ai.prepareAnalysis(from, to);
       const owner = hub.reserve(req);
       return hub.open(req, reply, owner, (s) => ai.analyze(s, { from, to, think: req.body.think === true, question: (req.body.question ?? '').trim() }, ctx));
     },
@@ -102,9 +117,9 @@ const aiRoutes: FastifyPluginAsync<{ ai: AiService; hub: SseHub }> = async (app,
         operationId: 'netops.ai.ask',
         summary: 'AI 問答(SSE)',
         description:
-          '依問題中的 IP / Port 查防火牆 log(先查連線組合統計,沒有統計的檔案才從 FTP 串流掃描,原始 log 不落地)並彙整;問到 AD 或 IP 出現在 AD 事件時帶入 AD 事件記錄;連同知識庫筆記送給模型,以 SSE 串流回答。' +
+          '依問題中的 IP / Port 查防火牆 log 並彙整(NETOPS_AI_SOURCE=clickhouse:查 ClickHouse 原始 TRAFFIC 30 天與威脅類 90 天,依連線組合累計加最多 15 筆範例,超過保留期限的部分標示 evidence.skipped,不掃 FTP;ftp:先查連線組合統計,沒有統計的檔案才從 FTP 串流掃描,原始 log 不落地);問到 AD 或 IP 出現在 AD 事件時帶入 AD 事件記錄;連同知識庫筆記送給模型,以 SSE 串流回答。' +
           'source 為 ad 時只看 AD 事件記錄。追問時問題沒有 IP / Port 會沿用前面的條件;同樣的條件 10 分鐘內不重複掃描。' +
-          '事件:open、meta(ips、ports、files)、scan(掃描進度)、evidence(matched、partial 掃描逾時資料不完整)、events、ad、notes(used、omitted、vectorError)、thinking、content、done、error、heartbeat。' +
+          '事件:open、meta(ips、ports、files、dataSource)、scan(ftp:掃描進度;clickhouse:source、step)、evidence(matched、partial 資料不完整;clickhouse 另有 samples、skipped)、events、ad、notes(used、omitted、vectorError)、thinking、content、done、error、heartbeat。ClickHouse 無法使用時串流開始前回 503 NETOPS_CLICKHOUSE_UNAVAILABLE。' +
           `期間最長 ${ASK_MAX_DAYS} 天;沒有已分析的 log 且不是 AD 問題回 404 NETOPS_PA_NO_DATA;未設定 AI 回 409 NETOPS_AI_DISABLED;超過同時上限回 429 NETOPS_STREAM_BUSY。`,
         tags: ['AI'],
         'x-permission': 'netops.ai.use',
@@ -127,6 +142,19 @@ const aiRoutes: FastifyPluginAsync<{ ai: AiService; hub: SseHub }> = async (app,
           '場景: 期間超過 31 天',
           '  當 呼叫 POST /api/netops/ai/questions 帶 32 天的時間範圍',
           '  那麼 回應 400 VALIDATION_FAILED',
+          '',
+          '場景: ClickHouse 來源的問答不掃 FTP',
+          '  假如 NETOPS_AI_SOURCE 為 clickhouse',
+          '  當 呼叫 POST /api/netops/ai/questions 帶問題 "10.10.1.1 最近連到哪些外部 IP"',
+          '  那麼 收到 scan 事件 { source: "clickhouse", step: "traffic" }',
+          '  而且 evidence 事件的 source 為 "clickhouse",samples 最多 15',
+          '  而且 不連 FTP',
+          '',
+          '場景: 問答期間有一部分超過原始 log 保留期限',
+          '  假如 NETOPS_AI_SOURCE 為 clickhouse 而且原始 TRAFFIC 保留 30 天',
+          '  當 問答期間從 35 天前開始',
+          '  那麼 evidence.skipped 為 35 天前到 30 天前',
+          '  而且 送給模型的資料註明「這段沒有資料可查，不代表沒有連線」',
         ].join('\n'),
         body: {
           type: 'object',
@@ -152,7 +180,7 @@ const aiRoutes: FastifyPluginAsync<{ ai: AiService; hub: SseHub }> = async (app,
       const question = req.body.question.trim();
       if (!question) throw validation('question', '請輸入問題');
       const input = { from, to, question, history: req.body.history, source: req.body.source };
-      const p = ai.prepareQuestion(input);
+      const p = await ai.prepareQuestion(input);
       const owner = hub.reserve(req);
       return hub.open(req, reply, owner, (s) => ai.ask(s, { from, to, question, think: req.body.think === true }, p));
     },

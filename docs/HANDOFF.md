@@ -2,6 +2,15 @@
 
 > 接手時先讀 `AGENT.md`,再讀 `docs/ARCHITECTURE.md`、`docs/IMPL-PLAN.md`。
 
+## 2026-11-13 AC2 AI 改查 ClickHouse(程式完成,待合併)
+
+**接手方式**:新討論串說「從 `NetOps/docs/HANDOFF.md`「2026-11-13 AC2」接手」。分支 `feature/ac2-ai-clickhouse` 疊在 AC1(`feature/ac1-recon-sync`,!93)上,**合併順序 !93 → AC2 的 MR**。下一步:AC3(IP 對照表;權限代碼要先在 Gateway 登記,跨 repo 需同意)。
+
+- **資料來源切換**:`NETOPS_AI_SOURCE`(clickhouse / ftp),未設定時 test → clickhouse、prod / dev → ftp(AQ4「Keep old path」)。Compose 傳空白 = 依 `GW_ENV`。**C6 上線時**正式區 `.env` 設 `NETOPS_AI_SOURCE=clickhouse`,之後才可移除 ftp 路徑(`service.ts` 的 FTP 掃描、`scanSlot`)。
+- **ClickHouse 來源**:`modules/ai/ch-source.ts`;分析最近 30 天用每小時摘要、更早用 `pa_heat_1d` 與每小時彙總(`meta.grain`,畫面「超過 30 天的資料較粗」);問答原始 TRAFFIC 30 天 / 威脅 90 天、15 筆範例、`evidence.skipped`;外部 IP 學習上限 30 天。API.md §10.1。
+- **上架後待驗(需求方)**:測試區 3 天內 AI 問答 evidence 的筆數相對 FTP 對帳(FTP Log 檔案頁「對帳」)誤差 < 0.5%;一天範圍 < 10 秒開始回答。長期間路徑只由 fixture 驗證,實測等 C6。
+- 路由沒有新增或改路徑,**不需要**發佈路由草稿。
+
 ## 2026-11-13 AI 改用 ClickHouse 範圍討論(AC1–AC7 計畫)
 
 **接手方式**:新討論串說「從 `NetOps/docs/HANDOFF.md`「2026-11-13 AI 改用 ClickHouse 範圍討論」接手」。計畫在 IMPL-PLAN「AC」,決策 ARCHITECTURE D44、D45。下一步:派 AC1(對帳後同步)給 Claude 子任務;AC3 範本欄位需求方已同意(「欄位可以」)。

@@ -38,8 +38,9 @@ const topLines = (rows, withBytes) =>
 /**
  * 期間 [from, to]('yyyy/MM/dd')的分析資料;沒有資料回 null
  *   summarize(from, to, topN) → mergeSummaries 的結果(hours 已篩到期間內),由呼叫端注入
+ *   opts.source(s):資料來源的說明,取代「N 個匯出檔」(AC2:ClickHouse 來源是每小時摘要與每天彙總);省略時同舊版
  */
-export function buildContext(summarize, from, to) {
+export function buildContext(summarize, from, to, opts = {}) {
   const s = summarize(from, to, 15)
   if (!s.files) return null
   const days = Math.round((parseDay(to) - parseDay(from)) / 86400000) + 1
@@ -51,7 +52,7 @@ export function buildContext(summarize, from, to) {
     `連線紀錄 ${num(x.rows)} 筆｜允許 ${num(x.allow)}（${pct(x.allow, x.rows)}）｜阻擋 ${num(x.block)}（${pct(x.block, x.rows)}）｜總流量 ${bytes(x.bytes)}（送出 ${bytes(x.sent)}、接收 ${bytes(x.recv)}）`
 
   const lines = [
-    `# 分析範圍：${from} ~ ${to}（${days} 天，PA-560 TRAFFIC log，${s.files} 個匯出檔，資料時間 ${s.timeMin} ~ ${s.timeMax}）`,
+    `# 分析範圍：${from} ~ ${to}（${days} 天，PA-560 TRAFFIC log，${opts.source ? opts.source(s) : `${s.files} 個匯出檔`}，資料時間 ${s.timeMin} ~ ${s.timeMax}）`,
     '\n## 整體',
     `- ${kpi(s)}`,
     p.files ? `- 前一段同長度期間 ${pFrom} ~ ${pTo}：${kpi(p)}` : `- 前一段期間 ${pFrom} ~ ${pTo} 沒有資料，無法比較`,

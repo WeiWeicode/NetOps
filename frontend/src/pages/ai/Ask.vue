@@ -15,7 +15,7 @@ import { can, describeError } from '@/api/gateway';
 import { pa } from '@/api/pa';
 import { UI } from '@/api/perms';
 import AiMarkdown from '@/components/AiMarkdown.vue';
-import { applyEvent, clearMessages, historyOf, messagesOf, searchLink, type ChatMessage, type Source } from '@/composables/aiChat';
+import { applyEvent, clearMessages, coarseNote, historyOf, messagesOf, searchLink, type ChatMessage, type Source } from '@/composables/aiChat';
 import { localToIso, toLocalInput } from '@/composables/searchQuery';
 import { toast } from '@/ui';
 
@@ -183,8 +183,23 @@ const onKey = (e: KeyboardEvent) => {
           <div v-else class="bubble-ai">
             <!-- 查到的資料 -->
             <div v-if="m.evidence" class="evidence">
-              <template v-if="m.evidence.summary">
+              <template v-if="m.evidence.summary && m.evidence.source === 'clickhouse'">
+                {{ m.evidence.label }}<template v-if="m.evidence.hours || m.evidence.days">(每小時摘要 {{ fmt(m.evidence.hours) }} 小時<template v-if="m.evidence.days">、每天彙總 {{ fmt(m.evidence.days) }} 天</template>)</template>
+                <span v-if="m.evidence.missing" class="c-warning"> · {{ fmt(m.evidence.missing) }} 小時的摘要還沒建好,資料不完整</span>
+                <span v-if="!m.evidence.hours && !m.evidence.days" class="c-warning"> · 這段期間沒有資料</span>
+                <span v-if="coarseNote(m.evidence.grain)" class="evidence-note c-warning"><GIcon name="alert-triangle" :size="13" /> {{ coarseNote(m.evidence.grain) }}</span>
+              </template>
+              <template v-else-if="m.evidence.summary">
                 {{ m.evidence.label }}<span v-if="m.evidence.missing" class="c-warning"> · {{ m.evidence.missing }} 個檔案的摘要讀不到,資料不完整</span>
+              </template>
+              <template v-else-if="m.evidence.source === 'clickhouse'">
+                <b>{{ m.evidence.label }}</b>:符合 {{ fmt(m.evidence.matched) }} 筆(<span class="c-success">允許 {{ fmt(m.evidence.allow) }}</span>、<span class="c-danger">阻擋 {{ fmt(m.evidence.block) }}</span>,{{ fmt(m.evidence.flows) }} 種連線組合<template v-if="m.evidence.samples">、{{ m.evidence.samples }} 筆範例</template>)
+                · {{ m.evidence.cached ? '沿用剛才的查詢' : `查詢 ${m.evidence.seconds} 秒` }}
+                <span v-if="m.evidence.partial" class="c-warning"> · 符合的連線組合太多,只取次數最多的部分,資料不完整</span>
+                <span v-if="m.evidence.skipped" class="evidence-note c-warning">
+                  <GIcon name="alert-triangle" :size="13" /> {{ m.evidence.skipped.from }} ~ {{ m.evidence.skipped.to }} 超過原始 log 保留期限,沒有資料可查(不代表沒有連線)
+                </span>
+                <GButton size="sm" variant="ghost" icon="search" @click="openSearch(m)">看原始紀錄</GButton>
               </template>
               <template v-else>
                 <b>{{ m.evidence.label }}</b>:符合 {{ fmt(m.evidence.matched) }} 筆(<span class="c-success">允許 {{ fmt(m.evidence.allow) }}</span>、<span class="c-danger">阻擋 {{ fmt(m.evidence.block) }}</span>,{{ fmt(m.evidence.flows) }} 種連線組合)· 查了
@@ -334,6 +349,16 @@ const onKey = (e: KeyboardEvent) => {
   margin-bottom: 8px;
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--c-primary) 6%, transparent);
+}
+.evidence-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  margin-top: 4px;
+}
+.evidence-note :deep(svg) {
+  flex: none;
+  margin-top: 3px;
 }
 .note-link {
   margin-right: 8px;

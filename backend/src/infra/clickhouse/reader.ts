@@ -17,6 +17,8 @@ export const READ_TABLES = {
   hourlyApp: 'netops.pa_traffic_hourly_app',
   /** V-b1 儀表板 Top 10 頻寬 IP */
   hourlySrc: 'netops.pa_traffic_hourly_src',
+  /** AC2:AI 分析超過 30 天的部分(每天彙總;V-a 熱力圖表) */
+  heat1d: 'netops.pa_heat_1d',
 } as const;
 
 /** 存進 ClickHouse 的威脅類 log(其他類型仍只有 FTP;AGENT.md §7.2) */
@@ -152,6 +154,81 @@ export interface ClickHouseReader {
   searchThreat(f: ThreatSearchFilter, limit: number, maxSeconds: number, signal?: AbortSignal): Promise<{ rows: LogRecord[]; more: boolean; scanned: number }>;
   /** 期間內威脅 log(log_type = threat)的筆數(明細查詢前判斷有沒有資料) */
   threatCount(fromMs: number, toMs: number): Promise<number>;
+  /**
+   * AI 問答(AC2,ARCHITECTURE D44):原始 TRAFFIC 符合條件的連線組合,依小時累計(格式同連線組合統計,給 ai/core/evidence.js addFlow);
+   * 依次數由多到少最多 limit 列,truncated = 還有更多組合
+   */
+  aiTrafficFlows(cond: AiCond, fromMs: number, toMs: number, limit: number, signal?: AbortSignal): Promise<{ rows: AiFlowRow[]; truncated: boolean }>;
+  /** AI 問答的範例紀錄:每種組合(來源、目的、Port、動作、規則)一筆、最新的在前,最多 limit 筆(TRAFFIC_FIELDS) */
+  aiTrafficSamples(cond: AiCond, fromMs: number, toMs: number, limit: number, signal?: AbortSignal): Promise<LogRecord[]>;
+  /**
+   * AI 問答:威脅類符合 IP 條件的紀錄,依全部欄位(時間除外)累計;n 乘 Repeat Count(同 FTP 摘要)。
+   * 依次數由多到少最多 limit 列,truncated = 還有更多
+   */
+  aiThreatGroups(types: readonly ChEventType[], cond: AiCond, fromMs: number, toMs: number, limit: number, signal?: AbortSignal): Promise<{ rows: AiThreatRow[]; truncated: boolean }>;
+  /** AI 分析超過 30 天的部分:每天的連線數、阻擋、位元組、威脅嚴重度(pa_heat_1d) */
+  aiDays(fromMs: number, toMs: number, signal?: AbortSignal): Promise<AiDayRow[]>;
+  /** AI 分析超過 30 天的部分:動作、App、區域(每小時彙總 App,13 個月)與來源 IP(每小時彙總來源,90 天)的排行 */
+  aiTops(fromMs: number, toMs: number, limit: number, signal?: AbortSignal): Promise<AiTops>;
+}
+
+/** AI 問答條件(ai/core/evidence.js parseQuestion):1 個 IP = 來源或目的(含 NAT);2 個 = 兩者之間;3–4 個 = 任一;Port = 目的 Port */
+export interface AiCond {
+  ips: string[];
+  ports: number[];
+}
+
+/** 連線組合每小時一列(欄位同 FTP 連線組合統計 pa/core/flows.js parseLine;end = [結束原因, 次數]) */
+export interface AiFlowRow {
+  src: string;
+  dst: string;
+  natSrc: string;
+  natDst: string;
+  proto: string;
+  dport: number;
+  action: string;
+  rule: string;
+  app: string;
+  fromZone: string;
+  toZone: string;
+  dstCountry: string;
+  srcUser: string;
+  category: string;
+  /** 'YYYY/MM/DD HH'(台灣時間) */
+  hour: string;
+  first: string;
+  last: string;
+  n: number;
+  bytes: number;
+  end: [string, number][];
+}
+
+/** 威脅類累計列:type + THREAT_FIELDS(time、repeat 除外)+ 次數與時間範圍 */
+export type AiThreatRow = LogRecord & { type: ChEventType; n: number; first: string; last: string };
+
+export interface AiDayRow {
+  /** 台灣時間當天 00:00(UTC 毫秒) */
+  day: number;
+  sessions: number;
+  deny: number;
+  bytes: number;
+  sent: number;
+  recv: number;
+  critical: number;
+  high: number;
+  medium: number;
+  low: number;
+  info: number;
+}
+
+/** [key, 次數, 位元組](同 FTP 摘要的 top 格式,mergeSummaries 可直接合併) */
+export type TopRow = [string, number, number];
+export interface AiTops {
+  actions: Record<string, number>;
+  app: TopRow[];
+  zone: TopRow[];
+  src: TopRow[];
+  blockSrc: TopRow[];
 }
 
 /** 明細查詢條件(和 FTP 掃描 core/palog.js buildFilter 相同語意;時間為 UTC 毫秒,toMs 不含) */
@@ -200,6 +277,27 @@ const THREAT_TEXT_COLUMNS = [
 ];
 
 /**
+ * 單一 IP 欄位的條件(trafficWhere 與 AI 問答共用;p 產生參數佔位符,值一律放參數):
+ *   CIDR(IPv4 / IPv6,BETWEEN)、萬用字元 *(LIKE)、合法 IP 完全相同;不合法的 CIDR 以字首、其他以字串完全相同比對
+ */
+export function ipClause(col: string, pattern: string, p: (v: Param, type: string) => string): string {
+  if (pattern.includes('/')) {
+    const [base = '', bitsText = ''] = pattern.split('/');
+    const bits = Number(bitsText);
+    const v4 = IPV4.test(base) && /^\d{1,2}$/.test(bitsText) && bits <= 32;
+    const v6 = isIPv6Text(base) && /^\d{1,3}$/.test(bitsText) && bits <= 128;
+    if (v4 || v6) {
+      const r = `IPv6CIDRToRange(toIPv6(${p(base, 'String')}), ${p(v4 ? bits + 96 : bits, 'UInt8')})`;
+      return `${col} BETWEEN tupleElement(${r}, 1) AND tupleElement(${r}, 2)`;
+    }
+    return `startsWith(${ipText(col)}, ${p(base, 'String')})`;
+  }
+  if (pattern.includes('*')) return `${ipText(col)} LIKE ${p(pattern.replace(/[\\%_]/g, '\\$&').replace(/\*/g, '%'), 'String')}`;
+  if (IPV4.test(pattern) || isIPv6Text(pattern)) return `${col} = toIPv6OrNull(${p(pattern, 'String')})`;
+  return `${ipText(col)} = ${p(pattern, 'String')}`;
+}
+
+/**
  * 明細條件 → SQL 條件與參數(純函式;值一律放參數,欄位名稱只來自程式內常數)。
  *   IP:完全相同(含 NAT 位址)、CIDR(IPv4 / IPv6,排序鍵友善的 BETWEEN)、萬用字元 *(LIKE,線性時間,沒有 ReDoS);
  *       不是合法 IP 也不是合法 CIDR 時同 FTP 版:CIDR 以字首比對、其他以字串完全相同比對
@@ -214,22 +312,7 @@ export function trafficWhere(f: TrafficFilter, textColumns: string[] = TEXT_COLU
     params[k] = v;
     return `{${k}:${type}}`;
   };
-  const ipOne = (col: string, pattern: string): string => {
-    if (pattern.includes('/')) {
-      const [base = '', bitsText = ''] = pattern.split('/');
-      const bits = Number(bitsText);
-      const v4 = IPV4.test(base) && /^\d{1,2}$/.test(bitsText) && bits <= 32;
-      const v6 = isIPv6Text(base) && /^\d{1,3}$/.test(bitsText) && bits <= 128;
-      if (v4 || v6) {
-        const r = `IPv6CIDRToRange(toIPv6(${p(base, 'String')}), ${p(v4 ? bits + 96 : bits, 'UInt8')})`;
-        return `${col} BETWEEN tupleElement(${r}, 1) AND tupleElement(${r}, 2)`;
-      }
-      return `startsWith(${ipText(col)}, ${p(base, 'String')})`;
-    }
-    if (pattern.includes('*')) return `${ipText(col)} LIKE ${p(pattern.replace(/[\\%_]/g, '\\$&').replace(/\*/g, '%'), 'String')}`;
-    if (IPV4.test(pattern) || isIPv6Text(pattern)) return `${col} = toIPv6OrNull(${p(pattern, 'String')})`;
-    return `${ipText(col)} = ${p(pattern, 'String')}`;
-  };
+  const ipOne = (col: string, pattern: string): string => ipClause(col, pattern, p);
   const ipAny = (cols: [string, boolean][], pattern?: string) => {
     const v = String(pattern ?? '').trim();
     if (!v) return;
@@ -290,6 +373,57 @@ export function threatSearchWhere(f: ThreatSearchFilter): { where: string[]; par
   }
   return { where, params };
 }
+
+/**
+ * AI 問答條件 → SQL(AC2;語意同 ai/core/evidence.js buildCondition,值一律放參數):
+ *   每個 IP 比對來源、目的與 NAT 位址(NAT 欄位空白不比對);1 個 IP、3–4 個 IP 任一出現用 OR,2 個 IP 兩者都要出現用 AND;
+ *   Port 比對目的 Port
+ */
+export function aiWhere(cond: AiCond, fromMs: number, toMs: number): { where: string[]; params: Record<string, Param> } {
+  const where = ['event_time >= toDateTime({from:UInt32})', 'event_time < toDateTime({to:UInt32})'];
+  const params: Record<string, Param> = { from: sec(fromMs), to: Math.ceil(toMs / 1000) };
+  let n = 0;
+  const p = (v: Param, type: string) => {
+    const k = `a${n++}`;
+    params[k] = v;
+    return `{${k}:${type}}`;
+  };
+  const cols: [string, boolean][] = [['src', false], ['dst', false], ['nat_src', true], ['nat_dst', true]];
+  const one = (ip: string) => `(${cols.map(([c, nat]) => (nat ? `(${c} != toIPv6('::') AND ${ipClause(c, ip, p)})` : ipClause(c, ip, p))).join(' OR ')})`;
+  const ips = cond.ips.slice(0, 4).map((x) => String(x).trim()).filter(Boolean);
+  if (ips.length) where.push(`(${ips.map(one).join(ips.length === 2 ? ' AND ' : ' OR ')})`);
+  const ports = [...new Set(cond.ports.map(Number))].filter((x) => Number.isInteger(x) && x > 0 && x <= 65535).slice(0, 10);
+  if (ports.length) where.push(`dport IN ${p(`[${ports.join(',')}]`, 'Array(UInt16)')}`);
+  return { where, params };
+}
+
+/**
+ * AI 問答的查詢在 SSE 串流內執行(有心跳,不受路由逾時限制):伺服器端用帳號上限 50 秒,用戶端多等 10 秒(逾時由 ClickHouse 回 159);
+ * 使用者關頁時 ClickHouse 也停止查詢
+ */
+const AI_SETTINGS = { max_execution_time: '50', cancel_http_readonly_queries_on_client_close: '1' };
+const AI_WAIT_MS = 60_000;
+
+/** 連線組合累計的欄位(AiFlowRow 的順序;ClickHouse 欄位一律加別名 g*,避免和欄位同名) */
+const FLOW_GROUP: [keyof AiFlowRow, string][] = [
+  ['src', ipText('src')],
+  ['dst', ipText('dst')],
+  ['natSrc', ipText('nat_src')],
+  ['natDst', ipText('nat_dst')],
+  ['proto', 'proto'],
+  ['dport', 'dport'],
+  ['action', 'action'],
+  ['rule', 'rule'],
+  ['app', 'app'],
+  ['fromZone', 'from_zone'],
+  ['toZone', 'to_zone'],
+  ['dstCountry', 'dst_country'],
+  ['srcUser', 'src_user'],
+  ['category', 'category'],
+  ['hour', `formatDateTime(toStartOfHour(event_time), '%Y/%m/%d %H')`],
+];
+/** 威脅類累計的欄位:THREAT_FIELDS 除了時間與 Repeat Count */
+const THREAT_GROUP = THREAT_FIELDS.filter(([k]) => k !== 'time' && k !== 'repeat');
 
 type Fetch = typeof fetch;
 export type Param = string | number;
@@ -569,6 +703,129 @@ export function createClickHouseReader(cfg: ClickHouseConfig, fetchImpl: Fetch =
       return Number(r[0]?.n ?? 0);
     },
     trafficRecords: (fromMs, toMs, onRow, signal) => records('traffic', TRAFFIC_FIELDS, fromMs, toMs, onRow, signal),
+    async aiTrafficFlows(cond, fromMs, toMs, limit, signal) {
+      const w = aiWhere(cond, fromMs, toMs);
+      const g = FLOW_GROUP.map(([, e], i) => `${e} AS g${i}`).join(', ');
+      const out: AiFlowRow[] = [];
+      await stream(
+        `SELECT ${g}, count() AS n, sum(bytes) AS b, ${timeText('min(event_time)')} AS t1, ${timeText('max(event_time)')} AS t2, sumMap([end_reason], [toUInt64(1)]) AS e
+         FROM ${READ_TABLES.traffic} WHERE ${w.where.join(' AND ')} GROUP BY ${FLOW_GROUP.map((_, i) => `g${i}`).join(', ')} ORDER BY n DESC LIMIT {lim:UInt32}`,
+        { ...w.params, lim: limit + 1 },
+        (cols) => {
+          const r: Record<string, unknown> = {};
+          FLOW_GROUP.forEach(([k], i) => (r[k] = cols[i]));
+          const k = FLOW_GROUP.length;
+          const [names = [], counts = []] = (cols[k + 4] as [string[], number[]] | undefined) ?? [];
+          out.push({
+            ...(r as unknown as AiFlowRow),
+            dport: Number(r.dport) || 0,
+            n: Number(cols[k]),
+            bytes: Number(cols[k + 1]),
+            first: String(cols[k + 2]),
+            last: String(cols[k + 3]),
+            end: names.map((x, i) => [x, Number(counts[i])] as [string, number]),
+          });
+        },
+        signal,
+        AI_SETTINGS,
+        undefined,
+        AI_WAIT_MS,
+      );
+      const truncated = out.length > limit;
+      return { rows: truncated ? out.slice(0, limit) : out, truncated };
+    },
+    async aiTrafficSamples(cond, fromMs, toMs, limit, signal) {
+      const w = aiWhere(cond, fromMs, toMs);
+      const names = TRAFFIC_FIELDS.map(([k]) => k);
+      const out: LogRecord[] = [];
+      await stream(
+        `SELECT ${TRAFFIC_FIELDS.map(([, e]) => e).join(', ')} FROM ${READ_TABLES.traffic} WHERE ${w.where.join(' AND ')}
+         ORDER BY event_time DESC LIMIT 1 BY src, dst, dport, action, rule LIMIT {lim:UInt32}`,
+        { ...w.params, lim: limit },
+        (cols) => {
+          const r: LogRecord = {};
+          for (let i = 0; i < names.length; i++) r[names[i]!] = cols[i] as string | number;
+          out.push(r);
+        },
+        signal,
+        AI_SETTINGS,
+        undefined,
+        AI_WAIT_MS,
+      );
+      return out;
+    },
+    async aiThreatGroups(types, cond, fromMs, toMs, limit, signal) {
+      const list = types.filter(isChEventType);
+      if (!list.length) return { rows: [], truncated: false };
+      const w = aiWhere(cond, fromMs, toMs);
+      const g = THREAT_GROUP.map(([, e], i) => `${e} AS g${i}`).join(', ');
+      const out: AiThreatRow[] = [];
+      await stream(
+        `SELECT log_type AS lt, ${g}, sum(greatest(repeat_count, 1)) AS n, ${timeText('min(event_time)')} AS t1, ${timeText('max(event_time)')} AS t2
+         FROM ${READ_TABLES.threat} WHERE ${w.where.join(' AND ')} AND log_type IN {types:Array(String)}
+         GROUP BY lt, ${THREAT_GROUP.map((_, i) => `g${i}`).join(', ')} ORDER BY n DESC LIMIT {lim:UInt32}`,
+        { ...w.params, types: `[${list.map((t) => `'${t}'`).join(',')}]`, lim: limit + 1 },
+        (cols) => {
+          const r: LogRecord = {};
+          THREAT_GROUP.forEach(([k], i) => (r[k] = cols[i + 1] as string | number));
+          const k = THREAT_GROUP.length + 1;
+          out.push({ ...r, type: cols[0] as ChEventType, n: Number(cols[k]), first: String(cols[k + 1]), last: String(cols[k + 2]) });
+        },
+        signal,
+        AI_SETTINGS,
+        undefined,
+        AI_WAIT_MS,
+      );
+      const truncated = out.length > limit;
+      return { rows: truncated ? out.slice(0, limit) : out, truncated };
+    },
+    async aiDays(fromMs, toMs, signal) {
+      const r = await rows<Record<string, number>>(
+        `SELECT toUnixTimestamp(bucket) AS d, sum(sessions) AS n, sum(deny) AS x, sum(bytes) AS b, sum(bytes_sent) AS s, sum(bytes_recv) AS r,
+                sum(thr_critical) AS c1, sum(thr_high) AS c2, sum(thr_medium) AS c3, sum(thr_low) AS c4, sum(thr_info) AS c5
+         FROM ${READ_TABLES.heat1d} WHERE bucket >= toDateTime({from:UInt32}) AND bucket < toDateTime({to:UInt32}) GROUP BY d ORDER BY d`,
+        range(fromMs, toMs),
+        signal,
+      );
+      return r.map((x) => ({
+        day: Number(x.d) * 1000,
+        sessions: Number(x.n),
+        deny: Number(x.x),
+        bytes: Number(x.b),
+        sent: Number(x.s),
+        recv: Number(x.r),
+        critical: Number(x.c1),
+        high: Number(x.c2),
+        medium: Number(x.c3),
+        low: Number(x.c4),
+        info: Number(x.c5),
+      }));
+    },
+    async aiTops(fromMs, toMs, limit, signal) {
+      const p = { ...range(fromMs, toMs), lim: limit };
+      const hw = 'hour >= toDateTime({from:UInt32}) AND hour < toDateTime({to:UInt32})';
+      // 依次數與依位元組各取前 limit 名(同 FTP 摘要 Counter.top(n, withBytes))
+      const top = async (table: string, key: string, cond = '') => {
+        const q = (order: string) =>
+          rows<{ k: string; n: number; b: number }>(
+            `SELECT ${key} AS k, sum(sessions) AS n, sum(bytes) AS b FROM ${table} WHERE ${hw} ${cond} GROUP BY k HAVING k != '' ORDER BY ${order} DESC, k LIMIT {lim:UInt16}`,
+            p,
+            signal,
+          );
+        const m = new Map<string, TopRow>();
+        for (const x of [...(await q('n')), ...(await q('b'))]) m.set(x.k, [x.k, Number(x.n), Number(x.b)]);
+        return [...m.values()];
+      };
+      const actions = await rows<{ a: string; n: number }>(`SELECT action AS a, sum(sessions) AS n FROM ${READ_TABLES.hourlyApp} WHERE ${hw} GROUP BY a ORDER BY a`, p, signal);
+      const zone = `if(from_zone = '' AND to_zone = '', '', concat(if(from_zone = '', '?', from_zone), ' → ', if(to_zone = '', '?', to_zone)))`;
+      return {
+        actions: Object.fromEntries(actions.map((x) => [x.a || '(空白)', Number(x.n)])),
+        app: await top(READ_TABLES.hourlyApp, 'app'),
+        zone: await top(READ_TABLES.hourlyApp, zone),
+        src: await top(READ_TABLES.hourlySrc, ipText('src')),
+        blockSrc: await top(READ_TABLES.hourlySrc, ipText('src'), "AND action != 'allow'"),
+      };
+    },
     threatRecords: (type, fromMs, toMs, onRow, signal) => records('threat', THREAT_FIELDS, fromMs, toMs, onRow, signal, type),
   };
 }

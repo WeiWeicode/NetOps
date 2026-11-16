@@ -2,14 +2,43 @@
  * AI 問答的對話與事件處理(由舊版 src/views/PaAsk.vue、stores/chat.js 搬移;IMPL-PLAN A1)
  *   對話放在模組層級的 reactive:切換頁面回來還在,PA 與 AD 分開;重新整理就清空(同舊版,不存 localStorage)
  *   applyEvent:SSE 事件 → 訊息狀態(純函式,可測試)
+ * AC2(docs/API.md §10.1):後端資料來源是 ClickHouse 時,scan / evidence 帶 source: 'clickhouse' 與 ClickHouse 的欄位
+ *   (筆數、範例數、略過的期間 skipped、粒度 grain);FTP 來源(正式區 C6 之前)沿用舊欄位
  */
 import { reactive } from 'vue';
 import type { HistoryItem, SseEvent } from '@/api/ai';
 
 export type Source = 'pa' | 'ad';
 
+/** 分析資料的粒度(日期 YYYY-MM-DD):detail = 每小時摘要(原始 log 建的);coarse = 每天 / 每小時彙總(超過 rawDays 天,較粗) */
+export interface Grain {
+  detail: { from: string; to: string } | null;
+  coarse: { from: string; to: string } | null;
+  rawDays: number;
+}
+
+/** 有較粗的期間時的提示文字(分析對話框、問答的整體統計共用);沒有回空字串 */
+export function coarseNote(g: Grain | null | undefined): string {
+  if (!g?.coarse) return '';
+  const range = g.coarse.from === g.coarse.to ? g.coarse.from : `${g.coarse.from} ~ ${g.coarse.to}`;
+  return `超過 ${g.rawDays} 天的資料較粗:${range} 只有每天 / 每小時彙總(沒有目的 IP、Port、規則等排行與逐小時統計)`;
+}
+
 export interface Evidence {
   label: string;
+  /** clickhouse:AC2 起;沒有這個欄位是 FTP 來源 */
+  source?: 'clickhouse';
+  /** ClickHouse:範例紀錄筆數(最多 15) */
+  samples?: number;
+  /** ClickHouse:實際查詢的期間('yyyy/MM/dd HH:mm';整段超過保留期限時 from 為空字串) */
+  from?: string;
+  to?: string;
+  /** ClickHouse:超過原始 log 保留期限、沒有查的期間 */
+  skipped?: { from: string; to: string } | null;
+  /** ClickHouse 整體統計:每小時摘要的小時數、每天彙總的天數、粒度 */
+  hours?: number;
+  days?: number;
+  grain?: Grain | null;
   summary?: boolean;
   matched?: number;
   allow?: number;
@@ -73,7 +102,8 @@ export function applyEvent(r: ChatMessage, e: SseEvent, isAd: boolean) {
       break;
     }
     case 'scan':
-      r.status = p.mode === 'flows' ? '查詢連線組合統計...' : `掃描 log ${fmt(p.filesScanned as number)} / ${fmt(p.files as number)} 個檔,找到 ${fmt(p.matched as number)} 筆...`;
+      if (p.source === 'clickhouse') r.status = p.step === 'threat' ? '查詢威脅類 log...' : '查詢防火牆 log(ClickHouse)...';
+      else r.status = p.mode === 'flows' ? '查詢連線組合統計...' : `掃描 log ${fmt(p.filesScanned as number)} / ${fmt(p.files as number)} 個檔,找到 ${fmt(p.matched as number)} 筆...`;
       break;
     case 'evidence':
       r.evidence = p as unknown as Evidence;

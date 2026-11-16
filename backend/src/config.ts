@@ -63,6 +63,12 @@ export interface AiConfig {
   vectorSync: boolean;
   /** 外部 IP 自動學習(D10):每天幾點自動跑(-1 = 不自動,預設)、看最近幾天、一次最多查幾個新 IP、查過的 IP 幾天內不重查 */
   ipLearn: { hour: number; days: number; max: number; ttlDays: number };
+  /**
+   * AI 分析、問答、外部 IP 學習的資料來源(NETOPS_AI_SOURCE;IMPL-PLAN AC2、ARCHITECTURE D44):
+   * clickhouse = 查 ClickHouse;ftp = 舊路徑(FTP 摘要與原始 log 掃描)。需求方 2026-11-13 AQ4「Keep old path」:
+   * 正式區在 C6(正式區 ClickHouse)之前沿用 ftp。未設定時依部署區:test 為 clickhouse,prod 與 dev 為 ftp(對正式區安全的值)
+   */
+  source: 'clickhouse' | 'ftp';
   /** 每次送給 AI 的知識庫筆記最多幾個字(同舊版 KB_MAX_CHARS) */
   kbMaxChars: number;
   /** 同時進行的 AI 串流上限:全系統、每人(超過回 429,不回 5xx;S0 報告 §3.6) */
@@ -278,11 +284,23 @@ function loadAi(env: NodeJS.ProcessEnv, gwEnv: GwEnv): AiConfig {
     llm: { url: llmUrl, model: str(env, 'LLM_MODEL'), apiKey: readSecret(env, 'LLM_API_KEY', gwEnv), timeoutMs: int(env, 'LLM_TIMEOUT_MS', 300000, 10000, 600000) },
     vector: { url: qdrantUrl, apiKey: readSecret(env, 'QDRANT_API_KEY', gwEnv), collection, embedUrl },
     vectorSync: bool(env, 'VECTOR_SYNC'),
-    ipLearn: { hour: int(env, 'IPLEARN_HOUR', -1, -1, 23), days: int(env, 'IPLEARN_DAYS', 7, 1, 60), max: int(env, 'IPLEARN_MAX', 150, 1, 500), ttlDays: int(env, 'IPLEARN_TTL_DAYS', 90, 1, 3650) },
+    ipLearn: { hour: int(env, 'IPLEARN_HOUR', -1, -1, 23), days: int(env, 'IPLEARN_DAYS', 7, 1, IPLEARN_MAX_DAYS), max: int(env, 'IPLEARN_MAX', 150, 1, 500), ttlDays: int(env, 'IPLEARN_TTL_DAYS', 90, 1, 3650) },
+    source: loadAiSource(env, gwEnv),
     kbMaxChars: int(env, 'KB_MAX_CHARS', 20000, 1000, 200000),
     maxStreams: int(env, 'AI_MAX_STREAMS', 6, 1, 50),
     maxStreamsPerUser: int(env, 'AI_MAX_STREAMS_PER_USER', 2, 1, 10),
   };
+}
+
+/** 外部 IP 學習最多看幾天(AC2:改查 ClickHouse 原始 TRAFFIC 後上限 30,原 60;需求方 2026-11-13) */
+export const IPLEARN_MAX_DAYS = 30;
+
+/** NETOPS_AI_SOURCE:clickhouse / ftp;其他值啟動失敗 */
+export function loadAiSource(env: NodeJS.ProcessEnv, gwEnv: GwEnv): 'clickhouse' | 'ftp' {
+  const v = str(env, 'NETOPS_AI_SOURCE').toLowerCase();
+  if (!v) return gwEnv === 'test' ? 'clickhouse' : 'ftp';
+  if (v !== 'clickhouse' && v !== 'ftp') throw new GatewayEnvError(`NETOPS_AI_SOURCE 只能是 clickhouse 或 ftp:${v}`);
+  return v;
 }
 
 /** netops-redis 位址(R1):test / prod 必填;只接受 redis:// 或 rediss:// */

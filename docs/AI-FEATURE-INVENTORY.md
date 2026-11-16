@@ -1,7 +1,9 @@
 # NetOps AI 功能盤點(舊版 IIS ↔ 新版 A1)
 
 > 2026-11-06 需求方要求「AI 重新盤點新舊功能差異,功能不用全部搬」。本文件列出舊版每個 AI 功能在新版 A1(NetOps !34 核心、!35 API、!36 前端)的狀態、成本、風險與建議。**2026-11-09 需求方已決定**(§1):翻譯(#5)與整理筆記(#6)不搬,已從 !35 / !36 與核心(`fix/a1-core-trim`)拿掉;其餘照建議。
-> 決策見 [ARCHITECTURE.md](ARCHITECTURE.md) D23、D25;API 見 [API.md](API.md) §10;工作項目見 IMPL-PLAN A1。
+> 決策見 [ARCHITECTURE.md](ARCHITECTURE.md) D23、D25、D44;API 見 [API.md](API.md) §10;工作項目見 IMPL-PLAN A1、AC2。
+>
+> **AC2(2026-11-13)資料來源**:分析、問答、外部 IP 學習依 `NETOPS_AI_SOURCE` 切換。測試區 `clickhouse`:分析最近 30 天用 ClickHouse 原始 TRAFFIC 建的每小時摘要、更早用每天 / 每小時彙總(畫面註明較粗,最長 92 天);問答查原始 TRAFFIC 30 天與威脅類 90 天(15 筆範例,不掃 FTP);外部 IP 學習上限 30 天。正式區 C6 之前 `ftp`(舊路徑,AQ4「Keep old path」)。下表「現況」欄的 FTP 掃描描述是 `ftp` 來源。
 
 ## 1. 已定案(需求方 2026-11-06)
 

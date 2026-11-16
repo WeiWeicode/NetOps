@@ -76,12 +76,15 @@ services:
       VECTOR_SYNC: ${VECTOR_SYNC:-0}
       # 外部 IP 自動學習每天幾點(-1 = 不自動,知識庫頁可手動執行)
       IPLEARN_HOUR: ${IPLEARN_HOUR:--1}
+      # AI 分析 / 問答 / 外部 IP 學習的資料來源(AC2,ARCHITECTURE D44):clickhouse 或 ftp;空白 = 依 GW_ENV(test → clickhouse、prod → ftp)。
+      #   正式區在 C6(正式區 ClickHouse)之前沿用 ftp(需求方 2026-11-13 AQ4「Keep old path」);C6 上線後正式區 .env 設 NETOPS_AI_SOURCE=clickhouse
+      NETOPS_AI_SOURCE: ${NETOPS_AI_SOURCE:-}
       # PA log 查詢切換(C3,ARCHITECTURE D29、D42):唯讀帳號 netops_reader(readonly=2,上限由 users.d constraints 固定)
       #   ClickHouse 停止時只有用到它的查詢受影響:來源 auto 改查 FTP、指定 clickhouse 回 503(/readyz 不受影響)
       CLICKHOUSE_URL: http://netops-clickhouse:8123
       CLICKHOUSE_USER: netops_reader
       CLICKHOUSE_PASSWORD_FILE: /run/secrets/ch_reader_password
-      # PA 總覽、安全事件、明細只查 ClickHouse(ARCHITECTURE D43,2026-11-11);FTP 只做對帳與補漏、AD 與 AI
+      # PA 總覽、安全事件、明細只查 ClickHouse(ARCHITECTURE D43,2026-11-11);FTP 只做對帳與補漏、AD,以及 NETOPS_AI_SOURCE=ftp 時的 AI
       # 每日 FTP 對帳:台灣時間 HH:MM 開始(需求方 2026-11-13 決定 08:10;PA 前一天的檔約 07:45 才有,還沒有時每 10 分鐘再試;-1 = 不自動)
       #   舊的 NETOPS_RECON_HOUR 仍可用,但 NETOPS_RECON_TIME 優先(這裡一律給值,所以 .env 只設 NETOPS_RECON_HOUR 不再生效)
       NETOPS_RECON_TIME: ${NETOPS_RECON_TIME:-08:10}

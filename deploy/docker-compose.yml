@@ -89,6 +89,8 @@ services:
       NETOPS_RECON_AUTO_BACKFILL: ${NETOPS_RECON_AUTO_BACKFILL:-1}
       # FTP 上 PA log 保留天數(需求方會排程刪除):期限內的缺口每天自動補,超過期限仍有缺口記 warn
       NETOPS_FTP_RETENTION_DAYS: ${NETOPS_FTP_RETENTION_DAYS:-10}
+      # 對帳後每日同步解密 / GlobalProtect / User-ID / AD(AC1,需求方 2026-11-13;不進 ClickHouse,FTP 只留 10 天);0 = 關閉,只能手動同步
+      NETOPS_DAILY_SYNC: ${NETOPS_DAILY_SYNC:-1}
       # ClickHouse 每小時摘要(總覽排行):保留天數同 ClickHouse TRAFFIC(正式區 30 天;測試區 TTL 3 天,多的天數沒有資料)
       NETOPS_CH_SUMMARY_DAYS: ${NETOPS_CH_SUMMARY_DAYS:-30}
       NETOPS_CH_SUMMARY_MINUTES: ${NETOPS_CH_SUMMARY_MINUTES:-5}

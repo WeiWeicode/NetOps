@@ -508,7 +508,7 @@ FTP 唯讀(AGENT.md §7.4):「刪除分析結果」只刪本系統的摘要,不�
 }
 ```
 
-**`GET /ftp/pa/status`**:`{ traffic: ImportStatus, events: ImportStatus }`(§1.2)。
+**`GET /ftp/pa/status`**:`{ traffic: ImportStatus, events: ImportStatus, daily: DailySyncStatus }`(§1.2;`daily` 見 §5.4)。
 
 **`POST /ftp/pa/syncs`**(無 body):在背景列出 TRAFFIC 與各類型目錄,把新的、已變更、上次失敗的檔案加入分析佇列;回 **202** `{ traffic: ImportStatus, events: ImportStatus }`。結果看 `GET /ftp/pa/status` 的 `lastSyncAt`、`lastSyncError` 與佇列。
 
@@ -592,7 +592,7 @@ ARCHITECTURE D33、D43、手冊 `PA-LOG-CLICKHOUSE-GUIDE.md` §11:FTP 只做對�
   "lastResult": { "days": 30, "imported": [ { "day": "2026-11-02", "events": 5300 } ] } }
 ```
 
-`dir`、`autoSyncMinutes` 與 `lastResult.imported[].day`(`YYYY-MM-DD`)同上。
+`dir`、`autoSyncMinutes` 與 `lastResult.imported[].day`(`YYYY-MM-DD`)同上。另有 `daily`(對帳後每日同步,同 §5.4;AD 是其中 `key: "ad"` 的類型)。
 
 **`POST /ftp/ad/syncs`**(無 body):背景比對每個日期資料夾,有變更才重新匯入;回 **202** + `GET /ftp/ad/status` 的內容。正在同步時回 409 `NETOPS_AD_SYNC_BUSY`;沒有設定 FTP 時回 503 `NETOPS_FTP_NOT_CONFIGURED`。
 
@@ -603,6 +603,31 @@ ARCHITECTURE D33、D43、手冊 `PA-LOG-CLICKHOUSE-GUIDE.md` §11:FTP 只做對�
 **`POST /ftp/ad/result-deletions`**:`{ "days": ["2026-11-02"] }` → `{ "deleted": 1 }`。
 
 ---
+
+### 5.4 對帳後每日同步(AC1)— 批次 `feature/ac1-recon-sync`
+
+ARCHITECTURE D43、D44,IMPL-PLAN AC1(需求方 2026-11-13「每天對帳後一併同步」):解密、GlobalProtect、User-ID 與 AD 不進 ClickHouse,測試區 `FTP_SYNC_MINUTES=0`、FTP 只保留 10 天,不排程會遺失。沒有新 API;狀態放在 `GET /ftp/pa/status` 與 `GET /ftp/ad/status` 的 `daily`。
+
+- **何時跑**:每天自動對帳(§5.3,`NETOPS_RECON_TIME`,預設 08:10)的每一輪結束後接著跑(對帳失敗也照跑)。`NETOPS_DAILY_SYNC=0` 關閉;`NETOPS_RECON_TIME=-1` 或沒有 ClickHouse(不自動對帳)時也不跑,只能在 FTP Log 檔案頁手動同步。
+- **同步什麼**:只排 FTP 保留期限內(1 ~ `NETOPS_FTP_RETENTION_DAYS` − 1 天前)的檔:PA 解密、GlobalProtect、User-ID 目錄依**檔名日期**挑(`…_2026_11_13_last_calendar_day_0.csv` = 11/12 的資料;檔名沒有日期的不排),新的、已變更、失敗的排入分析;AD 只比對這些日期的資料夾,有變才匯入。**不同步 TRAFFIC 與威脅類**(查詢已改 ClickHouse;TRAFFIC 由對帳自己同步)。目錄設成 `-` 的類型不列入。
+- **重試**(同對帳):前一天每個類型都匯入完成(`done`)今天就結束;還沒完成時對帳下一輪(10 分鐘後)再看,FTP 目錄 30 分鐘最多列一次;FTP 失敗只記 warn。一天最多試 90 次(約 15 小時)後停止並記 warn(`state: "gave-up"`)。較舊的日子同一輪一起排,沒補到的隔天再排。
+- **超過保留期限**:保留期限到期(`retentionDays` ~ `retentionDays + 7` 天前)仍沒匯入的日子記 warn,每個類型每天一次;從沒匯入過的類型(PA 可能沒有匯出)不記。
+- 狀態只在記憶體,重新啟動後當天重新判斷(已匯入的不會重複匯入)。
+
+```jsonc
+// GET /ftp/pa/status 的 daily(GET /ftp/ad/status 相同)
+"daily": {
+  "enabled": true, "at": "08:10", "retentionDays": 10,
+  "state": "retrying",                 // disabled | waiting(今天還沒開始)| retrying(前一天還沒全部匯入)| done | gave-up
+  "runDay": "2026-11-13", "lastRunAt": "…", "lastSyncAt": "…", "finishedAt": null, "tries": 2,
+  "categories": [                       // decryption、globalprotect、userid(有設定目錄的)、ad(有設定 FTP)
+    { "key": "globalprotect", "label": "GlobalProtect VPN",
+      "days": [ { "day": "2026-11-12", "state": "pending" }, { "day": "2026-11-11", "state": "done" } ] }  // 新的在前,保留期限內
+  ]
+}
+```
+
+每一天的 `state`:`done` 已匯入;`pending` 在佇列、分析中或 AD 同步中;`error` 有檔案分析 / 讀取失敗;`none` 還沒有這天的檔(FTP 上還沒出現或還沒同步)。
 
 ## 6. AD 網域 — 批次 `feature/netops-b2-ad`
 

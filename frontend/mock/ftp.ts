@@ -125,7 +125,33 @@ function emptyStatus() {
     running: [] as unknown[],
   };
 }
-const paStatus = { traffic: emptyStatus(), events: emptyStatus() };
+/** 對帳後每日同步(AC1):前一天 GlobalProtect 還在分析、5 天前 User-ID 失敗、8 天前解密沒有檔 */
+function dailyStatus() {
+  const days = Array.from({ length: 9 }, (_, i) => {
+    const d = new Date();
+    d.setDate(d.getDate() - i - 1);
+    return ymd(d);
+  });
+  const cat = (key: string, label: string, odd: (i: number) => string | null) => ({ key, label, days: days.map((day, i) => ({ day, state: odd(i) ?? 'done' })) });
+  return {
+    enabled: true,
+    at: '08:10',
+    retentionDays: 10,
+    state: 'retrying',
+    runDay: ymd(new Date()),
+    lastRunAt: new Date(Date.now() - 4 * 60_000).toISOString(),
+    lastSyncAt: new Date(Date.now() - 14 * 60_000).toISOString(),
+    finishedAt: null as string | null,
+    tries: 2,
+    categories: [
+      cat('decryption', '解密', (i) => (i === 7 ? 'none' : null)),
+      cat('globalprotect', 'GlobalProtect VPN', (i) => (i === 0 ? 'pending' : null)),
+      cat('userid', 'User-ID', (i) => (i === 4 ? 'error' : null)),
+      cat('ad', 'AD 事件', () => null),
+    ],
+  };
+}
+const paStatus = { traffic: emptyStatus(), events: emptyStatus(), daily: dailyStatus() };
 let paQueue: PaFile[] = [];
 let paTimer: ReturnType<typeof setInterval> | undefined;
 
@@ -222,6 +248,7 @@ export const adStatus = {
   lastSyncAt: new Date(Date.now() - 3_600_000).toISOString(),
   lastSyncError: '',
   lastResult: { days: adDays.length, imported: [] as { day: string; events: number }[] },
+  daily: paStatus.daily,
 };
 
 function adRun(days: string[]) {

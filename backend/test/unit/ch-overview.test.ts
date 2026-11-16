@@ -44,6 +44,7 @@ describe('config(C3)', () => {
     assert.equal(c.reconAt, 8 * 60 + 10);
     assert.equal(c.reconAutoBackfill, true);
     assert.equal(c.ftpRetentionDays, 10);
+    assert.equal(c.dailySync, true, 'AC1 對帳後每日同步預設開');
   });
   it('對帳時間:NETOPS_RECON_TIME=HH:MM 優先,舊的 NETOPS_RECON_HOUR 相容,-1 不自動;格式錯誤啟動失敗;自動補漏可關', () => {
     assert.equal(loadConfig({ ...base, NETOPS_RECON_TIME: '07:05' }).reconAt, 7 * 60 + 5);
@@ -57,6 +58,8 @@ describe('config(C3)', () => {
     assert.equal(loadConfig({ ...base, NETOPS_RECON_AUTO_BACKFILL: '0' }).reconAutoBackfill, false);
     assert.throws(() => loadConfig({ ...base, NETOPS_RECON_AUTO_BACKFILL: 'no' }), /NETOPS_RECON_AUTO_BACKFILL/);
     assert.equal(loadConfig({ ...base, NETOPS_FTP_RETENTION_DAYS: '14' }).ftpRetentionDays, 14);
+    assert.equal(loadConfig({ ...base, NETOPS_DAILY_SYNC: '0' }).dailySync, false);
+    assert.throws(() => loadConfig({ ...base, NETOPS_DAILY_SYNC: 'off' }), /NETOPS_DAILY_SYNC/);
   });
   it('有 CLICKHOUSE_URL 時密碼必填;帳號預設 netops_reader;URL 不可帶帳密', () => {
     assert.throws(() => loadConfig({ ...base, CLICKHOUSE_URL: 'http://ch:8123' }), /CLICKHOUSE_PASSWORD_FILE/);

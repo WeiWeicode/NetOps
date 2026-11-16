@@ -2,6 +2,12 @@
 
 > `backend/`、`deploy/` 的修改;新紀錄加在最上方,格式見 `AGENT.md` §11。
 
+## 2026-11-13 對帳後每日同步解密 / GlobalProtect / User-ID / AD(AC1)
+- 工作項目:AC1(ARCHITECTURE D43、D44)
+- 內容:新增 `modules/ftp/daily-sync.ts`:自動對帳每一輪結束後(`createReconciler` 新增 `after`)接著同步這四類;只排 FTP 保留期限內的日子(依檔名日期,`fileDataDay`),不同步 TRAFFIC 與威脅類。前一天沒全部匯入時照對帳規則每 10 分鐘再看、FTP 30 分鐘最多列一次、一天最多 90 次後停止並 warn;超過保留期限仍沒匯入記 warn(每類型每天一次,從沒匯入過的類型不記)。其他類型 log 的 `sync` 可只排指定類型與日期,新增 `dayState`、`hasAnyFile`;AD 新增 `dayState`、`hasAnyDay`。`GET /ftp/pa/status`、`GET /ftp/ad/status` 加 `daily`。新設定 `NETOPS_DAILY_SYNC`(預設 1)。
+- 檔案:`backend/src/modules/ftp/daily-sync.ts`、`backend/src/modules/pa/reconcile.ts`、`backend/src/modules/pa/importer.ts`、`backend/src/modules/pa-events/importer.ts`、`backend/src/modules/ad/importer.ts`、`backend/src/modules/ftp/routes.ts`、`backend/src/modules/ftp/ad-routes.ts`、`backend/src/app.ts`、`backend/src/config.ts`、`deploy/docker-compose.yml`、`backend/test/unit/daily-sync.test.ts`
+- 驗證:`npm run typecheck`、`npm test`、`npm run build`(見 MR)
+
 ## 2026-11-13 對帳改每天 08:10、缺口自動補漏
 - 工作項目:C3(需求方 2026-11-13 決定)
 - 內容:對帳時間支援分鐘(`NETOPS_RECON_TIME=HH:MM`,預設 08:10;舊 `NETOPS_RECON_HOUR` 相容,`-1` 不自動)。自動對帳發現 `gap` 時同手動補漏的流程送出工作(`createdBy` = `system:recon`;`planBackfill` 手動與自動共用),補漏排隊 / 執行中、FTP 還沒分析、佇列滿時照對帳重試規則每 10 分鐘再試,同一天每天最多自動送 3 次、補完 20 分鐘後才重新判斷、全系統同時只有 1 個自動補漏(資安審查:不擋人工補漏);FTP 保留期限(`NETOPS_FTP_RETENTION_DAYS`,預設 10,最多 30)內的缺口與 pending 每天再補,到期仍未完成記 warn。`NETOPS_RECON_AUTO_BACKFILL=0` 關閉。

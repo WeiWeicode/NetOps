@@ -2,6 +2,12 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。範圍:`frontend/`。
 
+## 2026-11-13 FTP Log 檔案頁「每日自動同步」卡片(AC1)
+- 工作項目:AC1(需求方:這次前端 UI 也由 Claude 完成)
+- 內容:新增 `components/DailySyncCard.vue`:今天這一輪的狀態、前一天完成幾類、上次檢查 / 列 FTP 時間、FTP 保留期限內每類型每天的格子(已匯入 / 處理中 / 失敗 / 尚無檔案,含無障礙文字與圖例)、失敗與停止重試提示、未啟用說明;第一欄固定、窄螢幕表格內水平捲動,頁面不溢出。防火牆 › FTP Log 檔案顯示全部類型,AD 網域 › FTP Log 檔案只顯示 AD。`api/ftp.ts` 加 `DailySyncStatus`;`composables/ftpFiles.ts` 加顯示對照與純函式;mock 加 `daily`。
+- 檔案:`frontend/src/components/DailySyncCard.vue`、`frontend/src/api/ftp.ts`、`frontend/src/composables/ftpFiles.ts`、`frontend/src/pages/firewall/Files.vue`、`frontend/src/pages/ad/Files.vue`、`frontend/mock/ftp.ts`、`frontend/test/dailySync.mount.test.ts`
+- 驗證:`npm run typecheck`、`npm test`、`npm run build`;`MOCK=admin` 桌機與 375 px 亮色檢視(見 MR)
+
 ## 2026-11-13 Log 明細查詢接威脅 log、抽屜嚴重度只在威脅類、國家分方向與內部網段(V-b2 驗收 C7 第二輪、C7b)
 - 工作項目:V-b2 驗收追加(需求方 2026-11-13 決定)
 - 內容:`PA_SEARCH_KEYS` 加 type、threat、severity、srcCountry、dstCountry;Log 明細查詢頁加類型 / 威脅名稱 / 嚴重度 / 來源國家 / 目的國家欄位與威脅結果欄位(最小可用版,樣式交 Gemini),「未套用」提示只留無法套用的條件;`useSlice` 加 `supportsSeverity`(流量類抽屜不顯示嚴重度 chip)、`setSeverity` 只對威脅類;`searchExtraOf` / `topLabelOf`:來源 / 目的國家分方向,PA 國家欄位是網段範圍時顯示「內部網路 10.0.0.0/8」並改帶 src / dst CIDR(`searchQuery.countryRange`)。mock 支援 type=THREAT。

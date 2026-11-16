@@ -6,6 +6,8 @@
 
 **接手方式**:新討論串說「從 `NetOps/docs/HANDOFF.md`「2026-11-13 AI 改用 ClickHouse 範圍討論」接手」。計畫在 IMPL-PLAN「AC」,決策 ARCHITECTURE D44、D45。下一步:派 AC1(對帳後同步)給 Claude 子任務;AC3 範本欄位需求方已同意(「欄位可以」)。
 
+**進度**:AC1 程式完成(`feature/ac1-recon-sync`,MR → develop,11-16 合併):對帳每一輪後同步解密 / GlobalProtect / User-ID / AD(`modules/ftp/daily-sync.ts`,`NETOPS_DAILY_SYNC=0` 關閉),FTP Log 檔案頁「每日自動同步」卡片;API.md §5.4。**上架後待驗**:測試區連續 3 天不用手動自動匯入四類(看卡片與服務日誌「每日同步完成」)。AC2–AC7 疊在這個分支上。
+
 **需求方決定(2026-11-13,照做,不要重新討論;引號內是原話或選項原文)**
 
 - 新增 AI(「照建議都加入計劃」):

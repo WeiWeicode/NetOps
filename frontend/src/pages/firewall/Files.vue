@@ -6,6 +6,7 @@
  *   有管理權限(UI.paFilesManage)可同步新檔案、分析 / 重新分析選取、取消分析、刪除分析結果(只刪本系統摘要,FTP 唯讀)。
  *   只有 TRAFFIC 目錄(FTP_LOG_DIR)與各類型 log 目錄的檔案可以勾選;其他目錄只能瀏覽(後端一定會略過,analyzableDir)。
  *   同步與分析在背景執行:分析中每 2 秒查詢進度,結束時重新載入清單。
+ *   「每日自動同步」卡片(AC1):每天對帳後自動匯入解密、GlobalProtect、User-ID 與 AD,顯示 FTP 保留期限內每天是否已匯入。
  */
 import { computed, onMounted, ref, shallowRef, watch } from 'vue';
 import { useRoute } from 'vue-router';
@@ -13,6 +14,7 @@ import { can, describeError } from '@/api/gateway';
 import { PA_BATCH_MAX, paFtp, type PaFile, type PaListing, type PaStatus } from '@/api/ftp';
 import { fmtClock, fmtNum, fmtSize, fmtTime } from '@/api/format';
 import { UI } from '@/api/perms';
+import DailySyncCard from '@/components/DailySyncCard.vue';
 import { analyzableDir, chunk, countFiles, crumbsOf, dayOf, filterFiles, groupDays, PA_STATE, progressPct } from '@/composables/ftpFiles';
 import { usePolling } from '@/composables/usePolling';
 import { confirm, toast } from '@/ui';
@@ -256,6 +258,9 @@ const columns = computed(() => [
 
     <GAlert v-if="statusError" tone="danger" title="無法取得分析進度">{{ describeError(statusError) }}</GAlert>
     <GAlert v-if="syncError" tone="warning" title="上次同步失敗,清單與分析結果可能不完整">{{ syncError }}</GAlert>
+
+    <!-- 對帳後每日同步(AC1):解密 / GlobalProtect / User-ID / AD 在保留期限內每天的匯入狀態 -->
+    <DailySyncCard :status="status?.daily" />
 
     <!-- 分析進度(TRAFFIC 與其他類型 log 各一個匯入程式) -->
     <GCard v-if="showProgress && status" padding="sm">

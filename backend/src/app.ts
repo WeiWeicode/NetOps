@@ -39,6 +39,7 @@ import { connectDashboardCache, createDashboardCache, type DashboardCache } from
 import { createChSummaryBuilder, type ChSummaryBuilder } from './modules/pa/ch-summary.js';
 import type { ChOverviewDeps } from './modules/pa/ch-overview.js';
 import { createReconciler } from './modules/pa/reconcile.js';
+import { createDailySync } from './modules/ftp/daily-sync.js';
 import reconRoutes from './modules/pa/recon-routes.js';
 import { connectBackfillQueue, type BackfillQueue } from './infra/redis/backfill.js';
 import { connectPaQueryStore, type PaQueryStore } from './infra/redis/pa-query.js';
@@ -204,6 +205,16 @@ export async function buildApp(
   // FTP 對帳與補漏(C3,D33):對帳在本服務(只用已分析的 FTP 摘要);補漏工作交給 netops-ingest(Redis 佇列)
   const backfillQueue = deps.backfillQueue !== undefined ? deps.backfillQueue : config.redisUrl ? connectBackfillQueue(config.redisUrl) : null;
   if (backfillQueue) app.addHook('onClose', async () => backfillQueue.close());
+  // 對帳後每日同步解密 / GlobalProtect / User-ID / AD(AC1;NETOPS_DAILY_SYNC=0 關閉;跟著自動對帳跑,沒有對帳就不跑)
+  const daily = createDailySync({
+    events,
+    ad,
+    log: app.log,
+    enabled: config.dailySync && Boolean(chReader && chBuilder) && config.reconAt >= 0,
+    at: config.reconAt,
+    retentionDays: config.ftpRetentionDays,
+    now: deps.chNow,
+  });
   // 對帳發現缺口時自動送補漏(需求方 2026-11-13 決定;NETOPS_RECON_AUTO_BACKFILL=0 關閉)
   const recon =
     chReader && chBuilder
@@ -215,6 +226,7 @@ export async function buildApp(
           log: app.log,
           at: config.reconAt,
           backfill: { queue: backfillQueue, enabled: config.reconAutoBackfill, retentionDays: config.ftpRetentionDays },
+          after: daily.run,
           now: deps.chNow,
         })
       : null;
@@ -247,7 +259,7 @@ export async function buildApp(
   await app.register(insightRoutes, { svc: createInsightService({ heat: heatReader, cache, recon, log: app.log, now: deps.heat?.now }) });
   await app.register(paEventRoutes, { events, ch });
   await app.register(adRoutes, { ad });
-  await app.register(adFtpRoutes, { ad });
+  await app.register(adFtpRoutes, { ad, daily: daily.status });
   const kb = createKbService(app.store.kb, app.log);
   await app.register(kbRoutes, { kb });
   // AI 分析、問答、語意搜尋、外部 IP 自動學習(IMPL-PLAN A1;deps.ai 只給測試注入假 AI 主機)
@@ -256,6 +268,7 @@ export async function buildApp(
     ftp,
     traffic,
     events,
+    daily: daily.status,
     logDir: config.ftp?.logDir ?? '',
     root: config.ftp?.root ?? '',
     pattern: config.ftp?.pattern.source ?? '',

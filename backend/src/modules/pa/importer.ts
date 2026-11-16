@@ -71,6 +71,19 @@ export interface RemoteFile extends FtpEntry {
 
 export const sumName = (p: string) =>
   `${path.posix.basename(p).replace(/[^\w.-]+/g, '_').slice(0, 80)}-${crypto.createHash('md5').update(p).digest('hex').slice(0, 8)}.json`;
+/**
+ * 匯出檔名推算資料日期 'yyyy/MM/dd'(同前端 composables/ftpFiles.ts 的 dayOf;AC1 每日同步用):
+ * PA 匯出檔名是匯出日(PA-560_decryption_2026_11_13_last_calendar_day_0.csv = 11/12 的資料),last_calendar_day 往前一天;檔名沒有日期回 null
+ */
+export function fileDataDay(name: string): string | null {
+  const m = name.match(/(\d{4})[_-](\d{2})[_-](\d{2})/);
+  if (!m) return null;
+  const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+  if (Number.isNaN(d.getTime())) return null;
+  if (/last_calendar_day/i.test(name)) d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().slice(0, 10).replace(/-/g, '/');
+}
+
 /** 修改時間 → ISO 字串;無法解析時回 ''(不丟例外) */
 export const modKey = (d: string | Date | null | undefined) => {
   const t = d ? new Date(d).getTime() : Number.NaN;

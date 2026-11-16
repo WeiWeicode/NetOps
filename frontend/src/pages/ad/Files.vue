@@ -6,12 +6,14 @@
  *   刪除匯入結果 = 只刪本系統的資料,FTP 檔案不動。同步與匯入在背景執行,完成後重新列出清單。
  *   列出清單要連 FTP 逐一列日期資料夾(最長 3 分鐘,佔用 FTP 連線):頁面載入時不送出,有管理權限的人按「列出 FTP 資料夾」才送出
  *   (需求方 2026-11-05 決定;D1 驗收 §4.2)。沒有管理權限的人只看得到同步狀態。
+ *   「每日自動同步」卡片(AC1):每天對帳後自動匯入 AD,顯示 FTP 保留期限內每天是否已匯入。
  */
 import { computed, onMounted, ref, shallowRef, watch } from 'vue';
 import { can, describeError } from '@/api/gateway';
 import { AD_CHANNEL, AD_IMPORT_MAX, adFtp, type AdDay, type AdStatus } from '@/api/ftp';
 import { fmtNum, fmtSize, fmtTime } from '@/api/format';
 import { UI } from '@/api/perms';
+import DailySyncCard from '@/components/DailySyncCard.vue';
 import { AD_STATE, securityEmptyDays } from '@/composables/ftpFiles';
 import { useJob } from '@/composables/useJob';
 import { usePolling } from '@/composables/usePolling';
@@ -189,6 +191,8 @@ const channelsText = (d: AdDay) => d.files.map((f) => `${AD_CHANNEL[f.channel] ?
     <GAlert v-if="statusError" tone="danger" title="無法取得同步狀態">{{ describeError(statusError) }}</GAlert>
     <GAlert v-if="status?.lastSyncError" tone="warning" title="上次同步失敗,匯入結果可能不完整">{{ status.lastSyncError }}</GAlert>
     <GAlert v-if="status?.running" tone="info" title="同步 / 匯入進行中">在背景執行,完成後自動重新列出清單。</GAlert>
+    <!-- 對帳後每日同步(AC1):只看 AD -->
+    <DailySyncCard :status="status?.daily" :only="['ad']" />
     <GAlert v-if="emptySecurity.length" tone="warning" :title="`${emptySecurity.join('、')} 的 Security 檔案沒有事件`">
       通常是 DC 的 Security 記錄容量太小、前一天的事件在匯出前就被覆蓋;請看 DC 上 <code>C:\ADLogBackup\Backup-Execution.log</code> 的 WARN(v3
       匯出程式會記錄最舊事件的時間),並加大 Security 記錄上限。

@@ -102,6 +102,11 @@ export interface Config {
   /** FTP 上 PA log 保留天數(NETOPS_FTP_RETENTION_DAYS,預設 10):期限內的缺口每天自動補,超過期限仍有缺口記 warn */
   ftpRetentionDays: number;
   /**
+   * 對帳後每日同步解密、GlobalProtect、User-ID 與 AD(IMPL-PLAN AC1;NETOPS_DAILY_SYNC,預設開;0 關閉)。
+   * 跟著自動對帳跑:NETOPS_RECON_TIME=-1 或沒有 ClickHouse(不對帳)時也不跑
+   */
+  dailySync: boolean;
+  /**
    * ClickHouse 原始表保留天數(V-a 時段明細的熱 / 冷分界,docs/VIZ-RULES-DESIGN.md §4.3.1)。要和 deploy/clickhouse/apply-schema.sh 一致:
    * 正式區 TRAFFIC 30、威脅 90(CQ12);測試區與本機 3。NETOPS_TTL_TRAFFIC_DAYS / _THREAT_DAYS 可覆寫
    */
@@ -326,6 +331,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, cwd?: string): 
     reconAt: loadReconAt(env),
     reconAutoBackfill: boolDefault(env, 'NETOPS_RECON_AUTO_BACKFILL', true),
     ftpRetentionDays: int(env, 'NETOPS_FTP_RETENTION_DAYS', 10, 1, 30),
+    // 需求方 2026-11-13 決定「每天對帳後一併同步」(AC1):這四類不進 ClickHouse,FTP 只留 10 天
+    dailySync: boolDefault(env, 'NETOPS_DAILY_SYNC', true),
     paTtlDays: loadPaTtlDays(env, gateway.gwEnv),
     clickhouseCold: loadClickHouseCold(env, gateway.gwEnv),
   };

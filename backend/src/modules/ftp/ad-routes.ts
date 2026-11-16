@@ -7,6 +7,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import { AppError } from '../../errors.js';
 import { ownerOf } from '../../infra/jobs/index.js';
 import type { AdImporter } from '../ad/importer.js';
+import type { DailySyncStatus } from './daily-sync.js';
 import { ACCEPTED, DAY, looseObject, NO_CONTENT } from '../../shared/schemas.js';
 import { dayIn, dayOut } from '../../shared/time.js';
 
@@ -18,7 +19,9 @@ const ID = { type: 'object', required: ['id'], properties: { id: { type: 'string
 type Listing = Awaited<ReturnType<AdImporter['listRemote']>>;
 const listingOut = (r: Listing) => ({ ...r, days: r.days.map((d) => ({ ...d, day: dayOut(d.day) })) });
 
-const adFtpRoutes: FastifyPluginAsync<{ ad: AdImporter }> = async (app, { ad }) => {
+/** daily:對帳後每日同步的狀態(AC1;AD 是其中一個類型,畫面只取 key = 'ad') */
+const adFtpRoutes: FastifyPluginAsync<{ ad: AdImporter; daily: () => DailySyncStatus }> = async (app, { ad, daily }) => {
+  const out = () => ({ ...statusOut(ad.status()), daily: daily() });
   const busy = () => new AppError(409, 'NETOPS_AD_SYNC_BUSY', 'AD 正在同步中,請稍後再試');
   /** 背景執行同步;錯誤記在 lastSyncError */
   const runSync = (opts?: { days: string[]; force: boolean }) => {
@@ -105,14 +108,14 @@ const adFtpRoutes: FastifyPluginAsync<{ ad: AdImporter }> = async (app, { ad }) 
       schema: {
         operationId: 'netops.ftp.ad-status',
         summary: 'AD 同步狀態',
-        description: '是否正在同步、最近一次同步的時間、錯誤與結果(匯入的日期與筆數)。',
+        description: '是否正在同步、最近一次同步的時間、錯誤與結果(匯入的日期與筆數);daily 為對帳後每日同步(AC1)的狀態,AD 是其中 key 為 ad 的類型。',
         tags: ['FTP Log 檔案'],
         'x-permission': 'netops.ftp.read',
         'x-gherkin': ['場景: 查詢同步狀態', '  當 呼叫 GET /api/netops/ftp/ad/status', '  那麼 回應 200', '  而且 回應含 running 與 lastSyncAt'].join('\n'),
-        response: { 200: looseObject('{ running, dir, autoSyncMinutes, lastSyncAt, lastSyncError, lastResult }') },
+        response: { 200: looseObject('{ running, dir, autoSyncMinutes, lastSyncAt, lastSyncError, lastResult, daily }') },
       },
     },
-    async () => statusOut(ad.status()),
+    async () => out(),
   );
 
   app.post(
@@ -139,7 +142,7 @@ const adFtpRoutes: FastifyPluginAsync<{ ad: AdImporter }> = async (app, { ad }) 
     },
     async (_req, reply) => {
       runSync();
-      return reply.status(202).send(statusOut(ad.status()));
+      return reply.status(202).send(out());
     },
   );
 
@@ -159,7 +162,7 @@ const adFtpRoutes: FastifyPluginAsync<{ ad: AdImporter }> = async (app, { ad }) 
     },
     async (req, reply) => {
       runSync({ days: req.body.days.map((d) => dayIn(d, 'days')), force: true });
-      return reply.status(202).send(statusOut(ad.status()));
+      return reply.status(202).send(out());
     },
   );
 

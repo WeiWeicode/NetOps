@@ -75,7 +75,7 @@ const ftpRoutes: FastifyPluginAsync<{
         operationId: 'netops.ftp.pa-status',
         summary: 'PA 匯入進度',
         description:
-          'TRAFFIC 與其他類型 log 的匯入佇列、分析中的檔案與最近一次同步結果;同步與分析在背景執行,畫面輪詢此 API。daily 為對帳後每日同步(解密、GlobalProtect、User-ID、AD;AC1)的狀態與 FTP 保留期限內每天的匯入狀態。',
+          'TRAFFIC 與其他類型 log 的匯入佇列、分析中的檔案與最近一次同步結果;同步與分析在背景執行,畫面輪詢此 API。daily 為對帳後每日同步(解密、GlobalProtect、User-ID、AD;AC1)的狀態與 FTP 保留期限內每天的匯入狀態;某類型連續 2 天以上 FTP 沒有檔時 stale = true(PA 匯出可能中斷),不擋當天完成。',
         tags: ['FTP Log 檔案'],
         'x-permission': 'netops.ftp.read',
         'x-gherkin': [
@@ -89,6 +89,12 @@ const ftpRoutes: FastifyPluginAsync<{
           '  當 呼叫 GET /api/netops/ftp/pa/status',
           '  那麼 daily.state 為 "done"',
           '  而且 daily.categories 每個類型前一天的 state 為 "done"',
+          '',
+          '場景: FTP 連續多天沒有新檔的類型視為中斷,不擋每日同步完成',
+          '  假如 User-ID 前一天與前兩天 FTP 都沒有檔,其他類型前一天都已匯入',
+          '  當 呼叫 GET /api/netops/ftp/pa/status',
+          '  那麼 daily.state 為 "done"',
+          '  而且 User-ID 那一類 stale 為 true、noFileDays 大於等於 2',
         ].join('\n'),
         response: { 200: looseObject('{ traffic: ImportStatus, events: ImportStatus, daily: DailySyncStatus }') },
       },

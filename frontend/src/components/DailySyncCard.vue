@@ -3,12 +3,13 @@
  * 對帳後每日同步(IMPL-PLAN AC1;docs/API.md §5.4):每天自動對帳後,從 FTP 匯入解密、GlobalProtect、User-ID 與 AD。
  * 顯示今天這一輪的狀態,以及 FTP 保留期限內每個類型每一天的匯入狀態(格子:已匯入 / 處理中 / 失敗 / 尚無檔案)。
  * 防火牆 › FTP Log 檔案顯示全部類型;AD 網域 › FTP Log 檔案只顯示 AD(only = ['ad'])。
+ * 連續 2 天以上 FTP 沒有檔的類型(stale)標「中斷」並提示 PA 匯出可能中斷;這些類型不擋當天完成(驗收報告 §3.2)。
  * 資料由頁面輪詢的匯入進度帶入(GET /ftp/pa/status、/ftp/ad/status 的 daily),本元件不自己呼叫 API。
  */
 import { computed } from 'vue';
 import type { DailySyncStatus } from '@/api/ftp';
 import { fmtTime } from '@/api/format';
-import { DAILY_DAY_STATE, DAILY_RUN_STATE, dailyCategories, dailyDayLabel, dailyDays, dailyErrors, dailyLatest } from '@/composables/ftpFiles';
+import { DAILY_DAY_STATE, DAILY_RUN_STATE, dailyCategories, dailyDayLabel, dailyDays, dailyErrors, dailyLatest, dailyStale } from '@/composables/ftpFiles';
 
 const props = defineProps<{
   status: DailySyncStatus | null | undefined;
@@ -20,6 +21,13 @@ const cats = computed(() => dailyCategories(props.status, props.only));
 const days = computed(() => dailyDays(cats.value));
 const latest = computed(() => dailyLatest(cats.value));
 const errors = computed(() => dailyErrors(cats.value));
+const stale = computed(() => dailyStale(cats.value));
+const staleHint = computed(() => {
+  const keys = cats.value.filter((c) => c.stale).map((c) => c.key);
+  const pa = keys.some((k) => k !== 'ad') ? 'PA 排程匯出(Device › Scheduled Log Export)' : '';
+  const ad = keys.includes('ad') ? 'AD 事件匯出排程' : '';
+  return [pa, ad].filter(Boolean).join('、');
+});
 const run = computed(() => (props.status ? DAILY_RUN_STATE[props.status.state] : null));
 const subtitle = computed(() => {
   const s = props.status;
@@ -44,7 +52,7 @@ const cellTitle = (label: string, day: string, state: keyof typeof DAILY_DAY_STA
       <div class="meta small">
         <span v-if="latest.day">
           前一天 <strong class="num">{{ latest.day }}</strong>:
-          <span class="num" :class="latest.done === latest.total ? 'c-success' : 'c-warning'">{{ latest.done }} / {{ latest.total }}</span> 類已匯入
+          <span class="num" :class="latest.done === latest.total ? 'c-success' : 'c-warning'">{{ latest.done }} / {{ latest.total }}</span> 類已匯入<template v-if="latest.stale">(<span class="c-warning">{{ latest.stale }} 類 FTP 中斷,略過</span>)</template>
         </span>
         <span v-if="status.lastRunAt" class="faint">上次檢查 {{ fmtTime(status.lastRunAt) }}</span>
         <span v-if="status.lastSyncAt" class="faint hide-sm">上次列 FTP {{ fmtTime(status.lastSyncAt) }}</span>
@@ -54,6 +62,12 @@ const cellTitle = (label: string, day: string, state: keyof typeof DAILY_DAY_STA
 
       <GAlert v-if="status.state === 'gave-up'" tone="danger">
         前一天的檔一直沒有匯入完成,今天已停止自動重試;請確認 FTP 上有沒有這天的檔,再手動同步。
+      </GAlert>
+      <GAlert v-if="stale.length" tone="warning" title="FTP 匯出可能中斷">
+        <ul class="stale-list">
+          <li v-for="m in stale" :key="m">{{ m }}</li>
+        </ul>
+        這些類型不擋每日同步完成;請網管確認{{ staleHint }}與 FTP 帳號、目錄權限。
       </GAlert>
       <GAlert v-if="errors.length" tone="warning" title="有檔案匯入失敗">
         {{ errors.slice(0, 6).join('、') }}<template v-if="errors.length > 6"> 等 {{ errors.length }} 項</template>。下一輪會自動重試;一直失敗請看檔案清單的錯誤訊息。
@@ -75,7 +89,10 @@ const cellTitle = (label: string, day: string, state: keyof typeof DAILY_DAY_STA
           </thead>
           <tbody>
             <tr v-for="c in cats" :key="c.key">
-              <th scope="row" class="cat">{{ c.label }}</th>
+              <th scope="row" class="cat">
+                {{ c.label }}
+                <GBadge v-if="c.stale" tone="warning" class="stale-badge">中斷</GBadge>
+              </th>
               <td v-for="d in c.days" :key="d.day" class="cell">
                 <span
                   class="mark"
@@ -188,6 +205,13 @@ const cellTitle = (label: string, day: string, state: keyof typeof DAILY_DAY_STA
   height: 18px;
   border-radius: 5px;
   margin-right: 5px;
+}
+.stale-list {
+  margin: 0 0 4px;
+  padding-left: 18px;
+}
+.stale-badge {
+  margin-left: 4px;
 }
 .legend {
   display: flex;

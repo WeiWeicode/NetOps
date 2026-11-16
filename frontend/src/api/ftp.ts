@@ -78,8 +78,11 @@ export interface DailySyncStatus {
   lastSyncAt: string | null;
   finishedAt: string | null;
   tries: number;
-  /** decryption / globalprotect / userid / ad;days 新的在前(YYYY-MM-DD) */
-  categories: { key: string; label: string; days: { day: string; state: DailyDayState }[] }[];
+  /**
+   * decryption / globalprotect / userid / ad;days 新的在前(YYYY-MM-DD)。
+   * noFileDays:從前一天往前連續幾天 FTP 都沒有檔;stale:連續 2 天以上沒有檔,PA 匯出可能中斷,不擋當天完成(舊版後端沒有這兩欄)
+   */
+  categories: { key: string; label: string; noFileDays?: number; stale?: boolean; days: { day: string; state: DailyDayState }[] }[];
 }
 
 export interface PaStatus {

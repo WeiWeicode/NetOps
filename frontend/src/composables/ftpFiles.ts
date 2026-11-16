@@ -141,10 +141,20 @@ export function dailyCategories(s: DailySyncStatus | null | undefined, only?: st
 /** 表頭的日期(取第一個類型的日期;各類型相同,新的在前) */
 export const dailyDays = (cats: DailySyncStatus['categories']): string[] => cats[0]?.days.map((d) => d.day) ?? [];
 
-/** 前一天(最新一天)完成的類型數 */
-export function dailyLatest(cats: DailySyncStatus['categories']): { day: string; done: number; total: number } {
+/** 前一天(最新一天)完成的類型數;stale = FTP 中斷、今天略過的類型數 */
+export function dailyLatest(cats: DailySyncStatus['categories']): { day: string; done: number; total: number; stale: number } {
   const day = dailyDays(cats)[0] ?? '';
-  return { day, done: cats.filter((c) => c.days[0]?.state === 'done').length, total: cats.length };
+  return { day, done: cats.filter((c) => c.days[0]?.state === 'done').length, total: cats.length, stale: cats.filter((c) => c.stale).length };
+}
+
+/** FTP 連續多天沒有新檔(PA 匯出可能中斷)的類型提示;天數等於保留期限內的天數時是「以上」 */
+export function dailyStale(cats: DailySyncStatus['categories']): string[] {
+  return cats
+    .filter((c) => c.stale)
+    .map((c) => {
+      const n = c.noFileDays ?? 0;
+      return `${c.label}:FTP 已 ${n} 天${n >= c.days.length ? '以上' : ''}沒有新檔,PA 匯出可能中斷`;
+    });
 }
 
 /** 保留期限內有失敗的 類型 · 日期(畫面提示用) */

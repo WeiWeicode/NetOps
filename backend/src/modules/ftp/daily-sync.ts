@@ -8,6 +8,8 @@
  * FTP 目錄 30 分鐘最多列一次;一天最多試 DAILY_MAX_TRIES 次(約 15 小時)後停止並記 warn。
  * 只排 FTP 保留期限內的日子(1 ~ retentionDays − 1 天前,依檔名日期),避免第一次啟動就把 FTP 上很舊的檔全部排進佇列。
  * 超過保留期限仍沒匯入的日子記 warn(每個類型、每天一次;從沒匯入過的類型不記,PA 可能沒有匯出)。
+ * 某類型從前一天往前連續 STALE_MIN_DAYS 天以上 FTP 都沒有檔(none)時視為「中斷」:PA 匯出可能失敗,等也等不到,
+ * 不擋今天完成(因此不擋 AC7 每日摘要),狀態標 stale 並記 warn(同一類型同一天一次;需求方 2026-11-16,驗收報告 §3.2)。
  * NETOPS_DAILY_SYNC=0 關閉;NETOPS_RECON_TIME=-1(不自動對帳)時也不跑。狀態只在記憶體,重新啟動後當天重新判斷。
  */
 import type { AdImporter } from '../ad/importer.js';
@@ -20,6 +22,8 @@ export const DAILY_EVENT_TYPES = ['decryption', 'globalprotect', 'userid'] as co
 export const DAILY_MAX_TRIES = 90;
 /** FTP 目錄最短多久列一次(同對帳的同步間隔) */
 export const DAILY_SYNC_GAP_MS = 30 * 60_000;
+/** 連續幾天 FTP 都沒有檔就視為匯出中斷(只有前一天沒有可能是 PA 還沒匯出,要等) */
+export const STALE_MIN_DAYS = 2;
 
 export type DailyDayState = 'done' | 'pending' | 'error' | 'none';
 /** disabled 關閉;waiting 今天還沒開始;retrying 前一天還沒全部匯入,稍後再試;done 今天已完成;gave-up 試太多次停止 */
@@ -38,8 +42,11 @@ export interface DailySyncStatus {
   /** 今天完成(或停止)的時間 */
   finishedAt: string | null;
   tries: number;
-  /** 每個類型在保留期限內每一天的狀態(新的在前) */
-  categories: { key: string; label: string; days: { day: string; state: DailyDayState }[] }[];
+  /**
+   * 每個類型在保留期限內每一天的狀態(新的在前)。
+   * noFileDays:從前一天往前連續幾天 FTP 都沒有檔(none);stale:noFileDays ≥ STALE_MIN_DAYS,PA 匯出可能中斷,不擋今天完成
+   */
+  categories: { key: string; label: string; noFileDays: number; stale: boolean; days: { day: string; state: DailyDayState }[] }[];
 }
 
 type Log = { info(o: object, m: string): void; warn(o: object, m: string): void };
@@ -85,6 +92,8 @@ export function createDailySync({
   let lastSyncMs = 0;
   /** 已記過「超過保留期限」warn 的 類型|日期(重新啟動前不重複記) */
   const warned = new Set<string>();
+  /** 已記過「匯出可能中斷」warn 的 類型|今天(同一類型同一天只記一次) */
+  const staleWarned = new Set<string>();
 
   const dayAgo = (today: string, i: number) => taipeiText(taipeiDayStartMs(today) - i * 86_400_000).slice(0, 10);
   const today = () => taipeiText(now()).slice(0, 10);
@@ -101,6 +110,13 @@ export function createDailySync({
     }));
     if (ad.configured()) out.push({ key: 'ad', label: 'AD 事件', state: (d) => ad.dayState(d), used: () => ad.hasAnyDay() });
     return out;
+  }
+
+  /** 從前一天(days[0])往前連續幾天都沒有檔 */
+  function noFileDays(c: Category, days: string[]) {
+    let n = 0;
+    while (n < days.length && c.state(days[n]!) === 'none') n++;
+    return n;
   }
 
   const code = (err: unknown) => (err as { code?: unknown }).code;
@@ -162,13 +178,24 @@ export function createDailySync({
         lastSyncMs = now();
         await syncFtp(days);
       }
-      // 前一天每個類型都匯入完成才算今天完成;較舊的日子同一輪一起排,沒補到的明天再排
+      // 前一天每個類型都匯入完成才算今天完成(中斷的類型略過);較舊的日子同一輪一起排,沒補到的明天再排
       const yesterday = days[0]!;
-      const left = cats.filter((c) => c.state(yesterday) !== 'done');
+      const stale = new Set<string>();
+      for (const c of cats) {
+        const n = noFileDays(c, days);
+        if (n < STALE_MIN_DAYS) continue;
+        stale.add(c.key);
+        const k = `${c.key}|${t}`;
+        if (staleWarned.has(k)) continue;
+        staleWarned.add(k);
+        log.warn({ type: c.key, noFileDays: n }, `每日同步:${c.label} FTP 已 ${n} 天沒有新檔,PA 匯出可能中斷;今天略過這個類型`);
+      }
+      for (const k of staleWarned) if (!k.endsWith(`|${t}`)) staleWarned.delete(k);
+      const left = cats.filter((c) => !stale.has(c.key) && c.state(yesterday) !== 'done');
       if (!left.length) {
         finished = 'done';
         finishedAt = new Date(now()).toISOString();
-        log.info({ day: yesterday }, '每日同步完成(解密 / GlobalProtect / User-ID / AD)');
+        log.info({ day: yesterday, skipped: [...stale] }, '每日同步完成(解密 / GlobalProtect / User-ID / AD)');
         return;
       }
       tries++;
@@ -197,7 +224,10 @@ export function createDailySync({
       lastSyncAt: lastSyncMs ? new Date(lastSyncMs).toISOString() : null,
       finishedAt: runDay === t ? finishedAt : null,
       tries: runDay === t ? tries : 0,
-      categories: cats.map((c) => ({ key: c.key, label: c.label, days: days.map((d) => ({ day: dayOut(d), state: c.state(d) })) })),
+      categories: cats.map((c) => {
+        const n = noFileDays(c, days);
+        return { key: c.key, label: c.label, noFileDays: n, stale: n >= STALE_MIN_DAYS, days: days.map((d) => ({ day: dayOut(d), state: c.state(d) })) };
+      }),
     };
   }
 

@@ -4,6 +4,7 @@
  *   - 其他類型 log 的同步可只排指定類型與日期;dayState 依檔名日期判斷每一天的匯入狀態
  *   - 每日同步:前一天沒匯入完成時照對帳的規則重試(FTP 30 分鐘最多列一次),完成後當天不再跑;試太多次停止並 warn;
  *     超過 FTP 保留期限仍沒匯入記 warn(每個類型每天一次,從沒匯入過的類型不記);FTP 失敗不丟出
+ *   - 某類型連續 2 天以上 FTP 都沒有檔視為中斷:不擋當天完成、狀態標 stale、warn 同一類型同一天一次(驗收報告 §3.2)
  *   - 對帳每一輪(到了 at 之後)結束後才接著每日同步;對帳失敗也照跑
  */
 import assert from 'node:assert/strict';
@@ -101,6 +102,7 @@ describe('每日同步(解密 / GlobalProtect / User-ID / AD)', () => {
   it('前一天還沒全部匯入:每輪再看,FTP 30 分鐘最多列一次;全部完成後當天不再跑;只排保留期限內的日子', async () => {
     let now = Date.parse('2026-11-13T08:10:00+08:00');
     const f = fakes();
+    allDone(f, '2026/11/11'); // 前兩天都有檔:前一天沒有只是 PA 還沒匯出,要等
     const logs: string[] = [];
     const d = createDailySync({ events: f.events as never, ad: f.ad as never, log: { info: (_o, m) => void logs.push(m), warn: (_o, m) => void logs.push(m) }, enabled: true, at: 8 * 60 + 10, retentionDays: 10, now: () => now });
     assert.equal(d.status().state, 'waiting');
@@ -149,6 +151,7 @@ describe('每日同步(解密 / GlobalProtect / User-ID / AD)', () => {
   it('FTP 失敗不丟出、下一輪再試;試太多次停止並 warn', async () => {
     let now = Date.parse('2026-11-13T08:10:00+08:00');
     const f = fakes();
+    allDone(f, '2026/11/11');
     f.eventsFail = true;
     f.adFail = true;
     const warns: string[] = [];
@@ -201,6 +204,58 @@ describe('每日同步(解密 / GlobalProtect / User-ID / AD)', () => {
     assert.deepEqual(f.calls.events[0]!.types, ['globalprotect']);
     assert.equal(f.calls.ad.length, 0);
     assert.deepEqual(d.status().categories.map((c) => c.key), ['globalprotect']);
+  });
+});
+
+describe('FTP 連續多天沒有新檔的類型(PA 匯出可能中斷)', () => {
+  it('連續 2 天以上沒有檔:不擋當天完成、標 stale 與天數、warn 一次;只有前一天沒有的仍要等', async () => {
+    let now = Date.parse('2026-11-13T08:10:00+08:00');
+    const f = fakes();
+    // 解密、AD 前一天已匯入;User-ID 保留期限內都沒有(9 天);GlobalProtect 只有前一天沒有(前兩天有)
+    for (const k of ['decryption', 'ad']) f.states[k]!['2026/11/12'] = 'done';
+    f.states.globalprotect!['2026/11/11'] = 'done';
+    const warns: { o: object; m: string }[] = [];
+    const d = createDailySync({ events: f.events as never, ad: f.ad as never, log: { info() {}, warn: (o, m) => void warns.push({ o, m }) }, enabled: true, at: 490, retentionDays: 10, now: () => now });
+    const staleWarns = () => warns.filter((w) => w.m.includes('PA 匯出可能中斷'));
+
+    await d.run();
+    let st = d.status();
+    assert.equal(st.state, 'retrying', 'GlobalProtect 只缺前一天,仍要等');
+    const cat = (k: string) => st.categories.find((c) => c.key === k)!;
+    assert.deepEqual([cat('userid').stale, cat('userid').noFileDays], [true, 9]);
+    assert.deepEqual([cat('globalprotect').stale, cat('globalprotect').noFileDays], [false, 1]);
+    assert.deepEqual([cat('decryption').stale, cat('decryption').noFileDays], [false, 0]);
+    assert.equal(staleWarns().length, 1);
+    assert.equal((staleWarns()[0]!.o as { type: string }).type, 'userid');
+    assert.ok(staleWarns()[0]!.m.includes('FTP 已 9 天沒有新檔'));
+
+    now += 10 * 60_000;
+    await d.run();
+    assert.equal(staleWarns().length, 1, '同一類型同一天只記一次');
+
+    // GlobalProtect 前一天匯入完成 → 今天完成(User-ID 中斷不擋)
+    f.states.globalprotect!['2026/11/12'] = 'done';
+    now += 10 * 60_000;
+    await d.run();
+    st = d.status();
+    assert.equal(st.state, 'done');
+
+    // 隔天:User-ID 仍中斷再記一次;前一天其他類型都還沒有檔、但前兩天有 → 仍要等
+    now = Date.parse('2026-11-14T08:10:00+08:00');
+    await d.run();
+    assert.equal(d.status().state, 'retrying');
+    assert.equal(staleWarns().length, 2);
+    assert.ok(staleWarns()[1]!.m.includes('FTP 已 9 天沒有新檔'));
+  });
+
+  it('只剩中斷的類型時第一輪就完成(不會重試到 gave-up)', async () => {
+    const f = fakes();
+    f.states.ad!['2026/11/12'] = 'done';
+    const d = createDailySync({ events: f.events as never, ad: f.ad as never, log: { info() {}, warn() {} }, enabled: true, at: 490, retentionDays: 10, now: () => Date.parse('2026-11-13T08:10:00+08:00') });
+    await d.run();
+    assert.equal(d.status().state, 'done');
+    assert.equal(d.status().tries, 0);
+    assert.deepEqual(d.status().categories.filter((c) => c.stale).map((c) => c.key), ['decryption', 'globalprotect', 'userid']);
   });
 });
 

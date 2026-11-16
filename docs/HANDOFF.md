@@ -2,9 +2,25 @@
 
 > 接手時先讀 `AGENT.md`,再讀 `docs/ARCHITECTURE.md`、`docs/IMPL-PLAN.md`。
 
+## 2026-11-16 正式區第一段上架完成
+
+**接手方式**:第二段(C6,PA log 管線)從 `deploy/RUNBOOK-prod.md` §4 與 `docs/IMPL-PLAN.md` C6 接手。
+
+- **已上線範圍(主機 3,`https://giganexus.gigasolar.com.tw/netops/`)**:`netops-api`、`/netops/` 前端、`netops-redis`、`netops-kb-backup`。
+- **開關**:`NETOPS_PA_PIPELINE=0`(`netops-clickhouse`、`netops-ingest`、`netops-pa` 不啟動,PA 接收留第二段);AI 走 FTP(`NETOPS_AI_SOURCE=ftp`);`FTP_SYNC_MINUTES=60`;FTP 目錄沿用 `server/.env.example` 預設值(需求方 2026-11-16 確認,表格見 RUNBOOK-prod §1)。因沒有 ClickHouse,流量總覽、安全事件、明細查詢、熱力圖在第二段前無法使用(D43)。
+- **MR**:NetOps !104(正式區 CI:`build-prod` / `deploy-prod` / `rbac-prod`)、!105(`develop` → `main`);Gateway !26(`develop` → `main`,正式區 Nginx 加 `/netops/`)、!27(`super-admin-grants` 補齊 `netops-admin` 28 項)。
+- **舊版 IIS**:保留在標籤 `legacy-iis`(`d07847c`),照常運作;`main` 改為正式區新版(ARCHITECTURE D12)。
+- **預設 `netops-admin`**:S112009、S094009、S114010、S111003。
+- **上架時遇到的問題與處理**:
+  1. 正式區 Gateway `main` 沒有 `/netops/` location → Gateway !26。
+  2. 主機 3 的 Gateway 共用目錄(`/srv/giganexus/shared/giga-api-gateway-bff/deploy/`)沒有 `gateway-apps.yaml`、`super-admin-grants*` 檔案:正式區 deploy 不會複製 `deploy/`,要從 Gateway `main` 手動複製(步驟寫在 RUNBOOK-prod §3 第 8 步、Gateway DEPLOYMENT §3.5.1)。
+  3. 超級管理員缺 NetOps 權限,指派 `netops-admin` 被防提權檢查擋下 → Gateway !27 補齊 28 項後重新套用。
+- **第二段待辦**:照 `deploy/RUNBOOK-prod.md` §4 與 IMPL-PLAN C6;`pa_api_key` 第二段前要換成專用帳號的 Key;**E2(NAS 150 GB / 年)、E5(主機 3 磁碟預留 20 GB)核准**;PA-560 憑證與接收端點憑證(RUNBOOK-prod §4 前提)。D2 第 3、4 步(知識庫複製、新舊數字核對與通知使用者)狀態:未確認。
+- **測試區待續照舊**:11-17 起 AC1 / AC7 跨日驗收、6b 對帳與 6c evidence 比對(見下段)。
+
 ## 2026-11-16 AC 驗收與修正
 
-**接手方式**:新討論串說「從 `NetOps/docs/HANDOFF.md`「2026-11-16 AC 驗收與修正」接手,做正式區上架」。報告 `docs/test-reports/2026-11-16-ac-uat.md`。
+**接手方式**:(已被上段取代)原寫「從「2026-11-16 AC 驗收與修正」接手,做正式區上架」;正式區第一段已完成,測試區待續與第二段看上段與下列。報告 `docs/test-reports/2026-11-16-ac-uat.md`。
 
 - **已完成**:!93–!99(AC1–AC7)合併上線測試區;驗收 !100(**通過 16 / 不通過 1**,另 1 項未測、2 項跨日待續);修正 **!101**(每日同步中斷判定:FTP 連續 2 天以上沒檔的類型不擋當天完成,API.md §5.4、ARCHITECTURE D43 / D44)與 **!102**(AI 回答原始 HTML 轉文字、時段資料註明沒有威脅名稱並禁止佔位符,API.md §10.3)已在測試區驗證。
 - **不通過項目 6b(對帳誤差 < 0.5%)的原因與處理**:驗收報告 §3.1。**是 PA 設定問題,不是程式**:預設規則 `interzone-default`(Deny)沒套 Log Forwarding `netops-forward`;需求方 2026-11-16 11:30 在 PA 改套並 Commit,**11:31 起 ClickHouse 收得到**(PA-FORWARDING-SPEC D.1、G11)。TRAFFIC 每天約由 350 萬增為 730 萬筆(×2.1)。
@@ -18,7 +34,7 @@
 
 **測試區待續**:11-17 起 AC1 / AC7 跨日驗收(每日同步卡片、流量總覽前一天摘要)與 6b 對帳(誤差 < 0.5%)、6c evidence 比對,上架正式區不等這些(上架與測試區驗收並行,結果補在本段)。
 
-### 正式區上架(下一步,依序)
+### 正式區上架清單(紀錄;第一段已於 2026-11-16 完成,見最上段;第二段仍照此清單)
 
 只整理既有文件已寫的前提,沒有新決策;「文件未記載,上架時確認」= 查不到,不要自己補數值。出處縮寫:IP = IMPL-PLAN.md、API = API.md、PF = PA-FORWARDING-SPEC.md、CG = PA-LOG-CLICKHOUSE-GUIDE.md。
 

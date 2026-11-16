@@ -10,13 +10,13 @@
 | B2 | 模組搬移 | 完成 |
 | F1 | 前端框架與畫面改寫 | 完成 |
 | D1 | 測試區部署 | 完成(有未驗項目) |
-| D2 | 驗收與切換 | 未開始 |
+| D2 | 驗收與切換 | **第 2 步第一段完成(2026-11-16)**:正式區 `netops-api`、`/netops/`、redis、kb-backup 上線(`NETOPS_PA_PIPELINE=0`、AI 走 FTP);第 3–5 步未確認 |
 | S0 | 串流驗證(SSE 經 Nginx / BFF) | 完成(2026-11-05,不改 Gateway;ARCHITECTURE D7) |
 | A1 | AI 搬進 `netops-api`、停用舊版 IIS | 測試區完成(2026-11-09);正式區上線與停用 IIS 併入 D2(D23、D18、D25) |
 | R0 | PA 即時監控前置:設備帳號、Log Forwarding、網路、容量量測 | 完成(2026-11-10) |
 | R1 | PA 即時監控(唯讀):`netops-pa`、`netops-redis`、即時監控頁 | **測試區完成(2026-11-10)**;正式區上線併入 D2(D19、D21、D24、D26) |
 | R2 | 封鎖 IP(DAG 動態標籤) | 未排程(D22) |
-| C0–C6 | PA log 高吞吐架構(ClickHouse + Parquet 冷歸檔 + PA 精準查詢) | **C1–C5 測試區完成(2026-11-13)**,觀察與驗收項目見 HANDOFF「2026-11-13」;C0 剩 E1、E2、E5(IT);C6 正式區未開始(D27–D33、D43,[PA-LOG-CLICKHOUSE-GUIDE.md](PA-LOG-CLICKHOUSE-GUIDE.md)) |
+| C0–C6 | PA log 高吞吐架構(ClickHouse + Parquet 冷歸檔 + PA 精準查詢) | **C1–C5 測試區完成(2026-11-13)**,觀察與驗收項目見 HANDOFF「2026-11-13」;C0 剩 E1、E2、E5(IT);C6 第一段完成(2026-11-16,見 C6 段);PA log 管線(第二段)未開始(D27–D33、D43,[PA-LOG-CLICKHOUSE-GUIDE.md](PA-LOG-CLICKHOUSE-GUIDE.md)) |
 | V-a | 熱力圖資料層:長期彙總(5 分鐘 / 每小時 / 每天)、熱力圖 API、時段明細熱 / 冷路由 | **測試區完成(2026-11-13)**:!75、冷路由 !80、部署修正 !81;11-11、11-12 已回填(D34、D35) |
 | V-b | 儀表板與熱力圖畫面:V-b1 Claude 元件介面與 API,V-b2 Gemini 頁面與動畫 | **測試區上線(2026-11-13)**:V-b1 + V-b2 第一版 !78、部署建置修正 !82;**畫面驗收與調整待做**(新討論串,HANDOFF-GEMINI-VIZ §8)(D40、D41) |
 | V-c | 偵測規則引擎:PA 規則 1–7、冷卻、白名單、網段設定頁、告警頁 | **規劃已合併(2026-11-11,!70)**;前置 C3;**需求方提供網段清單與初始白名單**(X11)(D37、D38、D39) |
@@ -128,6 +128,8 @@ D13:骨架直接留用;AI 不在這次範圍,不做串流驗證(D7、D17)。
 **完成條件**:`develop` 合併後 CI 部署成功;瀏覽器走完登入、總覽、明細、知識庫;架構觀測看得到心跳與紀錄。
 
 ## D2 驗收與切換
+
+**狀態(2026-11-16)**:第 2 步**第一段完成**(正式區 `netops-api`、`/netops/`、redis、kb-backup 上線;`NETOPS_PA_PIPELINE=0`、`NETOPS_AI_SOURCE=ftp`、`FTP_SYNC_MINUTES=60`,FTP 目錄沿用 `server/.env.example` 預設值,需求方確認;預設 `netops-admin` 四人;`main` = 正式區新版,舊版 IIS 在標籤 `legacy-iis`)。主機 3 腳本是 `deploy/host3-set-secrets.sh`、`host3-set-clickhouse-secrets.sh`、`host3-set-pa-secrets.sh`(下列「`host2-set-pa-secrets.sh`(主機 3 對應腳本)」即 `host3-set-pa-secrets.sh`)。第 3–5 步與第二段(C6)未完成。
 
 1. 使用者在測試區驗收。
 2. 正式區部署,發佈路由;負責人在 GigaItApp 指派 `netops-admin`、`netops-viewer`(D15)。部署前**確認正式區 FTP 目錄**:測試區 `FTP_LOG_DIR=/my-data` 寫在 CI `deploy-api-test`(TRAFFIC 不在 FTP 根目錄);正式區的 `FTP_LOG_DIR`(與 `FTP_ROOT`、`FTP_AD_DIR`、各類型目錄)要對照舊版 IIS 實際使用的值,由負責人確認後寫進正式區的 `netops.env` 或部署設定,不要沿用預設值 `/`。
@@ -288,6 +290,8 @@ D13:骨架直接留用;AI 不在這次範圍,不做串流驗證(D7、D17)。
 **前置**:C3;**E4(網通開 Log 權限並離峰試查,給管理平面 CPU 門檻)**。**負責人**:Claude 寫;網通改角色並觀察;需求方驗收。**完成條件**:上限無法繞過;同時第 2 個請求回 429;viewer 呼叫回 403;執行時管理平面 CPU 在網通門檻內;結果與 PA Monitor 一致。
 
 ## C6 正式區上線(已核准)
+
+**狀態(2026-11-16)**:**第一段完成**(`netops-api`、`/netops/`、`netops-redis`、`netops-kb-backup`;`NETOPS_PA_PIPELINE=0`,AI 走 FTP、`FTP_SYNC_MINUTES=60`;NetOps !104、!105,Gateway !26、!27;HANDOFF「2026-11-16 正式區第一段上架完成」)。**第二段**(ClickHouse、`netops-ingest`、`netops-pa`)照 `deploy/RUNBOOK-prod.md` §4,只改 `netops.env` 開關(`NETOPS_PA_PIPELINE=1`)與機密,不改程式;前提 E5、專用帳號 API Key、PA 憑證,未完成。CI `deploy-prod` 依 `NETOPS_PA_PIPELINE` 決定是否啟動第二段容器,並傳 `apply-schema.sh prod` 建正式區 TTL。主機 3 腳本:`deploy/host3-set-secrets.sh`、`host3-set-clickhouse-secrets.sh`、`host3-set-pa-secrets.sh`。
 
 1. 主機 3 依 E5 的資源部署;確認舊系統 port 不受影響。
 2. 上線一週觀察記憶體、磁碟、歸檔;一個月後看雜訊佔比(CQ8);依 CQ10 降級 FTP。

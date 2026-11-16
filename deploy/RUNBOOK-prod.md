@@ -98,6 +98,13 @@ getent passwd 1000 101                      # 記下讀得到機密的帳號(機
 6. 手動 **`rbac-prod`**:套用 `deploy/gateway-rbac.yaml`(`netops.*` 畫面權限、`netops-admin` / `netops-viewer`;不指派成員)。
 7. GigaItApp(正式區 `/it/`)「服務與路由」審查並**發佈** `netops-api` 草稿(含 `netops.ai.*`、`kb/*`、`pa-live/*`、`ai/explanations`、`ai/daily-summary`、`ip-names`、`ip-name-imports`;`pa-live/stream` 逾時 60000 ms;`pa-live/collector-control` 正式區回 403,可不發佈)→ 重跑 `rbac-prod` 補綁 includes。
 8. 負責人在 GigaItApp 指派 `netops-admin`、`netops-viewer`;應用登記 `netops`(`/netops/`)若正式區還沒有,同 `portal` / `it` 的做法登記(Gateway / GigaItApp 配合)。
+   **主機 3 的 Gateway 共用目錄要手動補檔**(2026-11-16 實際遇到):正式區 Gateway 的 deploy 不複製 `deploy/`,共用目錄 `/srv/giganexus/shared/giga-api-gateway-bff/deploy/` 沒有 `gateway-apps.yaml`、`super-admin-grants.yaml`、`super-admin-grants-plan.mjs`、`apply-super-admin-grants.sh`。
+   步驟(Gateway 負責人;用 Gateway `main` 的版本,Gateway !26、!27 合併後才有 `netops` 應用與 28 項權限):
+   1. 開發機 `git -C giga-api-gateway-bff fetch gitlab`,`git show gitlab/main:deploy/<檔名> | sha256sum` 記下四個檔案的雜湊。
+   2. 把四個檔案複製到主機 3(同 §2 的 `scp` 到 `C:/Users/user/netops-deploy/`),在 WSL 以 root 放進共用目錄,再 `sha256sum` 和第 1 步比對。
+   3. 套用應用登記:Gateway `gateway-apps.yaml` 由 Gateway 負責人手動套用(IMPL-PLAN D1「應用切換」);**實際套用指令未確認**,照 Gateway 該檔頭註解。
+   4. 補超級管理員權限:`cd /srv/giganexus/shared/giga-api-gateway-bff/deploy && ACTOR=cli:<工號> IMAGE_TAG=<正式區 Gateway 目前版本,見 /srv/giganexus/shared/gateway-image-tag> sh apply-super-admin-grants.sh prod /srv/giganexus/deploy/prod.env`(不使用 `YES=1`;Gateway DEPLOYMENT §3.5.1)。沒做這步,GigaItApp 指派 `netops-admin` 會被防提權檢查擋下(403 `PERMISSION_DENIED`)。
+   5. 超級管理員在 GigaItApp 重新整理或重新登入後,指派預設 `netops-admin`(S112009、S094009、S114010、S111003)。
 9. 驗證:`https://giganexus.gigasolar.com.tw/netops/` 登入、FTP Log 檔案、知識庫;舊系統 port 從主機 2 `tcp-check.ps1` 與開發機各測一次。
    新系統資料目錄與舊版 IIS 分開,一開始沒有資料。第一段 `FTP_SYNC_MINUTES=60`:**部署後最多 60 分鐘內第一次自動同步**(PA 15 秒、AD 20 秒、其他類型 60 秒後先跑一次,之後每 60 分鐘),
    同步與分析完成後再看 AD 事件與 AI 問答(FTP 舊路徑);急著看可在「FTP Log 檔案」頁手動同步。與舊版 IIS 同時讀 FTP,本系統連線上限 2。

@@ -43,7 +43,7 @@ sudo ss -ltn | grep -E ':5129[0-9]' || echo "5129x 沒有被占用"
 | `FTP_USERID_DIR` | `/user-id` | `server/.env.example:37`;`server/config.js:63` |
 | `FTP_PATTERN`(不設) | 程式預設(副檔名 csv、log、txt、gz) | `server/.env.example:38`、`server/config.js:47`;與 `backend/src/config.ts` 預設相同 |
 | `FTP_MAX_CONNECTIONS`(netops.env) | `2` | AGENT.md §6;舊版 `FTP_PARALLEL=2`(`server/.env.example:41`) |
-| `FTP_SYNC_MINUTES`(netops.env) | `0` | `server/.env.example:39`(舊版 IIS 繼續同步,D18) |
+| `FTP_SYNC_MINUTES`(deploy-prod 固定) | 第一段 `60`;第二段 `0` | 需求方 2026-11-16 決定(舊版 `server/.env.example:39` 為 0) |
 
 任一目錄變數空白時 `deploy-prod` 直接失敗(不落回程式預設值)。`FTP_HOST=10.10.130.66`、`FTP_USER` 由 `host3-set-secrets.sh` 寫入 `netops.env`。
 
@@ -99,8 +99,8 @@ getent passwd 1000 101                      # 記下讀得到機密的帳號(機
 7. GigaItApp(正式區 `/it/`)「服務與路由」審查並**發佈** `netops-api` 草稿(含 `netops.ai.*`、`kb/*`、`pa-live/*`、`ai/explanations`、`ai/daily-summary`、`ip-names`、`ip-name-imports`;`pa-live/stream` 逾時 60000 ms;`pa-live/collector-control` 正式區回 403,可不發佈)→ 重跑 `rbac-prod` 補綁 includes。
 8. 負責人在 GigaItApp 指派 `netops-admin`、`netops-viewer`;應用登記 `netops`(`/netops/`)若正式區還沒有,同 `portal` / `it` 的做法登記(Gateway / GigaItApp 配合)。
 9. 驗證:`https://giganexus.gigasolar.com.tw/netops/` 登入、FTP Log 檔案、知識庫;舊系統 port 從主機 2 `tcp-check.ps1` 與開發機各測一次。
-   新系統資料目錄與舊版 IIS 分開,第一段 `FTP_SYNC_MINUTES=0`、不跑每日同步:**AD 事件與 AI 問答(FTP 舊路徑)要先在「FTP Log 檔案」頁(PA、AD)手動同步才有資料**。
-   要自動同步時由需求方決定分鐘數,改 `netops.env` 的 `FTP_SYNC_MINUTES` 後重跑 `deploy-prod`(與舊版 IIS 同時讀 FTP,連線上限 2)。
+   新系統資料目錄與舊版 IIS 分開,一開始沒有資料。第一段 `FTP_SYNC_MINUTES=60`:**部署後最多 60 分鐘內第一次自動同步**(PA 15 秒、AD 20 秒、其他類型 60 秒後先跑一次,之後每 60 分鐘),
+   同步與分析完成後再看 AD 事件與 AI 問答(FTP 舊路徑);急著看可在「FTP Log 檔案」頁手動同步。與舊版 IIS 同時讀 FTP,本系統連線上限 2。
    知識庫筆記從舊版複製屬 D2 第 3 步(D14),不在本手冊。
    第一段沒有 ClickHouse:**流量總覽、安全事件、明細查詢、熱力圖在第二段前無法使用**(ARCHITECTURE D43,只查 ClickHouse),請使用者這期間繼續用舊版 IIS。
 
@@ -130,7 +130,7 @@ getent passwd 1000 101                      # 記下讀得到機密的帳號(機
    - `NETOPS_PA_PIPELINE=1`:`deploy-prod` 啟動 `netops-pa`(拉 Registry 映像)、`netops-clickhouse`(2 GB,`apply-schema.sh prod`:TRAFFIC 30 天、威脅 90 天、App 彙總 13 個月、來源彙總 90 天、熱力圖 5m 1 年、1h / 1d 5 年,CG §10.3)、`netops-ingest`;
      netops-api 改依 netops.env 對帳(`NETOPS_RECON_TIME` 預設 08:10)、每日同步、ClickHouse 摘要。
    - `PA_RECEIVE_ENABLED=1`、`PA_ALLOWED_SOURCES=<Docker 閘道>`(`docker network inspect giganexus-netops-prod_pa-ingress -f '{{range .IPAM.Config}}{{.Gateway}}{{end}}'`,第一次以 1 部署後查;PF F.3)、需要時 `PA_POLL_ENABLED=1`。
-   - C6 驗收後:`NETOPS_AI_SOURCE=clickhouse`(並刪除 `FTP_SYNC_MINUTES`)、`NETOPS_AI_DAILY_SUMMARY=1`(或刪除該行)。
+   - C6 驗收後:`NETOPS_AI_SOURCE=clickhouse`(並從 `netops.env` 移除 `FTP_SYNC_MINUTES`;開關 1 時 deploy-prod 已固定為 0)、`NETOPS_AI_DAILY_SUMMARY=1`(或刪除該行)。
    - E2(NAS 150 GB / 年)核准、`giga-netops/prod/pa-archive` 與標記檔建好(`GW_ENV=prod sh deploy/host2-setup-pa-archive.sh`,先讀該腳本確認主機 3 適用)後:`NETOPS_ARCHIVE_ENABLED=1`。
 5. 重試 `main` 最新 pipeline 的 `deploy-prod`。之後只換機密或憑證檔時,`main`「Run pipeline」帶 `NETOPS_PA_RECREATE=1`(由 Maintainer 執行;會重跑 `build-prod`,再手動 `deploy-prod`)。
 6. 網通:Syslog / HTTP Server Profile 加 `10.10.130.122`;預設規則 `interzone-default`、`intrazone-default` 也套 `netops-forward`(PF D.1、G11);Permitted IP 加 `10.10.130.122`;**接收開好後對 Syslog Server Profile 再 Commit 一次**。

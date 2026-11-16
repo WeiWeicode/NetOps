@@ -96,8 +96,8 @@ if ! grep -q '^FTP_USER=.' "$ENV_FILE"; then
 fi
 # AGENT.md §6:正式區 FTP 同時連線 2(舊版 FTP_PARALLEL=2)
 add FTP_MAX_CONNECTIONS 2
-# 第一段:不自動同步 FTP(舊版 IIS 繼續同步,D18;需要時改分鐘數,見 RUNBOOK-prod.md §3)
-add FTP_SYNC_MINUTES 0
+# 第一段:每 60 分鐘自動同步 FTP(需求方 2026-11-16;CI deploy-prod 也固定這個值,第二段為 0)
+add FTP_SYNC_MINUTES 60
 # 第一段:AI 走 FTP 舊路徑、不產生每日摘要、不歸檔(CI deploy-prod 在 NETOPS_PA_PIPELINE=0 時也會固定這些值)
 add NETOPS_AI_SOURCE ftp
 add NETOPS_AI_DAILY_SUMMARY 0

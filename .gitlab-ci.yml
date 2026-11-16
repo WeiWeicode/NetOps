@@ -339,7 +339,9 @@ deploy-prod:
     - case "$PIPE" in 0|1) echo "NETOPS_PA_PIPELINE=$PIPE" ;; *) echo "FAIL NETOPS_PA_PIPELINE 只能是 0 或 1:$PIPE" >&2; exit 1 ;; esac
     # 第一段(沒有 ClickHouse):AI 走 FTP 舊路徑、不產生每日摘要、不歸檔;不對帳、不建 ClickHouse 摘要、不送補漏(這些都要 ClickHouse)
     #   以 shell 環境變數固定(優先於 netops.env);第二段開關改 1 後才依 netops.env
-    - if [ "$PIPE" = 0 ]; then export NETOPS_AI_SOURCE=ftp NETOPS_AI_DAILY_SUMMARY=0 NETOPS_ARCHIVE_ENABLED=0 NETOPS_RECON_TIME=-1 NETOPS_RECON_AUTO_BACKFILL=0 NETOPS_CH_SUMMARY_MINUTES=0; fi
+    #   FTP 自動同步:第一段每 60 分鐘(需求方 2026-11-16;PA TRAFFIC 摘要、其他類型、AD;沒有 ClickHouse,每日同步不會跑);
+    #   第二段(開關 1)一律 0,改由對帳後每日同步(API.md §5.4)
+    - if [ "$PIPE" = 0 ]; then export NETOPS_AI_SOURCE=ftp NETOPS_AI_DAILY_SUMMARY=0 NETOPS_ARCHIVE_ENABLED=0 NETOPS_RECON_TIME=-1 NETOPS_RECON_AUTO_BACKFILL=0 NETOPS_CH_SUMMARY_MINUTES=0 FTP_SYNC_MINUTES=60; else export FTP_SYNC_MINUTES=0; fi
     - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
     - export IMAGE_TAG=$CI_COMMIT_SHA RELEASE_SHA=$CI_COMMIT_SHORT_SHA NETOPS_IMAGE_PREFIX="$NETOPS_IMAGE_PREFIX_PROD" COMPOSE_ENV_FILES="$NETOPS_ENV_FILE"
     # 正式區不建置:compose 檔的 build secret npm_token 只需變數存在

@@ -14,11 +14,22 @@ const text = (html: string) => {
 };
 
 describe('renderMarkdown(AI 回答)', () => {
-  it('<名稱> 佔位符當文字顯示,不會變成空白', () => {
-    const md = '來源 IP 對目的 IP 產生大量 <惡意軟體> 類別威脅（如 <威脅名稱1>, <威脅名稱2> 等）';
+  it('ASCII 佔位符(<Category>、<threat_name>)當文字顯示,不會變成「如 , 等」', () => {
+    // marked 只把 ASCII 標籤名當 HTML(中文 <名稱> 本來就會轉義);舊實作輸出原始 <Category> 交給 DOMPurify 清掉
+    const md = '來源 IP 對目的 IP 產生大量 <Category> 類別威脅（如 <threat_name>, <Name2> 等）';
     const out = renderMarkdown(md, { ai: true });
-    expect(text(out)).toContain('大量 <惡意軟體> 類別威脅（如 <威脅名稱1>, <威脅名稱2> 等）');
-    expect(out).not.toMatch(/<惡意軟體>/);
+    expect(text(out)).toContain('大量 <Category> 類別威脅（如 <threat_name>, <Name2> 等）');
+    expect(out).not.toMatch(/<Category>|<threat_name>/);
+  });
+
+  it('屬性型 HTML、註解、<br> 只當文字;程式碼區塊與表格照常', () => {
+    const md = ['<img src=x onerror=alert(1)> a<br>b <!-- c -->', '', '```', '<x> & y', '```', '', '| 欄 | 值 |', '| --- | --- |', '| <x> | 1 |'].join('\n');
+    const out = renderMarkdown(md, { ai: true });
+    expect(out).not.toMatch(/<img|<br|<!--/);
+    expect(text(out)).toContain('<img src=x onerror=alert(1)>');
+    expect(out).toContain('<pre><code>&lt;x&gt; &amp; y');
+    expect(out).toContain('<table>');
+    expect(text(out)).toContain('<x>');
   });
 
   it('區塊 HTML 與 script 也只當文字;行內程式碼與粗體照常', () => {

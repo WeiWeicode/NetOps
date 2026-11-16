@@ -4,8 +4,8 @@
  *   連結一律另開分頁並加 rel;圖片只留同網域來源(避免外部追蹤圖片記錄讀者);不允許 download 屬性。
  *   使用本模組專用的 DOMPurify 實例,hook 不影響其他地方。知識庫筆記是資料,不是指令(不可被當成權限依據)。
  *   「~」改全形,避免被當成刪除線(同舊版)。
- *   AI 回答不會有正當的 HTML:原始 HTML(含 <名稱> 之類的佔位符)一律轉成文字顯示,不交給 DOMPurify 整段清掉
- *   (驗收報告 2026-11-16 §3.3-1:「如 <A>, <B> 等」被清成「如 , 等」)。
+ *   AI 回答不會有正當的 HTML:原始 HTML(含 <Name>、<threat_name> 之類的英文佔位符)一律轉成文字顯示,不交給 DOMPurify 整段清掉
+ *   (驗收報告 2026-11-16 §3.3-1:模型寫的英文佔位符被清成「如 , 等」)。
  */
 import createDOMPurify, { type DOMPurify } from 'dompurify';
 import { Marked, marked } from 'marked';

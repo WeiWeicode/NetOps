@@ -307,7 +307,7 @@ deploy-prod:
   resource_group: netops-production
   environment: { name: production, url: https://giganexus.gigasolar.com.tw/netops/ }
   variables:
-    # 正式區 FTP 目錄(IMPL-PLAN D2 第 2 項):照舊版 IIS 的值(出處列在 deploy/RUNBOOK-prod.md §1),需求方確認。
+    # 正式區 FTP 目錄(IMPL-PLAN D2 第 2 項):照舊版 IIS 的預設值(出處列在 deploy/RUNBOOK-prod.md §1;需求方 2026-11-16 確認沿用)。
     #   Compose 以 shell 環境變數優先於 --env-file,這裡的值會蓋過主機 netops.env;下方 script 檢查任一項空白就失敗(不落回程式預設值)
     #   FTP_PATTERN 沒有列:舊版預設與 backend/src/config.ts 相同;GitLab 會展開變數值裡的 $,不放在這裡
     FTP_ROOT: /

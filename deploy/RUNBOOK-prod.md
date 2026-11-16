@@ -5,10 +5,29 @@
 > 規則:主機 3 的舊系統不能受影響(工作區 `AGENT.md` §5)——不動 `:9443` 與既有防火牆規則;含密碼的步驟由需求方執行,AI 不經手。
 > CI:`.gitlab-ci.yml` 的 `build-prod`(主機 2 建置推 Registry)→ `deploy-prod`(主機 3 手動)→ `rbac-prod`(主機 3 手動),只在 `main`。
 
+## 0. 部署前唯讀查證(需求方在主機 3 執行;AI 的唯讀 ssh 未獲授權,這些項目尚未實機確認)
+
+`ssh host3` 後 `wsl`,以下都只讀不改:
+
+```bash
+cat /srv/giganexus/shared/gateway-image-tag                      # 正式區 Gateway 映像 SHA(rbac-prod、host3-set-secrets.sh 用);要有一行 SHA
+ls /srv/giganexus/shared/giga-api-gateway-bff/deploy/docker-compose.prod.yml /srv/giganexus/deploy/prod.env
+ls /srv/giganexus/giga-observe/deploy/prod.env                     # host3-set-secrets.sh 建監控 Key 用的 env 檔
+sudo docker ps --format '{{.Names}}' | grep -E 'gno-backend|bff-1'  # giga-observe-prod 與正式區 Gateway 在運作
+mountpoint /mnt/nas-docker && df -h /mnt/nas-docker                # NAS(docker-backup)已掛載與剩餘空間
+ls -la /mnt/nas-docker/giga-netops 2>/dev/null || echo "尚未建立(§2 第 4 步會建)"
+sudo docker network ls --format '{{.Name}}' | grep -x giganexus-gw_default
+sudo docker volume ls --format '{{.Name}}' | grep -x giganexus-gw_gw_www
+ls /srv/giganexus/deploy/netops.env /srv/giganexus/netops-secrets 2>&1   # 第一次部署前應不存在
+sudo ss -ltn | grep -E ':5129[0-9]' || echo "5129x 沒有被占用"
+```
+
+任一項不符時先停下來回報,不要自行修改主機。
+
 ## 1. 正式區 FTP 目錄(寫在 `.gitlab-ci.yml` `deploy-prod` 的 `variables`)
 
 照舊版 IIS(repo 根目錄 `server/`)的設定。舊版 IIS 實際的 `server/.env` 不在 repo(`.gitignore`;AI 依 AGENT.md §7.5 不讀 `.env`),
-下表取自範本 `server/.env.example` 與程式預設值 `server/config.js`,**需求方以 IIS 主機上的 `server/.env` 核對後再合併**;不同時改 `deploy-prod` 的值。
+下表取自範本 `server/.env.example` 與程式預設值 `server/config.js`;**需求方 2026-11-16 確認沿用預設值**。之後要改時改 `deploy-prod` 的值。
 
 | 變數 | 值 | 出處 |
 | --- | --- | --- |

@@ -156,12 +156,31 @@ export interface IpLearnStatus {
   lastRun?: { at: string; by: string; range: string; candidates: number; looked: number; cached: number; manualSkip: number; failed: number; groups: number; notes: number } | null;
 }
 
-/** AC4 AI 解讀的參數:時段明細同 GET /pa/slice;分析儀表板同 GET /pa/insight/{view} */
-export type ExplainInput = { kind: 'slice'; params: SliceQuery } | { kind: 'insight'; params: { view: 'traffic' | 'threat'; from: string; to: string } };
+/**
+ * AI 解讀的參數(docs/API.md §10.3):時段明細同 GET /pa/slice;分析儀表板同 GET /pa/insight/{view};
+ * AC5 威脅 { name(威脅名稱或只有數字的威脅 ID), from, to(ISO 含時區,最長 31 天) };熱力圖同 GET /pa/heatmap
+ */
+export type ExplainInput =
+  | { kind: 'slice'; params: SliceQuery }
+  | { kind: 'insight'; params: { view: 'traffic' | 'threat'; from: string; to: string } }
+  | { kind: 'threat'; params: { name: string; from: string; to: string } }
+  | { kind: 'heatmap'; params: { granularity: 'year' | 'month' | 'day'; metric: 'traffic' | 'deny' | 'threat'; date?: string } };
+
+/** AC5 熱力圖 meta.cells:系統挑出送給 AI 的異常時段(畫面列成按鈕,點了開時段明細) */
+export interface ExplainCell {
+  t: string;
+  end: string;
+  v: number;
+  /** high 異常高;low 異常低;severity 有嚴重 / 高風險威脅 */
+  kind: 'high' | 'low' | 'severity';
+  ratio: number | null;
+  offHours: boolean;
+  partial: boolean;
+}
 
 /** AI 解讀的 meta 事件(docs/API.md §10.3) */
 export interface ExplainMeta {
-  kind: 'slice' | 'insight';
+  kind: 'slice' | 'insight' | 'threat' | 'heatmap';
   model: string;
   source: 'clickhouse';
   /** 資料落在已知缺口(對帳發現少資料) */
@@ -185,6 +204,19 @@ export interface ExplainMeta {
   to?: string;
   /** 有沒有前一期可比較 */
   prev?: boolean;
+  /** threat(AC5) */
+  name?: string;
+  match?: 'name' | 'id';
+  count?: number;
+  /** 超過保留期限、沒有查的部分 */
+  skipped?: { from: string; to: string } | null;
+  /** heatmap(AC5) */
+  granularity?: 'year' | 'month' | 'day';
+  metric?: 'traffic' | 'deny' | 'threat';
+  date?: string;
+  /** 沒有資料的格數 */
+  nulls?: number;
+  cells?: ExplainCell[];
 }
 
 export const ai = {
@@ -195,7 +227,7 @@ export const ai = {
   /** 問答:from / to 為 ISO 8601 含時區 */
   ask: (body: { from: string; to: string; question: string; history: HistoryItem[]; think: boolean; source: 'pa' | 'ad' }, onEvent: (e: SseEvent) => void, signal?: AbortSignal) =>
     streamPost('/api/netops/ai/questions', body, onEvent, signal),
-  /** AC4 AI 解讀(時段明細、分析儀表板) */
+  /** AI 解讀(AC4 時段明細、分析儀表板;AC5 威脅、熱力圖) */
   explain: (body: ExplainInput & { think: boolean }, onEvent: (e: SseEvent) => void, signal?: AbortSignal) => streamPost('/api/netops/ai/explanations', body, onEvent, signal),
   semanticSearch: (q: string) => http.get<{ items: (KbNote & { score: number })[]; vector: VectorStatus }>('/api/netops/kb/semantic-search', { query: { q } }),
   vectorStatus: () => http.get<VectorStatus>('/api/netops/kb/vector-status'),

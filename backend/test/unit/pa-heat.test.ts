@@ -180,6 +180,7 @@ function fakeReader(opts: { since?: number | null; rows?: HeatRow[]; sliceDelayM
     threatCountries: async () => [],
     threatTopInternalSrc: async () => [],
     threatTopNames: async () => [],
+    threatProfile: async () => ({ count: 0, repeat: 0, first: null, last: null, srcs: 0, dsts: 0, dims: { name: [], severity: [], category: [], subtype: [], direction: [], action: [], app: [], port: [], srcCountry: [], dstCountry: [], src: [], dst: [], time: [] } }),
     async slice() {
       calls.slice++;
       if (opts.sliceDelayMs) await new Promise((r) => setTimeout(r, opts.sliceDelayMs));

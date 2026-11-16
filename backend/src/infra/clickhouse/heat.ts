@@ -73,8 +73,36 @@ export interface HeatReader {
   threatTopInternalSrc(fromMs: number, toMs: number, limit: number, signal?: AbortSignal): Promise<{ ip: string; count: number; high: number }[]>;
   /** 威脅名稱排行 */
   threatTopNames(fromMs: number, toMs: number, limit: number, signal?: AbortSignal): Promise<{ name: string; severity: string; count: number }[]>;
+  /**
+   * AC5 AI 說明威脅:期間 [fromMs, toMs) 內同一個威脅(log_type = threat)的彙總。match.name = 名稱完全相同;
+   * match.idSuffix = 名稱結尾(威脅 ID,例 '(52316871)')。各維度依筆數取前 THREAT_PROFILE_TOP 名(time 維度依 timeGrain 全部列出,最多 THREAT_PROFILE_TIME_MAX)
+   */
+  threatProfile(match: { name: string } | { idSuffix: string }, fromMs: number, toMs: number, timeGrain: 'hour' | 'day', maxSeconds: number, signal?: AbortSignal): Promise<ThreatProfile>;
   /** 時段明細(熱資料:原始表);rows ≤ rowsLimit,sort 依時間新到舊或位元組大到小 */
   slice(type: SliceType, f: SliceFilter, rowsLimit: number, sort: 'time' | 'bytes', maxSeconds: number, signal?: AbortSignal): Promise<SliceData>;
+}
+
+/** AC5 威脅彙總的維度(固定常數;各維度的值一律轉成字串) */
+export const THREAT_PROFILE_DIMS = ['name', 'severity', 'category', 'subtype', 'direction', 'action', 'app', 'port', 'srcCountry', 'dstCountry', 'src', 'dst', 'time'] as const;
+export type ThreatProfileDim = (typeof THREAT_PROFILE_DIMS)[number];
+/** 一般維度取前幾名 */
+export const THREAT_PROFILE_TOP = 10;
+/** time 維度最多幾格(31 天 × 每天;或 1 天以內每小時) */
+export const THREAT_PROFILE_TIME_MAX = 48;
+/** [值, 筆數, 含 Repeat Count 的次數] */
+export type ProfileItem = [string, number, number];
+export interface ThreatProfile {
+  /** 筆數(原始列數,同熱力圖,不乘 Repeat Count) */
+  count: number;
+  /** 乘上 Repeat Count 的次數(同 AI 問答) */
+  repeat: number;
+  /** 第一次 / 最後一次(UTC 毫秒);沒有資料時 null */
+  first: number | null;
+  last: number | null;
+  /** 不同的來源 / 目的 IP 數 */
+  srcs: number;
+  dsts: number;
+  dims: Record<ThreatProfileDim, ProfileItem[]>;
 }
 
 const sec = (ms: number) => Math.floor(ms / 1000);
@@ -249,6 +277,53 @@ export function createHeatReader(cfg: ClickHouseConfig, fetchImpl: typeof fetch 
         signal,
       );
       return r.map((x) => ({ name: x.k, severity: x.sv === 'informational' ? 'info' : x.sv, count: num(x.n) }));
+    },
+    async threatProfile(match, fromMs, toMs, timeGrain, maxSeconds, signal) {
+      // 名稱比對用參數(不拼字串);ID 比對用 endsWith(名稱格式「名稱(ID)」,schema.sql)
+      const params: Record<string, Param> = { from: sec(fromMs), to: sec(toMs), nm: 'name' in match ? match.name : match.idSuffix };
+      const w = `${THREAT_RANGE} AND ${'name' in match ? 'name = {nm:String}' : 'endsWith(name, {nm:String})'}`;
+      const sum = await rows<{ n: number; r: number; t1: number; t2: number; us: number; ud: number }>(
+        `SELECT count() AS n, sum(greatest(repeat_count, 1)) AS r, toUnixTimestamp(min(event_time)) AS t1, toUnixTimestamp(max(event_time)) AS t2,
+                uniqExact(src) AS us, uniqExact(dst) AS ud FROM ${READ_TABLES.threat} WHERE ${w}`,
+        params,
+        maxSeconds,
+        signal,
+      );
+      const s = sum[0];
+      const dims = Object.fromEntries(THREAT_PROFILE_DIMS.map((k) => [k, [] as ProfileItem[]])) as Record<ThreatProfileDim, ProfileItem[]>;
+      const count = num(s?.n);
+      if (!count) return { count: 0, repeat: 0, first: null, last: null, srcs: 0, dsts: 0, dims };
+      // 一次掃描算全部維度:子查詢先篩出這個威脅的列,再 ARRAY JOIN 成(維度, 值);各維度取前幾名(LIMIT BY)
+      // 別名不和欄位同名(WHERE 會先解析成 SELECT 的別名);LowCardinality 欄位一律 CAST 成 String,陣列內的 tuple 型別才一致
+      const bucket = timeGrain === 'hour' ? `formatDateTime(toStartOfHour(event_time), '%Y-%m-%d %H:00')` : `formatDateTime(event_time, '%Y-%m-%d')`;
+      const pairs: [ThreatProfileDim, string][] = [
+        ['name', 'name'],
+        ['severity', 'severity'],
+        ['category', 'thr_category'],
+        ['subtype', 'subtype'],
+        ['direction', 'direction'],
+        ['action', 'action'],
+        ['app', 'app'],
+        ['port', `concat(proto, '/', toString(dport))`],
+        ['srcCountry', 'src_country'],
+        ['dstCountry', 'dst_country'],
+        ['src', ipText('src')],
+        ['dst', ipText('dst')],
+        ['time', bucket],
+      ];
+      const r = await rows<{ dm: string; k: string; n: number; rp: number }>(
+        `SELECT kv.1 AS dm, kv.2 AS k, count() AS n, sum(rc) AS rp
+         FROM (SELECT [${pairs.map(([d, e]) => `('${d}', CAST(${e}, 'String'))`).join(', ')}] AS kvs, greatest(repeat_count, 1) AS rc FROM ${READ_TABLES.threat} WHERE ${w})
+         ARRAY JOIN kvs AS kv GROUP BY dm, k ORDER BY dm, if(dm = 'time', 0, n) DESC, k LIMIT {lim:UInt16} BY dm`,
+        { ...params, lim: THREAT_PROFILE_TIME_MAX },
+        maxSeconds,
+        signal,
+      );
+      for (const x of r) {
+        const list = dims[x.dm as ThreatProfileDim];
+        if (list && (x.dm === 'time' || list.length < THREAT_PROFILE_TOP)) list.push([String(x.k ?? ''), num(x.n), num(x.rp)]);
+      }
+      return { count, repeat: num(s?.r), first: s?.t1 ? s.t1 * 1000 : null, last: s?.t2 ? s.t2 * 1000 : null, srcs: num(s?.us), dsts: num(s?.ud), dims };
     },
     slice: (type, f, rowsLimit, sort, maxSeconds, signal) => runSlice(rows, { traffic: READ_TABLES.traffic, threat: READ_TABLES.threat }, type, f, rowsLimit, sort, maxSeconds, signal),
   };

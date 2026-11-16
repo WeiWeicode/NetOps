@@ -2,6 +2,15 @@
 
 > 接手時先讀 `AGENT.md`,再讀 `docs/ARCHITECTURE.md`、`docs/IMPL-PLAN.md`。
 
+## 2026-11-14 AC5 AI 說明威脅 / 熱力圖指出異常格(程式完成,待合併)
+
+**接手方式**:新討論串說「從 `NetOps/docs/HANDOFF.md`「2026-11-14 AC5」接手」。分支 `feature/ac5-ai-threat-heatmap` 疊在 AC4 上,**合併順序 !93 → !94 → !95 → !96 → AC5 的 MR**。下一步:AC6。
+
+- **後端**:`POST /ai/explanations` 加 `kind: 'threat'`(`HeatService.threatProfile` → `infra/clickhouse/heat.ts` 的 `threatProfile`:一次掃描、ARRAY JOIN 各維度、LIMIT BY;Redis 快取 `ai-threat`)與 `kind: 'heatmap'`(沿用 `heatmap()` 快取,`modules/ai/core/anomaly.ts` 挑異常格);資料整理 `core/explain.ts` 的 `threatContext`、`heatmapContext`。API.md §10.3。
+- **前端**:熱力圖頁首「AI 指出異常格」對話框 + 異常時段按鈕(`anomalyChips`,回答提到的排前面,點了開時段明細);`SliceDrawer` 威脅列「說明」(面板開在抽屜內,不疊對話框);Log 明細查詢威脅列 / 明細對話框「AI 說明」(`components/ThreatAiDialog.vue`);`mock/ai.ts` 有假回答(威脅名稱含 `old` 看「超過保留期限」提示)。
+- **權限**:新增 `netops.pa-search.ai`(admin、viewer);`netops.pa-heatmap.ai`、`netops.pa-insight.ai` 改名稱涵蓋新功能。
+- **上架後(需求方)**:發佈 netops-api 路由草稿(路徑沒變、request schema 有改)、確認 `netops.pa-search.ai` 出現且 viewer / admin 都看得到;測試區驗收 3 天內的威脅與熱力圖(月 / 日視圖)。
+
 ## 2026-11-14 AC4 AI 解讀時段 / 摘要本期異常(程式完成,待合併)
 
 **接手方式**:新討論串說「從 `NetOps/docs/HANDOFF.md`「2026-11-14 AC4」接手」。分支 `feature/ac4-ai-slice-insight` 疊在 AC3 上,**合併順序 !93 → !94 → !95 → AC4 的 MR**。下一步:AC5。

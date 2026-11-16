@@ -456,6 +456,8 @@ D13:骨架直接留用;AI 不在這次範圍,不做串流驗證(D7、D17)。
 
 ### AC5 威脅「AI 說明這個威脅與處理建議」、熱力圖「AI 指出異常格」
 
+> **進度(2026-11-14)**:程式完成,分支 `feature/ac5-ai-threat-heatmap`(疊在 AC4 上);API.md §10.3。前端畫面也由 Claude 完成。按鈕:熱力圖與時段明細抽屜沿用 `netops.pa-heatmap.ai` / `netops.pa-insight.ai`(同 AC4 一頁一個 AI 節點),Log 明細查詢新增 `netops.pa-search.ai`。待:需求方發佈路由草稿、確認按鈕節點、測試區驗收。
+
 1. `kind: 'threat'`:
    - 參數是威脅名稱 / ID 與期間。
    - 後端彙總嚴重度、類別、方向、App / Port、國家、本期同名筆數、影響主機(IP 與名稱)。

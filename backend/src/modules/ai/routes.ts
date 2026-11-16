@@ -5,12 +5,12 @@
  * 權限:netops.ai.use(netops-admin、netops-viewer,2026-11-05 決定,D25 維持一個權限)。
  */
 import type { FastifyPluginAsync } from 'fastify';
-import { DAY, looseObject } from '../../shared/schemas.js';
+import { DAY, looseObject, TIME } from '../../shared/schemas.js';
 import { dayRange, timeIn, validation } from '../../shared/time.js';
 import { ownerOf } from '../../infra/jobs/index.js';
 import { SLICE_QUERY } from '../pa-heat/routes.js';
-import type { SliceQuery } from '../pa-heat/service.js';
-import type { AiService, HistoryItem, InsightParams } from './service.js';
+import type { SliceQuery, ThreatProfileQuery } from '../pa-heat/service.js';
+import type { AiService, ExplainInput, HeatmapParams, HistoryItem, InsightParams } from './service.js';
 import { SSE_TIMEOUT_MS, type SseHub } from './sse.js';
 
 /** 問答期間上限(天):ftp 來源有 IP 時要從 FTP 重讀原始 log(同明細查詢 §4.3);clickhouse 來源沿用同一個上限 */
@@ -33,6 +33,27 @@ const INSIGHT_PARAMS = {
   additionalProperties: false,
   properties: { view: { type: 'string', enum: ['traffic', 'threat'] }, from: DAY, to: DAY },
 } as const;
+
+/** AC5 threat 的 params:威脅名稱(完全相同)或威脅 ID(只有數字)與期間(最長 31 天,服務層檢查) */
+const THREAT_PARAMS = {
+  type: 'object',
+  required: ['name', 'from', 'to'],
+  additionalProperties: false,
+  properties: {
+    name: { type: 'string', minLength: 1, maxLength: 300, pattern: '^[^\\u0000-\\u001f]*$', description: '威脅名稱(Log 明細的「威脅名稱」,例 generic:xxx(52316871))或威脅 ID(只有數字)' },
+    from: TIME,
+    to: TIME,
+  },
+} as const;
+/** AC5 heatmap 的 params(同 GET /pa/heatmap;ad 指標不提供) */
+const HEATMAP_PARAMS = {
+  type: 'object',
+  required: ['granularity', 'metric'],
+  additionalProperties: false,
+  properties: { granularity: { type: 'string', enum: ['year', 'month', 'day'] }, metric: { type: 'string', enum: ['traffic', 'deny', 'threat'] }, date: DAY },
+} as const;
+const KINDS = ['slice', 'insight', 'threat', 'heatmap'] as const;
+const PARAMS_OF = { slice: SLICE_QUERY, insight: INSIGHT_PARAMS, threat: THREAT_PARAMS, heatmap: HEATMAP_PARAMS } as const;
 
 const aiRoutes: FastifyPluginAsync<{ ai: AiService; hub: SseHub }> = async (app, { ai, hub }) => {
   app.get(
@@ -195,18 +216,17 @@ const aiRoutes: FastifyPluginAsync<{ ai: AiService; hub: SseHub }> = async (app,
       return hub.open(req, reply, owner, (s) => ai.ask(s, { from, to, question, think: req.body.think === true }, p));
     },
   );
-  app.post<{ Body: { kind: 'slice' | 'insight'; params: SliceQuery | InsightParams; think?: boolean } }>(
+  app.post<{ Body: { kind: (typeof KINDS)[number]; params: SliceQuery | InsightParams | ThreatProfileQuery | HeatmapParams; think?: boolean } }>(
     '/v1/ai/explanations',
     {
       schema: {
         operationId: 'netops.ai.explain',
         summary: 'AI 解讀畫面上的統計(SSE)',
         description:
-          'PA 頁面的 AI 按鈕共用(AC4,ARCHITECTURE D44 ③)。後端依 params 自己取資料(不接受前端送來的統計),整理成統計與排行送給模型,以 SSE 串流回答;不送原始 log。' +
-          'kind: slice = 時段明細「AI 解讀這個時段」,params 同 GET /pa/slice(同一人同條件重用時段明細工作,30 分鐘內不重查;還在查時送 scan 事件 { step: "slice", waiting: true } 後等候);' +
-          'kind: insight = 分析儀表板「AI 摘要本期異常」,params { view: traffic | threat, from, to } 同 GET /pa/insight/{view}(用儀表板快取;流量另比較前一個同長度期間)。' +
-          '事件:open、meta(kind、model、source、partial、gapsKnown、contextChars、clipped、notes、vectorError;slice 另有 type、start、end、sliceSource、waited;insight 另有 view、from、to、prev)、scan、thinking、content、done、error、heartbeat。' +
-          '參數錯誤回 400;時段明細的錯誤照 GET /pa/slice(409 NETOPS_COLD_ARCHIVE_DISABLED、429 NETOPS_COLD_QUERY_BUSY、409 NETOPS_JOB_LIMIT_EXCEEDED);儀表板忙碌回 429 NETOPS_INSIGHT_BUSY;ClickHouse 無法使用回 503 NETOPS_CLICKHOUSE_UNAVAILABLE;未設定 AI 回 409 NETOPS_AI_DISABLED;同時進行的 AI 回答超過上限回 429 NETOPS_STREAM_BUSY(和分析、問答共用)。',
+          'PA 頁面的 AI 按鈕共用(AC4、AC5,ARCHITECTURE D44 ③;細節見 docs/API.md §10.3)。後端依 params 自己取資料(不接受前端送來的統計),只送統計與排行給模型,以 SSE 回答;不送原始 log。' +
+          'kind:slice = 時段明細(params 同 GET /pa/slice,重用同一人同條件的工作);insight = 分析儀表板(params { view, from, to },用儀表板快取);' +
+          'threat = 威脅說明與處理建議(params { name, from, to }:名稱完全相同,或只有數字時當威脅 ID 比對名稱結尾;最長 31 天);heatmap = 熱力圖異常格(params 同 GET /pa/heatmap,metric 不含 ad;只送統計與異常格,meta.cells 列出異常時段)。' +
+          '事件:open、meta、scan、thinking、content、done、error、heartbeat。錯誤:參數 400;時段明細照 GET /pa/slice;儀表板 429 NETOPS_INSIGHT_BUSY;威脅整段超過保留期限 404 NETOPS_PA_OUT_OF_RETENTION;日視圖超過 1 年 422;ClickHouse 503;未設定 AI 409 NETOPS_AI_DISABLED;名額 429 NETOPS_STREAM_BUSY。',
         tags: ['AI'],
         'x-permission': 'netops.ai.use',
         'x-audit-level': 'meta',
@@ -227,6 +247,18 @@ const aiRoutes: FastifyPluginAsync<{ ai: AiService; hub: SseHub }> = async (app,
           '  那麼 meta 事件的 prev 表示有沒有前一期可比較',
           '  而且 不重查 ClickHouse',
           '',
+          '場景: 威脅說明只送彙總',
+          '  假如 使用者在 Log 明細查到威脅 "generic:xxx(52316871)"',
+          '  當 呼叫 POST /api/netops/ai/explanations 帶 { kind: "threat", params: { name: "generic:xxx(52316871)", from, to } }',
+          '  那麼 meta 事件的 count 為本期同名筆數',
+          '  而且 送給模型的資料有嚴重度、方向、動作與影響主機,沒有原始 log 列',
+          '',
+          '場景: 熱力圖只送異常格',
+          '  假如 月視圖有 720 格',
+          '  當 呼叫 POST /api/netops/ai/explanations 帶 { kind: "heatmap", params: { granularity: "month", metric: "traffic", date } }',
+          '  那麼 送給模型的異常格最多 10 格(另加最多 3 格異常低)',
+          '  而且 meta.cells 列出這些格子的時間,畫面可點開時段明細',
+          '',
           '場景: 資料有字數上限',
           '  假如 排行的名稱很長',
           '  當 呼叫 POST /api/netops/ai/explanations',
@@ -241,13 +273,11 @@ const aiRoutes: FastifyPluginAsync<{ ai: AiService; hub: SseHub }> = async (app,
           required: ['kind', 'params'],
           additionalProperties: false,
           properties: {
-            kind: { type: 'string', enum: ['slice', 'insight'], description: 'slice = 時段明細;insight = 分析儀表板' },
-            params: { type: 'object', description: 'kind 為 slice 時同 GET /pa/slice 的條件;insight 時 { view, from, to }' },
+            kind: { type: 'string', enum: KINDS, description: 'slice = 時段明細;insight = 分析儀表板;threat = 威脅說明(AC5);heatmap = 熱力圖異常格(AC5)' },
+            params: { type: 'object', description: 'slice 同 GET /pa/slice 的條件;insight { view, from, to };threat { name, from, to };heatmap 同 GET /pa/heatmap' },
             think: { type: 'boolean', default: false, description: '深入思考(比較久)' },
           },
-          if: { properties: { kind: { const: 'slice' } } },
-          then: { properties: { params: SLICE_QUERY } },
-          else: { properties: { params: INSIGHT_PARAMS } },
+          allOf: KINDS.map((k) => ({ if: { properties: { kind: { const: k } } }, then: { properties: { params: PARAMS_OF[k] } } })),
         },
         response: SSE_RESPONSE('open、meta、scan、thinking、content、done、error、heartbeat'),
       },
@@ -255,7 +285,8 @@ const aiRoutes: FastifyPluginAsync<{ ai: AiService; hub: SseHub }> = async (app,
     async (req, reply) => {
       // 名額先檢查一次(取資料前),開始串流前再檢查一次
       hub.reserve(req);
-      const input = req.body.kind === 'slice' ? { kind: 'slice' as const, params: req.body.params as SliceQuery } : { kind: 'insight' as const, params: req.body.params as InsightParams };
+      // params 已依 kind 驗證(schema 的 allOf)
+      const input = { kind: req.body.kind, params: req.body.params } as ExplainInput;
       const ctx = await ai.prepareExplanation(input, ownerOf(req.identity));
       const owner = hub.reserve(req);
       return hub.open(req, reply, owner, (s) => ai.explain(s, { think: req.body.think === true }, ctx));

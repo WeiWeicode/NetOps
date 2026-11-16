@@ -10,14 +10,17 @@
  *   - 結果顯示摘要卡、嚴重度威脅、Top 10 排行、明細表(最多 200 列;rowsTruncated 時提示)與操作按鈕
  *   - AC4「AI 解讀這個時段」:有結果且有按鈕權限(aiPerm,熱力圖 netops.pa-heatmap.ai、儀表板 netops.pa-insight.ai)時顯示;
  *     送同一組條件,後端重用同一個時段明細工作(不重查);換條件時清掉舊回答
+ *   - AC5「AI 說明這個威脅」:威脅類明細列的「AI 說明」按鈕(同 aiPerm),在抽屜內(表格上方)開面板並自動開始;
+ *     期間是這個時段;不用對話框(疊在抽屜上時 Esc 會連抽屜一起關)。換時段時收起
  */
-import { computed, ref, watch } from 'vue';
+import { computed, nextTick, ref, watch } from 'vue';
 import { fmtNum, fmtSize, fmtTime } from '@/api/format';
 import type { ExplainInput } from '@/api/ai';
 import { ApiError, can, describeError } from '@/api/gateway';
 import type { HeatCell } from '@/api/heatmap';
 import type { SliceSeverity, SliceTopItem } from '@/api/slice';
 import { useLivePaQuery } from '@/composables/useLivePaQuery';
+import { useReducedMotion } from '@/composables/useReducedMotion';
 import { searchExtraOf, topLabelOf, type useSlice } from '@/composables/useSlice';
 import type { GBarListItem } from '@/ui/charts/GBarList.vue';
 import { formatRange } from '@/composables/vizTime';
@@ -53,6 +56,28 @@ const aiInput = computed<ExplainInput | null>(() => {
   const q = props.slice.query.value;
   return q && props.slice.result.value ? { kind: 'slice', params: { ...q } } : null;
 });
+
+/** AC5:威脅類明細列「AI 說明這個威脅」(期間 = 這個時段) */
+const threatAi = ref<{ name: string } | null>(null);
+const threatAiEl = ref<HTMLElement | null>(null);
+const { reduced } = useReducedMotion();
+const threatAiInput = computed<ExplainInput | null>(() => {
+  const q = props.slice.query.value;
+  return q && threatAi.value ? { kind: 'threat', params: { name: threatAi.value.name, from: q.start, to: q.end } } : null;
+});
+/** 明細列的威脅名稱(GTable 的 row 型別只有 _id) */
+const rowName = (row: unknown) => String((row as Record<string, unknown>).name ?? '').trim();
+async function explainThreat(name: string) {
+  if (!name) return;
+  threatAi.value = { name };
+  await nextTick();
+  threatAiEl.value?.scrollIntoView?.({ block: 'nearest', behavior: reduced.value ? 'auto' : 'smooth' });
+  threatAiEl.value?.focus({ preventScroll: true });
+}
+watch(
+  () => props.slice.query.value,
+  () => (threatAi.value = null),
+);
 
 const title = computed(() => {
   const q = props.slice.query.value;
@@ -200,6 +225,7 @@ const tableColumns = computed<Column[]>(() => {
       { key: 'src', label: '來源 IP', mono: true, ip: true },
       { key: 'dst', label: '目的 IP', mono: true, ip: true },
       { key: 'action', label: '動作', width: '76px' },
+      ...(canAi.value ? [{ key: 'ai', label: 'AI', width: '84px' }] : []),
     ];
   }
   return [
@@ -397,6 +423,24 @@ function onDrawerToggle(v: boolean) {
         hint="只把這個時段的摘要與 Top 10(不是明細列)送到公司內部的 AI 服務,不會傳到外部"
       />
 
+      <!-- AC5:AI 說明這個威脅(從明細列開啟;換一筆時重新開始) -->
+      <section v-if="canAi && threatAi" ref="threatAiEl" class="slice-drawer__threat-ai" tabindex="-1" aria-label="AI 說明這個威脅">
+        <div class="slice-drawer__threat-ai-head">
+          <span class="xs faint">威脅</span>
+          <code class="slice-drawer__threat-name" :title="threatAi.name">{{ threatAi.name }}</code>
+          <span class="spacer" />
+          <GButton size="sm" variant="ghost" square icon="x" aria-label="收起 AI 說明" @click="threatAi = null" />
+        </div>
+        <AiExplainPanel
+          :key="threatAi.name"
+          :input="threatAiInput"
+          title="AI 說明這個威脅"
+          start-label="AI 說明"
+          hint="只把這個威脅在這個時段的彙總(嚴重度、方向、動作、影響主機等,不是原始 log)送到公司內部的 AI 服務,不會傳到外部"
+          auto-start
+        />
+      </section>
+
       <!-- Top 10 排行(U5:點項目直接開 Log 明細查詢) -->
       <GCard v-if="topKeys.length" title="Top 10 排行" padding="sm">
         <template #actions>
@@ -472,6 +516,19 @@ function onDrawerToggle(v: boolean) {
           <template #cell-bytes="{ value }">
             <span class="num nowrap">{{ fmtSize(typeof value === 'number' ? value : Number(value ?? 0)) }}</span>
           </template>
+          <template #cell-ai="{ row }">
+            <GButton
+              v-if="rowName(row)"
+              size="sm"
+              variant="ghost"
+              icon="sparkles"
+              :aria-label="`AI 說明威脅 ${rowName(row)}`"
+              :aria-pressed="threatAi?.name === rowName(row)"
+              @click.stop="explainThreat(rowName(row))"
+            >
+              說明
+            </GButton>
+          </template>
         </GTable>
       </GCard>
     </div>
@@ -479,6 +536,34 @@ function onDrawerToggle(v: boolean) {
 </template>
 
 <style scoped>
+.slice-drawer__threat-ai {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  scroll-margin: 12px;
+}
+.slice-drawer__threat-ai:focus-visible {
+  outline: 2px solid var(--c-primary);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+.slice-drawer__threat-ai-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.slice-drawer__threat-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-sm, 0.875rem);
+}
+.slice-drawer__threat-ai-head .spacer {
+  flex: 1;
+}
 .slice-drawer__bar {
   display: flex;
   flex-wrap: wrap;

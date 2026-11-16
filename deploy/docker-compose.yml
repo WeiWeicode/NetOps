@@ -1,0 +1,427 @@
+# netops-api 部署到測試區(主機 2,與 Gateway 同一台;IMPL-PLAN B0)。CI deploy-api-test 於 develop 執行:
+#   docker compose --env-file <主機受保護目錄>/netops.env -f deploy/docker-compose.yml build --pull netops-api
+#   docker compose --env-file <主機受保護目錄>/netops.env -f deploy/docker-compose.yml up -d --wait netops-api
+#
+# 網路:加入 Gateway 的 Docker 網路(GW_NETWORK),別名 netops-api → BFF 以 http://netops-api:51292 轉入 /api/netops/*
+#   不對主機發佈 port:使用者與其他主機連不到服務,只有 Gateway 容器網路可連入(ARCHITECTURE §2)
+# 上游與路由:服務啟動後由 setupGateway 自動註冊為 Gateway 草稿(上游 netops-api、位址 SERVICE_ADVERTISE_URL、路由、權限代碼),
+#   在 GigaItApp「服務與路由」審查發佈後才生效
+# 機密(NETOPS_SECRETS_DIR,uid 1000 可讀;deploy/host2-set-secrets.sh 產生):
+#   gw_api_key(Gateway CLI client:create --code netops-api)、monitor_api_key(giga-observe ingest Key,服務 netops-api;D1)、
+#   ftp_password(FTP 10.10.130.66 唯讀帳號;B1)、qdrant_api_key(AI 主機 Qdrant 的 API Key,與舊版 IIS 相同;A1)
+# 資料目錄(B1):主機 NETOPS_DATA_HOST_DIR(/srv/giga-netops/test,WSL 檔案系統、uid 1000 可寫)掛到容器 /data;只經 infra/store 存取
+# FTP 目錄與同步:FTP_ROOT、FTP_LOG_DIR、FTP_AD_DIR、FTP_*_DIR 未設定時用程式預設值(backend/src/config.ts,與舊版相同)
+# 單一容器(ARCHITECTURE D9):背景工作在程序內執行,不要加 replicas
+#
+# 前端 SPA(IMPL-PLAN D1;同 GigaItApp、giga-Portal):spa-netops 只在 profile publish,一次性容器發佈到 Gateway 的 gw_www volume(Nginx /netops/)
+#   docker compose --env-file <netops.env> -f deploy/docker-compose.yml --profile publish build --pull spa-netops
+#   docker compose --env-file <netops.env> -f deploy/docker-compose.yml --profile publish run --rm spa-netops                    # 發佈
+#   docker compose --env-file <netops.env> -f deploy/docker-compose.yml --profile publish run --rm spa-netops rollback netops    # 回滾到上一版
+# PA log ClickHouse(C1):netops-clickhouse 只在內部網路;帳號檔由 deploy/host2-set-clickhouse-secrets.sh 產生,建表 deploy/clickhouse/apply-schema.sh
+# PA log 寫入管線(C2):netops-ingest(netops-api 同映像、不同進入點)讀 netops-redis 的 Stream,批次寫 netops-clickhouse
+# 冷資料 Parquet 歸檔(C4):netops-ingest 每天 02:30 匯出前一天到 NAS(NETOPS_ARCHIVE_HOST_DIR,預設 /mnt/nas-docker/giga-netops/<GW_ENV>/pa-archive;
+#   目錄與標記檔由 deploy/host2-setup-pa-archive.sh 建立),netops-clickhouse 唯讀掛載同一目錄給冷明細查詢(file(),帳號 netops_cold)。
+#   NETOPS_ARCHIVE_ENABLED=0 時不歸檔、冷明細回 409。NAS 晚於容器掛上時,netops-ingest 與 netops-clickhouse 要重建(CI 部署每次都會)
+# 知識庫 NAS 備份(ARCHITECTURE Q3):netops-kb-backup 每天打包資料目錄的 knowledge/ 到 NAS(deploy/kb-backup/backup.sh;目錄與標記檔由 deploy/host2-setup-kb-backup.sh 建立)
+name: giganexus-netops-${GW_ENV:?GW_ENV 必須設定(test / prod)}
+
+services:
+  netops-api:
+    image: ${NETOPS_IMAGE_PREFIX:-giganexus}/netops-api:${IMAGE_TAG:-dev}
+    build:
+      context: ../backend
+      secrets: [npm_token]
+    restart: unless-stopped
+    environment:
+      GW_ENV: ${GW_ENV}
+      SERVICE_CODE: netops-api
+      GW_BASE_URL: ${GW_BASE_URL:?GW_BASE_URL 必須設定}
+      # 同一 Docker 網路直連 bff-1 取 JWKS(不經 Nginx 的內網白名單;同 file-api、portal-api)
+      GW_JWKS_URL: ${GW_JWKS_URL:-http://bff-1:3000/.well-known/jwks.json}
+      GW_API_KEY_FILE: /run/secrets/gw_api_key
+      SERVICE_ADVERTISE_URL: http://netops-api:51292
+      MONITOR_URL: ${MONITOR_URL:-http://observe-api:51202}
+      MONITOR_API_KEY_FILE: /run/secrets/monitor_api_key
+      RELEASE_SHA: ${RELEASE_SHA:-dev}
+      NETOPS_DATA_DIR: /data
+      # PA 即時監控(R1):只讀 netops-redis(netops-pa 寫入);Redis 停止時只有即時監控回 503,其他功能不受影響
+      REDIS_URL: redis://netops-redis:6379/0
+      FTP_HOST: ${FTP_HOST:?FTP_HOST 必須設定}
+      FTP_USER: ${FTP_USER:?FTP_USER 必須設定}
+      FTP_PASSWORD_FILE: /run/secrets/ftp_password
+      FTP_ROOT: ${FTP_ROOT:-}
+      FTP_LOG_DIR: ${FTP_LOG_DIR:-}
+      FTP_PATTERN: ${FTP_PATTERN:-}
+      FTP_AD_DIR: ${FTP_AD_DIR:-}
+      FTP_THREAT_DIR: ${FTP_THREAT_DIR:-}
+      FTP_URL_DIR: ${FTP_URL_DIR:-}
+      FTP_DATA_FILTER_DIR: ${FTP_DATA_FILTER_DIR:-}
+      FTP_WILDFIRE_DIR: ${FTP_WILDFIRE_DIR:-}
+      FTP_DECRYPTION_DIR: ${FTP_DECRYPTION_DIR:-}
+      FTP_GLOBALPROTECT_DIR: ${FTP_GLOBALPROTECT_DIR:-}
+      FTP_USERID_DIR: ${FTP_USERID_DIR:-}
+      # 測試區 1 條(與舊版同時同步,控制 FTP 負載;AGENT.md §6)
+      FTP_MAX_CONNECTIONS: ${FTP_MAX_CONNECTIONS:-1}
+      # 0 = 不自動同步,只在 FTP Log 檔案頁手動同步。AC7:只剩 NETOPS_AI_SOURCE=ftp(正式區 C6 前的 AI 舊路徑)使用;
+      #   clickhouse 來源時一律當 0(啟動記 warn),解密 / GlobalProtect / User-ID / AD 改由對帳後每日同步。C6 後正式區改 clickhouse 時從 .env 移除,這一行一併刪除
+      FTP_SYNC_MINUTES: ${FTP_SYNC_MINUTES:-0}
+      # AI(A1,ARCHITECTURE D23):直接呼叫 AI 主機;.45 配置相同作為備用,換主機只改 netops.env。翻譯沿用 LLM_URL / LLM_MODEL
+      LLM_URL: ${LLM_URL:-http://10.10.130.46:8080/v1}
+      LLM_MODEL: ${LLM_MODEL:-Qwen3.6-35B-A3B-FP8}
+      EMBED_URL: ${EMBED_URL:-http://10.10.130.46:8081/v1}
+      # 沿用舊版 Qdrant 的 NetOpsKb(embedding 同為 Qwen3-Embedding-8B 4096 維,2026-11-05 查證)
+      QDRANT_URL: ${QDRANT_URL:-http://10.10.130.46:6333}
+      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-NetOpsKb}
+      QDRANT_API_KEY_FILE: /run/secrets/qdrant_api_key
+      # 0 = 只做語意搜尋、不寫入向量庫(舊版 IIS 仍同步同一個 collection;D18 切換後再開)
+      VECTOR_SYNC: ${VECTOR_SYNC:-0}
+      # 外部 IP 自動學習每天幾點(-1 = 不自動,知識庫頁可手動執行)
+      IPLEARN_HOUR: ${IPLEARN_HOUR:--1}
+      # AI 分析 / 問答 / 外部 IP 學習的資料來源(AC2,ARCHITECTURE D44):clickhouse 或 ftp;空白 = 依 GW_ENV(test → clickhouse、prod → ftp)。
+      #   正式區在 C6(正式區 ClickHouse)之前沿用 ftp(需求方 2026-11-13 AQ4「Keep old path」);C6 上線後正式區 .env 設 NETOPS_AI_SOURCE=clickhouse
+      NETOPS_AI_SOURCE: ${NETOPS_AI_SOURCE:-}
+      # PA log 查詢切換(C3,ARCHITECTURE D29、D42):唯讀帳號 netops_reader(readonly=2,上限由 users.d constraints 固定)
+      #   ClickHouse 停止時只有用到它的查詢受影響:來源 auto 改查 FTP、指定 clickhouse 回 503(/readyz 不受影響)
+      CLICKHOUSE_URL: http://netops-clickhouse:8123
+      CLICKHOUSE_USER: netops_reader
+      CLICKHOUSE_PASSWORD_FILE: /run/secrets/ch_reader_password
+      # PA 總覽、安全事件、明細只查 ClickHouse(ARCHITECTURE D43,2026-11-11);FTP 只做對帳與補漏、AD,以及 NETOPS_AI_SOURCE=ftp 時的 AI
+      # 每日 FTP 對帳:台灣時間 HH:MM 開始(需求方 2026-11-13 決定 08:10;PA 前一天的檔約 07:45 才有,還沒有時每 10 分鐘再試;-1 = 不自動)
+      #   舊的 NETOPS_RECON_HOUR 仍可用,但 NETOPS_RECON_TIME 優先(這裡一律給值,所以 .env 只設 NETOPS_RECON_HOUR 不再生效)
+      NETOPS_RECON_TIME: ${NETOPS_RECON_TIME:-08:10}
+      # 對帳發現缺口時自動送補漏(netops-ingest 從 FTP 補寫);0 = 關閉,只能手動補漏
+      NETOPS_RECON_AUTO_BACKFILL: ${NETOPS_RECON_AUTO_BACKFILL:-1}
+      # FTP 上 PA log 保留天數(需求方會排程刪除):期限內的缺口每天自動補,超過期限仍有缺口記 warn
+      NETOPS_FTP_RETENTION_DAYS: ${NETOPS_FTP_RETENTION_DAYS:-10}
+      # 對帳後每日同步解密 / GlobalProtect / User-ID / AD(AC1,需求方 2026-11-13;不進 ClickHouse,FTP 只留 10 天);0 = 關閉,只能手動同步
+      NETOPS_DAILY_SYNC: ${NETOPS_DAILY_SYNC:-1}
+      # AI 每日摘要(AC7):對帳與每日同步後自動產生前一天的摘要(流量總覽顯示);空白 = 依 GW_ENV(test 開、prod 關,正式區 C6 後再開);0 關閉
+      #   另外要有 LLM_URL 與自動對帳(ClickHouse + NETOPS_RECON_TIME)才會跑;AI 主機無法使用不影響對帳與同步
+      NETOPS_AI_DAILY_SUMMARY: ${NETOPS_AI_DAILY_SUMMARY:-}
+      # ClickHouse 每小時摘要(總覽排行):保留天數同 ClickHouse TRAFFIC(正式區 30 天;測試區 TTL 3 天,多的天數沒有資料)
+      NETOPS_CH_SUMMARY_DAYS: ${NETOPS_CH_SUMMARY_DAYS:-30}
+      NETOPS_CH_SUMMARY_MINUTES: ${NETOPS_CH_SUMMARY_MINUTES:-5}
+      # 冷明細(C4 / V-a 冷路由):時段明細早於原始表保留的部分讀 NAS Parquet(netops_cold 才能用 file());0 = 不開放(回 409)
+      NETOPS_ARCHIVE_ENABLED: ${NETOPS_ARCHIVE_ENABLED:-1}
+      CLICKHOUSE_COLD_USER: netops_cold
+      CLICKHOUSE_COLD_PASSWORD_FILE: /run/secrets/ch_cold_password
+    volumes:
+      - ${NETOPS_DATA_HOST_DIR:?NETOPS_DATA_HOST_DIR 必須設定}:/data
+    secrets: [gw_api_key, monitor_api_key, ftp_password, qdrant_api_key, ch_reader_password, ch_cold_password]
+    networks:
+      gateway:
+        aliases: [netops-api]
+      netops-internal:
+      # C3:唯讀查詢 netops-clickhouse
+      netops-ch:
+
+  # PA 即時監控的 Redis(R1,PA-LIVE-PLAN §3.2):NetOps 專用,不共用 Gateway 的 Redis。
+  #   只在內部網路 netops-internal(internal: true,不對主機開 port、不能連外);只有 netops-api、netops-pa、netops-ingest(C2)連得到,所以不設密碼
+  #   maxmemory 2 GB + noeviction:滿了寫入失敗(netops-pa 心跳記錄錯誤),不默默丟資料;RDB 開、AOF 不開(2026-11-04 決定)
+  #   保留時間由 netops-pa 修剪(TRAFFIC 明細 1 小時、統計 1 天;其他 2 天);資料遺失時歷史仍可從 FTP 查
+  netops-redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --maxmemory
+      - ${NETOPS_REDIS_MAXMEMORY:-2gb}
+      - --maxmemory-policy
+      - noeviction
+      - --appendonly
+      - "no"
+      - --save
+      - "3600 1 300 100 60 10000"
+      # 只在內部網路;保護模式會擋掉容器間的無密碼連線
+      - --protected-mode
+      - "no"
+    volumes:
+      - netops_redis_data:/data
+    read_only: true
+    # 官方映像 entrypoint 以 su-exec 切到 redis 使用者,需要這三個 capability
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID]
+    security_opt: ["no-new-privileges:true"]
+    # 關閉前存 RDB(資料接近 2 GB 時需要較長時間)
+    stop_grace_period: 60s
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging: &pa-logging
+      options: { max-size: 10m, max-file: "3" }
+    networks: [netops-internal]
+
+  # PA log 歷史(C1,ARCHITECTURE D27–D29、docs/PA-LOG-CLICKHOUSE-GUIDE.md §7、§10.2):TRAFFIC 與威脅類原始 log、每小時彙總。
+  #   只在內部網路 netops-ch(C2 起;不對主機開 port、不能連外):只有 netops-ingest(C2)與 netops-api(C3 起)連得到,
+  #   接收外部 Syslog / HTTP 的 netops-pa 不在這個網路(C1 資安審查 L3)。寫入管線 netops-ingest 在 C2、查詢切換在 C3
+  #   記憶體:容器上限 NETOPS_CH_MEM_LIMIT(測試區 1536m,不給 swap),伺服器上限 = 容器上限 × 0.75(config.d/low-memory.xml)
+  #   資料表與 TTL:deploy/clickhouse/apply-schema.sh(CI 啟動後執行;測試區 3 天)
+  #   帳號:default 只允許容器內本機(管理用 docker exec);應用程式帳號 netops_writer / reader / cold 定義在主機機密檔
+  #         ${NETOPS_SECRETS_DIR}/clickhouse/netops-users.xml(只含密碼雜湊;deploy/host2-set-clickhouse-secrets.sh 由本人執行)
+  #   以映像內建的 clickhouse 使用者(uid 101)執行,不需要任何 capability;資料可由 FTP 重建,不另外備份(手冊 §13)
+  #   冷歸檔(C4):NAS 的 pa-archive 唯讀掛在 user_files/archive(file() 只能讀 user_files 底下);主機的 cifs 掛載是 uid / gid 1000、
+  #     檔案 0640、目錄 0750,所以加入群組 1000 才讀得到(只加群組,不改使用者;其他掛載的檔案都是 101 擁有)
+  netops-clickhouse:
+    image: clickhouse/clickhouse-server:26.3.62.3
+    restart: unless-stopped
+    user: "101:101"
+    group_add: ["1000"]
+    read_only: true
+    tmpfs: [/tmp]
+    mem_limit: ${NETOPS_CH_MEM_LIMIT:-1536m}
+    memswap_limit: ${NETOPS_CH_MEM_LIMIT:-1536m}
+    cpus: ${NETOPS_CH_CPUS:-2}
+    ulimits:
+      nofile: { soft: 262144, hard: 262144 }
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      # 帳號由 users.d 設定,映像不要自動建立 / 改 default
+      CLICKHOUSE_SKIP_USER_SETUP: "1"
+    volumes:
+      - netops_ch_data:/var/lib/clickhouse
+      - ./clickhouse/config.d/low-memory.xml:/etc/clickhouse-server/config.d/zz-netops-low-memory.xml:ro
+      - ./clickhouse/users.d/default.xml:/etc/clickhouse-server/users.d/zz-netops-default.xml:ro
+      - ./clickhouse/users.d/profiles.xml:/etc/clickhouse-server/users.d/zz-netops-profiles.xml:ro
+      # 機密檔不存在時啟動失敗,不讓 Docker 自動建立同名空目錄
+      - type: bind
+        source: ${NETOPS_SECRETS_DIR}/clickhouse/netops-users.xml
+        target: /etc/clickhouse-server/users.d/zz-netops-users.xml
+        read_only: true
+        bind: { create_host_path: false }
+      # NAS 沒掛上時 Docker 會建本機空目錄(ClickHouse 照常啟動,冷明細回 404);寫入不受影響
+      - ${NETOPS_ARCHIVE_HOST_DIR:-/mnt/nas-docker/giga-netops/${GW_ENV}/pa-archive}:/var/lib/clickhouse/user_files/archive:ro
+    # 關閉前讓背景合併與緩衝寫完
+    stop_grace_period: 60s
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8123/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    logging: *pa-logging
+    networks: [netops-ch]
+
+  # PA log 寫入管線(C2,ARCHITECTURE D28、手冊 §6):consumer group ch-writer 讀 netops:pa:log:{traffic,threat,url,data,wildfire},
+  #   每 5 秒(INGEST_BATCH_SECONDS,3–5)批次寫 ClickHouse,成功才 ACK;重啟先補待處理清單(去重 token 相同,不重複);不過濾雜訊(CQ8)
+  #   和 netops-api 同一個映像、不同進入點(CQ4);不是 Gateway 上游、不開 port(D24);**單一容器,不要加 replicas**
+  #   狀態:心跳 netops:ingest:heartbeat(計數、落後、最後錯誤)、缺口清單 netops:ingest:gaps(Stream 被修剪、沒寫進去的區間,交給 FTP 補漏)
+  #   健康檢查:主迴圈每次推進都更新 /tmp/netops-ingest.alive;2 分鐘沒更新(Redis 斷線等)就 unhealthy
+  #   機密(NETOPS_SECRETS_DIR,uid 1000 可讀;deploy/host2-set-clickhouse-secrets.sh 已產生):ch_writer_password;C3 起加 ftp_password(netops-api 同一份,FTP 補漏)
+  netops-ingest:
+    image: ${NETOPS_IMAGE_PREFIX:-giganexus}/netops-api:${IMAGE_TAG:-dev}
+    command: ["node", "dist/src/ingest/main.js"]
+    restart: unless-stopped
+    init: true
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: ${NETOPS_INGEST_MEM_LIMIT:-256m}
+    memswap_limit: ${NETOPS_INGEST_MEM_LIMIT:-256m}
+    # 停止時寫完手上這批再 ACK(ClickHouse 重試中就直接結束,下次啟動補)
+    stop_grace_period: 30s
+    logging: *pa-logging
+    depends_on:
+      netops-redis:
+        condition: service_healthy
+      netops-clickhouse:
+        condition: service_healthy
+    environment:
+      GW_ENV: ${GW_ENV}
+      RELEASE_SHA: ${RELEASE_SHA:-dev}
+      REDIS_URL: redis://netops-redis:6379/0
+      CLICKHOUSE_URL: http://netops-clickhouse:8123
+      CLICKHOUSE_USER: netops_writer
+      CLICKHOUSE_PASSWORD_FILE: /run/secrets/ch_writer_password
+      INGEST_BATCH_SECONDS: ${NETOPS_INGEST_BATCH_SECONDS:-5}
+      # V8 heap 上限低於容器上限:記憶體吃緊時先 GC / 丟出錯誤,不要整個容器被 OOM kill(資安審查 M1)
+      NODE_OPTIONS: --max-old-space-size=160
+      # FTP 補漏(C3,ARCHITECTURE D33、手冊 §11.3):netops-api 建工作(手動,netops.ftp.write),這裡從 FTP 讀 TRAFFIC CSV,
+      #   只補寫 seqno 不在 ClickHouse 的列;一次一個工作、1 條 FTP 連線(只讀)。FTP_HOST 空白 = 不執行補漏
+      FTP_HOST: ${FTP_HOST:-}
+      FTP_USER: ${FTP_USER:-}
+      FTP_PASSWORD_FILE: /run/secrets/ftp_password
+      FTP_ROOT: ${FTP_ROOT:-}
+      FTP_LOG_DIR: ${FTP_LOG_DIR:-}
+      # 冷歸檔(C4,手冊 §8):每天 02:30 匯出前一天的 TRAFFIC 與威脅類 Parquet → 本機暫存 → NAS(/archive),SHA-256、manifest、
+      #   失敗每小時重試到資料被 TTL 刪除前(D+25 心跳告警 archiveState=late);讀回核對列數用 netops_cold;和冷明細共用冷查詢鎖
+      #   保留天數 NETOPS_ARCHIVE_KEEP_DAYS:測試區預設 14(NAS docker-folder 只剩約 18 GB);正式區 0 = 不刪(至少 1 年,CQ12)
+      NETOPS_ARCHIVE_ENABLED: ${NETOPS_ARCHIVE_ENABLED:-1}
+      INGEST_ARCHIVE_KEEP_DAYS: ${NETOPS_ARCHIVE_KEEP_DAYS:-}
+      # 單一 Parquet 上限(MB;平常一天 0.2–0.4 GB);暫存或 NAS 剩餘 < 2 GB 時不歸檔(心跳 archiveState=disk-low)
+      INGEST_ARCHIVE_MAX_MB: ${NETOPS_ARCHIVE_MAX_MB:-}
+      CLICKHOUSE_COLD_USER: netops_cold
+      CLICKHOUSE_COLD_PASSWORD_FILE: /run/secrets/ch_cold_password
+    volumes:
+      # NAS 歸檔目錄(只掛自己的目錄,不掛整個 /mnt/nas-docker);沒有標記檔 .giga-netops-archive 時不寫入
+      - ${NETOPS_ARCHIVE_HOST_DIR:-/mnt/nas-docker/giga-netops/${GW_ENV}/pa-archive}:/archive
+      # 匯出暫存(WSL 磁碟;一天約 0.2–0.4 GB,完成後刪除)。映像預先建立目錄(node 擁有),volume 第一次掛載時沿用擁有者
+      - netops_ingest_staging:/var/lib/netops-ingest/staging
+    secrets: [ch_writer_password, ftp_password, ch_cold_password]
+    # 映像的 HEALTHCHECK 是 netops-api 的 /healthz,這裡換掉
+    healthcheck:
+      test: ["CMD", "node", "-e", "process.exit(Date.now() - require('fs').statSync('/tmp/netops-ingest.alive').mtimeMs < 120000 ? 0 : 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    # ingest-egress(C3):只為了連 FTP 10.10.130.66(補漏);不對主機開 port
+    networks: [netops-internal, netops-ch, ingest-egress]
+
+  # PA-560 收集器(R1,Python,PA-LIVE-PLAN §3.1;pa-collector/):SDK 唯讀輪詢 + HTTP / Syslog 接收,只寫 netops-redis。
+  #   不是 Gateway 上游(D24),不註冊路由、不接 setupGateway;狀態寫心跳 netops:pa:heartbeat,由 netops-api 呈現
+  #   兩個開關(netops.env;測試區預設 0,測試時才開,2026-11-05 需求方決定):
+  #     PA_POLL_ENABLED     只控制 SDK 輪詢 PA-560(需 PA_HOST、機密 pa_api_key)
+  #     PA_RECEIVE_ENABLED  控制 HTTP 51293 / Syslog 51294 接收(需機密 pa_http_token、PA_ALLOWED_SOURCES)
+  #     PA_QUERY_ENABLED    PA 精準查詢執行者(C5,D31:需 PA_HOST、機密 pa_api_key,API 角色要有 XML API Log 權限 E4);
+  #                         測試區預設 0,由需求方手動開;PA_QUERY_MAX_MGMT_CPU 管理平面 CPU 門檻(預設 50,E4,實測前不放寬)
+  #   port 只綁 WSL 的 127.0.0.1:Windows 以 portproxy 帶進來,Windows 防火牆只放行 PA-560(docs/PA-FORWARDING-SPEC.md 附錄 F)
+  #   機密(NETOPS_SECRETS_DIR,uid 1000 可讀;deploy/host2-set-pa-secrets.sh):pa_api_key(空檔 = 尚未取得)、pa_http_token
+  netops-pa:
+    image: ${NETOPS_IMAGE_PREFIX:-giganexus}/netops-pa:${IMAGE_TAG:-dev}
+    build:
+      context: ../pa-collector
+      target: runtime
+    restart: unless-stopped
+    init: true
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    logging: *pa-logging
+    depends_on:
+      netops-redis:
+        condition: service_healthy
+    environment:
+      GW_ENV: ${GW_ENV}
+      REDIS_URL: redis://netops-redis:6379/0
+      PA_POLL_ENABLED: ${PA_POLL_ENABLED:-0}
+      PA_HOST: ${PA_HOST:-}
+      PA_PORT: ${PA_PORT:-}
+      PA_API_KEY_FILE: /run/secrets/pa_api_key
+      PA_POLL_SECONDS: ${PA_POLL_SECONDS:-}
+      # 測試區 PA-560 是自簽憑證、尚未取得憑證時才設 1(正式區設了會啟動失敗)
+      PA_TLS_INSECURE: ${PA_TLS_INSECURE:-}
+      PA_RECEIVE_ENABLED: ${PA_RECEIVE_ENABLED:-0}
+      PA_QUERY_ENABLED: ${PA_QUERY_ENABLED:-0}
+      PA_QUERY_MAX_MGMT_CPU: ${PA_QUERY_MAX_MGMT_CPU:-}
+      PA_HTTP_TOKEN_FILE: /run/secrets/pa_http_token
+      PA_ALLOWED_SOURCES: ${PA_ALLOWED_SOURCES:-}
+      # 憑證(選用;檔案放在主機 NETOPS_PA_TLS_HOST_DIR,唯讀掛到 /run/pa-tls,檔名固定見 docs/PA-FORWARDING-SPEC.md 附錄 F.6):
+      #   PA_CA_FILE            驗證 PA-560 管理介面憑證(公開資訊)
+      #   PA_TLS_CERT/KEY_FILE  接收端點改 HTTPS / Syslog SSL;PA_TLS_CLIENT_CA_FILE 要求 PA-560 用戶端憑證(Syslog 唯一的身分驗證)
+      #   PA_RECEIVE_PLAINTEXT  正式區沒有憑證時要明確設 1 才允許明文接收(需求方決定)
+      PA_CA_FILE: ${PA_CA_FILE:-}
+      PA_TLS_CERT_FILE: ${PA_TLS_CERT_FILE:-}
+      PA_TLS_KEY_FILE: ${PA_TLS_KEY_FILE:-}
+      PA_TLS_CLIENT_CA_FILE: ${PA_TLS_CLIENT_CA_FILE:-}
+      PA_RECEIVE_PLAINTEXT: ${PA_RECEIVE_PLAINTEXT:-}
+    volumes:
+      - ${NETOPS_PA_TLS_HOST_DIR:-/srv/giganexus/netops-pa-tls}:/run/pa-tls:ro
+    secrets: [pa_api_key, pa_http_token]
+    ports:
+      - "127.0.0.1:51293:51293"
+      - "127.0.0.1:51294:51294"
+    networks: [pa-ingress, netops-internal]
+
+  # 知識庫每日備份到 NAS(唯讀掛載資料目錄;不連網路)。NAS 晚於容器掛載時需重建容器(--force-recreate,CI 部署每次都會)
+  netops-kb-backup:
+    image: ${NETOPS_IMAGE_PREFIX:-giganexus}/netops-kb-backup:${IMAGE_TAG:-dev}
+    build:
+      context: ./kb-backup
+    restart: unless-stopped
+    network_mode: none
+    # PID 1 不是 sh:docker stop / 重建時立即結束,不等 10 秒被強制終止
+    init: true
+    # 只寫 /backup;不需要任何 capability
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    # 健康檢查:/backup/LAST_RESULT 26 小時內更新過(每天備份一次 + 緩衝)且結果是 OK。
+    #   備份 FAIL、NAS 未掛載(沒有標記檔就不寫結果)、超過一天沒備份都會 unhealthy
+    #   CI 的 up --wait 會等到 healthy:正常部署第一次檢查(約 30 秒)就通過;啟動時的備份最多等 5 分鐘;備份失敗時 deploy-api-test 失敗
+    healthcheck:
+      test: ["CMD-SHELL", "find /backup/LAST_RESULT -mmin -1560 | grep -q . && grep -q '^[^ ]* OK ' /backup/LAST_RESULT"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5m
+    environment:
+      GW_ENV: ${GW_ENV}
+      KB_BACKUP_HOUR: ${KB_BACKUP_HOUR:-2}
+      KB_BACKUP_KEEP: ${KB_BACKUP_KEEP:-30}
+    volumes:
+      - ${NETOPS_DATA_HOST_DIR}:/data:ro
+      # 主機 cifs 掛載點下的區域目錄(附件服務同一個 NAS 分享 docker-folder);沒有標記檔 .giga-netops-backup 時不寫入
+      - ${NETOPS_KB_BACKUP_HOST_DIR:-/mnt/nas-docker/giga-netops/${GW_ENV}}:/backup
+
+  # 前端 SPA:發佈到 Gateway 的 gw_www(/srv/www/netops/current,Nginx /netops/);不長駐
+  spa-netops:
+    image: ${NETOPS_IMAGE_PREFIX:-giganexus}/spa-netops:${IMAGE_TAG:-dev}
+    build:
+      context: ../frontend
+      # @giganexus/web-kit 取自公司 GitLab npm Registry(建置 secret npm_token)
+      secrets: [npm_token]
+      args:
+        RELEASE_SHA: ${RELEASE_SHA:-}
+    profiles: ["publish"]
+    restart: "no"
+    volumes:
+      - gw_www:/srv/www
+    command: ["publish", "netops"]
+
+secrets:
+  gw_api_key:
+    file: ${NETOPS_SECRETS_DIR:?NETOPS_SECRETS_DIR 必須設定}/gw_api_key
+  monitor_api_key:
+    file: ${NETOPS_SECRETS_DIR}/monitor_api_key
+  ftp_password:
+    file: ${NETOPS_SECRETS_DIR}/ftp_password
+  qdrant_api_key:
+    file: ${NETOPS_SECRETS_DIR}/qdrant_api_key
+  pa_api_key:
+    file: ${NETOPS_SECRETS_DIR}/pa_api_key
+  pa_http_token:
+    file: ${NETOPS_SECRETS_DIR}/pa_http_token
+  # netops-ingest 寫入 ClickHouse(C2;deploy/host2-set-clickhouse-secrets.sh 產生)
+  ch_writer_password:
+    file: ${NETOPS_SECRETS_DIR}/ch_writer_password
+  # netops-api 唯讀查詢 ClickHouse(C3;同一支腳本已產生)
+  ch_reader_password:
+    file: ${NETOPS_SECRETS_DIR}/ch_reader_password
+  # 冷明細與歸檔讀回核對(C4,netops_cold;同一支腳本在 C1 已產生)
+  ch_cold_password:
+    file: ${NETOPS_SECRETS_DIR}/ch_cold_password
+  # 建置用:GitLab npm Registry 讀取 Token(環境變數 GITLAB_NPM_TOKEN;CI 由主機機密檔讀入)
+  npm_token:
+    environment: GITLAB_NPM_TOKEN
+
+volumes:
+  # netops-redis 的 RDB 快照(重啟後保留最近資料)
+  netops_redis_data:
+  # netops-clickhouse 資料(C1;測試區 TTL 3 天,約 1–2 GB)
+  netops_ch_data:
+  # netops-ingest 冷歸檔的本機暫存(C4)
+  netops_ingest_staging:
+  # Gateway Nginx 唯讀掛載的 SPA volume(Gateway DEPLOYMENT.md §3.4)
+  gw_www:
+    external: true
+    name: ${GW_WWW_VOLUME:-giganexus-gw_gw_www}
+
+networks:
+  gateway:
+    external: true
+    name: ${GW_NETWORK:-giganexus-gw_default}
+  # PA 即時監控(R1):netops-redis 只在這個內部網路(不能連外、不對主機開 port)
+  netops-internal:
+    internal: true
+  # PA log ClickHouse(C2):只有 netops-clickhouse、netops-ingest、netops-api(C3);netops-pa 不在這裡
+  netops-ch:
+    internal: true
+  # netops-pa 連 PA-560 與接收轉送用(published port 需要非 internal 網路)
+  pa-ingress:
+  # netops-ingest 連 FTP 補漏用(C3;只有 netops-ingest 在這個網路)
+  ingest-egress:

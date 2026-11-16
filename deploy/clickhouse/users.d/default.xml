@@ -1,0 +1,15 @@
+<!--
+  default 帳號只允許容器內本機連線(管理用:docker compose exec netops-clickhouse clickhouse-client)。
+  CLICKHOUSE_SKIP_USER_SETUP=1 時映像不會自動限制 default,所以在這裡明確限制;應用程式一律用 netops_* 帳號
+  (deploy/host2-set-clickhouse-secrets.sh 產生,掛成 users.d/zz-netops-users.xml)。
+-->
+<clickhouse>
+    <users>
+        <default>
+            <networks replace="replace">
+                <ip>::1</ip>
+                <ip>127.0.0.1</ip>
+            </networks>
+        </default>
+    </users>
+</clickhouse>

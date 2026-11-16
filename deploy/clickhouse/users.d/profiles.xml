@@ -1,0 +1,70 @@
+<!--
+  查詢設定檔(C1;手冊 §10.2)。帳號本身(含密碼雜湊)在主機機密目錄,由 deploy/host2-set-clickhouse-secrets.sh 產生。
+    default        管理與 POC 匯入(docker exec):單一查詢 600 MB、GROUP BY / ORDER BY 超過 300 MB 落地磁碟
+    netops_writer  netops-ingest 寫入、歸檔、補漏(C2、C4)
+    netops_reader  netops-api 一般查詢(C3):readonly=2,上限以 constraints 固定(min 1:0 在 ClickHouse 代表「不限制」;max_threads 0 代表自動,所以設成 const)
+    netops_cold    冷查詢讀 NAS Parquet(C4):單執行緒
+-->
+<clickhouse>
+    <profiles>
+        <default>
+            <max_threads>2</max_threads>
+            <max_insert_threads>1</max_insert_threads>
+            <max_memory_usage>629145600</max_memory_usage>
+            <max_bytes_before_external_group_by>314572800</max_bytes_before_external_group_by>
+            <max_bytes_before_external_sort>314572800</max_bytes_before_external_sort>
+            <!-- 平行解析 / 輸出會為每條執行緒各配一大塊緩衝,小記憶體關掉 -->
+            <input_format_parallel_parsing>0</input_format_parallel_parsing>
+            <output_format_parallel_formatting>0</output_format_parallel_formatting>
+            <min_insert_block_size_bytes>67108864</min_insert_block_size_bytes>
+            <log_queries>1</log_queries>
+        </default>
+        <netops_writer>
+            <max_threads>2</max_threads>
+            <max_insert_threads>1</max_insert_threads>
+            <max_memory_usage>524288000</max_memory_usage>
+            <max_bytes_before_external_group_by>262144000</max_bytes_before_external_group_by>
+            <max_bytes_before_external_sort>262144000</max_bytes_before_external_sort>
+            <input_format_parallel_parsing>0</input_format_parallel_parsing>
+            <output_format_parallel_formatting>0</output_format_parallel_formatting>
+            <log_queries>1</log_queries>
+            <constraints>
+                <max_threads><const/></max_threads>
+                <max_memory_usage><min>1</min><max>524288000</max></max_memory_usage>
+            </constraints>
+        </netops_writer>
+        <netops_reader>
+            <readonly>2</readonly>
+            <max_threads>2</max_threads>
+            <max_execution_time>50</max_execution_time>
+            <max_memory_usage>524288000</max_memory_usage>
+            <max_result_rows>100000</max_result_rows>
+            <max_bytes_before_external_group_by>262144000</max_bytes_before_external_group_by>
+            <max_bytes_before_external_sort>262144000</max_bytes_before_external_sort>
+            <output_format_parallel_formatting>0</output_format_parallel_formatting>
+            <log_queries>1</log_queries>
+            <constraints>
+                <max_threads><const/></max_threads>
+                <max_execution_time><min>1</min><max>50</max></max_execution_time>
+                <max_memory_usage><min>1</min><max>524288000</max></max_memory_usage>
+                <max_result_rows><min>1</min><max>100000</max></max_result_rows>
+            </constraints>
+        </netops_reader>
+        <netops_cold>
+            <readonly>2</readonly>
+            <max_threads>1</max_threads>
+            <max_execution_time>50</max_execution_time>
+            <max_memory_usage>524288000</max_memory_usage>
+            <max_result_rows>100000</max_result_rows>
+            <input_format_parallel_parsing>0</input_format_parallel_parsing>
+            <output_format_parallel_formatting>0</output_format_parallel_formatting>
+            <log_queries>1</log_queries>
+            <constraints>
+                <max_threads><const/></max_threads>
+                <max_execution_time><min>1</min><max>50</max></max_execution_time>
+                <max_memory_usage><min>1</min><max>524288000</max></max_memory_usage>
+                <max_result_rows><min>1</min><max>100000</max></max_result_rows>
+            </constraints>
+        </netops_cold>
+    </profiles>
+</clickhouse>

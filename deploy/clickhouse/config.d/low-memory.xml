@@ -1,0 +1,72 @@
+<!--
+  netops-clickhouse 伺服器設定(C1,docs/PA-LOG-CLICKHOUSE-GUIDE.md §10.2):小主機低記憶體。
+  設定名稱以 26.3 LTS 的 system.server_settings 核對過(C1 報告 docs/test-reports/2026-11-10-clickhouse-c1.md §5)。
+  記憶體上限依容器 mem_limit(cgroup)× ratio 計算:測試區 1536 MB × 0.75 ≈ 1.1 GB。
+-->
+<clickhouse>
+    <max_server_memory_usage_to_ram_ratio>0.75</max_server_memory_usage_to_ram_ratio>
+    <!-- 快取調小(預設各 300 MB;query condition cache 預設 100 MB):標記 128 MB、主鍵索引 64 MB、其他 16–32 MB;不開 uncompressed cache -->
+    <mark_cache_size>134217728</mark_cache_size>
+    <primary_index_cache_size>67108864</primary_index_cache_size>
+    <index_mark_cache_size>33554432</index_mark_cache_size>
+    <uncompressed_cache_size>0</uncompressed_cache_size>
+    <vector_similarity_index_cache_size>16777216</vector_similarity_index_cache_size>
+    <compiled_expression_cache_size>16777216</compiled_expression_cache_size>
+    <query_condition_cache_size>33554432</query_condition_cache_size>
+    <max_concurrent_queries>20</max_concurrent_queries>
+    <!-- 背景合併執行緒(預設 16):寫入量小,4 條夠用 -->
+    <background_pool_size>4</background_pool_size>
+    <background_common_pool_size>4</background_common_pool_size>
+    <background_move_pool_size>2</background_move_pool_size>
+    <background_fetches_pool_size>2</background_fetches_pool_size>
+    <!-- 合併池調小後,這三個門檻要 ≤ background_pool_size × background_merges_mutations_concurrency_ratio(4 × 2 = 8),否則啟動失敗 -->
+    <merge_tree>
+        <number_of_free_entries_in_pool_to_execute_mutation>4</number_of_free_entries_in_pool_to_execute_mutation>
+        <number_of_free_entries_in_pool_to_lower_max_size_of_merge>4</number_of_free_entries_in_pool_to_lower_max_size_of_merge>
+        <number_of_free_entries_in_pool_to_execute_optimize_entire_partition>4</number_of_free_entries_in_pool_to_execute_optimize_entire_partition>
+    </merge_tree>
+    <timezone>Asia/Taipei</timezone>
+
+    <!-- 系統 log 表:只留 query_log / part_log(3 天),其他關掉,避免吃磁碟與記憶體 -->
+    <query_log replace="1">
+        <database>system</database>
+        <table>query_log</table>
+        <engine>ENGINE = MergeTree PARTITION BY event_date ORDER BY event_time TTL event_date + INTERVAL 3 DAY</engine>
+        <flush_interval_milliseconds>7500</flush_interval_milliseconds>
+    </query_log>
+    <part_log replace="1">
+        <database>system</database>
+        <table>part_log</table>
+        <engine>ENGINE = MergeTree PARTITION BY event_date ORDER BY event_time TTL event_date + INTERVAL 3 DAY</engine>
+        <flush_interval_milliseconds>7500</flush_interval_milliseconds>
+    </part_log>
+    <trace_log remove="1"/>
+    <metric_log remove="1"/>
+    <asynchronous_metric_log remove="1"/>
+    <text_log remove="1"/>
+    <query_thread_log remove="1"/>
+    <query_views_log remove="1"/>
+    <query_metric_log remove="1"/>
+    <processors_profile_log remove="1"/>
+    <opentelemetry_span_log remove="1"/>
+    <session_log remove="1"/>
+    <error_log remove="1"/>
+    <latency_log remove="1"/>
+    <blob_storage_log remove="1"/>
+    <background_schedule_pool_log remove="1"/>
+
+    <!-- 日誌只輸出到 stdout(Docker 的 max-size 輪替);不寫容器內的 log 檔 -->
+    <logger>
+        <level>warning</level>
+        <console>1</console>
+        <log remove="1"/>
+        <errorlog remove="1"/>
+    </logger>
+
+    <!-- 容器只在 Compose 內部網路(netops-internal),不對主機開 port -->
+    <listen_host>0.0.0.0</listen_host>
+    <!-- 只留 HTTP 8123 與原生 9000;MySQL / PostgreSQL 相容協定與 interserver(沒有複寫)用不到,不監聽 -->
+    <mysql_port remove="1"/>
+    <postgresql_port remove="1"/>
+    <interserver_http_port remove="1"/>
+</clickhouse>

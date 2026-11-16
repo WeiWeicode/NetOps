@@ -1,0 +1,146 @@
+# 資訊網通管理系統(NetOps)的畫面權限與角色(Gateway CLI `apply` 格式;同 GigaItApp、giga-Portal 的 deploy/gateway-rbac.yaml;IMPL-PLAN D1)
+#
+#   sh deploy/apply-gateway-rbac.sh test <Gateway 區域 env 檔>      # CI rbac-test 於 develop 自動執行
+#
+# 內容(ARCHITECTURE §5 權限草案):
+#   ① 應用、選單目錄、選單與按鈕(系統代碼 netops;kind / parent / sort 供 GigaItApp「權限設定 › 應用權限」樹狀設定)
+#      只負責首次登記:已存在的權限不覆寫名稱、上層與排序,之後在 GigaItApp「系統管理 › 選單管理」調整
+#      includes = 此頁 / 按鈕需要的 API 權限(隨附:擁有選單即一併擁有),與 frontend/src/router.ts 的 requires、frontend/src/api/perms.ts 一致
+#      API 權限(netops.pa.read 等)由 netops-api 啟動時自動註冊 OpenAPI 建立(x-permissions),本檔不重複登記;
+#      尚未註冊時 includes 會略過,下次套用補上
+#   ② 角色 netops-admin、netops-viewer:只定義角色內容,**不指派成員**。成員由系統負責人在 GigaItApp「人員」或「角色與指派規則」設定(D15)
+#      (此處不寫 adGroups / companies,套用時不會覆蓋畫面上的設定;permissions 會整組取代,新增選單請改此檔)
+#   netops.ping.read(B0 連線驗證 API)不綁畫面節點,也不放進角色;需要時個別指派
+#   「其他系統」目錄(Veeam 等一般連結,D11、D18)只在前端,不登記
+#   上游 netops-api 與 /api/netops/* 路由由服務啟動時自動註冊為草稿(BACKEND-GUIDE §7.5),不另寫 gateway-routes.yaml
+# 測試區與正式區設定不互通(Gateway PRD Q3),兩區各自套用。應用登記(gw.app,應用切換)由 Gateway 負責人維護(Gateway deploy/gateway-apps.yaml)。
+
+permissions:
+  - { code: netops.app.access, name: 資訊網通管理系統使用權限, kind: app, sort: 30 }
+  # 選單目錄(kind group:側欄大項,只分組命名、不可授予;名稱 / 排序 / 圖示可在「選單管理」修改;圖示須是 frontend/src/ui/icons.ts 登記的名稱)
+  - { code: netops.group.firewall, name: 防火牆 PA-560, kind: group, parent: netops.app.access, sort: 10, icon: shield }
+  - { code: netops.group.ad, name: AD 網域, kind: group, parent: netops.app.access, sort: 20, icon: gateway }
+  - { code: netops.group.knowledge, name: 網通知識, kind: group, parent: netops.app.access, sort: 30, icon: book-open }
+
+  # 防火牆 PA-560
+  # 即時監控(R1;PA-LIVE-PLAN §8):群組最上方,API 權限 netops.pa-realtime.read
+  - { code: netops.pa-live.read, name: 即時監控, kind: menu, parent: netops.group.firewall, sort: 5, includes: [netops.pa-realtime.read] }
+  # 測試區暫停 / 繼續收集器(2026-11-09 需求方決定;只給 netops-admin)。正式區 API 回 403、畫面不顯示按鈕
+  - { code: netops.pa-live.manage, name: 測試區暫停 / 繼續收集器, kind: button, parent: netops.pa-live.read, sort: 10, includes: [netops.pa-realtime.write] }
+  # C5 PA 精準查詢(XML API log、Session Browser;D31):只給 netops-admin(CQ7,netops-viewer 不列)。
+  # 熱力圖 / 儀表板的同名按鈕(netops.pa-heatmap.query、netops.pa-insight.query)等那兩個選單(!78)合併後再登記
+  - { code: netops.pa-live.query, name: 查詢 PA 即時連線 / 精準 log, kind: button, parent: netops.pa-live.read, sort: 20, includes: [netops.pa-query.read] }
+  - { code: netops.pa-dashboard.read, name: 流量總覽, kind: menu, parent: netops.group.firewall, sort: 10, includes: [netops.pa.read] }
+  # V-b1(VIZ-RULES-DESIGN §4.8,X15:熱力圖 sort 12、儀表板 sort 15;時段明細抽屜要 netops.pa-log.read)
+  # 「查詢即時連線」按鈕(netops.pa-heatmap.query / netops.pa-insight.query)等 C5 完成才登記
+  # 注意:includes netops.pa-log.read 等於同時開放「Log 明細查詢」API(時段明細抽屜要用);只授權這兩個選單的角色也能查原始 log(設計 §4.8 決定)
+  - { code: netops.pa-heatmap.read, name: 活動熱力圖, kind: menu, parent: netops.group.firewall, sort: 12, includes: [netops.pa.read, netops.pa-log.read] }
+  - { code: netops.pa-insight.read, name: 分析儀表板, kind: menu, parent: netops.group.firewall, sort: 15, includes: [netops.pa.read, netops.pa-log.read] }
+  - { code: netops.pa-events.read, name: 安全事件, kind: menu, parent: netops.group.firewall, sort: 20, includes: [netops.pa.read] }
+  - { code: netops.pa-search.read, name: Log 明細查詢, kind: menu, parent: netops.group.firewall, sort: 30, includes: [netops.pa-log.read] }
+  - { code: netops.pa-files.read, name: FTP Log 檔案, kind: menu, parent: netops.group.firewall, sort: 40, includes: [netops.ftp.read] }
+  # 同步 / 分析 / 刪除分析結果(FTP 唯讀,只刪本系統資料;AGENT.md §7.4)
+  - { code: netops.pa-files.manage, name: 同步 / 分析 / 刪除分析結果, kind: button, parent: netops.pa-files.read, sort: 10, includes: [netops.ftp.write] }
+
+  # AD 網域
+  - { code: netops.ad-events.read, name: AD 事件總覽, kind: menu, parent: netops.group.ad, sort: 10, includes: [netops.ad.read] }
+  - { code: netops.ad-search.read, name: Log 明細查詢, kind: menu, parent: netops.group.ad, sort: 20, includes: [netops.ad-log.read] }
+  - { code: netops.ad-files.read, name: FTP Log 檔案, kind: menu, parent: netops.group.ad, sort: 30, includes: [netops.ftp.read] }
+  - { code: netops.ad-files.manage, name: 同步 / 匯入 / 刪除匯入結果, kind: button, parent: netops.ad-files.read, sort: 10, includes: [netops.ftp.write] }
+
+  # 網通知識
+  - { code: netops.kb-page.read, name: 知識庫, kind: menu, parent: netops.group.knowledge, sort: 10, includes: [netops.kb.read] }
+  - { code: netops.kb-page.write, name: 新增 / 修改 / 刪除筆記, kind: button, parent: netops.kb-page.read, sort: 10, includes: [netops.kb.write] }
+  # IP 對照表(AC3;姓名、部門屬個資):選單與按鈕只給 netops-admin(網管),netops-viewer 不列(例外同 D31)。
+  #   PA 各畫面的名稱沿用各 PA API 的權限(看得到 PA 的人就看得到名稱),不需要這兩個節點
+  - { code: netops.ip-name-page.read, name: IP 對照表, kind: menu, parent: netops.group.knowledge, sort: 20, includes: [netops.ip-name.read] }
+  - { code: netops.ip-name-page.write, name: 新增 / 修改 / 刪除 / 匯入對照, kind: button, parent: netops.ip-name-page.read, sort: 10, includes: [netops.ip-name.write] }
+
+  # AI(IMPL-PLAN A1,ARCHITECTURE D23):netops.ai.use 不是 .read,選單不能綁定(BACKEND-GUIDE §6.1),改由按鈕綁定;
+  #   AI 問答頁的選單只綁該頁需要的讀取權限。舊版的整理筆記(寫知識庫)與翻譯依 2026-11-09 決定不搬(D25)
+  #   語意搜尋、向量庫狀態、外部 IP 學習狀態用 netops.kb.read;立即同步 / 學習用 netops.kb.write(知識庫頁既有的節點)
+#   netops.ai.use 的資料範圍是 PA + AD + 知識庫(問答會依問題帶入 PA log、AD 事件與筆記;分析帶入 PA 摘要),
+#   所以三個 AI 按鈕都一併綁定這三個讀取權限,授權畫面看得到實際範圍(security-auditor 審查;是否拆成 PA / AD 各自的權限待需求方決定)
+  - { code: netops.pa-ask.read, name: AI 問答, kind: menu, parent: netops.group.firewall, sort: 50, includes: [netops.pa.read] }
+  - { code: netops.pa-ask.use, name: 使用 AI 問答, kind: button, parent: netops.pa-ask.read, sort: 10, includes: [netops.ai.use, netops.pa.read, netops.ad.read, netops.kb.read] }
+  - { code: netops.pa-dashboard.ai, name: AI 分析, kind: button, parent: netops.pa-dashboard.read, sort: 10, includes: [netops.ai.use, netops.pa.read, netops.ad.read, netops.kb.read] }
+  - { code: netops.ad-ask.read, name: AI 問答, kind: menu, parent: netops.group.ad, sort: 40, includes: [netops.ad.read] }
+  - { code: netops.ad-ask.use, name: 使用 AI 問答, kind: button, parent: netops.ad-ask.read, sort: 10, includes: [netops.ai.use, netops.pa.read, netops.ad.read, netops.kb.read] }
+  # AC4(IMPL-PLAN「AC」,D44 ③):時段明細「AI 解讀這個時段」、分析儀表板「AI 摘要本期異常」,共用 POST /ai/explanations(netops.ai.use)。
+  #   時段明細抽屜在熱力圖與儀表板都有,所以兩頁各一個按鈕;資料範圍是 PA 統計(時段明細的摘要與 Top 10、儀表板)+ 知識庫筆記,
+  #   綁定 netops.pa.read、netops.pa-log.read(時段明細)、netops.kb.read;不碰 AD,不綁 netops.ad.read
+  # AC5(IMPL-PLAN「AC」AC5):熱力圖「AI 指出異常格」、時段明細抽屜威脅列「AI 說明威脅」沿用所在頁的按鈕(同 AC4 儀表板一頁一個 AI 按鈕節點,改名稱);
+  #   Log 明細查詢威脅列「AI 說明威脅」新增 netops.pa-search.ai:資料是威脅原始表的彙總 + 知識庫筆記,綁 netops.pa-log.read、netops.kb.read
+  - { code: netops.pa-heatmap.ai, name: AI 解讀時段 / 指出異常格 / 說明威脅, kind: button, parent: netops.pa-heatmap.read, sort: 10, includes: [netops.ai.use, netops.pa.read, netops.pa-log.read, netops.kb.read] }
+  - { code: netops.pa-insight.ai, name: AI 摘要本期異常 / 解讀時段 / 說明威脅, kind: button, parent: netops.pa-insight.read, sort: 10, includes: [netops.ai.use, netops.pa.read, netops.pa-log.read, netops.kb.read] }
+  - { code: netops.pa-search.ai, name: AI 說明威脅, kind: button, parent: netops.pa-search.read, sort: 10, includes: [netops.ai.use, netops.pa-log.read, netops.kb.read] }
+  # AC6(IMPL-PLAN「AC」AC6):安全事件頁「AI 摘要安全事件」新增 netops.pa-events.ai:資料是四類安全事件的總覽統計 + 知識庫筆記,綁 netops.pa.read、netops.kb.read
+  - { code: netops.pa-events.ai, name: AI 摘要安全事件, kind: button, parent: netops.pa-events.read, sort: 10, includes: [netops.ai.use, netops.pa.read, netops.kb.read] }
+
+roles:
+  - code: netops-admin
+    name: 資訊網通管理系統管理員
+    description: 資訊網通管理系統全部畫面與操作(FTP 同步 / 分析、知識庫編輯、測試區收集器開關;按鈕綁定的寫入 API 一併取得)
+    permissions:
+      - netops.app.access
+      - netops.pa-live.read
+      - netops.pa-live.manage
+      - netops.pa-live.query
+      - netops.pa-dashboard.read
+      - netops.pa-heatmap.read
+      - netops.pa-insight.read
+      - netops.pa-events.read
+      - netops.pa-search.read
+      - netops.pa-files.read
+      - netops.pa-files.manage
+      - netops.ad-events.read
+      - netops.ad-search.read
+      - netops.ad-files.read
+      - netops.ad-files.manage
+      - netops.kb-page.read
+      - netops.kb-page.write
+      # AC3:IP 對照表只給網管
+      - netops.ip-name-page.read
+      - netops.ip-name-page.write
+      # AI(A1;netops.ai.use 給 admin 與 viewer,2026-11-05 決定)
+      - netops.pa-ask.read
+      - netops.pa-ask.use
+      - netops.pa-dashboard.ai
+      - netops.ad-ask.read
+      - netops.ad-ask.use
+      # AC4
+      - netops.pa-heatmap.ai
+      - netops.pa-insight.ai
+      # AC5
+      - netops.pa-search.ai
+      # AC6
+      - netops.pa-events.ai
+  - code: netops-viewer
+    name: 資訊網通管理系統檢視者
+    description: 資訊網通管理系統全部畫面唯讀(不含 FTP 同步 / 分析與知識庫編輯;含 AI 分析與問答)
+    permissions:
+      - netops.app.access
+      - netops.pa-live.read
+      - netops.pa-dashboard.read
+      - netops.pa-heatmap.read
+      - netops.pa-insight.read
+      - netops.pa-events.read
+      - netops.pa-search.read
+      - netops.pa-files.read
+      - netops.ad-events.read
+      - netops.ad-search.read
+      - netops.ad-files.read
+      - netops.kb-page.read
+      # AI(A1)
+      - netops.pa-ask.read
+      - netops.pa-ask.use
+      - netops.pa-dashboard.ai
+      - netops.ad-ask.read
+      - netops.ad-ask.use
+      # AC4
+      - netops.pa-heatmap.ai
+      - netops.pa-insight.ai
+      # AC5
+      - netops.pa-search.ai
+      # AC6
+      - netops.pa-events.ai

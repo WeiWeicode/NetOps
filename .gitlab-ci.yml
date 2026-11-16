@@ -1,0 +1,451 @@
+# NetOps Pipeline(Runner:主機 2 WSL shell executor,tag windows-runner;與 Gateway 同一台主機;IMPL-PLAN B0)
+#   check            所有分支:netops-api、netops-web(frontend/)型別檢查、單元測試、建置;netops-pa(pa-collector/)ruff 與 pytest;
+#                    netops-ingest 整合測試(check:ingest-int:一次性 Redis + ClickHouse 容器,只在 backend/ 或 deploy/clickhouse/ 有變更時)
+#   deploy-api-test  develop:在主機 2 建置並更新 netops-api(加入 Gateway 網路;啟動後自動註冊路由草稿)與知識庫 NAS 備份 netops-kb-backup;
+#                    PA 即時監控 netops-redis、netops-pa(R1;netops-pa 沒變更時不重建,deploy/ci-netops-pa.sh);PA log ClickHouse netops-clickhouse 與建表(C1);
+#                    寫入管線 netops-ingest(C2;C4 起含每天的冷歸檔,NAS 目錄唯讀掛給 netops-clickhouse)
+#   deploy-web-test  develop:建置 SPA 並發佈到 Gateway 的 gw_www(Nginx /netops/;IMPL-PLAN D1,同 GigaItApp、giga-Portal)
+#   rbac-test        develop:以已部署的 Gateway 映像套用 deploy/gateway-rbac.yaml(netops.* 畫面權限、netops-admin / netops-viewer 角色;不指派成員)
+#   build-prod       main:在主機 2 建置 netops-api(netops-ingest 同映像)、netops-kb-backup、netops-pa、spa-netops 並推送 GitLab Registry(tag = commit SHA;
+#                    比照 GigaItApp。正式區不在主機 3 建置)
+#   deploy-prod      main 手動:主機 3(prod-deploy)拉取同一個 SHA 的映像,compose --no-build 更新 netops-api、netops-redis、netops-kb-backup,
+#                    前端發佈到正式區 Gateway 的 /netops/。PA log 管線(netops-clickhouse、netops-ingest、netops-pa)由主機 3 netops.env 的
+#                    NETOPS_PA_PIPELINE 開關(第一段 0 = 不啟動;第二段 C6 改 1),步驟見 deploy/RUNBOOK-prod.md
+#   rbac-prod        main 手動:以正式區 Gateway 映像套用 deploy/gateway-rbac.yaml
+# 舊版 IIS 程式(根目錄 server/、src/)不在 Pipeline 內;上架前在 main 打標籤保留舊版(deploy/RUNBOOK-prod.md),舊版 IIS 上架期間照常運作。
+# 主機需有:${NETOPS_SECRETS_DIR} 機密與 ${NETOPS_ENV_FILE}(主機 2:deploy/host2-set-secrets.sh;主機 3:deploy/host3-set-secrets.sh 產生);
+#           Gateway 已部署(giganexus-gw_default 網路、giganexus-gw_gw_www volume、Nginx /netops/ location);npm Registry Token 同其他專案(${NPM_TOKEN_FILE})
+stages: [check, deploy-test, rbac-test, build-prod, deploy-prod, rbac-prod]
+
+variables:
+  NETOPS_ENV_FILE: /srv/giganexus/deploy/netops.env
+  NETOPS_SECRETS_DIR: /srv/giganexus/netops-secrets
+  NPM_TOKEN_FILE: /srv/giganexus/deploy/secrets/gitlab_npm_token
+  GATEWAY_DIR: /srv/giganexus/shared/giga-api-gateway-bff
+  GW_TEST_ENV_FILE: /srv/giganexus/deploy/test.env
+  GW_PROD_ENV_FILE: /srv/giganexus/deploy/prod.env
+  NETOPS_IMAGE_PREFIX_PROD: $CI_REGISTRY_IMAGE
+
+.runner: &runner
+  tags: [windows-runner]
+
+check:backend:
+  <<: *runner
+  stage: check
+  script:
+    - export GITLAB_NPM_TOKEN="$(cat "$NPM_TOKEN_FILE")"
+    - cd backend
+    - npm ci --no-audit --no-fund
+    - npm run typecheck
+    - npm test
+    - npm run build
+
+check:frontend:
+  <<: *runner
+  stage: check
+  script:
+    - export GITLAB_NPM_TOKEN="$(cat "$NPM_TOKEN_FILE")"
+    - cd frontend
+    - npm ci --no-audit --no-fund
+    - npm run typecheck
+    - npm test
+    - npm run build
+    # 再用 Docker 建置看得到的檔案(扣掉 .dockerignore,例如 test/)build 一次:vite.config.ts 載入的檔案不能依賴被排除的檔案(2026-11-13 deploy-web-test 失敗)
+    - sh ../deploy/ci-web-build-context.sh
+
+# netops-pa(Python,R1):在映像的 test 階段跑 ruff 與 pytest(Python 3.12,與執行映像同一個基底;假 PA、fakeredis,不連外部主機)
+check:pa-collector:
+  <<: *runner
+  stage: check
+  script:
+    # --pull:同 deploy-api-test(主機上的基底映像可能被其他專案覆寫)
+    - docker build --pull --target test -t "netops-pa-test:$CI_COMMIT_SHORT_SHA" pa-collector
+    - docker image rm "netops-pa-test:$CI_COMMIT_SHORT_SHA" >/dev/null 2>&1 || true
+
+# netops-ingest 整合測試(C2):一次性的 Redis 7.4 與 ClickHouse(同 Compose 的映像、設定、schema、migrations、netops_writer 帳號),
+#   只發佈到 127.0.0.1 的隨機 port,跑完刪除(after_script)。帳號密碼是這個 job 臨時產生的,不用主機機密
+check:ingest-int:
+  <<: *runner
+  stage: check
+  rules:
+    - changes: [backend/**/*, deploy/clickhouse/**/*, deploy/host2-set-clickhouse-secrets.sh, .gitlab-ci.yml]
+  variables:
+    CH_IMAGE: clickhouse/clickhouse-server:26.3.62.3
+  script:
+    # 暫存目錄與輸出放在 checkout 外面(/tmp/netops-int-<job>.*),不留未追蹤檔;job 輸出另存 .log,
+    #   給沒有 Job 讀取權限的 AI 以 ssh 唯讀查看(保留 3 天)
+    - N="netops-int-$CI_JOB_ID"; L="/tmp/$N.log"; T="$(mktemp -d)"; echo "$T" > "/tmp/$N.path"; mkdir "$T/s"
+    # C4:冷歸檔的「NAS」目錄(測試寫入,ClickHouse 唯讀掛在 user_files/archive,同 Compose);容器內 uid 101 要讀得到
+    - mkdir -m 755 "$T/a"
+    - find /tmp -maxdepth 1 -name 'netops-int-*.log' -mtime +3 -delete 2>/dev/null || true
+    - NETOPS_SECRETS_DIR="$T/s" sh deploy/host2-set-clickhouse-secrets.sh >/dev/null
+    # 容器內 uid 101 要讀得到帳號檔(一次性密碼;主機上的正式檔是 101:101 / 400)
+    - chmod 644 "$T/s/clickhouse/netops-users.xml"
+    - D="$PWD/deploy/clickhouse"
+    # 這個 job 專用的網路(不放預設 bridge);port 只發佈到 127.0.0.1
+    - docker network create "$N-net" >/dev/null
+    - >-
+      docker run -d --name "$N-ch" --network "$N-net" --user 101:101 --memory 1536m --memory-swap 1536m --tmpfs /tmp
+      -e CLICKHOUSE_SKIP_USER_SETUP=1 -p 127.0.0.1::8123
+      -v "$D/config.d/low-memory.xml:/etc/clickhouse-server/config.d/zz-netops-low-memory.xml:ro"
+      -v "$D/users.d/default.xml:/etc/clickhouse-server/users.d/zz-netops-default.xml:ro"
+      -v "$D/users.d/profiles.xml:/etc/clickhouse-server/users.d/zz-netops-profiles.xml:ro"
+      -v "$T/s/clickhouse/netops-users.xml:/etc/clickhouse-server/users.d/zz-netops-users.xml:ro"
+      -v "$T/a:/var/lib/clickhouse/user_files/archive:ro"
+      "$CH_IMAGE" >/dev/null
+    - docker run -d --name "$N-redis" --network "$N-net" -p 127.0.0.1::6379 redis:7.4-alpine >/dev/null
+    - for i in $(seq 1 60); do docker exec "$N-ch" wget -qO- http://127.0.0.1:8123/ping >/dev/null 2>&1 && break; sleep 1; done
+    # 升級測試:V-a 前的舊 schema → apply-schema.sh 要成功(2026-11-12 測試區部署失敗的情況);結束時刪掉資料庫
+    - sh deploy/clickhouse/test-upgrade.sh "$N-ch" 2>&1 | tee -a "$L"; test "$(tail -n 1 "$L" | cut -c1-4)" = "OK  "
+    - sh deploy/clickhouse/apply-schema.sh test "$N-ch" 2>&1 | tee -a "$L"
+    # migrations 可重複執行
+    - sh deploy/clickhouse/apply-schema.sh test "$N-ch" >/dev/null
+    - export INT_CLICKHOUSE_URL="http://127.0.0.1:$(docker port "$N-ch" 8123/tcp | head -n 1 | sed 's/.*://')"
+    - export INT_REDIS_URL="redis://127.0.0.1:$(docker port "$N-redis" 6379/tcp | head -n 1 | sed 's/.*://')/0"
+    - export INT_CLICKHOUSE_PASSWORD_FILE="$T/s/ch_writer_password"
+    # C3:netops-api 的唯讀查詢(netops_reader)
+    - export INT_CLICKHOUSE_READER_PASSWORD_FILE="$T/s/ch_reader_password"
+    # C4:冷歸檔與冷明細(netops_cold 讀 file())
+    - export INT_CLICKHOUSE_COLD_PASSWORD_FILE="$T/s/ch_cold_password" INT_ARCHIVE_DIR="$T/a"
+    # npm Token 只給 npm ci(測試碼與相依套件的 script 讀不到;資安審查 L5)
+    - (cd backend && GITLAB_NPM_TOKEN="$(cat "$NPM_TOKEN_FILE")" npm ci --no-audit --no-fund)
+    - (cd backend && npm run test:int) > "$L.test" 2>&1 && R=0 || R=$?; cat "$L.test" >> "$L"; tail -n 120 "$L.test"; rm -f "$L.test"; test "$R" = 0
+    # 重複修正(dedupe-day.sh):同一列寫兩筆 → 修正後原始表與每小時彙總都是 1
+    #   兩筆放在同一個 INSERT(同一個區塊):分兩次寫會被表的去重視窗擋掉第二次;時間先算好(昨天同一秒)
+    - E=$(($(date +%s) - 86400))
+    - V="(toDateTime($E), toDateTime64($E, 3), '::ffff:10.1.1.1', 'dup-test', 'dup-test', 'syslog')"
+    - docker exec "$N-ch" clickhouse-client --async_insert=0 --query "INSERT INTO netops.pa_traffic_logs (event_time, received_at, src, app, src_host, source) VALUES $V, $V"
+    - test "$(docker exec "$N-ch" clickhouse-client --query "SELECT count() FROM netops.pa_traffic_logs WHERE app = 'dup-test'")" = 2 || { echo "FAIL 重複列沒有寫進去" | tee -a "$L" >&2; exit 1; }
+    - DD="$(docker exec "$N-ch" clickhouse-client --query "SELECT toString(toDate(event_time)) FROM netops.pa_traffic_logs WHERE app = 'dup-test' LIMIT 1")"
+    - sh deploy/clickhouse/dedupe-day.sh "$N-ch" "$DD" 2>&1 | tee -a "$L"
+    - R="$(docker exec "$N-ch" clickhouse-client --query "SELECT count() FROM netops.pa_traffic_logs WHERE app = 'dup-test'") $(docker exec "$N-ch" clickhouse-client --query "SELECT sum(sessions) FROM netops.pa_traffic_hourly_app WHERE app = 'dup-test'")"
+    - test "$R" = "1 1" || { echo "FAIL dedupe-day.sh:原始表 / 彙總 = $R(應為 1 1)" | tee -a "$L" >&2; exit 1; }
+    - echo "OK   dedupe-day.sh" | tee -a "$L"
+  after_script:
+    - N="netops-int-$CI_JOB_ID"; L="/tmp/$N.log"
+    - echo "== job $CI_JOB_ID 結束:$CI_JOB_STATUS" >> "$L"
+    - '{ echo "== clickhouse 日誌"; docker logs --tail 80 "$N-ch"; echo "== redis 日誌"; docker logs --tail 20 "$N-redis"; } >> "$L" 2>&1 || true'
+    - chmod 644 "$L" 2>/dev/null || true
+    - docker rm -f "$N-ch" "$N-redis" >/dev/null 2>&1 || true
+    - docker network rm "$N-net" >/dev/null 2>&1 || true
+    - if [ -s "/tmp/$N.path" ]; then rm -rf "$(cat "/tmp/$N.path")" "/tmp/$N.path"; fi
+
+deploy-api-test:
+  <<: *runner
+  stage: deploy-test
+  rules:
+    - if: $CI_COMMIT_BRANCH == "develop"
+  environment: { name: test-api }
+  variables:
+    # 測試區 FTP 的 TRAFFIC log 在 /my-data(根目錄沒有;D1 驗收 2026-11-05 §3.1,需求方決定寫進部署設定)。
+    # Compose 以 shell 環境變數優先於 --env-file,這裡的值會蓋過主機 netops.env 的 FTP_LOG_DIR。正式區另定(docs/HANDOFF.md D2 前確認)
+    FTP_LOG_DIR: /my-data
+    # 完整歷史:deploy/ci-netops-pa.sh 要比對正在執行的 netops-pa 是哪個 commit 建的(淺層 clone 找不到就只能重建)
+    GIT_DEPTH: "0"
+  script:
+    - test -f "$NETOPS_ENV_FILE" || { echo "缺少 $NETOPS_ENV_FILE(先在主機 2 執行 deploy/host2-set-secrets.sh)" >&2; exit 1; }
+    - for f in gw_api_key monitor_api_key ftp_password qdrant_api_key; do test -f "$NETOPS_SECRETS_DIR/$f" || { echo "缺少 netops-api 機密 $f(先在主機 2 執行 deploy/host2-set-secrets.sh)" >&2; exit 1; }; done
+    # C3:netops-api 唯讀查詢 ClickHouse(deploy/host2-set-clickhouse-secrets.sh 已產生)
+    - test -f "$NETOPS_SECRETS_DIR/ch_reader_password" || { echo "缺少 ch_reader_password(先在主機 2 執行 deploy/host2-set-clickhouse-secrets.sh)" >&2; exit 1; }
+    # C4:冷明細與歸檔讀回核對(netops_cold;同一支腳本在 C1 已產生)
+    - test -f "$NETOPS_SECRETS_DIR/ch_cold_password" || { echo "缺少 ch_cold_password(先在主機 2 執行 deploy/host2-set-clickhouse-secrets.sh)" >&2; exit 1; }
+    - export IMAGE_TAG=$CI_COMMIT_SHORT_SHA RELEASE_SHA=$CI_COMMIT_SHORT_SHA COMPOSE_ENV_FILES="$NETOPS_ENV_FILE"
+    - export GITLAB_NPM_TOKEN="$(cat "$NPM_TOKEN_FILE")"
+    - C="docker compose -f deploy/docker-compose.yml"
+    # --pull:主機上的 node:22-alpine 可能被其他專案覆寫(同 Gateway 2026-10-02)
+    # netops-pa(R1):pa-collector/、Compose 的 netops-pa 段與 netops.env 都沒變時不重建、不重啟(重建會讓 PA-560 Syslog 斷線、不會自動重連,
+    #   要網通重新 Commit;docs/PA-FORWARDING-SPEC.md F.3)。判斷在 deploy/ci-netops-pa.sh;機密或憑證檔換了,手動重跑 pipeline 時帶 NETOPS_PA_RECREATE=1
+    #   要重建時先建置:建置失敗時不會只更新到一半
+    - PA_PLAN="$(sh deploy/ci-netops-pa.sh || echo rebuild)"
+    - if [ "$PA_PLAN" = rebuild ]; then $C build --pull netops-pa; fi
+    - $C build --pull netops-api netops-kb-backup
+    # 記下啟動時間:之後只看這次的日誌(同一 SHA 重跑、容器未重建時,不被舊的註冊結果誤判)
+    - S="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    - $C up -d --wait --force-recreate netops-api
+    # 知識庫 NAS 備份:重建才看得到晚於容器掛上的 NAS;啟動時今天還沒備份就先備份一次(結果看容器日誌)
+    - $C up -d --wait --force-recreate netops-kb-backup
+    # PA 即時監控(R1):netops-redis(資料保留在 volume,不強制重建)與收集器 netops-pa。
+    #   輪詢與接收預設關閉(netops.env 的 PA_POLL_ENABLED / PA_RECEIVE_ENABLED,測試時才開);關閉時仍會執行並寫心跳
+    - for f in pa_api_key pa_http_token; do test -f "$NETOPS_SECRETS_DIR/$f" || { echo "缺少 netops-pa 機密 $f(先在主機 2 執行 deploy/host2-set-pa-secrets.sh)" >&2; exit 1; }; done
+    # netops-redis 被重建(設定或映像改了)時,netops-pa 一起重建,不靠舊連線自動重連
+    - R0="$($C ps -q netops-redis || true)"
+    - $C up -d --wait netops-redis
+    - if [ "$PA_PLAN" = keep ] && [ "$R0" != "$($C ps -q netops-redis)" ]; then echo "netops-redis 已重建,netops-pa 一起重建" >&2; PA_PLAN=rebuild; $C build --pull netops-pa; fi
+    - |
+      if [ "$PA_PLAN" = rebuild ]; then
+        $C up -d --wait --force-recreate netops-pa
+        echo "WARN netops-pa 已重建,TRAFFIC Syslog 可能需要網通重新 Commit netops-syslog(PA-560 不會自動重連;docs/PA-FORWARDING-SPEC.md F.3)"
+      else
+        echo "OK   netops-pa 沒有變更,沿用原容器(沒有重啟,Syslog 連線不受影響)"
+      fi
+    - $C exec -T netops-redis redis-cli config get maxmemory-policy | grep -q noeviction || { echo "FAIL netops-redis 不是 noeviction" >&2; exit 1; }
+    - $C exec -T netops-redis redis-cli config get appendonly | grep -qx no || { echo "FAIL netops-redis AOF 應關閉" >&2; exit 1; }
+    - $C exec -T netops-redis redis-cli config get save | grep -q '3600 1' || { echo "FAIL netops-redis RDB save 設定不符" >&2; exit 1; }
+    - $C exec -T netops-redis redis-cli config get maxmemory | tail -n 1 | grep -q '^[1-9]' || { echo "FAIL netops-redis 沒有 maxmemory" >&2; exit 1; }
+    - echo "OK   netops-redis / netops-pa"
+    # PA log ClickHouse(C1):每次重建(資料在 volume,中斷數秒)。掛載的設定檔內容改了 Compose 不會自動重建,
+    #   單檔 bind mount 在 checkout 換檔後容器也讀不到新檔,所以一律 --force-recreate。建表與 TTL 可重複執行(測試區 3 天)
+    - test -f "$NETOPS_SECRETS_DIR/clickhouse/netops-users.xml" || { echo "缺少 ClickHouse 帳號檔(先在主機 2 執行 deploy/host2-set-clickhouse-secrets.sh)" >&2; exit 1; }
+    - $C up -d --wait --force-recreate netops-clickhouse
+    - sh deploy/clickhouse/apply-schema.sh test "$($C ps -q netops-clickhouse)"
+    - $C exec -T netops-clickhouse clickhouse-client --query "SELECT value FROM system.server_settings WHERE name = 'max_server_memory_usage'" | awk '$1 > 0 && $1 <= 1288490188 {ok=1} END {exit !ok}' || { echo "FAIL netops-clickhouse 記憶體上限不符(應 ≤ 1.2 GB)" >&2; exit 1; }
+    - echo "OK   netops-clickhouse"
+    # PA log 寫入管線(C2):netops-ingest(netops-api 同映像)。重建時未 ACK 的批次留在 Redis 待處理清單,啟動後先補(去重 token 相同,不重複)
+    - test -f "$NETOPS_SECRETS_DIR/ch_writer_password" || { echo "缺少 ch_writer_password(先在主機 2 執行 deploy/host2-set-clickhouse-secrets.sh)" >&2; exit 1; }
+    # 心跳要是這一版、這次部署之後啟動的(同一個 commit 重跑 pipeline 時舊心跳的 release 也相同)、狀態 ok
+    #   (啟動檢查 ClickHouse 帳密與 consumer group 都過了才是 ok),最多等 60 秒
+    - SI="$(date -u +%Y-%m-%dT%H:%M:%S)"
+    - $C up -d --wait --force-recreate netops-ingest
+    - |
+      for i in $(seq 1 30); do
+        HB="$($C exec -T netops-redis redis-cli hmget netops:ingest:heartbeat release state startedAt | paste -sd ' ' -)" || HB=""
+        set -- $HB
+        if [ "${1:-}" = "$CI_COMMIT_SHORT_SHA" ] && [ "${2:-}" = ok ] && [ "$(printf '%s\n%s\n' "$SI" "${3:-}" | sort | head -n 1)" = "$SI" ]; then
+          echo "OK   netops-ingest($HB)"
+          # 冷歸檔(C4):只顯示狀態不擋部署(nas-missing = 需求方還沒執行 deploy/host2-setup-pa-archive.sh;late = 逾期未歸檔)
+          echo "INFO 冷歸檔:$($C exec -T netops-redis redis-cli hmget netops:ingest:heartbeat archiveState archiveLastOk:traffic archiveLateCount archiveError | paste -sd ' ' -)"
+          break
+        fi
+        [ "$i" = 30 ] && { echo "FAIL netops-ingest 心跳不是這次部署的或狀態異常:$HB" >&2; $C logs --tail 20 netops-ingest >&2; exit 1; }
+        sleep 2
+      done
+    # 冒煙測試:健康檢查(/healthz、/readyz 不進 giga-observe 監控)。
+    #   原本另打一次不帶內部 Token 的 /v1/ping 確認回 401,但每次部署都在 giga-observe 留一筆 401(2026-11-09 驗收 §4.5),
+    #   改由單元測試涵蓋(backend/test/unit/app.test.ts「缺少 Token 回 401 NETOPS_INTERNAL_TOKEN_INVALID」)
+    - $C exec -T netops-api wget -qO- http://127.0.0.1:51292/healthz
+    - $C exec -T netops-api wget -qO- http://127.0.0.1:51292/readyz
+    # 自動註冊在背景執行(SDK 失敗時重試 1、2、4、8、16 秒,另加連線逾時);最多等 90 秒看最終結果,重試用完仍失敗時 job 失敗
+    # 訊息取自 @giganexus/backend-sdk 0.3:成功「API 已註冊…」,最終失敗「…Gateway 路由未更新」
+    - |
+      for i in $(seq 1 45); do
+        L="$($C logs --since "$S" netops-api 2>&1)"
+        if echo "$L" | grep -q 'Gateway 路由未更新'; then echo "$L" | grep '自動註冊' | tail -10; exit 1; fi
+        if echo "$L" | grep -q 'API 已註冊'; then echo "$L" | grep 'API 已註冊' | tail -1; exit 0; fi
+        sleep 2
+      done
+      echo "90 秒內沒有看到自動註冊結果" >&2; $C logs --since "$S" netops-api 2>&1 | tail -20; exit 1
+
+deploy-web-test:
+  <<: *runner
+  stage: deploy-test
+  rules:
+    - if: $CI_COMMIT_BRANCH == "develop"
+  # 同一個 compose project:等後端部署完才發佈,不與 deploy-api-test 同時執行;後端失敗時不發佈前端
+  needs: [deploy-api-test]
+  environment: { name: test, url: https://giganexus-test.gigasolar.com.tw/netops/ }
+  script:
+    - test -f "$NETOPS_ENV_FILE" || { echo "缺少 $NETOPS_ENV_FILE(先在主機 2 執行 deploy/host2-set-secrets.sh)" >&2; exit 1; }
+    - export IMAGE_TAG=$CI_COMMIT_SHORT_SHA RELEASE_SHA=$CI_COMMIT_SHORT_SHA COMPOSE_ENV_FILES="$NETOPS_ENV_FILE"
+    - export GITLAB_NPM_TOKEN="$(cat "$NPM_TOKEN_FILE")"
+    - P="docker compose -f deploy/docker-compose.yml --profile publish"
+    # --pull:同 deploy-api-test
+    - $P build --pull spa-netops
+    # 發佈到 gw_www 的 netops(保留上一版供回滾:$P run --rm spa-netops rollback netops)
+    - $P run --rm spa-netops
+    # 冒煙測試(經 Gateway Nginx):/netops/ 與深層路由都回本系統的 index.html(引用 /netops/assets/);
+    # Gateway 尚未加 /netops/ location 時會落到入口網的 index.html,這裡就會失敗
+    - |
+      for u in /netops/ /netops/firewall/dashboard; do
+        curl -skf "https://127.0.0.1$u" | grep -q '/netops/assets/' || { echo "FAIL $u 不是 NetOps 的 index.html(Gateway /netops/ location?)" >&2; exit 1; }
+        echo "OK   $u"
+      done
+    # 失敗要讓 job 失敗:不用「A | B && echo」(&& 左側失敗不會中止 job)
+    - curl -sk -o /dev/null -w '%{http_code}\n' https://127.0.0.1/api/auth/me | grep -q 401 || { echo "FAIL /api/auth/me 不是 401" >&2; exit 1; }
+    - echo "OK   /api/auth/me → 401(單一入口)"
+
+rbac-test:
+  <<: *runner
+  stage: rbac-test
+  rules:
+    - if: $CI_COMMIT_BRANCH == "develop"
+  script:
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+    # 與測試區 Gateway 相同的映像(Gateway deploy-test 記錄);GATEWAY_DIR 為 Gateway 共用目錄(含 deploy/)
+    # 在 deploy-api-test 之後:includes 綁的 netops.* API 權限由 netops-api 啟動時自動註冊建立
+    - export IMAGE_TAG="$(cat "$(dirname "$GATEWAY_DIR")/gateway-image-tag")" REGISTRY=10.10.130.123:5050/giganexus/giga-api-gateway-bff
+    - sh deploy/apply-gateway-rbac.sh test "$GW_TEST_ENV_FILE"
+
+# ---------- 正式區(主機 3;D2 / C6;比照 GigaItApp、giga-file-service) ----------
+# 映像在主機 2 建置推送 Registry(主機 3 不建置);deploy-prod / rbac-prod 只在 main 手動執行,Runner 為主機 3 的 Protected Runner(tag prod-deploy)
+build-prod:
+  <<: *runner
+  stage: build-prod
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+  script:
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+    - export IMAGE_TAG=$CI_COMMIT_SHA RELEASE_SHA=$CI_COMMIT_SHORT_SHA NETOPS_IMAGE_PREFIX="$NETOPS_IMAGE_PREFIX_PROD"
+    - export GITLAB_NPM_TOKEN="$(cat "$NPM_TOKEN_FILE")"
+    # 以主機 2 的 netops.env 解析 compose(必要變數、機密路徑);上面 export 的變數優先,映像名稱與 tag 指向 Registry
+    - export COMPOSE_ENV_FILES="$NETOPS_ENV_FILE"
+    - P="docker compose -f deploy/docker-compose.yml --profile publish"
+    # netops-pa 第一段不啟動,仍建置推送:第二段(C6)只改開關,用的是同一個 SHA 的映像
+    - $P build --pull netops-api netops-kb-backup netops-pa spa-netops
+    - $P push netops-api netops-kb-backup netops-pa spa-netops
+    # 記下推送後的 digest(dotenv artifact → deploy-prod):Registry 的同名 tag 之後被覆寫時,deploy-prod 比對不符就失敗(資安審查 H1)
+    - |
+      : > prod-digests.env
+      for s in netops-api netops-kb-backup netops-pa spa-netops; do
+        d="$(docker image inspect -f '{{range .RepoDigests}}{{println .}}{{end}}' "$NETOPS_IMAGE_PREFIX/$s:$IMAGE_TAG" | grep "^$NETOPS_IMAGE_PREFIX/$s@sha256:" | head -n 1 || true)"
+        [ -n "$d" ] || { echo "FAIL 取不到 $s 推送後的 digest" >&2; exit 1; }
+        echo "NETOPS_DIGEST_$(echo "$s" | tr 'a-z-' 'A-Z_')=${d#*@}" >> prod-digests.env
+      done
+      cat prod-digests.env
+  artifacts:
+    reports: { dotenv: prod-digests.env }
+    # 回滾時重試舊 pipeline 的 deploy-prod 也要讀得到
+    expire_in: 1 year
+
+deploy-prod:
+  stage: deploy-prod
+  tags: [prod-deploy]
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+      when: manual
+  # 取 build-prod 的 digest(dotenv);同一時間只跑一個正式區部署(資安審查 M2)
+  needs: [build-prod]
+  resource_group: netops-production
+  environment: { name: production, url: https://giganexus.gigasolar.com.tw/netops/ }
+  variables:
+    # 正式區 FTP 目錄(IMPL-PLAN D2 第 2 項):照舊版 IIS 的預設值(出處列在 deploy/RUNBOOK-prod.md §1;需求方 2026-11-16 確認沿用)。
+    #   Compose 以 shell 環境變數優先於 --env-file,這裡的值會蓋過主機 netops.env;下方 script 檢查任一項空白就失敗(不落回程式預設值)
+    #   FTP_PATTERN 沒有列:舊版預設與 backend/src/config.ts 相同;GitLab 會展開變數值裡的 $,不放在這裡
+    FTP_ROOT: /
+    FTP_LOG_DIR: /my-data
+    FTP_AD_DIR: /AD_Log_Backup
+    FTP_THREAT_DIR: /threat
+    FTP_URL_DIR: /url-filtering
+    FTP_DATA_FILTER_DIR: /data-filtering
+    FTP_WILDFIRE_DIR: /wildfire-submissions
+    FTP_DECRYPTION_DIR: /decryption
+    FTP_GLOBALPROTECT_DIR: /globalprotect
+    FTP_USERID_DIR: /user-id
+    # deploy/ci-netops-pa.sh 要比對正在執行的 netops-pa 是哪個 commit 建的(第二段)
+    GIT_DEPTH: "0"
+  script:
+    - test -f "$NETOPS_ENV_FILE" || { echo "缺少 $NETOPS_ENV_FILE(先在主機 3 執行 deploy/host3-set-secrets.sh)" >&2; exit 1; }
+    - test "$(grep -cE '^[[:space:]]*(export[[:space:]]+)?GW_ENV=' "$NETOPS_ENV_FILE")" = 1 && grep -qx 'GW_ENV=prod' "$NETOPS_ENV_FILE" || { echo "FAIL $NETOPS_ENV_FILE 的 GW_ENV 要只有一行 GW_ENV=prod" >&2; exit 1; }
+    # 執行 pipeline 時帶的變數優先於 netops.env:正式區的端點、主機路徑、網路一律由 netops.env(root 管理)或 compose 預設提供(資安審查 M1)
+    - unset GW_BASE_URL GW_JWKS_URL GW_NETWORK GW_WWW_VOLUME MONITOR_URL LLM_URL LLM_MODEL EMBED_URL QDRANT_URL QDRANT_COLLECTION VECTOR_SYNC IPLEARN_HOUR FTP_HOST FTP_USER FTP_PATTERN NETOPS_DATA_HOST_DIR NETOPS_KB_BACKUP_HOST_DIR NETOPS_ARCHIVE_HOST_DIR NETOPS_PA_TLS_HOST_DIR PA_RECEIVE_PLAINTEXT PA_CA_FILE PA_TLS_CERT_FILE PA_TLS_KEY_FILE PA_TLS_CLIENT_CA_FILE PA_ALLOWED_SOURCES PA_HOST
+    - export GW_ENV=prod NETOPS_SECRETS_DIR=/srv/giganexus/netops-secrets
+    - for k in FTP_ROOT FTP_LOG_DIR FTP_AD_DIR FTP_THREAT_DIR FTP_URL_DIR FTP_DATA_FILTER_DIR FTP_WILDFIRE_DIR FTP_DECRYPTION_DIR FTP_GLOBALPROTECT_DIR FTP_USERID_DIR; do eval "v=\${$k:-}"; [ -n "$v" ] || { echo "FAIL 缺少正式區 FTP 目錄 $k(.gitlab-ci.yml deploy-prod variables)" >&2; exit 1; }; done
+    # 正式區不可略過憑證驗證(netops-pa / netops-api 啟動時也會擋;這裡提早失敗)
+    - if grep -qE '^[[:space:]]*(export[[:space:]]+)?(PA_TLS_INSECURE|FTP_TLS_INSECURE)=.' "$NETOPS_ENV_FILE"; then echo "FAIL 正式區 netops.env 不可設定 PA_TLS_INSECURE / FTP_TLS_INSECURE" >&2; exit 1; fi
+    - export PA_TLS_INSECURE= FTP_TLS_INSECURE=
+    # 機密檔(host3-set-secrets.sh、host3-set-clickhouse-secrets.sh、host3-set-pa-secrets.sh 產生;第一段也要有:compose 的 secrets 定義指向這些檔)
+    - for f in gw_api_key monitor_api_key ftp_password qdrant_api_key ch_reader_password ch_cold_password ch_writer_password pa_api_key pa_http_token clickhouse/netops-users.xml; do test -f "$NETOPS_SECRETS_DIR/$f" || { echo "缺少機密 $f(主機 3 依 deploy/RUNBOOK-prod.md §2 執行 host3-set-*.sh)" >&2; exit 1; }; done
+    # PA log 管線開關(第一段 0;第二段 C6 改 1):只認 netops.env 的 NETOPS_PA_PIPELINE
+    - PIPE="$(sed -n 's/^NETOPS_PA_PIPELINE=//p' "$NETOPS_ENV_FILE" | tail -n 1)"; PIPE="${PIPE:-0}"
+    - case "$PIPE" in 0|1) echo "NETOPS_PA_PIPELINE=$PIPE" ;; *) echo "FAIL NETOPS_PA_PIPELINE 只能是 0 或 1:$PIPE" >&2; exit 1 ;; esac
+    # 第一段(沒有 ClickHouse):AI 走 FTP 舊路徑、不產生每日摘要、不歸檔;不對帳、不建 ClickHouse 摘要、不送補漏(這些都要 ClickHouse)
+    #   以 shell 環境變數固定(優先於 netops.env);第二段開關改 1 後才依 netops.env
+    #   FTP 自動同步:第一段每 60 分鐘(需求方 2026-11-16;PA TRAFFIC 摘要、其他類型、AD;沒有 ClickHouse,每日同步不會跑);
+    #   第二段(開關 1)一律 0,改由對帳後每日同步(API.md §5.4)
+    - if [ "$PIPE" = 0 ]; then export NETOPS_AI_SOURCE=ftp NETOPS_AI_DAILY_SUMMARY=0 NETOPS_ARCHIVE_ENABLED=0 NETOPS_RECON_TIME=-1 NETOPS_RECON_AUTO_BACKFILL=0 NETOPS_CH_SUMMARY_MINUTES=0 FTP_SYNC_MINUTES=60; else export FTP_SYNC_MINUTES=0; fi
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+    - export IMAGE_TAG=$CI_COMMIT_SHA RELEASE_SHA=$CI_COMMIT_SHORT_SHA NETOPS_IMAGE_PREFIX="$NETOPS_IMAGE_PREFIX_PROD" COMPOSE_ENV_FILES="$NETOPS_ENV_FILE"
+    # 正式區不建置:compose 檔的 build secret npm_token 只需變數存在
+    - export GITLAB_NPM_TOKEN=unused
+    - C="docker compose -f deploy/docker-compose.yml"
+    - $C --profile publish pull netops-api netops-kb-backup spa-netops
+    # 拉到的映像必須是 build-prod 推送的那一份(digest 比對;第二段的 netops-pa 拉取後同樣檢查)
+    - |
+      digest_ok() {
+        k="NETOPS_DIGEST_$(echo "$1" | tr 'a-z-' 'A-Z_')"; eval "want=\${$k:-}"
+        [ -n "$want" ] || { echo "FAIL 沒有 $k(build-prod 的 dotenv artifact)" >&2; return 1; }
+        docker image inspect -f '{{range .RepoDigests}}{{println .}}{{end}}' "$NETOPS_IMAGE_PREFIX/$1:$IMAGE_TAG" | grep -qx "$NETOPS_IMAGE_PREFIX/$1@$want" \
+          || { echo "FAIL $1:$IMAGE_TAG 的 digest 與 build-prod 推送的不同($want)" >&2; return 1; }
+        echo "OK   $1 digest $want"
+      }
+    - for s in netops-api netops-kb-backup spa-netops; do digest_ok "$s"; done
+    # 官方映像(redis)主機 3 沒有時才拉;連不到 Docker Hub 時依 RUNBOOK-prod.md §5 從主機 2 載入
+    - $C pull --policy missing netops-redis
+    # 1. 後端:記下啟動時間,只看這次的日誌判斷自動註冊結果
+    - S="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    - $C up -d --no-build --wait --force-recreate netops-api
+    # 2. 知識庫 NAS 備份(NAS 目錄與標記檔:RUNBOOK-prod.md §2 第 4 步);重建才看得到晚於容器掛上的 NAS
+    - $C up -d --no-build --wait --force-recreate netops-kb-backup || { $C logs --tail 20 netops-kb-backup >&2; echo "FAIL netops-kb-backup 不健康(NAS /mnt/nas-docker/giga-netops/prod 與標記檔?)" >&2; exit 1; }
+    # 3. PA 即時監控的 Redis(netops-api 只讀;資料在 volume,不強制重建)
+    - R0="$($C ps -q netops-redis || true)"
+    - $C up -d --no-build --wait netops-redis
+    - $C exec -T netops-redis redis-cli config get maxmemory-policy | grep -q noeviction || { echo "FAIL netops-redis 不是 noeviction" >&2; exit 1; }
+    - $C exec -T netops-redis redis-cli config get appendonly | grep -qx no || { echo "FAIL netops-redis AOF 應關閉" >&2; exit 1; }
+    - $C exec -T netops-redis redis-cli config get save | grep -q '3600 1' || { echo "FAIL netops-redis RDB save 設定不符" >&2; exit 1; }
+    - $C exec -T netops-redis redis-cli config get maxmemory | tail -n 1 | grep -q '^[1-9]' || { echo "FAIL netops-redis 沒有 maxmemory" >&2; exit 1; }
+    - echo "OK   netops-redis"
+    # 4. PA log 管線(第二段 C6,NETOPS_PA_PIPELINE=1):同 deploy-api-test,映像改為拉取;ClickHouse TTL 用正式區(apply-schema.sh prod)
+    - |
+      if [ "$PIPE" = 1 ]; then
+        if grep -qE '^[[:space:]]*(export[[:space:]]+)?PA_RECEIVE_PLAINTEXT=1' "$NETOPS_ENV_FILE"; then echo "WARN PA_RECEIVE_PLAINTEXT=1:正式區明文接收(需求方決定的已知風險;RUNBOOK-prod.md §4)"; fi
+        PA_PLAN="$(sh deploy/ci-netops-pa.sh || echo rebuild)"
+        if [ "$PA_PLAN" = keep ] && [ -n "$R0" ] && [ "$R0" != "$($C ps -q netops-redis)" ]; then echo "netops-redis 已重建,netops-pa 一起重建" >&2; PA_PLAN=rebuild; fi
+        if [ "$PA_PLAN" = rebuild ]; then
+          $C pull netops-pa
+          digest_ok netops-pa
+          $C up -d --no-build --wait --force-recreate netops-pa
+          echo "WARN netops-pa 已重建,TRAFFIC Syslog 可能需要網通重新 Commit netops-syslog(PA-560 不會自動重連;docs/PA-FORWARDING-SPEC.md F.3)"
+        else
+          echo "OK   netops-pa 沒有變更,沿用原容器(沒有重啟,Syslog 連線不受影響)"
+        fi
+        $C pull --policy missing netops-clickhouse
+        $C up -d --no-build --wait --force-recreate netops-clickhouse
+        sh deploy/clickhouse/apply-schema.sh prod "$($C ps -q netops-clickhouse)"
+        # 伺服器上限 = 容器上限 × 0.75(正式區容器 2 GB → ≤ 1.5 GiB;NETOPS_CH_MEM_LIMIT=2048m 由 host3-set-secrets.sh 寫入)
+        $C exec -T netops-clickhouse clickhouse-client --query "SELECT value FROM system.server_settings WHERE name = 'max_server_memory_usage'" | awk '$1 > 0 && $1 <= 1610612736 {ok=1} END {exit !ok}' || { echo "FAIL netops-clickhouse 記憶體上限不符(應 ≤ 1.5 GiB)" >&2; exit 1; }
+        echo "OK   netops-clickhouse"
+        SI="$(date -u +%Y-%m-%dT%H:%M:%S)"
+        $C up -d --no-build --wait --force-recreate netops-ingest
+        for i in $(seq 1 30); do
+          HB="$($C exec -T netops-redis redis-cli hmget netops:ingest:heartbeat release state startedAt | paste -sd ' ' -)" || HB=""
+          set -- $HB
+          if [ "${1:-}" = "$CI_COMMIT_SHORT_SHA" ] && [ "${2:-}" = ok ] && [ "$(printf '%s\n%s\n' "$SI" "${3:-}" | sort | head -n 1)" = "$SI" ]; then
+            echo "OK   netops-ingest($HB)"
+            echo "INFO 冷歸檔:$($C exec -T netops-redis redis-cli hmget netops:ingest:heartbeat archiveState archiveLastOk:traffic archiveLateCount archiveError | paste -sd ' ' -)"
+            break
+          fi
+          [ "$i" = 30 ] && { echo "FAIL netops-ingest 心跳不是這次部署的或狀態異常:$HB" >&2; $C logs --tail 20 netops-ingest >&2; exit 1; }
+          sleep 2
+        done
+      else
+        echo "INFO NETOPS_PA_PIPELINE=0:不啟動 netops-clickhouse / netops-ingest / netops-pa(PA 總覽、安全事件、明細在第二段前無法使用)"
+      fi
+    # 5. 冒煙測試(健康檢查不進 giga-observe 監控)
+    - $C exec -T netops-api wget -qO- http://127.0.0.1:51292/healthz
+    - $C exec -T netops-api wget -qO- http://127.0.0.1:51292/readyz
+    # 6. 自動註冊(正式區草稿):最多等 90 秒,重試用完仍失敗時 job 失敗(訊息同 deploy-api-test)
+    - |
+      for i in $(seq 1 45); do
+        L="$($C logs --since "$S" netops-api 2>&1)"
+        if echo "$L" | grep -q 'Gateway 路由未更新'; then echo "$L" | grep '自動註冊' | tail -10; exit 1; fi
+        if echo "$L" | grep -q 'API 已註冊'; then echo "$L" | grep 'API 已註冊' | tail -1; break; fi
+        [ "$i" = 45 ] && { echo "90 秒內沒有看到自動註冊結果" >&2; echo "$L" | tail -20; exit 1; }
+        sleep 2
+      done
+    # 7. 前端:發佈到 gw_www 的 netops(保留上一版供回滾:RUNBOOK-prod.md §6)
+    #   compose run 沒有 --no-build;映像已在上面拉取,--pull never 確保不重拉,run 不加 --build 就不會建置
+    - $C --profile publish run --rm --pull never spa-netops
+    # 8. 冒煙測試(經 Gateway Nginx):/netops/ 與深層路由都回本系統的 index.html
+    - |
+      for u in /netops/ /netops/firewall/dashboard; do
+        curl -skf "https://127.0.0.1$u" | grep -q '/netops/assets/' || { echo "FAIL $u 不是 NetOps 的 index.html(正式區 Gateway /netops/ location?)" >&2; exit 1; }
+        echo "OK   $u"
+      done
+    - curl -sk -o /dev/null -w '%{http_code}\n' https://127.0.0.1/api/auth/me | grep -q 401 || { echo "FAIL /api/auth/me 不是 401" >&2; exit 1; }
+    - echo "OK   /api/auth/me → 401(單一入口)"
+
+rbac-prod:
+  stage: rbac-prod
+  tags: [prod-deploy]
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+      when: manual
+  # 受正式區 environment 的保護規則管(不算一次部署);與 deploy-prod 不同時執行(資安審查 M2)
+  needs: [deploy-prod]
+  resource_group: netops-production
+  environment: { name: production, action: prepare }
+  script:
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+    # 與正式區 Gateway 相同的映像(Gateway deploy-prod 記錄);主機 3 的 GATEWAY_DIR 由 Gateway 共用目錄提供(含 deploy/)
+    # 在 deploy-prod 之後:includes 綁的 netops.* API 權限由 netops-api 啟動時自動註冊建立
+    - export IMAGE_TAG="$(cat "$(dirname "$GATEWAY_DIR")/gateway-image-tag")" REGISTRY=10.10.130.123:5050/giganexus/giga-api-gateway-bff
+    - sh deploy/apply-gateway-rbac.sh prod "$GW_PROD_ENV_FILE"

@@ -1,0 +1,237 @@
+/**
+ * C3 Log 明細查詢改查 ClickHouse(工作模式,D6):
+ *   - trafficWhere:條件一律放參數(值不出現在 SQL),IP 完全相同 / CIDR / 萬用字元、Port、動作、q
+ *   - 來源:source 參數 > 設定 NETOPS_PA_DETAIL_SOURCE(預設 ftp);clickhouse 期間最長 30 天
+ *   - 結果格式同 FTP 來源(分頁、匯出、取消),result.source 為 clickhouse
+ */
+import assert from 'node:assert/strict';
+import { after, before, describe, it } from 'node:test';
+import { threatSearchWhere, trafficWhere } from '../../src/infra/clickhouse/reader.js';
+import { createFakeFtp } from '../fixtures/fake-ftp.js';
+import { createFakeReader, trafficRecord, type FakeReader } from '../fixtures/fake-ch.js';
+import { createTestApp, waitFor, type TestApp } from '../helpers.js';
+
+const F = Date.parse('2026-11-11T00:00:00+08:00');
+const T = F + 3600_000;
+
+describe('trafficWhere(明細條件 → SQL)', () => {
+  it('值都放參數,不出現在 SQL', () => {
+    const evil = "1' OR 1=1 --";
+    const { where, params } = trafficWhere({ fromMs: F, toMs: T, app: evil, rule: evil, user: evil, country: evil, q: evil, action: evil, proto: evil, fromZone: evil, src: evil });
+    const sql = where.join(' AND ');
+    assert.ok(!sql.includes('OR 1=1'));
+    assert.ok(Object.values(params).some((v) => String(v).includes('OR 1=1')));
+    assert.equal(params.from, F / 1000);
+    assert.equal(params.to, T / 1000);
+  });
+
+  it('IP:完全相同用 toIPv6OrNull、IPv4 CIDR 換成 IPv6 前綴(+96)、萬用字元換 LIKE 並跳脫;NAT 欄位空白不比對', () => {
+    const exact = trafficWhere({ fromMs: F, toMs: T, src: '10.1.2.3' });
+    assert.match(exact.where[2]!, /src = toIPv6OrNull\(\{p0:String\}\) OR \(nat_src != toIPv6\('::'\) AND nat_src = toIPv6OrNull/);
+    const cidr = trafficWhere({ fromMs: F, toMs: T, dst: '10.10.0.0/16' });
+    assert.match(cidr.where[2]!, /dst BETWEEN tupleElement\(IPv6CIDRToRange/);
+    assert.equal(cidr.params.p1, 112);
+    const wild = trafficWhere({ fromMs: F, toMs: T, ip: '10.10.*' });
+    assert.match(wild.where[2]!, /LIKE \{p0:String\}/);
+    assert.equal(wild.params.p0, '10.10.%');
+    // 不合法的 CIDR:同 FTP 版以字首比對
+    const bad = trafficWhere({ fromMs: F, toMs: T, src: '10.10/99' });
+    assert.match(bad.where[2]!, /startsWith/);
+    // 不合法的 IPv6(只有 16 進位與 :)不送進 toIPv6
+    assert.match(trafficWhere({ fromMs: F, toMs: T, src: '::::/64' }).where[2]!, /startsWith/);
+    assert.ok(!trafficWhere({ fromMs: F, toMs: T, src: ':::' }).where[2]!.includes('toIPv6OrNull'));
+  });
+
+  it('Port 清單、動作 allow / block、q 比對多個文字欄位', () => {
+    const w = trafficWhere({ fromMs: F, toMs: T, port: '443, 8443,99999', action: 'block', q: 'fin' });
+    assert.ok(w.where.includes(`action != 'allow'`));
+    assert.equal(w.params.p0, '[443,8443]');
+    assert.match(w.where.find((x) => x.includes('concat('))!, /positionCaseInsensitiveUTF8\(concat\(/);
+    assert.ok(trafficWhere({ fromMs: F, toMs: T, port: '99999' }).where.includes('0'));
+  });
+
+  it('國家:country 比對來源或目的,srcCountry / dstCountry 只比對一方(C7 第二輪)', () => {
+    const any = trafficWhere({ fromMs: F, toMs: T, country: 'Japan' });
+    assert.ok(any.where.some((x) => x.includes('src_country') && x.includes('dst_country')));
+    const src = trafficWhere({ fromMs: F, toMs: T, srcCountry: 'China' });
+    const w = src.where.at(-1)!;
+    assert.match(w, /src_country/);
+    assert.doesNotMatch(w, /dst_country/);
+    assert.match(trafficWhere({ fromMs: F, toMs: T, dstCountry: 'China' }).where.at(-1)!, /^\(positionCaseInsensitiveUTF8\(dst_country/);
+  });
+});
+
+describe('threatSearchWhere(威脅 log 明細條件)', () => {
+  it('只查 log_type threat;嚴重度 info → informational;威脅名稱包含;值都放參數;q 比對威脅名稱', () => {
+    const evil = "x' OR 1=1 --";
+    const w = threatSearchWhere({ fromMs: F, toMs: T, severity: 'info', threat: evil, src: '10.0.0.1', q: 'brute' });
+    const sql = w.where.join(' AND ');
+    assert.ok(w.where.includes(`log_type = 'threat'`));
+    assert.ok(w.where.includes('severity = {sev:String}'));
+    assert.equal(w.params.sev, 'informational');
+    assert.equal(w.params.thr, evil);
+    assert.ok(!sql.includes('OR 1=1'));
+    assert.match(sql, /dst_country, ',', name, ',', url/);
+    assert.doesNotMatch(sql, /end_reason/);
+  });
+});
+
+describe('明細 API(只查 ClickHouse)', () => {
+  let t: TestApp;
+  let reader: FakeReader;
+  before(async () => {
+    const thr = (time: string, name: string, severity: string, src: string, srcCountry: string) => ({
+      time, subtype: 'vulnerability', src, dst: '10.10.1.1', natSrc: '', natDst: '', rule: 'In', srcUser: '', app: 'ms-ds-smb', fromZone: 'WAN', toZone: 'LAN',
+      dport: 445, proto: 'tcp', action: 'reset-both', url: '', name, category: 'any', severity, direction: 'client-to-server', srcCountry, dstCountry: '10.0.0.0-10.255.255.255',
+      repeat: 1, thrCategory: 'brute-force', filedigest: '', filetype: '',
+    });
+    reader = createFakeReader(Array.from({ length: 30 }, (_, i) => trafficRecord(`2026/11/11 00:${String(i).padStart(2, '0')}:00`, i)), [
+      { type: 'threat', rec: thr('2026/11/11 00:05:00', 'SMB Brute Force(40004)', 'high', '203.0.113.9', 'China') },
+      { type: 'threat', rec: thr('2026/11/11 00:06:00', 'Port Scan(8001)', 'high', '198.51.100.7', 'United States') },
+      { type: 'threat', rec: thr('2026/11/11 00:07:00', 'DNS Query(1)', 'informational', '10.10.1.2', '10.0.0.0-10.255.255.255') },
+      { type: 'url', rec: thr('2026/11/11 00:08:00', 'x', 'informational', '10.10.1.2', '10.0.0.0-10.255.255.255') },
+    ]);
+    t = await createTestApp({ ftp: createFakeFtp(), chReader: reader, chNow: () => Date.parse('2026-11-11T03:10:00+08:00'), env: { NETOPS_CH_SUMMARY_MINUTES: '0', PA_SEARCH_LIMIT: '20' } });
+    await t.app.chSummary!.runOnce();
+  });
+  after(async () => t.close());
+
+  const submit = (body: object, emp?: string) => t.call({ method: 'POST', url: '/v1/pa/log-searches', payload: body, emp });
+  async function done(id: string) {
+    await waitFor(async () => !['queued', 'running'].includes((await t.call({ url: `/v1/pa/log-searches/${id}` })).json().status));
+    return (await t.call({ url: `/v1/pa/log-searches/${id}` })).json();
+  }
+  const range = { from: '2026-11-11T00:00:00+08:00', to: '2026-11-11T00:59:00+08:00' };
+
+  it('type THREAT:查威脅 log,嚴重度、威脅名稱、來源國家都套用;threat 欄為威脅名稱,嚴重度 informational 回 info(C7 第二輪)', async () => {
+    const res = await submit({ ...range, type: 'THREAT', severity: 'high', srcCountry: 'China' });
+    assert.equal(res.statusCode, 202, res.body);
+    const job = await done(res.json().id);
+    assert.equal(job.status, 'done', JSON.stringify(job.error));
+    assert.equal(job.result.type, 'THREAT');
+    assert.equal(job.result.total, 1);
+    const rows = (await t.call({ url: `/v1/pa/log-searches/${job.id}/rows` })).json();
+    assert.equal(rows.items[0].threat, 'SMB Brute Force(40004)');
+    assert.equal(rows.items[0].severity, 'high');
+    assert.equal(rows.items[0].src, '203.0.113.9');
+    const csv = await t.call({ url: `/v1/pa/log-searches/${job.id}/export` });
+    assert.match(String(csv.headers['content-disposition']), /PA_threat_/);
+    const named = await done((await submit({ ...range, type: 'THREAT', threat: 'scan' })).json().id);
+    assert.equal(named.result.total, 1);
+    // 關鍵字比對威脅名稱;country 任一方可和 srcCountry 一起用
+    assert.equal((await done((await submit({ ...range, type: 'THREAT', q: 'Brute Force(' })).json().id)).result.total, 1);
+    assert.equal((await done((await submit({ ...range, type: 'THREAT', country: '10.0.0.0', srcCountry: 'United' })).json().id)).result.total, 1);
+    const info = await done((await submit({ ...range, type: 'THREAT', severity: 'info' })).json().id);
+    assert.equal(info.result.total, 1);
+    assert.equal((await t.call({ url: `/v1/pa/log-searches/${info.id}/rows` })).json().items[0].severity, 'info');
+    // url 類型不算威脅 log
+    const all = await done((await submit({ ...range, type: 'THREAT' })).json().id);
+    assert.equal(all.result.total, 3);
+  });
+
+  it('TRAFFIC 帶嚴重度或威脅名稱回 400;type 只接受 TRAFFIC / THREAT;srcCountry 只比對來源', async () => {
+    assert.equal((await submit({ ...range, severity: 'high' })).statusCode, 400);
+    assert.equal((await submit({ ...range, type: 'TRAFFIC', threat: 'x' })).statusCode, 400);
+    assert.equal((await submit({ ...range, type: 'URL' })).statusCode, 400);
+    // 關鍵字 + 嚴重度 / 威脅名稱仍限 1 天(資安審查)
+    const long = { from: '2026-11-09T00:00:00+08:00', to: '2026-11-11T00:00:00+08:00', type: 'THREAT', q: 'x' };
+    assert.equal((await submit({ ...long, severity: 'info' })).statusCode, 400);
+    assert.equal((await submit({ ...long, threat: 'scan' })).statusCode, 400);
+    const src = await done((await submit({ ...range, srcCountry: 'United States' })).json().id);
+    assert.equal(src.status, 'done');
+    assert.equal(src.result.total, 0);
+    const dst = await done((await submit({ ...range, dstCountry: 'United States' })).json().id);
+    assert.equal(dst.result.total, 20);
+    assert.equal(dst.result.type, 'TRAFFIC');
+  });
+
+  it('結果格式同舊版(欄位、分頁、匯出、取消),依時間由舊到新', async () => {
+    const res = await submit({ ...range, src: '10.10.1.1' });
+    assert.equal(res.statusCode, 202, res.body);
+    const job = await done(res.json().id);
+    assert.equal(job.status, 'done');
+    assert.equal(job.result.source, 'clickhouse');
+    assert.equal(job.result.total, 6);
+    assert.equal(job.result.stopReason, '');
+    const rows = (await t.call({ url: `/v1/pa/log-searches/${job.id}/rows?pageSize=2` })).json();
+    assert.equal(rows.total, 6);
+    assert.equal(rows.items[0].src, '10.10.1.1');
+    assert.equal(rows.items[0].time, '2026-11-11T00:01:00+08:00');
+    assert.deepEqual(Object.keys(rows.items[0]).slice(0, 4), ['time', 'subtype', 'action', 'src']);
+    const csv = await t.call({ url: `/v1/pa/log-searches/${job.id}/export` });
+    assert.equal(csv.statusCode, 200);
+    assert.match(csv.headers['content-type'] as string, /text\/csv/);
+    // 別人查不到
+    assert.equal((await t.call({ url: `/v1/pa/log-searches/${job.id}`, emp: 'S999999' })).statusCode, 404);
+    assert.equal((await t.call({ method: 'DELETE', url: `/v1/pa/log-searches/${job.id}` })).statusCode, 204);
+    assert.equal((await t.call({ url: `/v1/pa/log-searches/${job.id}` })).statusCode, 404);
+  });
+
+  it('超過筆數上限:stopReason limit', async () => {
+    const job = await done((await submit({ ...range, limit: 5 })).json().id);
+    assert.equal(job.result.total, 5);
+    assert.equal(job.result.stopReason, 'limit');
+  });
+
+  it('超過 30 天、只用關鍵字超過 1 天回 400;超過保留期限、期間沒有資料回 404;連不上回 503;source 只接受 clickhouse', async () => {
+    assert.equal((await submit({ from: '2026-10-11T00:00:00+08:00', to: '2026-11-11T00:00:00+08:00' })).statusCode, 400);
+    const q = await submit({ from: '2026-11-09T00:00:00+08:00', to: '2026-11-11T00:00:00+08:00', q: 'fin' });
+    assert.equal(q.statusCode, 400);
+    assert.equal(q.json().details[0].field, 'q');
+    const old = await submit({ from: '2026-10-01T00:00:00+08:00', to: '2026-10-01T01:00:00+08:00' });
+    assert.equal(old.statusCode, 404);
+    assert.equal(old.json().code, 'NETOPS_PA_OUT_OF_RETENTION');
+    const none = await submit({ from: '2026-11-11T05:00:00+08:00', to: '2026-11-11T06:00:00+08:00' });
+    assert.equal(none.statusCode, 404);
+    assert.equal(none.json().code, 'NETOPS_PA_NO_DATA');
+    assert.equal((await submit({ ...range, source: 'ftp' })).statusCode, 400);
+    reader.failing = true;
+    try {
+      const res = await submit(range);
+      assert.equal(res.statusCode, 503);
+      assert.equal(res.json().code, 'NETOPS_CLICKHOUSE_UNAVAILABLE');
+      assert.ok(!res.body.includes('ECONNREFUSED'));
+    } finally {
+      reader.failing = false;
+    }
+  });
+
+  it('期間有一部分在資料之前:結果標 partial,匯出檔名標出來', async () => {
+    const job = await done((await submit({ from: '2026-11-10T23:00:00+08:00', to: '2026-11-11T00:30:00+08:00' })).json().id);
+    assert.equal(job.result.partial, true);
+    assert.deepEqual(job.result.coverage, { from: '2026-11-11', to: '2026-11-11' });
+    const csv = await t.call({ url: `/v1/pa/log-searches/${job.id}/export` });
+    assert.match(decodeURIComponent(String(csv.headers['content-disposition'])), /部分期間超過保留期限/);
+  });
+
+  it('每人同時最多 1 個明細查詢', async () => {
+    const orig = reader.searchTraffic;
+    let release!: () => void;
+    reader.searchTraffic = (...a) => new Promise((r) => (release = () => r(orig(...a))));
+    try {
+      const first = await submit(range, 'S200001');
+      assert.equal(first.statusCode, 202);
+      const second = await submit(range, 'S200001');
+      assert.equal(second.statusCode, 409);
+      assert.equal(second.json().code, 'NETOPS_JOB_LIMIT_EXCEEDED');
+    } finally {
+      await new Promise((r) => setTimeout(r, 20));
+      release?.();
+      reader.searchTraffic = orig;
+    }
+  });
+
+  it('工作執行中 ClickHouse 失敗:工作 failed,錯誤代碼 NETOPS_CLICKHOUSE_UNAVAILABLE', async () => {
+    const orig = reader.searchTraffic;
+    reader.searchTraffic = async () => {
+      throw new (await import('../../src/infra/clickhouse/index.js')).ClickHouseError('x', 241, 500);
+    };
+    try {
+      const job = await done((await submit(range)).json().id);
+      assert.equal(job.status, 'failed');
+      assert.equal(job.error.code, 'NETOPS_CLICKHOUSE_UNAVAILABLE');
+    } finally {
+      reader.searchTraffic = orig;
+    }
+  });
+});

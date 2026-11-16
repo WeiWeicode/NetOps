@@ -394,6 +394,10 @@ netsh interface portproxy show v4tov4
 
 正式區沒有 `server.crt` / `server.key` 時接收端點不會啟動;需求方決定接受明文時才設 `PA_RECEIVE_PLAINTEXT=1`。私鑰是機密:由需求方放入,不要貼到聊天或工單。
 
+**正式區(主機 3,2026-11-16 需求方決定)**:公司 AD CS 到位前,用主機 3 自建的 NetOps 專用 CA「GigaNexus NetOps PA CA (prod)」(與 Gateway `:9443` 的臨時 PKI 分開),
+以 `deploy/host3-pa-pki.sh` 產生上表的 `pa-mgmt-ca.pem`(= 該 CA)、`server.crt`、`server.key`(SAN `IP:10.10.130.122`),並簽發 PA-560 在設備上產生的 CSR(管理介面憑證,SAN 含 `10.10.115.35`,私鑰留在 PA)。
+CA 私鑰在 `/srv/giganexus/netops-pa-ca/`(root 700,不掛進容器)。步驟見 `deploy/RUNBOOK-prod.md` §4.1;`pa-client-ca.pem`(用戶端憑證)之後用同一個 CA 再做。
+
 ---
 
 ## G. 請網通回覆的資訊(R0)
@@ -403,11 +407,11 @@ netsh interface portproxy show v4tov4
 | G1 | 唯讀 API Key(A 節) | SDK 輪詢 | **已取得**(需求方以 `deploy/host2-set-pa-secrets.sh` 寫入主機,AI 不經手) |
 | G2 | PA-560 管理介面 IP(或 DNS 名稱) | `PA_HOST` | **10.10.115.35**(`:443`) |
 | G3 | PAN-OS 版本(Dashboard 或 `show system info` 的 sw-version) | 核對 B、C 節標「版本」的欄位;連線檢查也會印出 | **12.1.7-h3**(2026-11-09 在開發機 10.10.112.13 跑連線檢查取得);B、C 節變數 2026-11-10 已對照設備(B.4 `status` → `$decryption_status`) |
-| G4 | 管理介面憑證:是否自簽、SAN 內有哪些名稱 / IP、簽發的 CA 憑證 | `PA_CA_FILE`;決定是否需暫用 `PA_TLS_INSECURE`(只限測試區) | **出廠自簽**:CN 與 SAN 都只有 `DNS:044109003916`(序號),沒有 IP SAN。測試區暫用 `PA_TLS_INSECURE=1`;**正式區要請網通換成公司 CA 簽發、SAN 含 `10.10.115.35`(或公司 DNS 名稱)的憑證**,並提供 CA 憑證 |
+| G4 | 管理介面憑證:是否自簽、SAN 內有哪些名稱 / IP、簽發的 CA 憑證 | `PA_CA_FILE`;決定是否需暫用 `PA_TLS_INSECURE`(只限測試區) | **出廠自簽**:CN 與 SAN 都只有 `DNS:044109003916`(序號),沒有 IP SAN。測試區暫用 `PA_TLS_INSECURE=1`;**正式區要請網通換成公司 CA 簽發、SAN 含 `10.10.115.35`(或公司 DNS 名稱)的憑證**,並提供 CA 憑證。**2026-11-16 需求方決定**:改由主機 3 的 NetOps 專用 CA 簽發——網通在 PA 產生 CSR(SAN 含 `10.10.115.35`,私鑰留在 PA),主機 3 `deploy/host3-pa-pki.sh sign-csr` 簽發後匯回,設為管理介面 SSL/TLS Service Profile(RUNBOOK-prod §4.1 第 3 步);**未執行** |
 | G5 | 管理介面 Permitted IP Addresses 已加入 `10.10.130.124`(與正式區 `.122`)、網路放行到管理介面 `:443` | 輪詢 | 待回覆 |
 | G6 | PA-560 送 log 的**來源 IP**(管理介面或 service route 指定的介面) | 主機 Windows 防火牆規則(附錄 F.2) | **10.10.115.35**(管理介面;2026-11-10 主機 2 抓封包確認,51293、51294 都是這個來源) |
-| G7 | HTTP 用 HTTPS 或 HTTP;Syslog 用 SSL 或 TCP;PA-560 是否信任公司內部 CA(信任才能用 HTTPS / SSL) | 接收端點憑證(F.6) | 測試區:**HTTP、TCP 明文**(需求方同意);內部 CA 信任未確認 |
-| G8 | Syslog SSL 能否設定**用戶端憑證**,能的話提供簽發的 CA 憑證 | Syslog 唯一能驗證來源的方式(F.4.1) | 待回覆 |
+| G7 | HTTP 用 HTTPS 或 HTTP;Syslog 用 SSL 或 TCP;PA-560 是否信任公司內部 CA(信任才能用 HTTPS / SSL) | 接收端點憑證(F.6) | 測試區:**HTTP、TCP 明文**(需求方同意);內部 CA 信任未確認。**正式區(2026-11-16 需求方決定)**:**HTTPS、SSL**;PA 匯入 NetOps 專用 CA 為 Trusted Root(RUNBOOK-prod §4.1 第 2、4 步);**未執行** |
+| G8 | Syslog SSL 能否設定**用戶端憑證**,能的話提供簽發的 CA 憑證 | Syslog 唯一能驗證來源的方式(F.4.1) | 待回覆;**正式區第二段先不做**(需求方 2026-11-16),之後用 NetOps 專用 CA 簽發 |
 | G9 | B、C、D 節設定完成(先只加正式區;測試時再加測試區 `10.10.130.124`) | 接收 | **測試區已設定並 Commit**(2026-11-10,只有 `netops-test` 10.10.130.124;正式區未加) |
 | G10 | 開 TRAFFIC 前後的管理平面 CPU 與 log 轉送佇列觀察(E4) | 負載 | 設定後 |
 | G11 | 預設規則 `interzone-default`、`intrazone-default` 套用 `netops-forward`(D.1) | TRAFFIC 轉送完整度、對帳 | **測試區 2026-11-16 已改**:`interzone-default` 的 Log Forwarding 由 None 改 `netops-forward`(`intrazone-default` 原本已套),需求方 11:30 Commit;**11:31 起 ClickHouse 收到該規則的 deny / reset-both**。ClickHouse TRAFFIC 每天約由 350 萬筆增為約 730 萬筆(×2.1,與 FTP 11/14、11/15 的 729 萬、712 萬筆相近),容量依此重估(IMPL-PLAN E2 / E5、PA-LOG-CLICKHOUSE-GUIDE §4)。**正式區(主機 3)設定 B、C、D 節時一併做** |

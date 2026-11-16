@@ -5,7 +5,7 @@
 #   (正式區要用網通另建、只開 XML API Operational Requests / Log 的專用帳號產生的 Key,IMPL-PLAN D2;還沒拿到直接 Enter 建空檔)、
 #   憑證目錄 /srv/giganexus/netops-pa-tls、netops.env 的 PA_POLL_ENABLED=0、PA_RECEIVE_ENABLED=0、PA_QUERY_ENABLED=0。
 # 第一段不啟動 netops-pa,但 compose secrets 要有檔案,所以第一段就執行(API Key 可先留空);第二段拿到 Key 後刪除 pa_api_key 再執行一次。
-# 正式區不可設 PA_TLS_INSECURE(netops-pa 啟動會失敗,CI deploy-prod 也會擋):PA-560 管理介面換公司 CA 憑證後設 PA_CA_FILE。
+# 正式區不可設 PA_TLS_INSECURE(netops-pa 啟動會失敗,CI deploy-prod 也會擋):PA-560 管理介面憑證與接收端憑證由 host3-pa-pki.sh(NetOps 專用 CA)產生後設 PA_CA_FILE 等(RUNBOOK-prod.md §4.1)。
 set -eu
 ENV_FILE=/srv/giganexus/deploy/netops.env
 [ "$(id -u)" = 0 ] || { echo "請用 sudo 執行" >&2; exit 1; }

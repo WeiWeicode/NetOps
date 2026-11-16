@@ -332,6 +332,15 @@ deploy-prod:
     # 正式區不可略過憑證驗證(netops-pa / netops-api 啟動時也會擋;這裡提早失敗)
     - if grep -qE '^[[:space:]]*(export[[:space:]]+)?(PA_TLS_INSECURE|FTP_TLS_INSECURE)=.' "$NETOPS_ENV_FILE"; then echo "FAIL 正式區 netops.env 不可設定 PA_TLS_INSECURE / FTP_TLS_INSECURE" >&2; exit 1; fi
     - export PA_TLS_INSECURE= FTP_TLS_INSECURE=
+    # netops-pa 掛載的憑證目錄不可指到 NetOps PA CA 目錄(或其上層、或含 ca.key 的目錄):CA 私鑰不可掛進容器(需求方 2026-11-16;RUNBOOK-prod.md §4.1)
+    - |
+      TLSD="$(sed -n 's/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}NETOPS_PA_TLS_HOST_DIR=//p' "$NETOPS_ENV_FILE" | tail -n 1 | tr -d "\"'")"
+      TLSR="$(realpath -m "${TLSD:-/srv/giganexus/netops-pa-tls}")"; CAD=/srv/giganexus/netops-pa-ca
+      case "$TLSR/" in "$CAD"/*) BAD=1 ;; *) BAD=0 ;; esac
+      case "$CAD/" in "${TLSR%/}"/*) BAD=1 ;; esac
+      if [ -e "$TLSR/ca.key" ]; then BAD=1; fi
+      if [ "$BAD" = 1 ]; then echo "FAIL NETOPS_PA_TLS_HOST_DIR=$TLSR 指到 PA CA 目錄或含 ca.key,不可掛進 netops-pa" >&2; exit 1; fi
+      echo "OK   PA 憑證目錄 $TLSR"
     # 機密檔(host3-set-secrets.sh、host3-set-clickhouse-secrets.sh、host3-set-pa-secrets.sh 產生;第一段也要有:compose 的 secrets 定義指向這些檔)
     - for f in gw_api_key monitor_api_key ftp_password qdrant_api_key ch_reader_password ch_cold_password ch_writer_password pa_api_key pa_http_token clickhouse/netops-users.xml; do test -f "$NETOPS_SECRETS_DIR/$f" || { echo "缺少機密 $f(主機 3 依 deploy/RUNBOOK-prod.md §2 執行 host3-set-*.sh)" >&2; exit 1; }; done
     # PA log 管線開關(第一段 0;第二段 C6 改 1):只認 netops.env 的 NETOPS_PA_PIPELINE

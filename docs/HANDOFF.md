@@ -4,7 +4,7 @@
 
 ## 2026-11-16 AC 驗收與修正
 
-**接手方式**:新討論串說「從 `NetOps/docs/HANDOFF.md`「2026-11-16 AC 驗收與修正」接手」。報告 `docs/test-reports/2026-11-16-ac-uat.md`。
+**接手方式**:新討論串說「從 `NetOps/docs/HANDOFF.md`「2026-11-16 AC 驗收與修正」接手,做正式區上架」。報告 `docs/test-reports/2026-11-16-ac-uat.md`。
 
 - **已完成**:!93–!99(AC1–AC7)合併上線測試區;驗收 !100(**通過 16 / 不通過 1**,另 1 項未測、2 項跨日待續);修正 **!101**(每日同步中斷判定:FTP 連續 2 天以上沒檔的類型不擋當天完成,API.md §5.4、ARCHITECTURE D43 / D44)與 **!102**(AI 回答原始 HTML 轉文字、時段資料註明沒有威脅名稱並禁止佔位符,API.md §10.3)已在測試區驗證。
 - **不通過項目 6b(對帳誤差 < 0.5%)的原因與處理**:驗收報告 §3.1。**是 PA 設定問題,不是程式**:預設規則 `interzone-default`(Deny)沒套 Log Forwarding `netops-forward`;需求方 2026-11-16 11:30 在 PA 改套並 Commit,**11:31 起 ClickHouse 收得到**(PA-FORWARDING-SPEC D.1、G11)。TRAFFIC 每天約由 350 萬增為 730 萬筆(×2.1)。
@@ -15,6 +15,41 @@
   3. 正式區(主機 3):PA 設定一併套用預設規則轉送(PA-FORWARDING-SPEC D.1);**E2 / E5 申請**(E2 150 GB / 年、E5 預留 20 GB,數字不變)。
   4. 測試區 TTL **維持 3 天**(需求方決定,不改)。
   5. 其他觀察(驗收報告 §3.3):Session 逾時約 20 分鐘是否預期,待確認。
+
+**測試區待續**:11-17 起 AC1 / AC7 跨日驗收(每日同步卡片、流量總覽前一天摘要)與 6b 對帳(誤差 < 0.5%)、6c evidence 比對,上架正式區不等這些(上架與測試區驗收並行,結果補在本段)。
+
+### 正式區上架(下一步,依序)
+
+只整理既有文件已寫的前提,沒有新決策;「文件未記載,上架時確認」= 查不到,不要自己補數值。出處縮寫:IP = IMPL-PLAN.md、API = API.md、PF = PA-FORWARDING-SPEC.md、CG = PA-LOG-CLICKHOUSE-GUIDE.md。
+
+1. **資源與空間前提(C6 前置)**
+   - 主機 3 磁碟 E5:vhdx 所在實體碟預留 20 GB、ClickHouse 容器上限 2 GB、不必先加大 WSL;vhdx 在哪個碟、剩餘空間要 IT 確認(IP「E5」與「容量重估」、CG §4.4–§4.6)。**核准狀態:文件未記載,上架時確認。**
+   - NAS E2:150 GB / 年(需求方 2026-11-16 決定);IT 核准狀態(IP E2)**文件未記載,上架時確認**。核准前 `NETOPS_ARCHIVE_ENABLED=0`(IP C4 狀態段)。
+   - 主機 3 的舊系統不受影響:上架前確認舊系統 port 可連、規則 `Docker-WSL2-AllServices-TCP` 的 port 範圍不含 51293 / 51294(IP C6 第 1 步;PF 附錄 F.4.1 末項「主機 3 已有規則」)。
+2. **正式區 `.env` / 部署設定**(`netops.env`、CI 部署設定;值依下列出處,沒列的值**文件未記載,上架時確認**)
+   - `NETOPS_AI_SOURCE`:正式區未設定時預設 `ftp`;C6 後改 `clickhouse`(API §10.1 資料來源、IP AC 段 AQ4)。
+   - `NETOPS_ARCHIVE_ENABLED`:預設 0;E2 核准、NAS 目錄 `giga-netops/prod/pa-archive` 建好後才開;`NETOPS_ARCHIVE_KEEP_DAYS` 正式區 0(不刪)或至少 366(IP C4 狀態段、CG §10.3 與歸檔保留期限列)。
+   - TTL:`NETOPS_TTL_TRAFFIC_DAYS`、`NETOPS_TTL_THREAT_DAYS` 預設依部署區,要和 `apply-schema.sh` 一致(API §4.4 熱冷分界);正式區 TRAFFIC 30 天、威脅 90 天(CG §10.3、CQ12)。
+   - `NETOPS_AI_DAILY_SUMMARY`:未設定時 prod 關,C6 後再開(API §10.4);`FTP_SYNC_MINUTES`:`NETOPS_AI_SOURCE=clickhouse` 時當 0,C6 後正式區改 clickhouse 時從 `.env` 與 Compose 移除(API §5.4 / §10 末段、HANDOFF「2026-11-14 AC7」)。
+   - `NETOPS_RECON_TIME`(預設 08:10)、`NETOPS_DAILY_SYNC`(1)(API §5.3、§5.4)。
+   - FTP:正式區 `FTP_LOG_DIR`、`FTP_ROOT`、`FTP_AD_DIR`、各類型目錄要對照舊版 IIS 實際值,由負責人確認,不沿用預設 `/`(IP D2 第 2 項)。
+   - PA:API Key 改專用帳號(只開 XML API Operational Requests、Log)後以 `host2-set-pa-secrets.sh` 的主機 3 對應腳本更新機密、`NETOPS_PA_RECREATE=1` 重建 `netops-pa`;PA-560 管理介面換公司 CA 憑證、`PA_CA_FILE`,正式區不可用 `PA_TLS_INSECURE`(IP D2;PF G4、附錄 F.4)。接收端點憑證 `server.crt` / `server.key` 由需求方放入,否則接收不啟動(PF F.6;明文需需求方決定 `PA_RECEIVE_PLAINTEXT=1`)。
+   - ClickHouse 帳號機密:主機 3 對應 `host2-set-clickhouse-secrets.sh` 的腳本由需求方執行,**主機 3 腳本名稱文件未記載,上架時確認**(C1 報告 §7)。
+3. **ClickHouse 建立與 schema(正式區 TTL)**:`netops-clickhouse`(`clickhouse/clickhouse-server:26.3.62.3`,容器 2 GB)隨 CI 啟動;`deploy/clickhouse/apply-schema.sh prod` 以正式區 TTL 建表:TRAFFIC 30 天、威脅 90 天、App 彙總 13 個月、來源彙總 90 天、熱力圖 5m 1 年、1h / 1d 5 年(CG §10.3;C1 報告 §5「TTL 依部署區」;IP V-a 第 1 項)。CI 每次部署會執行 `apply-schema.sh`,**正式區 CI 傳 `prod` 的設定位置文件未記載,上架時確認**。
+4. **PA 轉送設定(網通)**
+   - 正式區 Syslog Server Profile(`netops-syslog`,:51294)與 HTTP Server Profile(`netops-http`,:51293)加主機 3 `10.10.130.122`(PF §0 總覽、B.1、C.1)。
+   - **預設規則 `interzone-default`、`intrazone-default` 也要 Override → Log at Session End、Log Forwarding `netops-forward`**(PF D.1、G11);其他規則同樣檢查。
+   - 開好接收後請網通對 Syslog Server Profile **再 Commit 一次**(PA 不會自動重連 error 110)(IP D2 第 2 項、PF E 節、F.3 第 7 步)。
+   - PA Permitted IP Addresses 加 `10.10.130.122`(PF A 節第 0 步)。
+5. **主機 3 portproxy 與防火牆(PF 附錄 F.2)**:`netsh interface portproxy` 轉 51293 / 51294 到 WSL localhost、Windows 防火牆只放行 PA-560 來源 IP `10.10.115.35`;IP 換成 `10.10.130.122`、Compose 專案名 `giganexus-netops-prod`(PF 附錄 F 開頭說明)。portproxy 會遺失來源 IP,Syslog 51294 在沒有用戶端憑證前只靠防火牆(PF F.2、F.4.1);**:9443 與其他既有規則不動**(工作區 AGENT §5)。
+6. **路由草稿發佈**:`netops-api` 啟動時只註冊草稿,需求方在 GigaItApp「服務與路由」發佈:`netops.ai.*`、`kb/semantic-search`、`kb/vector-*`、`kb/ip-learning*`、`pa-live/*`(串流 `pa-live/stream` 逾時 60000 ms;`pa-live/collector-control` 正式區回 403,可不發佈);AC 批次新增的 `POST /ai/explanations`、`GET /ai/daily-summary`、`/ip-names`、`/ip-name-imports` 等路徑也要發佈(IP D2、AC1–AC7 各段「上架後」)。
+7. **權限代碼與選單(正式區 Gateway rbac)**:`rbac-prod` 套用 `deploy/gateway-rbac.yaml`(新權限 `netops.ip-name.read|write`、`netops.pa-heatmap.ai`、`pa-insight.ai`、`pa-search.ai`、`pa-events.ai` 等按鈕節點);**正式區選單節點(IP 對照表等)可能要手動調整**(IP AC3 段);權限代碼在 `giga-api-gateway-bff` 登記屬跨 repo,需取得同意(IP AC 段「跨 repo 事項」)。負責人在 GigaItApp 指派 `netops-admin`、`netops-viewer`(IP D2)。`netops.pa-live.manage` 也會出現在正式區 admin,API 回 403、不影響使用。
+8. **上架後驗證**
+   - 即時監控 TRAFFIC 排行與即時 log 有資料;收集器心跳 `dropped`、`rejected`、`malformed` 為 0(IP D2、PF E1–E3)。
+   - ClickHouse healthy;正式區 TTL 正確(`system.tables`);每日 08:10 對帳 `status` 與誤差 < 0.5%(API §5.3);`interzone-default` 的 deny 紀錄進 ClickHouse。
+   - 歸檔(E2 核准後):連續 7 天成功、`file()` 查得到 7 天前資料、拔 NAS 不影響寫入(IP C4 完成條件)。
+   - 上線一週看主機 3 記憶體(available 長期 < 1.5 GB 才排加大)、磁碟、歸檔;一個月後看雜訊佔比(CQ8);依 CQ10 降級 FTP(IP C6 第 2 項、CG §4.6)。
+   - 完成後:`npm run arch:check`(GigaNexusAIPlan)、更新甘特圖、HANDOFF 與 PROJECT-MAP(IP C6 完成條件)。
 
 ## 2026-11-14 AC7 AI 每日摘要(程式完成,待合併)
 

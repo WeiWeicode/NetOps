@@ -909,6 +909,26 @@ AI 串流(§10.1)開始後的錯誤以 `error` 事件回傳 `{ code, message }`:
 - 外部 IP 自動學習(D10):候選 IP 來自最近 N 天的 TRAFFIC 排行(目的 IP、被擋、上傳、外部連入);`clickhouse` 來源取 ClickHouse 原始 TRAFFIC 建的每小時摘要(不新增彙總表),`ftp` 來源取 FTP 摘要。`IPLEARN_DAYS` 上限 30。`IPLEARN_HOUR` 預設 -1(不自動,舊版 3 點;D25:舊版 IIS 停用後正式區改 3);管理者改過的自動學習筆記不覆寫;自動學習筆記上限 1,000 則。
 - 時間欄位(`lastSync`、`startedAt`、`finishedAt`)輸出 `+08:00`。
 
+### 10.3 AI 解讀(AC4,ARCHITECTURE D44 ③)— 批次 `feature/ac4-ai-slice-insight`
+
+| 方法 | 路徑 | 權限 | 說明 |
+| --- | --- | --- | --- |
+| POST | `/api/netops/ai/explanations` | `netops.ai.use` | PA 頁面的 AI 按鈕共用;`{ kind, params, think? }`,回 SSE(寫法同 §10.1:`x-timeout-ms: 60000`、heartbeat、`X-Accel-Buffering: no`);稽核 `x-audit-level: meta` |
+
+- `kind: 'slice'`(時段明細「AI 解讀這個時段」):`params` 同 `GET /pa/slice`(§4.4)。後端以**同一人同條件**重用時段明細工作(30 分鐘內不重查 ClickHouse);工作還在查時送 `scan` `{ label, source: 'clickhouse', step: 'slice', waiting: true }` 後等候(最多 180 秒,逾時 `error` 事件 `NETOPS_JOB_TIMEOUT`)。送模型的是條件、摘要、各 Top 10 與資料完整度;**明細列(`rows`)不送**。
+- `kind: 'insight'`(分析儀表板「AI 摘要本期異常」):`params` 為 `{ view: 'traffic' | 'threat', from, to }`,同 `GET /pa/insight/{view}`(§4.5),用儀表板快取。送合計、高峰(前 5 格與平均的倍數)、Top 10 與前一期比較:威脅用 `score.prev`;流量另查前一個同長度期間的每天彙總合計(快取鍵 `traffic-prev`;資料起點晚於前一期時不比較;忙碌取不到時只在資料中註明,不中斷)。
+- **後端自己取資料**,不接受前端送來的統計;PA 欄位文字(App、威脅名稱、國家、區域、條件)去掉控制字元與換行、每欄 120 字,整段資料上限 8,000 字(超過時省略後面的排行並註明,`meta.clipped`)。附 IP 對照表(AC3,姓名不遮罩,AQ2)與知識庫筆記(只用 IP / 關鍵字比對,不做語意搜尋);提示詞、姓名不寫服務日誌。
+- 錯誤(串流開始前):參數錯誤 400;時段明細的錯誤照 §4.4(409 `NETOPS_COLD_ARCHIVE_DISABLED`、429 `NETOPS_COLD_QUERY_BUSY`、409 `NETOPS_JOB_LIMIT_EXCEEDED`);儀表板 429 `NETOPS_INSIGHT_BUSY`;503 `NETOPS_CLICKHOUSE_UNAVAILABLE`;409 `NETOPS_AI_DISABLED`;429 `NETOPS_STREAM_BUSY`(和分析、問答共用名額)。
+- 資料來源不受 `NETOPS_AI_SOURCE` 影響(一律 ClickHouse,同 §4.4 / §4.5;正式區 C6 之前這兩頁本來就回 503)。
+
+| 事件 | 資料 |
+| --- | --- |
+| `meta` | `{ kind, model, source: 'clickhouse', partial, gapsKnown, contextChars, clipped, notes, vectorError }`;slice 另有 `type, start, end, sliceSource, waited`;insight 另有 `view, from, to, prev`(有沒有前一期可比較) |
+| `scan` | slice 等工作時 `{ label, source, step: 'slice', waiting: true }` |
+| `open`、`thinking`、`content`、`done`、`error`、`heartbeat` | 同 §10.1 |
+
+- 畫面:時段明細抽屜(熱力圖按鈕 `netops.pa-heatmap.ai`、儀表板 `netops.pa-insight.ai`)與分析儀表板標題列「AI 摘要本期異常」(`netops.pa-insight.ai`,對話框,摘要目前頁籤與期間)。兩個按鈕節點 `includes` `netops.ai.use`、`netops.pa.read`、`netops.pa-log.read`、`netops.kb.read`。
+
 ## 11. IP 對照表 — 批次 `feature/ac3-ip-names`(IMPL-PLAN AC3,ARCHITECTURE D45)
 
 IP / 網段 → 使用者姓名、部門、設備名稱、設備類型、備註。姓名、部門屬個資:只給網管(`netops-admin`),稽核一律 `x-audit-level: meta`(不記內容),服務日誌不記內容;關鍵字搜尋用 POST(姓名不出現在網址與存取日誌)。存檔 `ipnames/ip-names.json`(經 `infra/store` 的 `listIpNames` / `saveIpNames`),以最新為準、不記歷史,上限 20,000 筆。第一版只支援 IPv4。

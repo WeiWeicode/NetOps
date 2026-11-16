@@ -5,9 +5,12 @@
  * 權限:netops.ai.use(netops-admin、netops-viewer,2026-11-05 決定,D25 維持一個權限)。
  */
 import type { FastifyPluginAsync } from 'fastify';
-import { looseObject } from '../../shared/schemas.js';
+import { DAY, looseObject } from '../../shared/schemas.js';
 import { dayRange, timeIn, validation } from '../../shared/time.js';
-import type { AiService, HistoryItem } from './service.js';
+import { ownerOf } from '../../infra/jobs/index.js';
+import { SLICE_QUERY } from '../pa-heat/routes.js';
+import type { SliceQuery } from '../pa-heat/service.js';
+import type { AiService, HistoryItem, InsightParams } from './service.js';
 import { SSE_TIMEOUT_MS, type SseHub } from './sse.js';
 
 /** 問答期間上限(天):ftp 來源有 IP 時要從 FTP 重讀原始 log(同明細查詢 §4.3);clickhouse 來源沿用同一個上限 */
@@ -23,6 +26,13 @@ const HISTORY = {
   description: '前面的對話(最多 100 則;只送最近 6 則、每則前 4000 字給模型)',
 } as const;
 const sse = { 'x-timeout-ms': SSE_TIMEOUT_MS } as const;
+/** AC4 insight 的 params(同 GET /pa/insight/{view}) */
+const INSIGHT_PARAMS = {
+  type: 'object',
+  required: ['view', 'from', 'to'],
+  additionalProperties: false,
+  properties: { view: { type: 'string', enum: ['traffic', 'threat'] }, from: DAY, to: DAY },
+} as const;
 
 const aiRoutes: FastifyPluginAsync<{ ai: AiService; hub: SseHub }> = async (app, { ai, hub }) => {
   app.get(
@@ -183,6 +193,72 @@ const aiRoutes: FastifyPluginAsync<{ ai: AiService; hub: SseHub }> = async (app,
       const p = await ai.prepareQuestion(input);
       const owner = hub.reserve(req);
       return hub.open(req, reply, owner, (s) => ai.ask(s, { from, to, question, think: req.body.think === true }, p));
+    },
+  );
+  app.post<{ Body: { kind: 'slice' | 'insight'; params: SliceQuery | InsightParams; think?: boolean } }>(
+    '/v1/ai/explanations',
+    {
+      schema: {
+        operationId: 'netops.ai.explain',
+        summary: 'AI 解讀畫面上的統計(SSE)',
+        description:
+          'PA 頁面的 AI 按鈕共用(AC4,ARCHITECTURE D44 ③)。後端依 params 自己取資料(不接受前端送來的統計),整理成統計與排行送給模型,以 SSE 串流回答;不送原始 log。' +
+          'kind: slice = 時段明細「AI 解讀這個時段」,params 同 GET /pa/slice(同一人同條件重用時段明細工作,30 分鐘內不重查;還在查時送 scan 事件 { step: "slice", waiting: true } 後等候);' +
+          'kind: insight = 分析儀表板「AI 摘要本期異常」,params { view: traffic | threat, from, to } 同 GET /pa/insight/{view}(用儀表板快取;流量另比較前一個同長度期間)。' +
+          '事件:open、meta(kind、model、source、partial、gapsKnown、contextChars、clipped、notes、vectorError;slice 另有 type、start、end、sliceSource、waited;insight 另有 view、from、to、prev)、scan、thinking、content、done、error、heartbeat。' +
+          '參數錯誤回 400;時段明細的錯誤照 GET /pa/slice(409 NETOPS_COLD_ARCHIVE_DISABLED、429 NETOPS_COLD_QUERY_BUSY、409 NETOPS_JOB_LIMIT_EXCEEDED);儀表板忙碌回 429 NETOPS_INSIGHT_BUSY;ClickHouse 無法使用回 503 NETOPS_CLICKHOUSE_UNAVAILABLE;未設定 AI 回 409 NETOPS_AI_DISABLED;同時進行的 AI 回答超過上限回 429 NETOPS_STREAM_BUSY(和分析、問答共用)。',
+        tags: ['AI'],
+        'x-permission': 'netops.ai.use',
+        'x-audit-level': 'meta',
+        ...sse,
+        'x-gherkin': [
+          '場景: 時段明細 AI 解讀沿用同一份查詢結果',
+          '  假如 使用者擁有 netops.ai.use',
+          '  而且 使用者剛查過 GET /api/netops/pa/slice?start=…&end=…',
+          '  當 呼叫 POST /api/netops/ai/explanations 帶 { kind: "slice", params: 同樣的條件 }',
+          '  那麼 回應 200 且 Content-Type 為 text/event-stream',
+          '  而且 依序收到 open、meta、content、done 事件',
+          '  而且 不重查 ClickHouse',
+          '  而且 送給模型的資料只有摘要與 Top 10,沒有明細列',
+          '',
+          '場景: 分析儀表板 AI 摘要用儀表板快取',
+          '  假如 使用者剛看過 GET /api/netops/pa/insight/threat?from=2026-11-05&to=2026-11-11',
+          '  當 呼叫 POST /api/netops/ai/explanations 帶 { kind: "insight", params: { view: "threat", from: "2026-11-05", to: "2026-11-11" } }',
+          '  那麼 meta 事件的 prev 表示有沒有前一期可比較',
+          '  而且 不重查 ClickHouse',
+          '',
+          '場景: 資料有字數上限',
+          '  假如 排行的名稱很長',
+          '  當 呼叫 POST /api/netops/ai/explanations',
+          '  那麼 送給模型的資料不超過上限,並註明「已省略」',
+          '',
+          '場景: 參數錯誤',
+          '  當 呼叫 POST /api/netops/ai/explanations 帶 { kind: "slice", params: { start, end } } 而 end − start 超過 1 天',
+          '  那麼 回應 400 VALIDATION_FAILED',
+        ].join('\n'),
+        body: {
+          type: 'object',
+          required: ['kind', 'params'],
+          additionalProperties: false,
+          properties: {
+            kind: { type: 'string', enum: ['slice', 'insight'], description: 'slice = 時段明細;insight = 分析儀表板' },
+            params: { type: 'object', description: 'kind 為 slice 時同 GET /pa/slice 的條件;insight 時 { view, from, to }' },
+            think: { type: 'boolean', default: false, description: '深入思考(比較久)' },
+          },
+          if: { properties: { kind: { const: 'slice' } } },
+          then: { properties: { params: SLICE_QUERY } },
+          else: { properties: { params: INSIGHT_PARAMS } },
+        },
+        response: SSE_RESPONSE('open、meta、scan、thinking、content、done、error、heartbeat'),
+      },
+    },
+    async (req, reply) => {
+      // 名額先檢查一次(取資料前),開始串流前再檢查一次
+      hub.reserve(req);
+      const input = req.body.kind === 'slice' ? { kind: 'slice' as const, params: req.body.params as SliceQuery } : { kind: 'insight' as const, params: req.body.params as InsightParams };
+      const ctx = await ai.prepareExplanation(input, ownerOf(req.identity));
+      const owner = hub.reserve(req);
+      return hub.open(req, reply, owner, (s) => ai.explain(s, { think: req.body.think === true }, ctx));
     },
   );
 };

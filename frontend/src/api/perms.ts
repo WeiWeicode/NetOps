@@ -37,6 +37,9 @@ export const UI = {
   paAskUse: 'netops.pa-ask.use',
   adAskUse: 'netops.ad-ask.use',
   paDashboardAi: 'netops.pa-dashboard.ai',
+  // AC4:熱力圖的時段明細「AI 解讀這個時段」、儀表板「AI 摘要本期異常」與其時段明細(POST /ai/explanations)
+  paHeatmapAi: 'netops.pa-heatmap.ai',
+  paInsightAi: 'netops.pa-insight.ai',
 } as const;
 
 export const API = {

@@ -8,10 +8,13 @@
  *   - 409 / 404 冷歸檔未提供時顯示中性 GAlert(info),並保留熱力圖格子的彙總數字(從 cell 帶入)
  *   - 其他錯誤顯示 GAlert(danger)含 message 與 requestId
  *   - 結果顯示摘要卡、嚴重度威脅、Top 10 排行、明細表(最多 200 列;rowsTruncated 時提示)與操作按鈕
+ *   - AC4「AI 解讀這個時段」:有結果且有按鈕權限(aiPerm,熱力圖 netops.pa-heatmap.ai、儀表板 netops.pa-insight.ai)時顯示;
+ *     送同一組條件,後端重用同一個時段明細工作(不重查);換條件時清掉舊回答
  */
 import { computed, ref, watch } from 'vue';
 import { fmtNum, fmtSize, fmtTime } from '@/api/format';
-import { ApiError, describeError } from '@/api/gateway';
+import type { ExplainInput } from '@/api/ai';
+import { ApiError, can, describeError } from '@/api/gateway';
 import type { HeatCell } from '@/api/heatmap';
 import type { SliceSeverity, SliceTopItem } from '@/api/slice';
 import { useLivePaQuery } from '@/composables/useLivePaQuery';
@@ -19,6 +22,7 @@ import { searchExtraOf, topLabelOf, type useSlice } from '@/composables/useSlice
 import type { GBarListItem } from '@/ui/charts/GBarList.vue';
 import { formatRange } from '@/composables/vizTime';
 import type { Column } from '@/ui/components/GTable.vue';
+import AiExplainPanel from './AiExplainPanel.vue';
 
 const props = withDefaults(
   defineProps<{
@@ -26,10 +30,13 @@ const props = withDefaults(
     slice: ReturnType<typeof useSlice>;
     cell?: HeatCell | null;
     canDrill?: boolean;
+    /** AC4:「AI 解讀這個時段」的按鈕權限代碼;未給或沒有權限時不顯示 */
+    aiPerm?: string;
   }>(),
   {
     cell: null,
     canDrill: false,
+    aiPerm: '',
   },
 );
 
@@ -39,6 +46,13 @@ const emit = defineEmits<{
 }>();
 
 const livePa = useLivePaQuery();
+
+/** AC4:AI 解讀這個時段(條件同目前的時段明細;後端自己取同一份結果) */
+const canAi = computed(() => !!props.aiPerm && can(props.aiPerm));
+const aiInput = computed<ExplainInput | null>(() => {
+  const q = props.slice.query.value;
+  return q && props.slice.result.value ? { kind: 'slice', params: { ...q } } : null;
+});
 
 const title = computed(() => {
   const q = props.slice.query.value;
@@ -373,6 +387,15 @@ function onDrawerToggle(v: boolean) {
           清除篩選
         </button>
       </div>
+
+      <!-- AC4:AI 解讀這個時段 -->
+      <AiExplainPanel
+        v-if="canAi"
+        :input="aiInput"
+        title="AI 解讀這個時段"
+        start-label="AI 解讀"
+        hint="只把這個時段的摘要與 Top 10(不是明細列)送到公司內部的 AI 服務,不會傳到外部"
+      />
 
       <!-- Top 10 排行(U5:點項目直接開 Log 明細查詢) -->
       <GCard v-if="topKeys.length" title="Top 10 排行" padding="sm">

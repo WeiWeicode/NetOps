@@ -242,7 +242,21 @@ export function createInsightService(d: InsightDeps) {
     };
   }
 
-  return { traffic, threat };
+  /**
+   * 流量的前一個同長度期間合計(AC4「AI 摘要本期異常」的比較;只讀每天彙總,快取同儀表板)。
+   * 彙總資料起點晚於前一期開始時回 null(同 threat 的 score.prev)
+   */
+  async function trafficPrev(q: { from: string; to: string }) {
+    const r = range(q);
+    const h = reader();
+    const len = r.toMs - r.fromMs;
+    const data = await cached('traffic-prev', r, async () => ({ rows: await h.heatRows('1d', r.fromMs - len, r.fromMs), since: await h.heatEarliest('1d') }));
+    if (data.since === null || data.since > r.fromMs - len) return null;
+    const s = data.rows.reduce((a, x) => ({ sessions: a.sessions + x.sessions, sent: a.sent + x.sent, recv: a.recv + x.recv, deny: a.deny + x.deny }), { sessions: 0, sent: 0, recv: 0, deny: 0 });
+    return { from: dayText(r.fromMs - len), to: dayText(r.fromMs - DAY_MS), ...s };
+  }
+
+  return { traffic, threat, trafficPrev };
 }
 
 export type InsightService = ReturnType<typeof createInsightService>;

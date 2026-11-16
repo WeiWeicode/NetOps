@@ -66,6 +66,11 @@ permissions:
   - { code: netops.pa-dashboard.ai, name: AI 分析, kind: button, parent: netops.pa-dashboard.read, sort: 10, includes: [netops.ai.use, netops.pa.read, netops.ad.read, netops.kb.read] }
   - { code: netops.ad-ask.read, name: AI 問答, kind: menu, parent: netops.group.ad, sort: 40, includes: [netops.ad.read] }
   - { code: netops.ad-ask.use, name: 使用 AI 問答, kind: button, parent: netops.ad-ask.read, sort: 10, includes: [netops.ai.use, netops.pa.read, netops.ad.read, netops.kb.read] }
+  # AC4(IMPL-PLAN「AC」,D44 ③):時段明細「AI 解讀這個時段」、分析儀表板「AI 摘要本期異常」,共用 POST /ai/explanations(netops.ai.use)。
+  #   時段明細抽屜在熱力圖與儀表板都有,所以兩頁各一個按鈕;資料範圍是 PA 統計(時段明細的摘要與 Top 10、儀表板)+ 知識庫筆記,
+  #   綁定 netops.pa.read、netops.pa-log.read(時段明細)、netops.kb.read;不碰 AD,不綁 netops.ad.read
+  - { code: netops.pa-heatmap.ai, name: AI 解讀時段, kind: button, parent: netops.pa-heatmap.read, sort: 10, includes: [netops.ai.use, netops.pa.read, netops.pa-log.read, netops.kb.read] }
+  - { code: netops.pa-insight.ai, name: AI 摘要本期異常 / 解讀時段, kind: button, parent: netops.pa-insight.read, sort: 10, includes: [netops.ai.use, netops.pa.read, netops.pa-log.read, netops.kb.read] }
 
 roles:
   - code: netops-admin
@@ -98,6 +103,9 @@ roles:
       - netops.pa-dashboard.ai
       - netops.ad-ask.read
       - netops.ad-ask.use
+      # AC4
+      - netops.pa-heatmap.ai
+      - netops.pa-insight.ai
   - code: netops-viewer
     name: 資訊網通管理系統檢視者
     description: 資訊網通管理系統全部畫面唯讀(不含 FTP 同步 / 分析與知識庫編輯;含 AI 分析與問答)
@@ -120,3 +128,6 @@ roles:
       - netops.pa-dashboard.ai
       - netops.ad-ask.read
       - netops.ad-ask.use
+      # AC4
+      - netops.pa-heatmap.ai
+      - netops.pa-insight.ai

@@ -243,6 +243,7 @@
 
 - 在要監控的**安全政策規則** Actions > Log Forwarding 選 `netops-forward`。已經有其他 Log Forwarding Profile 的規則(例如送 FTP 匯出、Panorama),請把上面的 Match List **加進既有的 profile**,不要取代(現有 FTP 匯出要繼續,FTP 是歷史查詢來源)。
 - Decryption(10.0 以後):在解密政策規則 Options > Log Forwarding 選一個含 `decryption` Match List(→ `netops-http`)的 profile。
+- **預設規則 `interzone-default`、`intrazone-default` 也要套**(2026-11-16 驗收發現漏套):這兩條在 Policies > Security 最下方,要選取後按 **Override**,再在 Actions 勾 **Log at Session End**、Log Forwarding 選 `netops-forward`,然後 Commit。不套的話,走這兩條規則的連線(例如 `interzone-default` 的 deny / reset-both)log 只會出現在 FTP 匯出,**不進 ClickHouse**,對帳會長期出現約一半的缺口(`docs/test-reports/2026-11-16-ac-uat.md` §3.1)。新增其他沒有 Log Forwarding 的規則時同樣檢查。
 
 ### D.2 Device > Log Settings
 
@@ -409,5 +410,6 @@ netsh interface portproxy show v4tov4
 | G8 | Syslog SSL 能否設定**用戶端憑證**,能的話提供簽發的 CA 憑證 | Syslog 唯一能驗證來源的方式(F.4.1) | 待回覆 |
 | G9 | B、C、D 節設定完成(先只加正式區;測試時再加測試區 `10.10.130.124`) | 接收 | **測試區已設定並 Commit**(2026-11-10,只有 `netops-test` 10.10.130.124;正式區未加) |
 | G10 | 開 TRAFFIC 前後的管理平面 CPU 與 log 轉送佇列觀察(E4) | 負載 | 設定後 |
+| G11 | 預設規則 `interzone-default`、`intrazone-default` 套用 `netops-forward`(D.1) | TRAFFIC 轉送完整度、對帳 | **測試區 2026-11-16 已改**:`interzone-default` 的 Log Forwarding 由 None 改 `netops-forward`(`intrazone-default` 原本已套),需求方 11:30 Commit;**11:31 起 ClickHouse 收到該規則的 deny / reset-both**。ClickHouse TRAFFIC 每天約由 350 萬筆增為約 730 萬筆(×2.1,與 FTP 11/14、11/15 的 729 萬、712 萬筆相近),容量依此重估(IMPL-PLAN E2 / E5、PA-LOG-CLICKHOUSE-GUIDE §4)。**正式區(主機 3)設定 B、C、D 節時一併做** |
 
 **PA-560 Commit 時的提示(2026-11-10 記錄,這次不動 PA-560)**:Commit 會出現「API KeyGen 使用 deprecated algorithm,建議設定 API Key Certificate」。G1 的唯讀 API Key 目前照常可用;**下次換 API Key 時**請網通先設定 API Key Certificate(Device > Setup > Management > API Key Certificate)再產生新 Key,新 Key 以 `deploy/host2-set-pa-secrets.sh`(正式區比照)寫入主機。

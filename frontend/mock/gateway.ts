@@ -61,10 +61,11 @@ const MENUS = [
   { code: 'netops.pa-insight.ai', name: 'AI 摘要本期異常 / 解讀時段 / 說明威脅', kind: 'button', parentCode: 'netops.pa-insight.read', sort: 10, icon: null },
   // AC5:Log 明細查詢威脅列「AI 說明威脅」
   { code: 'netops.pa-search.ai', name: 'AI 說明威脅', kind: 'button', parentCode: 'netops.pa-search.read', sort: 10, icon: null },
+  { code: 'netops.pa-events.ai', name: 'AI 摘要安全事件', kind: 'button', parentCode: 'netops.pa-events.read', sort: 10, icon: null },
 ];
 const READ_API = ['netops.ping.read', 'netops.pa-realtime.read', 'netops.pa.read', 'netops.pa-log.read', 'netops.ftp.read', 'netops.ad.read', 'netops.ad-log.read', 'netops.kb.read', 'netops.ai.use'];
 /** viewer 也有的 AI 按鈕(netops.ai.use 給 admin 與 viewer,2026-11-05 決定) */
-const AI_BUTTONS = ['netops.pa-ask.use', 'netops.pa-dashboard.ai', 'netops.ad-ask.use', 'netops.pa-heatmap.ai', 'netops.pa-insight.ai', 'netops.pa-search.ai'];
+const AI_BUTTONS = ['netops.pa-ask.use', 'netops.pa-dashboard.ai', 'netops.ad-ask.use', 'netops.pa-heatmap.ai', 'netops.pa-insight.ai', 'netops.pa-search.ai', 'netops.pa-events.ai'];
 const WRITE_API = ['netops.ftp.write', 'netops.kb.write', 'netops.pa-realtime.write', 'netops.pa-query.read', 'netops.ip-name.read', 'netops.ip-name.write'];
 /** 只給 admin 的選單(viewer 沒有;AC3 IP 對照表) */
 const ADMIN_ONLY = new Set(['netops.ip-name-page.read']);

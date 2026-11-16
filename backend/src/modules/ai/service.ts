@@ -28,6 +28,8 @@ import { buildCondition, createCollector, parseQuestion } from './core/evidence.
 import type { SseStream } from './sse.js';
 import type { AiSource, ChAiSource } from './ch-source.js';
 import {
+  EVENTS_TASK,
+  eventsContext,
   EXPLAIN_PROMPT,
   HEATMAP_TASK,
   heatmapContext,
@@ -38,6 +40,7 @@ import {
   threatContext,
   threatInsightContext,
   trafficInsightContext,
+  type EventsForAi,
   type SliceForAi,
   type ThreatForAi,
   type ThreatInsightForAi,
@@ -47,7 +50,7 @@ import {
 import { pickHeatAnomalies, type HeatmapForAi } from './core/anomaly.js';
 import type { SliceQuery, ThreatProfileQuery } from '../pa-heat/service.js';
 import { ipsInText } from '../ip-names/core.js';
-import { dayOut, logTimeOut } from '../../shared/time.js';
+import { dayOut, dayRange, logTimeOut } from '../../shared/time.js';
 
 /** 語意搜尋(kb/core/vector.js searchVectors) */
 export interface VectorSearch {
@@ -98,14 +101,18 @@ export interface ExplainSources {
   heatmap?: (q: HeatmapParams) => Promise<unknown>;
   /** AC5:同 HeatService.threatProfile(Redis 快取) */
   threat?: (q: ThreatProfileQuery) => Promise<ThreatForAi>;
+  /** AC6:四類安全事件的總覽(同 GET /pa-events/overview 的快取) */
+  events?: (q: EventsParams) => Promise<EventsForAi>;
 }
+export type EventsParams = { from: string; to: string };
 export type InsightParams = { view: 'traffic' | 'threat'; from: string; to: string };
 export type HeatmapParams = { granularity: 'year' | 'month' | 'day'; metric: 'traffic' | 'deny' | 'threat'; date?: string };
 export type ExplainInput =
   | { kind: 'slice'; params: SliceQuery }
   | { kind: 'insight'; params: InsightParams }
   | { kind: 'threat'; params: ThreatProfileQuery }
-  | { kind: 'heatmap'; params: HeatmapParams };
+  | { kind: 'heatmap'; params: HeatmapParams }
+  | { kind: 'events'; params: EventsParams };
 /** 時段明細工作最多等多久(工作本身 120 秒逾時;再加排隊的餘裕) */
 export const EXPLAIN_SLICE_WAIT_MS = 180_000;
 /** 等時段明細工作時每次等多久 */
@@ -452,7 +459,8 @@ export function createAiService(deps: {
     | { kind: 'slice'; owner: string; params: SliceQuery; first: { status: 200 | 202; body: unknown } }
     | { kind: 'insight'; params: InsightParams; data: TrafficInsightForAi | ThreatInsightForAi; prev: TrafficPrev | null; prevError: boolean }
     | { kind: 'threat'; data: ThreatForAi }
-    | { kind: 'heatmap'; data: HeatmapForAi };
+    | { kind: 'heatmap'; data: HeatmapForAi }
+    | { kind: 'events'; data: EventsForAi };
 
   const noSource = () => new AppError(503, 'NETOPS_CLICKHOUSE_UNAVAILABLE', 'PA log 資料庫(ClickHouse)暫時無法使用,請稍後再試');
 
@@ -462,6 +470,7 @@ export function createAiService(deps: {
    *   insight:儀表板資料(快取命中不重查 ClickHouse);流量另取前一期合計,前一期取不到(忙碌、期間太早)只在資料中註明
    *   threat(AC5):同一個威脅的彙總(快取;整段超過保留期限 404)
    *   heatmap(AC5):熱力圖格子(同 GET /pa/heatmap 的快取)
+   *   events(AC6):四類安全事件總覽(同 GET /pa-events/overview 的快取;某類沒有資料只在資料中註明)
    */
   async function prepareExplanation(input: ExplainInput, owner: string): Promise<ExplainCtx> {
     llmOf();
@@ -477,6 +486,11 @@ export function createAiService(deps: {
     if (input.kind === 'heatmap') {
       if (!src?.heatmap) throw noSource();
       return { kind: 'heatmap', data: (await src.heatmap(input.params)) as HeatmapForAi };
+    }
+    if (input.kind === 'events') {
+      const q = dayRange(input.params);
+      if (!src?.events) throw noSource();
+      return { kind: 'events', data: await src.events(q) };
     }
     if (!src?.insight) throw noSource();
     const p = input.params;
@@ -549,6 +563,12 @@ export function createAiService(deps: {
         nulls: picked.stats.nulls,
         cells: [...picked.anomalies.map(cell), ...picked.lows.map(cell)],
       };
+    } else if (ctx.kind === 'events') {
+      const d = ctx.data;
+      ({ text, clipped } = eventsContext(d));
+      task = EVENTS_TASK;
+      const types = d.types.map((t) => ({ type: t.type, rows: t.overview?.rows ?? 0, empty: t.overview === null, partial: Boolean(t.overview && (t.overview.partial || t.overview.missing > 0 || t.overview.topsState !== 'ok')) }));
+      info = { kind: 'events', from: d.from, to: d.to, partial: types.some((t) => t.partial), types };
     } else {
       const d = ctx.data;
       ({ text, clipped } = d.view === 'traffic' ? trafficInsightContext(d, ctx.prev) : threatInsightContext(d));

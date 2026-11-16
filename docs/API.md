@@ -909,7 +909,7 @@ AI 串流(§10.1)開始後的錯誤以 `error` 事件回傳 `{ code, message }`:
 - 外部 IP 自動學習(D10):候選 IP 來自最近 N 天的 TRAFFIC 排行(目的 IP、被擋、上傳、外部連入);`clickhouse` 來源取 ClickHouse 原始 TRAFFIC 建的每小時摘要(不新增彙總表),`ftp` 來源取 FTP 摘要。`IPLEARN_DAYS` 上限 30。`IPLEARN_HOUR` 預設 -1(不自動,舊版 3 點;D25:舊版 IIS 停用後正式區改 3);管理者改過的自動學習筆記不覆寫;自動學習筆記上限 1,000 則。
 - 時間欄位(`lastSync`、`startedAt`、`finishedAt`)輸出 `+08:00`。
 
-### 10.3 AI 解讀(AC4、AC5,ARCHITECTURE D44 ③)— 批次 `feature/ac4-ai-slice-insight`、`feature/ac5-ai-threat-heatmap`
+### 10.3 AI 解讀(AC4–AC6,ARCHITECTURE D44 ③)— 批次 `feature/ac4-ai-slice-insight`、`feature/ac5-ai-threat-heatmap`、`feature/ac6-ai-events`
 
 | 方法 | 路徑 | 權限 | 說明 |
 | --- | --- | --- | --- |
@@ -919,18 +919,20 @@ AI 串流(§10.1)開始後的錯誤以 `error` 事件回傳 `{ code, message }`:
 - `kind: 'insight'`(分析儀表板「AI 摘要本期異常」):`params` 為 `{ view: 'traffic' | 'threat', from, to }`,同 `GET /pa/insight/{view}`(§4.5),用儀表板快取。送合計、高峰(前 5 格與平均的倍數)、Top 10 與前一期比較:威脅用 `score.prev`;流量另查前一個同長度期間的每天彙總合計(快取鍵 `traffic-prev`;資料起點晚於前一期時不比較;忙碌取不到時只在資料中註明,不中斷)。
 - `kind: 'threat'`(AC5,Log 明細查詢 / 時段明細抽屜威脅列「AI 說明這個威脅與處理建議」):`params` 為 `{ name, from, to }`。`name` 是威脅名稱(完全相同;1–300 字、不可有控制字元),只有數字時當**威脅 ID**,比對名稱結尾「(ID)」(名稱格式 `xxx(52316871)`);`from` / `to` 為 ISO 含時區(對齊到分鐘),最長 31 天。後端查原始威脅表(`log_type = threat`)彙總:筆數(另附含 Repeat Count 的次數)、第一 / 最後一次、不同來源 / 目的 IP 數,以及嚴重度、威脅類別、子類型、方向、動作、來源 / 目的 IP(影響主機)、App、協定 / Port、來源 / 目的國家各前 10 名,與每小時(期間 ≤ 2 天)或每天的筆數;不送原始 log 列。Redis 快取(鍵 `ai-threat`,含現在或剛結束 1 小時內 60 秒,更早 1 小時)。整段超過威脅原始表保留期限回 404 `NETOPS_PA_OUT_OF_RETENTION`;一部分超過時只查保留期限內,`meta.skipped` 與送模型的資料都註明「沒有查,不代表沒有發生」。
 - `kind: 'heatmap'`(AC5,活動熱力圖「AI 指出異常格」):`params` 同 `GET /pa/heatmap`(§4.4;`metric` 為 `traffic | deny | threat`,不含 `ad`),沿用熱力圖快取。後端從格子挑出異常時段(`modules/ai/core/anomaly.ts`),**不全送**(月視圖最多 744 格):送整體統計(合計、平均、中位數、P90、最大值、各等級格數、沒有資料 / 不完整的格數)與最多 10 格異常高、最多 3 格異常低。挑選:中位數與 MAD 的穩健偏離程度 ≥ 3.5;月視圖以「一天中的同一個小時」為基準、年視圖分平日 / 假日、日視圖整天一組(同組有資料少於 8 格時改整段);威脅指標先列有嚴重 / 高風險的格子;異常低只看流量、最後一格不列;`v = null` 不參與計算。`meta.cells` 列出這些格子(`t, end, v, kind: high | low | severity, ratio, offHours, partial`,不含 IP),畫面列成按鈕開時段明細,再用 `slice` 解讀。
+- `kind: 'events'`(AC6,安全事件頁「AI 摘要安全事件」):`params` 為 `{ from, to? }`(`YYYY-MM-DD`,同 `GET /pa-events/overview` 的期間,最長 92 天)。後端取**威脅、URL 過濾、資料過濾、WildFire 四類**的總覽(同 §4.2 ClickHouse 路徑與快取;解密、GlobalProtect、User-ID 不在範圍),送各類筆數、時間範圍、KPI 前 6 個值、最多的 3 個小時,再送各排行前 8 名;超過字數上限時從排行後面省略(四類的筆數與 KPI 一定在)。某類沒有資料(`NETOPS_PA_NO_DATA`)或整段超過保留期限只在資料中註明;**四類都是這樣**時回該錯誤(404);期間早於最早資料(`partial`)、每小時摘要沒建好(`missing`)、`topsState` 不是 `ok` 都寫明不完整。`meta.types` 為 `[{ type, rows, empty, partial }]`,畫面列出四類筆數,點了切換到該類型。
 - **後端自己取資料**,不接受前端送來的統計;PA 欄位文字(App、威脅名稱、國家、區域、條件)去掉控制字元與換行、每欄 120 字,整段資料上限 8,000 字(超過時省略後面的排行並註明,`meta.clipped`)。附 IP 對照表(AC3,姓名不遮罩,AQ2)與知識庫筆記(只用 IP / 關鍵字比對,不做語意搜尋);提示詞、姓名不寫服務日誌。
 - 錯誤(串流開始前):參數錯誤 400;時段明細的錯誤照 §4.4(409 `NETOPS_COLD_ARCHIVE_DISABLED`、429 `NETOPS_COLD_QUERY_BUSY`、409 `NETOPS_JOB_LIMIT_EXCEEDED`);儀表板 429 `NETOPS_INSIGHT_BUSY`;503 `NETOPS_CLICKHOUSE_UNAVAILABLE`;409 `NETOPS_AI_DISABLED`;429 `NETOPS_STREAM_BUSY`(和分析、問答共用名額)。
 - 資料來源不受 `NETOPS_AI_SOURCE` 影響(一律 ClickHouse,同 §4.4 / §4.5;正式區 C6 之前這兩頁本來就回 503)。
 
 | 事件 | 資料 |
 | --- | --- |
-| `meta` | `{ kind, model, source: 'clickhouse', partial, gapsKnown, contextChars, clipped, notes, vectorError }`;slice 另有 `type, start, end, sliceSource, waited`;insight 另有 `view, from, to, prev`(有沒有前一期可比較);threat 另有 `name, match: name | id, from, to, count, skipped`;heatmap 另有 `granularity, metric, date, from, to, nulls, cells` |
+| `meta` | `{ kind, model, source: 'clickhouse', partial, gapsKnown, contextChars, clipped, notes, vectorError }`;slice 另有 `type, start, end, sliceSource, waited`;insight 另有 `view, from, to, prev`(有沒有前一期可比較);threat 另有 `name, match: name | id, from, to, count, skipped`;heatmap 另有 `granularity, metric, date, from, to, nulls, cells`;events 另有 `from, to, types`(沒有 `gapsKnown`:安全事件不做 FTP 對帳缺口) |
 | `scan` | slice 等工作時 `{ label, source, step: 'slice', waiting: true }` |
 | `open`、`thinking`、`content`、`done`、`error`、`heartbeat` | 同 §10.1 |
 
 - 畫面:時段明細抽屜(熱力圖按鈕 `netops.pa-heatmap.ai`、儀表板 `netops.pa-insight.ai`)與分析儀表板標題列「AI 摘要本期異常」(`netops.pa-insight.ai`,對話框,摘要目前頁籤與期間)。兩個按鈕節點 `includes` `netops.ai.use`、`netops.pa.read`、`netops.pa-log.read`、`netops.kb.read`。
 - AC5 畫面:熱力圖頁首「AI 指出異常格」(`netops.pa-heatmap.ai`,對話框,送目前顯示的粒度 / 指標 / 日期);時段明細抽屜威脅類明細列「說明」(同抽屜的按鈕權限,面板開在抽屜內,期間 = 該時段);Log 明細查詢威脅結果列與明細對話框「AI 說明」(新按鈕 `netops.pa-search.ai`,`includes` `netops.ai.use`、`netops.pa-log.read`、`netops.kb.read`;期間 = 這次查詢的期間)。
+- AC6 畫面:安全事件頁頁首「AI 摘要安全事件」(新按鈕 `netops.pa-events.ai`,`includes` `netops.ai.use`、`netops.pa.read`、`netops.kb.read`;對話框,期間 = 頁面目前的期間,和選的類型無關)。
 
 ## 11. IP 對照表 — 批次 `feature/ac3-ip-names`(IMPL-PLAN AC3,ARCHITECTURE D45)
 

@@ -471,6 +471,8 @@ D13:骨架直接留用;AI 不在這次範圍,不做串流驗證(D7、D17)。
 
 ### AC6 安全事件頁 AI 摘要
 
+> **進度(2026-11-14)**:程式完成,分支 `feature/ac6-ai-events`(疊在 AC5 上);API.md §10.3。前端畫面也由 Claude 完成。按鈕新增 `netops.pa-events.ai`(admin、viewer)。待:需求方發佈路由草稿、確認按鈕節點、測試區驗收。
+
 1. `kind: 'events'`:期間內威脅、URL、資料過濾、WildFire 的統計摘要。
 
 **前置**:AC4。**負責人**:Claude;Gemini。**完成條件**:同 AC4。

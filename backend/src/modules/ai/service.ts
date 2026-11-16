@@ -80,6 +80,8 @@ export function createAiService(deps: {
   /** AI 資料來源(NETOPS_AI_SOURCE);clickhouse 時 ch 必須有值 */
   source?: AiSource;
   ch?: ChAiSource | null;
+  /** IP 對照表(AC3,D45):提示詞中出現的 IP 附上使用者 / 部門 / 設備;未提供時不附 */
+  ipNames?: (text: string) => string;
 }) {
   const { traffic, events, ad, kb, vector, ftp } = deps;
   const source: AiSource = deps.source ?? 'ftp';
@@ -152,7 +154,7 @@ export function createAiService(deps: {
     const ask = question ? `\n\n使用者另外想了解：${question}\n請在「整體結論」之後先用「## 針對提問」章節回答這個問題，再依規則完成其餘章節。` : '';
     await streamAnswer(s, llm, think, [
       { role: 'system', content: SYSTEM_PROMPT },
-      { role: 'user', content: `以下是 PA 防火牆 log 的統計摘要，請依規則分析。${ask}\n\n${text}${kbSection(kbNotes)}` },
+      { role: 'user', content: `以下是 PA 防火牆 log 的統計摘要，請依規則分析。${ask}\n\n${text}${deps.ipNames?.(text) ?? ''}${kbSection(kbNotes)}` },
     ]);
   }
 
@@ -370,7 +372,7 @@ export function createAiService(deps: {
     await streamAnswer(s, llm, think, [
       { role: 'system', content: ASK_PROMPT },
       ...history,
-      { role: 'user', content: `${question}\n\n---\n以下是系統從防火牆 log / AD 事件記錄查到的資料：\n\n${evidence}${kbSection(kbNotes)}` },
+      { role: 'user', content: `${question}\n\n---\n以下是系統從防火牆 log / AD 事件記錄查到的資料：\n\n${evidence}${deps.ipNames?.(`${question}\n${evidence}`) ?? ''}${kbSection(kbNotes)}` },
     ]);
   }
 

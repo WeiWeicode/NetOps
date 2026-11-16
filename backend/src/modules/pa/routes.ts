@@ -55,6 +55,7 @@ const paRoutes: FastifyPluginAsync<{ ch: ChOverviewDeps }> = async (app, { ch })
   app.get<{ Querystring: { from: string; to?: string; top?: number; source?: string } }>(
     '/v1/pa/overview',
     {
+      config: { ipNames: true },
       schema: {
         operationId: 'netops.pa.overview',
         summary: 'PA 流量總覽',

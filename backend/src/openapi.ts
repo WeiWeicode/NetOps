@@ -45,6 +45,9 @@ export const PERMISSIONS = [
   { code: 'netops.kb.write', name: 'NetOps 知識庫:編輯' },
   // A1:AI 分析、問答(呼叫模型,不寫資料;2026-11-05 決定給 netops-admin、netops-viewer,D25 維持一個權限)
   { code: 'netops.ai.use', name: 'NetOps AI 分析與問答:使用' },
+  // AC3:IP 對照表(姓名、部門屬個資;兩個都只給 netops-admin,例外同 D31)。PA 各 API 附帶的名稱沿用各 API 原本的權限
+  { code: 'netops.ip-name.read', name: 'NetOps IP 對照表:查詢與匯出' },
+  { code: 'netops.ip-name.write', name: 'NetOps IP 對照表:編輯與匯入' },
 ];
 
 /** project:開發專案(package.json gateway.project,由 SDK loadGatewayEnv 讀取) */

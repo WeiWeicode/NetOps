@@ -293,7 +293,7 @@ const sankeyRows = computed(() => {
 });
 
 const topIpCols: Column[] = [
-  { key: 'ip', label: '來源 IP', mono: true },
+  { key: 'ip', label: '來源 IP', mono: true, ip: true },
   { key: 'bytesFmt', label: '總流量', align: 'right' },
   { key: 'recvFmt', label: '下載', align: 'right' },
   { key: 'sentFmt', label: '上傳', align: 'right' },
@@ -404,7 +404,7 @@ const countryRows = computed(() =>
 );
 
 const compareCols: Column[] = [
-  { key: 'ip', label: 'IP 位址', mono: true },
+  { key: 'ip', label: 'IP 位址', mono: true, ip: true },
   { key: 'countFmt', label: '總威脅數', align: 'right' },
   { key: 'highFmt', label: '高風險以上', align: 'right' },
 ];

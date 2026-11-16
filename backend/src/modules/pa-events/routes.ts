@@ -61,6 +61,7 @@ const paEventRoutes: FastifyPluginAsync<{ events: EventImporter; ch: ChOverviewD
   app.get<{ Querystring: { type: string; from: string; to?: string; top?: number; source?: string } }>(
     '/v1/pa-events/overview',
     {
+      config: { ipNames: true },
       schema: {
         operationId: 'netops.pa-events.overview',
         summary: 'PA 安全事件總覽',

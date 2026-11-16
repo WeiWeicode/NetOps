@@ -2,6 +2,16 @@
 
 > `backend/`、`deploy/` 的修改;新紀錄加在最上方,格式見 `AGENT.md` §11。
 
+## 2026-11-14 IP 對照表(AC3)
+- 工作項目:AC3(ARCHITECTURE D45)
+- 內容:
+  - 新增 `modules/ip-names/`:`core.ts`(IPv4 / CIDR 正規化、範圍小的優先查名稱、匯入列解析與差異、名稱搜尋 → IP 範圍)、`service.ts`(快取索引、單筆編輯、匯入預覽 15 分鐘 / 每人 1 份、版本不同拒絕確認、`aiNamesSection`)、`routes.ts`(API.md §11;權限 `netops.ip-name.read|write`,稽核 meta)。
+  - 新增 `shared/xlsx.ts`(不加套件:ZIP 不壓縮寫出 + 下拉清單;讀 stored / deflate,解壓縮總量 30 MB 上限)與 CSV 解析;`infra/store/ip-names.ts`(`ipnames/ip-names.json`)。
+  - `app.ts`:`ipNames` 服務、`preSerialization` 對 `config.ipNames` 的路由附 `names`;12 支 PA API 標記;`live-routes.ts` 串流 snapshot / logs 附名稱。測試用 `deps.logStream`。
+  - `pa/log-routes.ts`:`name` 條件(對照表換成 IP 範圍,上限 1,000 個)、匯出多兩欄名稱;`reader.ts` `TrafficFilter.ipRanges`(兩個陣列參數,比對來源 / 目的 / NAT)。
+  - `ai/service.ts`:分析與問答提示詞附 IP 對照(`deps.ipNames`)。`openapi.ts` 新增兩個權限;`deploy/gateway-rbac.yaml` 新增選單 / 按鈕節點只給 netops-admin。
+- 驗證:`npm run typecheck`、`npm test`、`npm run build`
+
 ## 2026-11-13 AI 分析、問答、外部 IP 學習改查 ClickHouse(AC2)
 - 工作項目:AC2(ARCHITECTURE D44)
 - 內容:

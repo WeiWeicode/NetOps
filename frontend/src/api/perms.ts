@@ -17,6 +17,8 @@ export const NETOPS = {
   adSearch: 'netops.ad-search.read',
   adFiles: 'netops.ad-files.read',
   kbPage: 'netops.kb-page.read',
+  // AC3:IP 對照表(只給網管;PA 畫面的名稱不需要這個權限)
+  ipNamePage: 'netops.ip-name-page.read',
   // A1:AI 問答(選單只綁該頁的讀取權限;使用 AI 由按鈕 UI.paAskUse / UI.adAskUse 綁定 netops.ai.use)
   paAsk: 'netops.pa-ask.read',
   adAsk: 'netops.ad-ask.read',
@@ -30,6 +32,7 @@ export const UI = {
   paLiveQuery: 'netops.pa-live.query',
   adFilesManage: 'netops.ad-files.manage',
   kbWrite: 'netops.kb-page.write',
+  ipNameWrite: 'netops.ip-name-page.write',
   // A1:netops.ai.use 不是 .read,只能由按鈕綁定(deploy/gateway-rbac.yaml)
   paAskUse: 'netops.pa-ask.use',
   adAskUse: 'netops.ad-ask.use',
@@ -49,5 +52,7 @@ export const API = {
   adLogRead: 'netops.ad-log.read',
   kbRead: 'netops.kb.read',
   kbWrite: 'netops.kb.write',
+  ipNameRead: 'netops.ip-name.read',
+  ipNameWrite: 'netops.ip-name.write',
   aiUse: 'netops.ai.use',
 } as const;

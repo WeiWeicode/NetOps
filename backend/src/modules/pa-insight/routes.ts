@@ -24,6 +24,7 @@ const insightRoutes: FastifyPluginAsync<{ svc: InsightService }> = async (app, {
   app.get<{ Querystring: { from: string; to: string } }>(
     '/v1/pa/insight/traffic',
     {
+      config: { ipNames: true },
       schema: {
         operationId: 'netops.pa-insight.traffic',
         summary: 'PA 分析儀表板:流量',
@@ -51,6 +52,7 @@ const insightRoutes: FastifyPluginAsync<{ svc: InsightService }> = async (app, {
   app.get<{ Querystring: { from: string; to: string } }>(
     '/v1/pa/insight/threat',
     {
+      config: { ipNames: true },
       schema: {
         operationId: 'netops.pa-insight.threat',
         summary: 'PA 分析儀表板:安全威脅',

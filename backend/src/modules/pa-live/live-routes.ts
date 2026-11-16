@@ -91,6 +91,7 @@ const paLiveLiveRoutes: FastifyPluginAsync<{ live: PaLiveService; stream?: LiveS
   app.get(
     '/v1/pa-live/snapshot',
     {
+      config: { ipNames: true },
       schema: {
         operationId: 'netops.pa-live.snapshot',
         summary: '即時監控:收集器狀態與設備快照',
@@ -227,6 +228,7 @@ const paLiveLiveRoutes: FastifyPluginAsync<{ live: PaLiveService; stream?: LiveS
   app.get<{ Querystring: { type: LogType; minutes: number; limit?: number; dims?: string } }>(
     '/v1/pa-live/top',
     {
+      config: { ipNames: true },
       schema: {
         operationId: 'netops.pa-live.top',
         summary: '即時監控:排行與統計',
@@ -265,6 +267,7 @@ const paLiveLiveRoutes: FastifyPluginAsync<{ live: PaLiveService; stream?: LiveS
   app.get<{ Querystring: { type: LogType; limit?: number; before?: string } & LogFilter }>(
     '/v1/pa-live/logs',
     {
+      config: { ipNames: true },
       schema: {
         operationId: 'netops.pa-live.logs',
         summary: '即時監控:最新 log',
@@ -380,6 +383,15 @@ const paLiveLiveRoutes: FastifyPluginAsync<{ live: PaLiveService; stream?: LiveS
       const stream = new PassThrough();
       const send = (event: string, data: unknown, id?: string) => {
         if (stream.writableEnded || stream.destroyed) return;
+        // IP 對照表(AC3):snapshot、logs 附上本事件出現的 IP 的名稱(沿用串流的權限);讀取失敗只略過名稱
+        if ((event === 'logs' || event === 'snapshot') && data && typeof data === 'object' && !Array.isArray(data)) {
+          try {
+            const names = app.ipNames.namesFor(data);
+            if (Object.keys(names).length) data = { ...(data as Record<string, unknown>), names };
+          } catch (err) {
+            req.log.error({ err }, 'IP 對照表讀取失敗,串流不附名稱');
+          }
+        }
         stream.write(`${id ? `id: ${id}\n` : ''}event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
         // 用戶端讀不動:中斷連線(連同底層回應),不在記憶體累積
         if (stream.writableLength > MAX_PENDING_BYTES) {

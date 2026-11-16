@@ -2,6 +2,12 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。範圍:`frontend/`。
 
+## 2026-11-14 IP 對照表頁與 PA 畫面顯示名稱(AC3)
+- 工作項目:AC3(需求方:這次前端 UI 也由 Claude 完成)
+- 內容:`pages/knowledge/IpNames.vue`(搜尋用 POST、清單、單筆編輯對話框、匯入預覽:新增 / 修改 / 刪除 / 有問題分頁,有刪除時再確認;匯出 Excel / CSV、範本);`ui/components/GIpLabel.vue` + `ui/ipLabel.ts`(ui 不依賴應用,名稱由 `main.ts` provide);`GTable` 欄位 `ip: true`;`composables/ipNames.ts`(`api/gateway.ts` 與即時監控串流收 `names`,回應出現但沒有名稱的 IP 移除舊名稱,不存瀏覽器);`TopList` IP 項目附名稱;Log 明細「使用者 / 部門」條件(不寫進網址)與明細對話框名稱;各 PA 頁 IP 欄改 `ip: true`;選單「網通知識 › IP 對照表」。
+- 檔案:`frontend/src/{pages/knowledge/IpNames.vue,ui/components/GIpLabel.vue,ui/ipLabel.ts,ui/components/GTable.vue,composables/ipNames.ts,composables/ipNameForm.ts,composables/paLive.ts,api/ipNames.ts,api/gateway.ts,api/pa.ts,api/perms.ts,router.ts,main.ts,components/TopList.vue,components/SliceDrawer.vue,pages/firewall/*.vue}`、`frontend/mock/{ipNames,gateway}.ts`、`frontend/test/ipNames.mount.test.ts`
+- 驗證:typecheck、`npm test`、build;`MOCK=admin` 下 1440 / 375 px 無水平捲動、四種風格名稱標籤對比、鍵盤操作(原生按鈕、對話框);沒有新增動畫(reduced-motion 不受影響)
+
 ## 2026-11-13 AI 分析與問答顯示 ClickHouse 來源(AC2)
 - 工作項目:AC2(需求方:這次前端 UI 也由 Claude 完成)
 - 內容:`components/AiAnalysis.vue`:ClickHouse 來源顯示每小時摘要小時數、每天彙總天數、摘要未建好 / 未更新、期間早於最早資料;有較粗的期間時以警告框註明「超過 30 天的資料較粗」與期間。`pages/ai/Ask.vue`:問答的查詢結果改顯示 ClickHouse 欄位(符合筆數、允許 / 阻擋、組合數、範例數、查詢秒數、組合太多不完整、超過保留期限沒有查的期間);整體統計顯示小時 / 天數與較粗提示。`composables/aiChat.ts`:`Evidence` 加 ClickHouse 欄位、`Grain`、`coarseNote()`;`scan` 的 ClickHouse 狀態文字。外部 IP 學習天數上限 30(`components/IpLearning.vue`)。mock 改為 ClickHouse 事件。FTP 來源(正式區 C6 前)的畫面不變。

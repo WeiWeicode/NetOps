@@ -191,7 +191,7 @@ const actions = computed(() =>
     .sort((a, b) => b.n - a.n),
 );
 const scanColumns = [
-  { key: 'src', label: '來源 IP', mono: true },
+  { key: 'src', label: '來源 IP', mono: true, ip: true },
   { key: 'zone', label: '區域流向', hideSm: true },
   { key: 'n', label: '被擋次數', align: 'right' as const, width: '100px' },
   { key: 'dsts', label: '不同目的 IP', align: 'right' as const, width: '110px' },

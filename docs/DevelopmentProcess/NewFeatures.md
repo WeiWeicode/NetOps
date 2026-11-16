@@ -2,6 +2,12 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。
 
+## 2026-11-14 IP 對照表(AC3)
+- 工作項目:AC3(ARCHITECTURE D45;需求方 AQ1–AQ3;前端頁面需求方 2026-11-13 改交 Claude)
+- 內容:網通知識 › IP 對照表(只給網管):單筆新增 / 修改 / 刪除、Excel / CSV 範本下載、匯入先預覽差異(整份取代)再確認、匯出。PA 各畫面 IP 旁顯示名稱(看得到 PA 就看得到)、Log 明細匯出多來源 / 目的名稱欄、Log 明細可用使用者 / 部門查(API 端換成 IP 範圍)、AI 提示詞附名稱(不遮罩)。
+- 檔案:見 BackendCorrection、FrontendCorrection 同日紀錄;`docs/API.md` §11、`deploy/gateway-rbac.yaml`
+- 驗證:單元測試(核心、Excel / CSV、API、名稱搜尋 = IP 搜尋、日誌不含姓名部門、rbac viewer 沒有節點)、前端元件測試;mock 下 1440 / 375 px
+
 ## 2026-11-13 AI 分析、問答、外部 IP 學習改查 ClickHouse(AC2)
 - 工作項目:AC2(ARCHITECTURE D44、D25 ③;需求方 AQ2、AQ4)
 - 內容:AI 的資料來源依 `NETOPS_AI_SOURCE` 切換(測試區 clickhouse、正式區 C6 前 ftp,舊路徑保留)。ClickHouse 來源:分析最長 92 天,最近 30 天用原始 TRAFFIC 建的每小時摘要、更早用每天 / 每小時彙總並註明較粗;問答查原始 TRAFFIC 30 天與威脅類 90 天,15 筆範例,不再掃 FTP,超過保留期限的部分標示;外部 IP 學習上限 30 天。畫面:分析對話框「超過 30 天的資料較粗」、問答顯示 ClickHouse 的查詢結果與略過的期間。

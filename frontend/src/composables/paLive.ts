@@ -5,6 +5,7 @@
  *   - collectorBadges / logSource / controlView:頁首的輪詢 / 接收狀態、log 來源說明、測試區開關按鈕(2026-11-09 驗收 §7.4、需求方決定)
  *   - useLiveStream:EventSource 連線、暫停、斷線重連(伺服器每 5 分鐘結束連線,瀏覽器自動重連;429 / 404 拉長重試間隔)
  */
+import { absorbNames } from './ipNames';
 import { onScopeDispose, ref, shallowRef } from 'vue';
 import { redirectToLogin, refreshSession } from '@/api/gateway';
 import { paLive, type CollectorControl, type CollectorStatus, type InterfacesSnap, type LiveLog, type LogFilter, type LogType, type PaLiveSnapshot } from '@/api/paLive';
@@ -283,7 +284,9 @@ export function useLiveStream(onSnapshot: (s: PaLiveSnapshot) => void) {
     src.addEventListener('snapshot', (e) => {
       touch();
       try {
-        onSnapshot(JSON.parse((e as MessageEvent).data) as PaLiveSnapshot);
+        const snap = JSON.parse((e as MessageEvent).data) as PaLiveSnapshot;
+        absorbNames(snap);
+        onSnapshot(snap);
       } catch {
         // 格式錯誤的事件略過
       }
@@ -301,6 +304,7 @@ export function useLiveStream(onSnapshot: (s: PaLiveSnapshot) => void) {
       touch();
       try {
         const d = JSON.parse((e as MessageEvent).data) as { items: LiveLog[]; dropped: number; skipped: string[] };
+        absorbNames(d);
         if (d.dropped || d.skipped?.length) skipped.value += (d.dropped ?? 0) + (d.skipped?.length ? 1 : 0);
         if (paused.value) pending = pending.concat(d.items).slice(-MAX_LOGS);
         else logs.value = mergeLogs(logs.value, d.items, MAX_LOGS);

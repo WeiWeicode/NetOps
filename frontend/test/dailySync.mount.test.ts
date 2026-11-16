@@ -92,6 +92,12 @@ describe('DailySyncCard', () => {
     expect(w.text()).toContain('GlobalProtect VPN:FTP 已 2 天沒有新檔');
     expect(w.text()).toContain('今天已完成');
     expect(w.findAll('.stale-badge')).toHaveLength(2);
+    expect(w.text()).toContain('PA 排程匯出');
+    const ad = status({ categories: [{ key: 'ad', label: 'AD 事件', noFileDays: 2, stale: true, days: none }] });
+    expect(dailyStale(dailyCategories(ad))).toEqual(['AD 事件:FTP 已 2 天沒有新檔,AD 匯出可能中斷']);
+    const wa = make({ status: ad, only: ['ad'] });
+    expect(wa.text()).toContain('AD 事件匯出排程');
+    expect(wa.text()).not.toContain('PA 排程匯出');
     // 舊版後端沒有 stale 欄位:不顯示
     expect(make({ status: status() }).text()).not.toContain('PA 匯出可能中斷');
   });

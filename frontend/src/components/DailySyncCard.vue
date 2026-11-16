@@ -22,6 +22,12 @@ const days = computed(() => dailyDays(cats.value));
 const latest = computed(() => dailyLatest(cats.value));
 const errors = computed(() => dailyErrors(cats.value));
 const stale = computed(() => dailyStale(cats.value));
+const staleHint = computed(() => {
+  const keys = cats.value.filter((c) => c.stale).map((c) => c.key);
+  const pa = keys.some((k) => k !== 'ad') ? 'PA 排程匯出(Device › Scheduled Log Export)' : '';
+  const ad = keys.includes('ad') ? 'AD 事件匯出排程' : '';
+  return [pa, ad].filter(Boolean).join('、');
+});
 const run = computed(() => (props.status ? DAILY_RUN_STATE[props.status.state] : null));
 const subtitle = computed(() => {
   const s = props.status;
@@ -57,11 +63,11 @@ const cellTitle = (label: string, day: string, state: keyof typeof DAILY_DAY_STA
       <GAlert v-if="status.state === 'gave-up'" tone="danger">
         前一天的檔一直沒有匯入完成,今天已停止自動重試;請確認 FTP 上有沒有這天的檔,再手動同步。
       </GAlert>
-      <GAlert v-if="stale.length" tone="warning" title="PA 匯出可能中斷">
+      <GAlert v-if="stale.length" tone="warning" title="FTP 匯出可能中斷">
         <ul class="stale-list">
           <li v-for="m in stale" :key="m">{{ m }}</li>
         </ul>
-        這些類型不擋每日同步完成;請網管確認 PA 排程匯出(Device › Scheduled Log Export)與 FTP 帳號、目錄權限。
+        這些類型不擋每日同步完成;請網管確認{{ staleHint }}與 FTP 帳號、目錄權限。
       </GAlert>
       <GAlert v-if="errors.length" tone="warning" title="有檔案匯入失敗">
         {{ errors.slice(0, 6).join('、') }}<template v-if="errors.length > 6"> 等 {{ errors.length }} 項</template>。下一輪會自動重試;一直失敗請看檔案清單的錯誤訊息。

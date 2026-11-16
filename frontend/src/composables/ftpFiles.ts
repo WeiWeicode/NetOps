@@ -153,7 +153,7 @@ export function dailyStale(cats: DailySyncStatus['categories']): string[] {
     .filter((c) => c.stale)
     .map((c) => {
       const n = c.noFileDays ?? 0;
-      return `${c.label}:FTP 已 ${n} 天${n >= c.days.length ? '以上' : ''}沒有新檔,PA 匯出可能中斷`;
+      return `${c.label}:FTP 已 ${n} 天${n >= c.days.length ? '以上' : ''}沒有新檔,${c.key === 'ad' ? 'AD' : 'PA'} 匯出可能中斷`;
     });
 }
 

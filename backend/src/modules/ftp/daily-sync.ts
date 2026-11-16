@@ -10,6 +10,8 @@
  * 超過保留期限仍沒匯入的日子記 warn(每個類型、每天一次;從沒匯入過的類型不記,PA 可能沒有匯出)。
  * 某類型從前一天往前連續 STALE_MIN_DAYS 天以上 FTP 都沒有檔(none)時視為「中斷」:PA 匯出可能失敗,等也等不到,
  * 不擋今天完成(因此不擋 AC7 每日摘要),狀態標 stale 並記 warn(同一類型同一天一次;需求方 2026-11-16,驗收報告 §3.2)。
+ * none 也可能是「FTP 連不上、還沒列到」(重新啟動後索引是空的),所以只有今天成功列過該類型 FTP 目錄後才判斷中斷。
+ * 保留期限內只有 1 天(retentionDays ≤ 2)時無法判斷,維持原本的等待 / gave-up。
  * NETOPS_DAILY_SYNC=0 關閉;NETOPS_RECON_TIME=-1(不自動對帳)時也不跑。狀態只在記憶體,重新啟動後當天重新判斷。
  */
 import type { AdImporter } from '../ad/importer.js';
@@ -94,6 +96,8 @@ export function createDailySync({
   const warned = new Set<string>();
   /** 已記過「匯出可能中斷」warn 的 類型|今天(同一類型同一天只記一次) */
   const staleWarned = new Set<string>();
+  /** 今天成功列過 FTP 目錄的類型(PA 類型 key 與 'ad');列不出來的類型不判斷中斷 */
+  const listed = new Set<string>();
 
   const dayAgo = (today: string, i: number) => taipeiText(taipeiDayStartMs(today) - i * 86_400_000).slice(0, 10);
   const today = () => taipeiText(now()).slice(0, 10);
@@ -127,6 +131,10 @@ export function createDailySync({
     if (types.length) {
       try {
         const r = await events.sync({ types: [...types], days: new Set(days) });
+        if (!('busy' in r && r.busy)) {
+          const labels = new Map(events.eventTypes().map((e) => [e.type, e.label]));
+          for (const t of types) if (!r.errors.some((e) => e.startsWith(`${labels.get(t)}:`))) listed.add(t);
+        }
         if (r.errors.length) log.warn({ errors: r.errors.length }, '每日同步:部分 PA 類型目錄列不出來(FTP),稍後再試');
         else if (r.added) log.info({ added: r.added }, '每日同步:解密 / GlobalProtect / User-ID 新檔已排入分析');
       } catch (err) {
@@ -136,6 +144,7 @@ export function createDailySync({
     if (ad.configured()) {
       try {
         const r = await ad.sync({ days, force: false });
+        if ('imported' in r) listed.add('ad');
         if ('imported' in r && r.imported.length) log.info({ days: r.imported.length }, '每日同步:AD 已匯入');
       } catch (err) {
         log.warn({ code: code(err) }, '每日同步:AD 同步失敗(FTP),稍後再試');
@@ -166,6 +175,7 @@ export function createDailySync({
       if (runDay !== t) {
         runDay = t;
         tries = 0;
+        listed.clear();
         finished = null;
         finishedAt = null;
       }
@@ -183,12 +193,14 @@ export function createDailySync({
       const stale = new Set<string>();
       for (const c of cats) {
         const n = noFileDays(c, days);
-        if (n < STALE_MIN_DAYS) continue;
+        if (n < STALE_MIN_DAYS || !listed.has(c.key)) continue;
         stale.add(c.key);
         const k = `${c.key}|${t}`;
         if (staleWarned.has(k)) continue;
         staleWarned.add(k);
-        log.warn({ type: c.key, noFileDays: n }, `每日同步:${c.label} FTP 已 ${n} 天沒有新檔,PA 匯出可能中斷;今天略過這個類型`);
+        const src = c.key === 'ad' ? 'AD 匯出' : 'PA 匯出';
+        const msg = c.used() ? `FTP 已 ${n} 天沒有新檔,${src}可能中斷` : `FTP 保留期限內沒有任何檔(從沒匯入過),${src}可能未設定或中斷`;
+        log.warn({ type: c.key, noFileDays: n, used: c.used() }, `每日同步:${c.label} ${msg};今天略過這個類型`);
       }
       for (const k of staleWarned) if (!k.endsWith(`|${t}`)) staleWarned.delete(k);
       const left = cats.filter((c) => !stale.has(c.key) && c.state(yesterday) !== 'done');
@@ -226,7 +238,7 @@ export function createDailySync({
       tries: runDay === t ? tries : 0,
       categories: cats.map((c) => {
         const n = noFileDays(c, days);
-        return { key: c.key, label: c.label, noFileDays: n, stale: n >= STALE_MIN_DAYS, days: days.map((d) => ({ day: dayOut(d), state: c.state(d) })) };
+        return { key: c.key, label: c.label, noFileDays: n, stale: runDay === t && listed.has(c.key) && n >= STALE_MIN_DAYS, days: days.map((d) => ({ day: dayOut(d), state: c.state(d) })) };
       }),
     };
   }

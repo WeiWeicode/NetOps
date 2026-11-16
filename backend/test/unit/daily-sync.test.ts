@@ -248,6 +248,45 @@ describe('FTP 連續多天沒有新檔的類型(PA 匯出可能中斷)', () => {
     assert.ok(staleWarns()[1]!.m.includes('FTP 已 9 天沒有新檔'));
   });
 
+  it('FTP 列不出來(重新啟動後索引是空的)時不判斷中斷,照舊等待;列得出來後才判斷', async () => {
+    let now = Date.parse('2026-11-13T08:10:00+08:00');
+    const f = fakes();
+    f.eventsFail = true;
+    f.adFail = true;
+    const warns: string[] = [];
+    const d = createDailySync({ events: f.events as never, ad: f.ad as never, log: { info() {}, warn: (_o, m) => void warns.push(m) }, enabled: true, at: 490, retentionDays: 10, now: () => now });
+    await d.run();
+    assert.equal(d.status().state, 'retrying');
+    assert.ok(d.status().categories.every((c) => !c.stale && c.noFileDays === 9));
+    assert.ok(!warns.some((m) => m.includes('可能中斷')));
+
+    // FTP 恢復:AD 前一天匯入;三類 PA 仍都沒有檔 → 判中斷,今天完成
+    f.eventsFail = false;
+    f.adFail = false;
+    f.states.ad!['2026/11/12'] = 'done';
+    now += 30 * 60_000;
+    await d.run();
+    assert.equal(d.status().state, 'done');
+    assert.equal(warns.filter((m) => m.includes('PA 匯出可能中斷')).length, 3);
+  });
+
+  it('從沒匯入過的類型提示可能未設定;只有部分類型列不出來時其他類型照常判斷', async () => {
+    const f = fakes();
+    f.used.delete('userid');
+    f.states.ad!['2026/11/12'] = 'done';
+    f.events.sync = async (o: { types?: string[]; days?: Set<string> } = {}) => {
+      f.calls.events.push(o);
+      return { found: 0, added: 0, errors: ['decryption:timeout'] };
+    };
+    const warns: string[] = [];
+    const d = createDailySync({ events: f.events as never, ad: f.ad as never, log: { info() {}, warn: (_o, m) => void warns.push(m) }, enabled: true, at: 490, retentionDays: 10, now: () => Date.parse('2026-11-13T08:10:00+08:00') });
+    await d.run();
+    const st = d.status();
+    assert.equal(st.state, 'retrying', '解密列不出來,不判中斷,仍要等');
+    assert.deepEqual(st.categories.filter((c) => c.stale).map((c) => c.key), ['globalprotect', 'userid']);
+    assert.ok(warns.some((m) => m.includes('userid FTP 保留期限內沒有任何檔(從沒匯入過)')));
+  });
+
   it('只剩中斷的類型時第一輪就完成(不會重試到 gave-up)', async () => {
     const f = fakes();
     f.states.ad!['2026/11/12'] = 'done';

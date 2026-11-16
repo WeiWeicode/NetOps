@@ -8,11 +8,11 @@
 
 - **已完成**:!93–!99(AC1–AC7)合併上線測試區;驗收 !100(**通過 16 / 不通過 1**,另 1 項未測、2 項跨日待續);修正 **!101**(每日同步中斷判定:FTP 連續 2 天以上沒檔的類型不擋當天完成,API.md §5.4、ARCHITECTURE D43 / D44)與 **!102**(AI 回答原始 HTML 轉文字、時段資料註明沒有威脅名稱並禁止佔位符,API.md §10.3)已在測試區驗證。
 - **不通過項目 6b(對帳誤差 < 0.5%)的原因與處理**:驗收報告 §3.1。**是 PA 設定問題,不是程式**:預設規則 `interzone-default`(Deny)沒套 Log Forwarding `netops-forward`;需求方 2026-11-16 11:30 在 PA 改套並 Commit,**11:31 起 ClickHouse 收得到**(PA-FORWARDING-SPEC D.1、G11)。TRAFFIC 每天約由 350 萬增為 730 萬筆(×2.1)。
-- **容量已重估**(IMPL-PLAN「容量重估」、PA-LOG-CLICKHOUSE-GUIDE §4):ClickHouse 每天約 143 MiB(730 萬 × 20.6 bytes)、穩態約 8–9 GB(E5 仍預留 20 GB);Parquet 每天約 140 MB、一年約 64 GB(**E2 建議 100 GB / 年**,原 150 GB)。**依 11/14、11/15 對帳數字推估,轉送後的實測待 11/17 起確認。**
+- **容量已重估**(IMPL-PLAN「容量重估」、PA-LOG-CLICKHOUSE-GUIDE §4):ClickHouse 每天約 143 MiB(730 萬 × 20.6 bytes)、穩態約 8–9 GB(E5 仍預留 20 GB);Parquet 每天約 140 MB、一年約 51–64 GB(**E2 維持 150 GB / 年**,需求方 2026-11-16 決定,其餘留給尖峰日與成長)。**依 11/14、11/15 對帳數字推估,轉送後的實測待 11/17 起確認。**
 - **待辦**:
-  1. 11-17 起 AC1 / AC7 跨日驗收(每天 08:10 後看每日同步卡片與流量總覽前一天摘要);6b 對帳(誤差 < 0.5%)與 6c evidence 筆數比對重測;順便量 `interzone-default` 轉送後的每天筆數與 `system.parts`,和上面的估算比對(差距超過 20% 就改 E2 / E5 數字)。
+  1. 11-17 起 AC1 / AC7 跨日驗收(每天 08:10 後看每日同步卡片與流量總覽前一天摘要);6b 對帳(誤差 < 0.5%)與 6c evidence 筆數比對重測;順便量 `interzone-default` 轉送後的每天筆數與 `system.parts`,和上面的估算比對(實測後由需求方決定是否調整 E2 / E5)。
   2. **網管**修 PA 匯出到 FTP 失敗:解密(`benson`)、User-ID(`benson4`)帳號 / 目錄權限 / 啟用狀態(FileZilla 日誌 11/04 13:45 前後);GlobalProtect(`benson3`、14:00)與 data-filtering(`benson3`、13:30)沒有任何執行紀錄,原因不明(驗收報告 §3.2)。修好前這三類在 FTP 是 `stale`(!101 不擋當天完成)。
-  3. 正式區(主機 3):PA 設定一併套用預設規則轉送(PA-FORWARDING-SPEC D.1);**E2 / E5 依新估算申請**(E2 100 GB / 年、E5 預留 20 GB)。
+  3. 正式區(主機 3):PA 設定一併套用預設規則轉送(PA-FORWARDING-SPEC D.1);**E2 / E5 申請**(E2 150 GB / 年、E5 預留 20 GB,數字不變)。
   4. 測試區 TTL **維持 3 天**(需求方決定,不改)。
   5. 其他觀察(驗收報告 §3.3):Session 逾時約 20 分鐘是否預期,待確認。
 

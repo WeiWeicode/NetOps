@@ -116,7 +116,7 @@ getent passwd 1000 101                      # 記下讀得到機密的帳號(機
 
 ## 4. 第二段(C6):開啟 PA log 管線
 
-前提:E5(主機 3 磁碟 20 GB 預留)核准;網通給專用 API 帳號的 Key;PA-560 管理介面換公司 CA 憑證;接收端點憑證(PF 附錄 F.6)或需求方決定明文接收。
+前提:E5(主機 3 磁碟 20 GB 預留)核准;網通給專用 API 帳號的 Key;**§4.1 憑證**(NetOps 專用 CA 簽接收端點憑證與 PA-560 管理介面憑證;需求方 2026-11-16 決定,公司 AD CS 到位前不等)。
 
 1. **確認既有規則**:列出所有放行 51293 / 51294 的 Inbound Allow 規則(只讀),預期沒有任何一條(含 `Docker-WSL2-AllServices-TCP`,PF 附錄 F.4.1 末項);有的話先停下來回報,不要改它:
    ```powershell
@@ -131,8 +131,9 @@ getent passwd 1000 101                      # 記下讀得到機密的帳號(機
    netsh interface portproxy show v4tov4
    ```
    做完從開發機與主機 2 再測一次舊系統 port。portproxy 會遺失來源 IP:Syslog 51294 在用戶端憑證(F.6)前只靠這條防火牆規則。
-3. **機密**:`sudo rm /srv/giganexus/netops-secrets/pa_api_key && sudo sh host3-set-pa-secrets.sh`(輸入專用帳號的 Key);公司 CA 憑證放 `/srv/giganexus/netops-pa-tls/`,
-   `netops.env` 設 `PA_CA_FILE=/run/pa-tls/<檔名>`、`PA_HOST`;**不可設 `PA_TLS_INSECURE`**(`deploy-prod` 與 `netops-pa` 都會擋)。
+3. **機密與憑證**:`sudo rm /srv/giganexus/netops-secrets/pa_api_key && sudo sh host3-set-pa-secrets.sh`(輸入專用帳號的 Key);
+   憑證照 **§4.1 第 1 步**(`host3-pa-pki.sh init`、`server`),把腳本結尾印的 `PA_CA_FILE`、`PA_TLS_CERT_FILE`、`PA_TLS_KEY_FILE`、`PA_HOST=10.10.115.35` 寫進 `netops.env`;
+   **不可設 `PA_TLS_INSECURE`**(`deploy-prod` 與 `netops-pa` 都會擋),有 `server.crt` 就不設 `PA_RECEIVE_PLAINTEXT`。
 4. **開關**(`/srv/giganexus/deploy/netops.env`):
    - `NETOPS_PA_PIPELINE=1`:`deploy-prod` 啟動 `netops-pa`(拉 Registry 映像)、`netops-clickhouse`(2 GB,`apply-schema.sh prod`:TRAFFIC 30 天、威脅 90 天、App 彙總 13 個月、來源彙總 90 天、熱力圖 5m 1 年、1h / 1d 5 年,CG §10.3)、`netops-ingest`;
      netops-api 改依 netops.env 對帳(`NETOPS_RECON_TIME` 預設 08:10)、每日同步、ClickHouse 摘要。
@@ -140,8 +141,74 @@ getent passwd 1000 101                      # 記下讀得到機密的帳號(機
    - C6 驗收後:`NETOPS_AI_SOURCE=clickhouse`(並從 `netops.env` 移除 `FTP_SYNC_MINUTES`;開關 1 時 deploy-prod 已固定為 0)、`NETOPS_AI_DAILY_SUMMARY=1`(或刪除該行)。
    - E2(NAS 150 GB / 年)核准、`giga-netops/prod/pa-archive` 與標記檔建好(`GW_ENV=prod sh deploy/host2-setup-pa-archive.sh`,先讀該腳本確認主機 3 適用)後:`NETOPS_ARCHIVE_ENABLED=1`。
 5. 重試 `main` 最新 pipeline 的 `deploy-prod`。之後只換機密或憑證檔時,`main`「Run pipeline」帶 `NETOPS_PA_RECREATE=1`(由 Maintainer 執行;會重跑 `build-prod`,再手動 `deploy-prod`)。
-6. 網通:Syslog / HTTP Server Profile 加 `10.10.130.122`;預設規則 `interzone-default`、`intrazone-default` 也套 `netops-forward`(PF D.1、G11);Permitted IP 加 `10.10.130.122`;**接收開好後對 Syslog Server Profile 再 Commit 一次**。
-7. 驗證:即時監控有資料、收集器 `dropped` / `rejected` / `malformed` 為 0;`system.tables` TTL 正確;隔天 08:10 對帳誤差 < 0.5%。
+6. 網通:Syslog / HTTP Server Profile 加 `10.10.130.122`(**Syslog Transport `SSL`、HTTP Protocol `HTTPS`**,§4.1 第 4 步);預設規則 `interzone-default`、`intrazone-default` 也套 `netops-forward`(PF D.1、G11);Permitted IP 加 `10.10.130.122`;**接收開好後對 Syslog Server Profile 再 Commit 一次**。
+7. 驗證:§4.1 第 5 步的連線檢查全部成功;即時監控有資料、收集器 `dropped` / `rejected` / `malformed` 為 0;`system.tables` TTL 正確;隔天 08:10 對帳誤差 < 0.5%。
+
+### 4.1 PA 憑證(NetOps 專用 CA,`deploy/host3-pa-pki.sh`)
+
+需求方 2026-11-16 決定:主機 3 自建 **「GigaNexus NetOps PA CA (prod)」**,與 Gateway `:9443` 的臨時 PKI 分開;CA 私鑰只留在主機 3(`/srv/giganexus/netops-pa-ca/ca.key`,root 400,目錄 root 700,不掛進任何容器)。
+PA-560 管理介面憑證由網通在 PA 產生 CSR,**私鑰留在 PA**;腳本只簽發。用戶端憑證(mTLS,PF G8)這次不做,之後用同一個 CA 加簽即可。
+
+| 項目 | 值 |
+| --- | --- |
+| CA | RSA 4096、SHA-256、10 年;`basicConstraints CA:TRUE, pathlen:0` |
+| 接收端 `server.crt` | RSA 3072、825 天;CN 與 SAN `IP:10.10.130.122`(PA 以 IP 送 log,文件內沒有主機 3 的接收用 DNS 名稱,所以只放 IP);`serverAuth` |
+| PA 管理介面憑證 | 照 CSR 的主體與 SAN(**必須含 `IP:10.10.115.35`**,不含就拒絕;IP 只能是這一個,DNS 照 CSR 保留;CN 要是 `10.10.115.35` 或 SAN 的 DNS 名稱);金鑰 RSA ≥ 2048 或 ECDSA P-256 / P-384;825 天;`serverAuth`,不沿用 CSR 要求的其他擴充欄位 |
+| 檔案 | `/srv/giganexus/netops-pa-tls/`(容器 `/run/pa-tls`):`pa-mgmt-ca.pem` 644、`server.crt` 644、`server.key` `1000:1000` 400(PF F.6) |
+| 到期 | `sudo sh host3-pa-pki.sh status` 看 CA、`server.crt` 與已簽發清單;接收端到期前 `server --renew`,PA 憑證到期前請網通重產 CSR 再 `sign-csr` |
+
+腳本與 §2 一樣從開發機複製到主機 3 再以 root 執行:
+
+```powershell
+scp deploy/host3-pa-pki.sh host3:C:/Users/user/netops-deploy/
+```
+
+```bash
+sudo install -d -m 700 -o root /root/netops-deploy
+sudo install -m 700 -o root /mnt/c/Users/user/netops-deploy/host3-pa-pki.sh /root/netops-deploy/
+sudo sha256sum /root/netops-deploy/host3-pa-pki.sh    # 和開發機 sha256sum deploy/host3-pa-pki.sh 比對
+```
+
+依序(1、3 的第 2 小步、5 需求方在主機 3;其餘網通在 PA-560):
+
+1. **主機 3 建 CA、簽接收端憑證**(`/srv/giganexus/netops-pa-tls` 由 §2 的 `host3-set-pa-secrets.sh` 建立,沒有時腳本會停下來):
+   ```bash
+   sudo sh /root/netops-deploy/host3-pa-pki.sh init      # 已有 CA 不會覆寫;印出 CA 的 SHA-256 指紋
+   sudo sh /root/netops-deploy/host3-pa-pki.sh server    # 已有 server.crt 會停下來;重簽用 server --renew(舊檔備份到 CA 目錄)
+   ```
+   把結尾印的四行寫進 `/srv/giganexus/deploy/netops.env`(§4 第 3 步)。
+   CA 憑證(公開)複製給網通:`sudo cp /srv/giganexus/netops-pa-tls/pa-mgmt-ca.pem /mnt/c/Users/user/netops-deploy/`,再從 Windows 取走。
+2. **網通:PA 匯入 CA 為 Trusted Root**:Device > Certificate Management > Certificates > **Import**,Certificate Name `netops-pa-ca-prod`、檔案 `pa-mgmt-ca.pem`(只匯入憑證,不需要私鑰);
+   匯入後開啟該憑證勾選 **Trusted Root CA**;核對指紋與第 1 步印的相同(PA 畫面沒有 SHA-256 指紋時核對主體與到期日)。Commit。
+3. **網通產 CSR → 主機 3 簽發 → 匯回 PA**:
+   1. 網通:Certificates > **Generate**,Certificate Name 例如 `pa-mgmt-prod`、Common Name `10.10.115.35`、**Signed By 選 External Authority (CSR)**、
+      演算法 RSA 2048 以上(或 ECDSA 256 / 384)、Digest sha256;Certificate Attributes 加 **IP `10.10.115.35`**(要有 DNS 名稱時另加 Host Name;IP 不可加其他位址)。產生後 **Export** CSR(私鑰留在 PA,不要匯出),
+      並把 CSR 檔的 SHA-256(`sha256sum` 或 PowerShell `Get-FileHash`)**用另一個管道**(例如當面或電話)告訴需求方,防止 CSR 在傳送途中被換掉。
+   2. 需求方把 CSR 放到主機 3(同上 `scp` 到 `C:/Users/user/netops-deploy/`),在 WSL:
+      ```bash
+      sudo sh /root/netops-deploy/host3-pa-pki.sh sign-csr /mnt/c/Users/user/netops-deploy/pa-mgmt-prod.csr
+      ```
+      腳本先印出 CSR 檔與公鑰的 SHA-256、CN、SAN,**和網通給的 SHA-256 相同才輸入 `y`**。
+      SAN 沒有 `10.10.115.35`、有其他 IP、有 IP / DNS 以外的項目、CN 不是 `10.10.115.35`(或 SAN 的 DNS 名稱)、金鑰太弱時拒絕簽發,請網通重產。成功時在 CSR 旁產生 `pa-mgmt-prod.crt`(公開),印出 SAN、到期、指紋。
+   3. 網通:Certificates > **Import**,Certificate Name 填**與第 1 小步相同**的 `pa-mgmt-prod`、檔案 `pa-mgmt-prod.crt`(不勾 Import private key;PA 會和 CSR 的私鑰配對)。
+   4. 網通:Device > Certificate Management > **SSL/TLS Service Profile** > Add(例如 `netops-mgmt-prod`,憑證 `pa-mgmt-prod`,Min Version TLSv1.2),
+      再到 Device > Setup > Management > General Settings 把 **SSL/TLS Service Profile** 改成它。Commit(管理介面會換憑證,Web UI 要重新連線)。這把 CA 沒有名稱限制,**不要裝進 Windows / 瀏覽器的信任清單**;瀏覽器的憑證警告核對指紋後略過即可。
+4. **網通:Server Profile 改加密**(PF B.1、C.1):`netops-syslog` 的 `netops-prod` **Transport 改 `SSL`**(Port 51294);`netops-http` 的 `netops-prod` **Protocol 改 `HTTPS`**、TLS Version 1.2 以上(Port 51293)。
+   **請網通確認(未在設備上查證)**:PA 送 Syslog SSL / HTTPS 時是否驗證接收端憑證、驗證要不要另外指定 Certificate Profile(HTTP Server Profile 有 Certificate Profile 欄位時選一個只含 `netops-pa-ca-prod` 的 Profile);
+   確認方式:暫時把 `netops-pa-ca-prod` 的 Trusted Root CA 取消勾選再 Commit,PA System log 應出現憑證驗證失敗、接收端收不到;確認後恢復勾選。結果回報系統負責人寫進 PF G7。
+   要在主機 3 的 `netops-pa` 以 TLS 啟動之後(§4 第 4、5 步部署完成、日誌有 `接收端點已啟用:HTTPS :51293、Syslog TLS :51294`)再 Commit;順序反了 Syslog 不會自動重連(PF E 節),要再 Commit 一次。
+5. **驗證**(主機 3;只跑一次唯讀查詢、不寫 Redis;PF F.4 第 3 步):
+   ```bash
+   sudo docker exec giganexus-netops-prod-netops-pa-1 python -m netops_pa check
+   ```
+   預期第一行 `PA-560 10.10.115.35:443,驗證憑證(PA_CA_FILE)`,之後各項 `✓`、`結果:全部成功`。憑證驗證失敗時先看第 3 步的 SSL/TLS Service Profile 是否已套用並 Commit。
+   接收端:`sudo docker logs --tail 20 giganexus-netops-prod-netops-pa-1` 沒有 `TLS 握手失敗`;PA-560 System log 沒有 `syslog connection failed`;即時監控有 TRAFFIC 與威脅類資料。
+   全部成功後才把 `PA_POLL_ENABLED=1`(§4 第 4 步)。
+
+`server.crt` 換新(`server --renew`)後要重建 `netops-pa` 才會載入:`main`「Run pipeline」帶 `NETOPS_PA_RECREATE=1`,之後請網通對 `netops-syslog` 再 Commit;
+確認新憑證運作後刪除 `/srv/giganexus/netops-pa-ca/server.key.bak-*`(舊憑證在到期前仍有效,沒有 CRL)。
+**撤銷**:沒有 CRL。私鑰外洩或誤簽時,唯一的處理是重建 CA(移走 `/srv/giganexus/netops-pa-ca` 後重跑 §4.1 全部步驟,PA 刪除舊的 Trusted Root)。
+能在主機 3 WSL 取得 root 的人(含 Windows 使用者 `wsl -u root`、`prod-deploy` Runner 透過 docker)都能讀到 CA 私鑰。
 
 關閉第二段:`NETOPS_PA_PIPELINE=0` 後重跑 `deploy-prod` **不會停止**已在執行的三個容器(避免誤停);要停時手動
 `sudo docker stop giganexus-netops-prod-netops-pa-1 giganexus-netops-prod-netops-ingest-1 giganexus-netops-prod-netops-clickhouse-1`(停 `netops-pa` 前先告知網通)。

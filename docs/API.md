@@ -612,6 +612,7 @@ ARCHITECTURE D43、D44,IMPL-PLAN AC1(需求方 2026-11-13「每天對帳後一�
 - **何時跑**:每天自動對帳(§5.3,`NETOPS_RECON_TIME`,預設 08:10)的每一輪結束後接著跑(對帳失敗也照跑)。`NETOPS_DAILY_SYNC=0` 關閉;`NETOPS_RECON_TIME=-1` 或沒有 ClickHouse(不自動對帳)時也不跑,只能在 FTP Log 檔案頁手動同步。
 - **同步什麼**:只排 FTP 保留期限內(1 ~ `NETOPS_FTP_RETENTION_DAYS` − 1 天前)的檔:PA 解密、GlobalProtect、User-ID 目錄依**檔名日期**挑(`…_2026_11_13_last_calendar_day_0.csv` = 11/12 的資料;檔名沒有日期的不排),新的、已變更、失敗的排入分析;AD 只比對這些日期的資料夾,有變才匯入。**不同步 TRAFFIC 與威脅類**(查詢已改 ClickHouse;TRAFFIC 由對帳自己同步)。目錄設成 `-` 的類型不列入。
 - **重試**(同對帳):前一天每個類型都匯入完成(`done`)今天就結束;還沒完成時對帳下一輪(10 分鐘後)再看,FTP 目錄 30 分鐘最多列一次;FTP 失敗只記 warn。一天最多試 90 次(約 15 小時)後停止並記 warn(`state: "gave-up"`)。較舊的日子同一輪一起排,沒補到的隔天再排。
+- **中斷判定(!101,需求方 2026-11-16)**:某類型從前一天往前連續 **2 天以上**(`STALE_MIN_DAYS = 2`)FTP 都沒有檔(`none`),且**今天成功列過該類型的 FTP 目錄**(重新啟動後索引是空的,不能把「還沒列到」當成沒有檔)→ 該類型 `stale: true`:**不擋當天完成**(其他類型前一天都 `done` 就算 `state: done`,所以不擋 AC7 每日摘要),每日同步略過它;`noFileDays` 是連續沒有檔的天數。warn 同類型同一天只記一次(PA 與 AD 文字不同;從沒匯入過的類型標「可能未設定或中斷」)。保留期限內只有 1 天(`retentionDays` ≤ 2)時無法判斷,維持等待 / `gave-up`。FTP 又有檔時下一輪自動回到正常判斷。
 - **超過保留期限**:保留期限到期(`retentionDays` ~ `retentionDays + 7` 天前)仍沒匯入的日子記 warn,每個類型每天一次;從沒匯入過的類型(PA 可能沒有匯出)不記。
 - 狀態只在記憶體,重新啟動後當天重新判斷(已匯入的不會重複匯入)。
 
@@ -623,6 +624,7 @@ ARCHITECTURE D43、D44,IMPL-PLAN AC1(需求方 2026-11-13「每天對帳後一�
   "runDay": "2026-11-13", "lastRunAt": "…", "lastSyncAt": "…", "finishedAt": null, "tries": 2,
   "categories": [                       // decryption、globalprotect、userid(有設定目錄的)、ad(有設定 FTP)
     { "key": "globalprotect", "label": "GlobalProtect VPN",
+      "noFileDays": 0, "stale": false,   // 從前一天往前連續幾天 FTP 都沒有檔(none);stale = 判定為中斷(見「中斷判定」)
       "days": [ { "day": "2026-11-12", "state": "pending" }, { "day": "2026-11-11", "state": "done" } ] }  // 新的在前,保留期限內
   ]
 }
@@ -916,6 +918,7 @@ AI 串流(§10.1)開始後的錯誤以 `error` 事件回傳 `{ code, message }`:
 | POST | `/api/netops/ai/explanations` | `netops.ai.use` | PA 頁面的 AI 按鈕共用;`{ kind, params, think? }`,回 SSE(寫法同 §10.1:`x-timeout-ms: 60000`、heartbeat、`X-Accel-Buffering: no`);稽核 `x-audit-level: meta` |
 
 - `kind: 'slice'`(時段明細「AI 解讀這個時段」):`params` 同 `GET /pa/slice`(§4.4)。後端以**同一人同條件**重用時段明細工作(30 分鐘內不重查 ClickHouse);工作還在查時送 `scan` `{ label, source: 'clickhouse', step: 'slice', waiting: true }` 後等候(最多 180 秒,逾時 `error` 事件 `NETOPS_JOB_TIMEOUT`)。送模型的是條件、摘要、各 Top 10 與資料完整度;**明細列(`rows`)不送**。
+- **AI 回答顯示與送模型的資料規則(!102,2026-11-16)**:前端 AI 回答(`renderMarkdown(…, { ai: true })`)內的**原始 HTML 一律轉成文字顯示**(例如模型寫的 `<名稱>` 佔位符會原樣顯示,不再被 DOMPurify 整段清掉);**知識庫筆記的 Markdown 不受影響**(照原本 marked + DOMPurify)。TRAFFIC 時段明細送 AI 的資料只有威脅筆數、**沒有威脅名稱與類別**,資料段落會註明;提示詞規則 7 禁止寫出資料沒有的名稱,也不可用 `<名稱>`、`[類別]`、`XXX` 之類的佔位符,要改說「資料沒有列出」並指出要看哪個明細(驗收報告 §3.3-1)。
 - `kind: 'insight'`(分析儀表板「AI 摘要本期異常」):`params` 為 `{ view: 'traffic' | 'threat', from, to }`,同 `GET /pa/insight/{view}`(§4.5),用儀表板快取。送合計、高峰(前 5 格與平均的倍數)、Top 10 與前一期比較:威脅用 `score.prev`;流量另查前一個同長度期間的每天彙總合計(快取鍵 `traffic-prev`;資料起點晚於前一期時不比較;忙碌取不到時只在資料中註明,不中斷)。
 - `kind: 'threat'`(AC5,Log 明細查詢 / 時段明細抽屜威脅列「AI 說明這個威脅與處理建議」):`params` 為 `{ name, from, to }`。`name` 是威脅名稱(完全相同;1–300 字、不可有控制字元),只有數字時當**威脅 ID**,比對名稱結尾「(ID)」(名稱格式 `xxx(52316871)`);`from` / `to` 為 ISO 含時區(對齊到分鐘),最長 31 天。後端查原始威脅表(`log_type = threat`)彙總:筆數(另附含 Repeat Count 的次數)、第一 / 最後一次、不同來源 / 目的 IP 數,以及嚴重度、威脅類別、子類型、方向、動作、來源 / 目的 IP(影響主機)、App、協定 / Port、來源 / 目的國家各前 10 名,與每小時(期間 ≤ 2 天)或每天的筆數;不送原始 log 列。Redis 快取(鍵 `ai-threat`,含現在或剛結束 1 小時內 60 秒,更早 1 小時)。整段超過威脅原始表保留期限回 404 `NETOPS_PA_OUT_OF_RETENTION`;一部分超過時只查保留期限內,`meta.skipped` 與送模型的資料都註明「沒有查,不代表沒有發生」。
 - `kind: 'heatmap'`(AC5,活動熱力圖「AI 指出異常格」):`params` 同 `GET /pa/heatmap`(§4.4;`metric` 為 `traffic | deny | threat`,不含 `ad`),沿用熱力圖快取。後端從格子挑出異常時段(`modules/ai/core/anomaly.ts`),**不全送**(月視圖最多 744 格):送整體統計(合計、平均、中位數、P90、最大值、各等級格數、沒有資料 / 不完整的格數)與最多 10 格異常高、最多 3 格異常低。挑選:中位數與 MAD 的穩健偏離程度 ≥ 3.5;月視圖以「一天中的同一個小時」為基準、年視圖分平日 / 假日、日視圖整天一組(同組有資料少於 8 格時改整段);威脅指標先列有嚴重 / 高風險的格子;異常低只看流量、最後一格不列;`v = null` 不參與計算。`meta.cells` 列出這些格子(`t, end, v, kind: high | low | severity, ratio, offHours, partial`,不含 IP),畫面列成按鈕開時段明細,再用 `slice` 解讀。

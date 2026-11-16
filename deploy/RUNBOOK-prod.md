@@ -207,8 +207,10 @@ sudo sha256sum /root/netops-deploy/host3-pa-pki.sh    # 和開發機 sha256sum d
 
 `server.crt` 換新(`server --renew`)後要重建 `netops-pa` 才會載入:`main`「Run pipeline」帶 `NETOPS_PA_RECREATE=1`,之後請網通對 `netops-syslog` 再 Commit;
 確認新憑證運作後刪除 `/srv/giganexus/netops-pa-ca/server.key.bak-*`(舊憑證在到期前仍有效,沒有 CRL)。
-**撤銷**:沒有 CRL。私鑰外洩或誤簽時,唯一的處理是重建 CA(移走 `/srv/giganexus/netops-pa-ca` 後重跑 §4.1 全部步驟,PA 刪除舊的 Trusted Root)。
+**CA 私鑰不加密、不備份**(需求方 2026-11-16 決定;CA 不加名稱限制、`netops-pa-tls` 目錄權限維持 `host2-set-pa-secrets.sh` 的設定)。
 能在主機 3 WSL 取得 root 的人(含 Windows 使用者 `wsl -u root`、`prod-deploy` Runner 透過 docker)都能讀到 CA 私鑰。
+**遺失或外洩時重建 CA**(沒有 CRL,誤簽同樣處理):移走 `/srv/giganexus/netops-pa-ca` → 重跑本節第 1 步 `init`、`server --renew` → 網通在 PA 刪除舊的 Trusted Root、匯入新的 CA(第 2 步)→ 重產 CSR 並簽發匯回(第 3 步)→ 重建 `netops-pa`(`NETOPS_PA_RECREATE=1`)→ 第 5 步驗證。
+`deploy-prod` 會擋 `NETOPS_PA_TLS_HOST_DIR` 指到 CA 目錄(或其上層、或含 `ca.key` 的目錄),避免 CA 私鑰掛進容器。
 
 關閉第二段:`NETOPS_PA_PIPELINE=0` 後重跑 `deploy-prod` **不會停止**已在執行的三個容器(避免誤停);要停時手動
 `sudo docker stop giganexus-netops-prod-netops-pa-1 giganexus-netops-prod-netops-ingest-1 giganexus-netops-prod-netops-clickhouse-1`(停 `netops-pa` 前先告知網通)。

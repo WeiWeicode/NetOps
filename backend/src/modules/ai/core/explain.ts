@@ -545,3 +545,45 @@ export const EVENTS_TASK = `請摘要這段期間的安全事件，依以下章�
 （依重要性列出：高風險威脅、被擋或非良性的檔案、可疑的上傳、集中在少數 IP / 網站 / 使用者的情況；寫出 IP、名稱與筆數；某類沒有資料或不完整時說明）
 ## 建議追查
 （具體列出要到哪個頁面查什麼，例如 Log 明細查詢某個 IP 或威脅名稱、熱力圖看某個時段；要通知誰）`;
+
+/* ───────── 每日摘要(AC7) ───────── */
+
+/** 每日摘要:流量、安全事件各占一半上限(兩段各自截斷,再整體截一次) */
+export const DAILY_MAX_CHARS = EXPLAIN_MAX_CHARS;
+
+/** 流量連線數合計(趨勢有資料的格子;都沒有資料時 null) */
+export function trafficSessions(d: TrafficInsightForAi): number | null {
+  const has = d.trend.filter((x) => x.sessions !== null);
+  return has.length ? has.reduce((s, x) => s + (x.sessions ?? 0), 0) : null;
+}
+
+/**
+ * 前一天的流量(分析儀表板,同 insight)+ 四類安全事件(同 events)→ 送給模型的資料。
+ * traffic / events 取不到時傳 null 與原因(只在資料中註明,另一段照送);兩段都沒有時呼叫端不送模型
+ */
+export function dailyContext(
+  day: string,
+  traffic: { data: TrafficInsightForAi; prev: TrafficPrev | null; prevError: boolean } | { error: string },
+  events: EventsForAi | { error: string },
+  max = DAILY_MAX_CHARS,
+): { text: string; clipped: boolean } {
+  const half = Math.floor(max / 2);
+  const head = `# ${clean(day, 10)} 每日摘要資料（前一天整天；只有統計與排行，沒有原始 log）`;
+  let t: { text: string; clipped: boolean };
+  if ('error' in traffic) t = { text: `## 流量\n- 這次取不到流量統計：${clean(traffic.error, 200)}`, clipped: false };
+  else {
+    t = trafficInsightContext(traffic.data, traffic.prev, half);
+    if (traffic.prevError) t.text += '\n（前一天的資料這次取不到，不和前一天比較）';
+  }
+  const e = 'error' in events ? { text: `## 安全事件\n- 這次取不到安全事件統計：${clean(events.error, 200)}`, clipped: false } : eventsContext(events, half);
+  const all = joinCapped([head, t.text, e.text], max);
+  return { text: all.text, clipped: all.clipped || t.clipped || e.clipped };
+}
+
+export const DAILY_TASK = `請寫一份給 MIS 主管看的「前一天」防火牆每日摘要，依以下章節輸出：
+## 昨日總結
+（2–4 句：流量與安全事件的整體狀況，和前一天比較的明顯變化；資料不完整時先說明）
+## 需要注意
+（依重要性列出最多 5 項：高風險威脅、異常流量高峰、大量阻擋、可疑上傳、集中在少數 IP / 網站 / 使用者的情況；寫出 IP、名稱、時間與數字；沒有就寫「沒有明顯異常」）
+## 建議今天追查
+（具體列出要到哪個頁面查什麼，例如分析儀表板某個時段、Log 明細查詢某個 IP 或威脅名稱、安全事件頁某一類）`;

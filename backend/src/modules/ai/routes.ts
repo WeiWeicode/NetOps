@@ -12,6 +12,7 @@ import { SLICE_QUERY } from '../pa-heat/routes.js';
 import type { SliceQuery, ThreatProfileQuery } from '../pa-heat/service.js';
 import type { AiService, ExplainInput, HeatmapParams, HistoryItem, InsightParams } from './service.js';
 import { SSE_TIMEOUT_MS, type SseHub } from './sse.js';
+import type { DailySummaryScheduler } from './daily-summary.js';
 
 /** 問答期間上限(天):ftp 來源有 IP 時要從 FTP 重讀原始 log(同明細查詢 §4.3);clickhouse 來源沿用同一個上限 */
 export const ASK_MAX_DAYS = 31;
@@ -62,7 +63,7 @@ const EVENTS_PARAMS = {
 const KINDS = ['slice', 'insight', 'threat', 'heatmap', 'events'] as const;
 const PARAMS_OF = { slice: SLICE_QUERY, insight: INSIGHT_PARAMS, threat: THREAT_PARAMS, heatmap: HEATMAP_PARAMS, events: EVENTS_PARAMS } as const;
 
-const aiRoutes: FastifyPluginAsync<{ ai: AiService; hub: SseHub }> = async (app, { ai, hub }) => {
+const aiRoutes: FastifyPluginAsync<{ ai: AiService; hub: SseHub; daily?: DailySummaryScheduler | null }> = async (app, { ai, hub, daily }) => {
   app.get(
     '/v1/ai/status',
     {
@@ -77,6 +78,50 @@ const aiRoutes: FastifyPluginAsync<{ ai: AiService; hub: SseHub }> = async (app,
       },
     },
     async () => ai.status(),
+  );
+
+  // AC7:AI 每日摘要(排程產生、存檔;這裡只讀)
+  app.get<{ Querystring: { day?: string } }>(
+    '/v1/ai/daily-summary',
+    {
+      schema: {
+        operationId: 'netops.ai.daily-summary',
+        summary: 'AI 每日摘要',
+        description:
+          '每天自動對帳與每日同步(AC1)之後,系統自動產生前一天的 AI 摘要(流量 + 威脅、URL 過濾、資料過濾、WildFire 四類安全事件的統計;不送原始 log),流量總覽顯示(IMPL-PLAN AC7;docs/API.md §10.4)。' +
+          '不指定 day 時回最近一份完成的摘要;day(YYYY-MM-DD)指定某一天。target 為今天要產生的日子(前一天)與其狀態 state:disabled 未啟用、waiting 等對帳 / 每日同步、running 產生中、retrying 第一次失敗稍後重試、done 完成、failed 重試後仍失敗(畫面標示「今天的摘要產生失敗」)。' +
+          '摘要內容含 IP 與姓名(AQ2),只回給有 netops.ai.use 的人,不寫進日誌與稽核。未啟用(NETOPS_AI_DAILY_SUMMARY=0、沒有 LLM_URL 或不自動對帳)時 enabled false、state disabled,仍可讀已存的摘要。',
+        tags: ['AI'],
+        'x-permission': 'netops.ai.use',
+        'x-audit-level': 'meta',
+        'x-gherkin': [
+          '場景: 讀取最近一份每日摘要',
+          '  假如 使用者擁有 netops.ai.use',
+          '  而且 系統已在今天 08:10 對帳與每日同步後產生 2026-11-13 的摘要',
+          '  當 呼叫 GET /api/netops/ai/daily-summary',
+          '  那麼 回應 200',
+          '  而且 target 為 "2026-11-13" 且 state 為 "done"',
+          '  而且 summary.result.text 為 Markdown 摘要',
+          '',
+          '場景: 重試後仍失敗',
+          '  假如 AI 主機無法使用',
+          '  當 系統產生 2026-11-13 的摘要失敗並重試一次仍失敗',
+          '  那麼 GET /api/netops/ai/daily-summary 的 state 為 "failed"',
+          '  而且 summary 為最近一份完成的摘要(較早的日子)',
+          '  而且 對帳與每日同步照常完成',
+          '',
+          '場景: 日期格式錯誤',
+          '  當 呼叫 GET /api/netops/ai/daily-summary?day=2026/11/13',
+          '  那麼 回應 400 VALIDATION_FAILED',
+        ].join('\n'),
+        querystring: { type: 'object', additionalProperties: false, properties: { day: DAY } },
+        response: { 200: looseObject('{ enabled, at, target, state, error, summary: { day, state, tries, at, result: { text, model, partial, clipped, contextChars, counts } | null, error } | null, days: [{ day, state }] }') },
+      },
+    },
+    async (req) => {
+      if (!daily) return { enabled: false, at: null, target: '', state: 'disabled', error: null, summary: null, days: [] };
+      return daily.status(req.query.day);
+    },
   );
 
   app.post<{ Body: { from: string; to?: string; think?: boolean; question?: string } }>(

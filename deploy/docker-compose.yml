@@ -62,7 +62,8 @@ services:
       FTP_USERID_DIR: ${FTP_USERID_DIR:-}
       # 測試區 1 條(與舊版同時同步,控制 FTP 負載;AGENT.md §6)
       FTP_MAX_CONNECTIONS: ${FTP_MAX_CONNECTIONS:-1}
-      # 0 = 不自動同步,只在 FTP Log 檔案頁手動同步
+      # 0 = 不自動同步,只在 FTP Log 檔案頁手動同步。AC7:只剩 NETOPS_AI_SOURCE=ftp(正式區 C6 前的 AI 舊路徑)使用;
+      #   clickhouse 來源時一律當 0(啟動記 warn),解密 / GlobalProtect / User-ID / AD 改由對帳後每日同步。C6 後正式區改 clickhouse 時從 .env 移除,這一行一併刪除
       FTP_SYNC_MINUTES: ${FTP_SYNC_MINUTES:-0}
       # AI(A1,ARCHITECTURE D23):直接呼叫 AI 主機;.45 配置相同作為備用,換主機只改 netops.env。翻譯沿用 LLM_URL / LLM_MODEL
       LLM_URL: ${LLM_URL:-http://10.10.130.46:8080/v1}
@@ -94,6 +95,9 @@ services:
       NETOPS_FTP_RETENTION_DAYS: ${NETOPS_FTP_RETENTION_DAYS:-10}
       # 對帳後每日同步解密 / GlobalProtect / User-ID / AD(AC1,需求方 2026-11-13;不進 ClickHouse,FTP 只留 10 天);0 = 關閉,只能手動同步
       NETOPS_DAILY_SYNC: ${NETOPS_DAILY_SYNC:-1}
+      # AI 每日摘要(AC7):對帳與每日同步後自動產生前一天的摘要(流量總覽顯示);空白 = 依 GW_ENV(test 開、prod 關,正式區 C6 後再開);0 關閉
+      #   另外要有 LLM_URL 與自動對帳(ClickHouse + NETOPS_RECON_TIME)才會跑;AI 主機無法使用不影響對帳與同步
+      NETOPS_AI_DAILY_SUMMARY: ${NETOPS_AI_DAILY_SUMMARY:-}
       # ClickHouse 每小時摘要(總覽排行):保留天數同 ClickHouse TRAFFIC(正式區 30 天;測試區 TTL 3 天,多的天數沒有資料)
       NETOPS_CH_SUMMARY_DAYS: ${NETOPS_CH_SUMMARY_DAYS:-30}
       NETOPS_CH_SUMMARY_MINUTES: ${NETOPS_CH_SUMMARY_MINUTES:-5}

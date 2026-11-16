@@ -8,7 +8,9 @@
  *   palogs/iplearn.json               外部 IP 自動學習查過的 IP、網段與分組(A1;同舊版位置)
  *   palogs/ch/index.json、ch/{kind}/{YYYYMMDDHH}.json.gz   ClickHouse 每小時摘要(C3;新版才有)
  *   palogs/ch/recon/{YYYYMMDD}.json   FTP 與 ClickHouse 每日對帳結果(C3)
+ *   palogs/ai-daily/{YYYYMMDD}.json   AI 每日摘要(AC7;內容含 IP 與姓名,視同機密)
  */
+import fs from 'node:fs';
 import path from 'node:path';
 import { ensureDir, readGzipJson, readGzipText, readJson, removeFile, safeJoin, writeGzipJson, writeGzipText, writeJson } from './files.js';
 
@@ -49,6 +51,11 @@ export interface PaStore {
   saveRecon(day: string, result: unknown): void;
   readRecon<T>(day: string): T | null;
   removeRecon(day: string): void;
+  /** AI 每日摘要(AC7;day 為 'YYYYMMDD'):摘要內容含 IP 與姓名(AQ2),只經本服務 API 給有權限的人看;不存在回 null */
+  saveAiDaily(day: string, value: unknown): void;
+  readAiDaily<T>(day: string): T | null;
+  /** 有存檔的日子('YYYYMMDD',新的在前) */
+  listAiDaily(): string[];
 }
 
 const CH_KINDS = ['traffic', 'threat', 'url', 'data', 'wildfire'];
@@ -68,6 +75,12 @@ export function createPaStore(root: string, eventTypes: readonly string[]): PaSt
   const reconFile = (day: string) => {
     if (!/^\d{8}$/.test(day)) throw new Error(`不合法的對帳日期:${day}`);
     return safeJoin(reconDir, `${day}.json`);
+  };
+  const aiDailyDir = path.join(base, 'ai-daily');
+  ensureDir(aiDailyDir);
+  const aiDailyFile = (day: string) => {
+    if (!/^\d{8}$/.test(day)) throw new Error(`不合法的每日摘要日期:${day}`);
+    return safeJoin(aiDailyDir, `${day}.json`);
   };
   const chFile = (kind: string, hour: string) => {
     if (!CH_KINDS.includes(kind) || !/^\d{10}$/.test(hour)) throw new Error(`不合法的 ClickHouse 摘要代號:${kind}/${hour}`);
@@ -109,5 +122,14 @@ export function createPaStore(root: string, eventTypes: readonly string[]): PaSt
     saveRecon: (day, result) => writeJson(reconFile(day), result),
     readRecon: (day) => readJson(reconFile(day)),
     removeRecon: (day) => removeFile(reconFile(day)),
+    saveAiDaily: (day, value) => writeJson(aiDailyFile(day), value),
+    readAiDaily: (day) => readJson(aiDailyFile(day)),
+    listAiDaily: () =>
+      fs
+        .readdirSync(aiDailyDir)
+        .map((f) => /^(\d{8})\.json$/.exec(f)?.[1])
+        .filter((d): d is string => Boolean(d))
+        .sort()
+        .reverse(),
   };
 }

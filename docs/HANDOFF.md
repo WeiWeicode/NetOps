@@ -2,9 +2,18 @@
 
 > 接手時先讀 `AGENT.md`,再讀 `docs/ARCHITECTURE.md`、`docs/IMPL-PLAN.md`。
 
+## 2026-11-14 AC7 AI 每日摘要(程式完成,待合併)
+
+**接手方式**:新討論串說「從 `NetOps/docs/HANDOFF.md`「2026-11-14 AC7」接手」。分支 `feature/ac7-daily-summary` 疊在 AC6 上,**合併順序 !93 → !94 → !95 → !96 → !97 → !98 → AC7 的 MR**。AC 全部批次到此完成。
+
+- **後端**:`modules/ai/daily-summary.ts`(排程:對帳每一輪 → 每日同步 → 背景 `kick()`;等每日同步結束才產生前一天;失敗隔 10 分鐘重試一次,仍失敗存 `failed`);`service.ts` 的 `dailySummary`(流量儀表板快取 + 前一天比較、四類安全事件總覽 → `core/explain.ts` 的 `dailyContext` / `DAILY_TASK`,非串流 `chatOnce`);存檔 `infra/store/pa.ts` 的 `saveAiDaily` / `readAiDaily` / `listAiDaily`(`palogs/ai-daily/`);`GET /ai/daily-summary`。設定 `NETOPS_AI_DAILY_SUMMARY`(test 開、prod / dev 關)。API.md §10.4。
+- **`FTP_SYNC_MINUTES`**:AQ4(正式區 C6 前沿用 FTP 舊路徑)下不能整個刪除;改成 `NETOPS_AI_SOURCE=clickhouse` 時一律當 0、啟動記 warn。C6 後正式區改 clickhouse 時,刪除 `config.ts` 的 `syncMinutes`、匯入器的定時同步、Compose 那一行與文件。
+- **前端**:流量總覽篩選列下方 `components/DailySummaryCard.vue`(`composables/useDailySummary.ts`):狀態標籤、日期選單、筆數、不完整提示、「今天的摘要產生失敗」、收合 / 展開;前一天還沒產生時每 5 分鐘再查。沿用 `netops.pa-dashboard.ai` 顯示,不新增權限代碼。`mock/ai.ts` 有假資料(11/12 失敗、11/11 不完整)。
+- **上架後(需求方)**:發佈 netops-api 路由草稿(新路徑 `GET /ai/daily-summary`);測試區連續 3 天 08:10 後確認流量總覽有前一天的摘要;AI 主機停機那天確認對帳與每日同步照常、畫面標示失敗。
+
 ## 2026-11-14 AC6 安全事件頁 AI 摘要(程式完成,待合併)
 
-**接手方式**:新討論串說「從 `NetOps/docs/HANDOFF.md`「2026-11-14 AC6」接手」。分支 `feature/ac6-ai-events` 疊在 AC5 上,**合併順序 !93 → !94 → !95 → !96 → !97 → AC6 的 MR**。下一步:AC7。
+**接手方式**:新討論串說「從 `NetOps/docs/HANDOFF.md`「2026-11-14 AC6」接手」。分支 `feature/ac6-ai-events` 疊在 AC5 上,**合併順序 !93 → !94 → !95 → !96 → !97 → AC6 的 MR**。下一步:AC7(已完成,見上)。
 
 - **後端**:`POST /ai/explanations` 加 `kind: 'events'`(`params { from, to? }` 同 `GET /pa-events/overview`);`modules/pa/ch-overview.ts` 的 `eventsForAi` 取威脅、URL 過濾、資料過濾、WildFire 四類總覽(沿用總覽快取,某類沒有資料只註明,四類都沒有回 404);資料整理 `core/explain.ts` 的 `eventsContext`(筆數 / KPI / 高峰在前,排行在後)。API.md §10.3。
 - **前端**:安全事件頁頁首「AI 摘要安全事件」對話框(期間 = 頁面目前期間,四類一起),回答下方四類筆數按鈕(點了切換類型);`explainNotices` 對 events 列出不完整 / 沒有資料的類型(不提示 FTP 對帳);`mock/ai.ts` 有假回答(WildFire 沒有資料;期間超過一天時 URL 過濾不完整)。

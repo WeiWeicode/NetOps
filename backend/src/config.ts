@@ -45,7 +45,7 @@ export interface FtpConfig {
   adDir: string;
   /** 本服務同時開啟的 FTP 連線上限(匯入與明細查詢共用;AGENT.md §6:test 1、prod 2) */
   maxConnections: number;
-  /** 自動同步間隔(分鐘),0 = 不自動同步 */
+  /** 自動同步間隔(分鐘),0 = 不自動同步;NETOPS_AI_SOURCE=clickhouse 時一律 0(AC7,只剩正式區 C6 前的 AI 舊路徑使用) */
   syncMinutes: number;
 }
 
@@ -69,6 +69,11 @@ export interface AiConfig {
    * 正式區在 C6(正式區 ClickHouse)之前沿用 ftp。未設定時依部署區:test 為 clickhouse,prod 與 dev 為 ftp(對正式區安全的值)
    */
   source: 'clickhouse' | 'ftp';
+  /**
+   * AI 每日摘要(IMPL-PLAN AC7;NETOPS_AI_DAILY_SUMMARY):每天對帳與每日同步(AC1)之後,自動產生前一天的摘要(流量總覽顯示)。
+   * 未設定時依部署區:test 開;prod 與 dev 關(正式區 C6 之前沒有 ClickHouse,C6 後再開)。另外要有 LLM_URL 與自動對帳才會跑
+   */
+  dailySummary: boolean;
   /** 每次送給 AI 的知識庫筆記最多幾個字(同舊版 KB_MAX_CHARS) */
   kbMaxChars: number;
   /** 同時進行的 AI 串流上限:全系統、每人(超過回 429,不回 5xx;S0 報告 §3.6) */
@@ -119,6 +124,8 @@ export interface Config {
   paTtlDays: { traffic: number; threat: number };
   /** 冷明細(C4,帳號 netops_cold);NETOPS_ARCHIVE_ENABLED 不是 1 時為 null(冷路由回 409 NETOPS_COLD_ARCHIVE_DISABLED) */
   clickhouseCold: { url: string; user: string; password: string; timeoutMs: number } | null;
+  /** 啟動時要寫進服務日誌的設定提醒(例:不再使用的設定);不含機密 */
+  startupWarnings?: string[];
 }
 
 /**
@@ -286,6 +293,7 @@ function loadAi(env: NodeJS.ProcessEnv, gwEnv: GwEnv): AiConfig {
     vectorSync: bool(env, 'VECTOR_SYNC'),
     ipLearn: { hour: int(env, 'IPLEARN_HOUR', -1, -1, 23), days: int(env, 'IPLEARN_DAYS', 7, 1, IPLEARN_MAX_DAYS), max: int(env, 'IPLEARN_MAX', 150, 1, 500), ttlDays: int(env, 'IPLEARN_TTL_DAYS', 90, 1, 3650) },
     source: loadAiSource(env, gwEnv),
+    dailySummary: boolDefault(env, 'NETOPS_AI_DAILY_SUMMARY', gwEnv === 'test'),
     kbMaxChars: int(env, 'KB_MAX_CHARS', 20000, 1000, 200000),
     maxStreams: int(env, 'AI_MAX_STREAMS', 6, 1, 50),
     maxStreamsPerUser: int(env, 'AI_MAX_STREAMS_PER_USER', 2, 1, 10),
@@ -331,16 +339,25 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, cwd?: string): 
   if (gateway.serviceCode !== SERVICE_CODE) throw new Error(`SERVICE_CODE 必須是 ${SERVICE_CODE}:${gateway.serviceCode}`);
   const port = Number(env.PORT ?? DEFAULT_PORT);
   if (!isGatewayPort(port)) throw new Error(`PORT 必須在 51200–51300(BACKEND-GUIDE.md §3):${env.PORT}`);
+  const ai = loadAi(env, gateway.gwEnv);
+  const ftp = loadFtp(env, gateway.gwEnv);
+  const startupWarnings: string[] = [];
+  // AC7(IMPL-PLAN):FTP 定時同步只剩 NETOPS_AI_SOURCE=ftp(正式區 C6 之前的 AI 舊路徑,AQ4「Keep old path」)用得到;
+  // clickhouse 來源時 PA 查詢走 ClickHouse、解密 / GlobalProtect / User-ID / AD 由每日同步(AC1)匯入,FTP_SYNC_MINUTES 不再使用
+  if (ftp && ai.source === 'clickhouse' && ftp.syncMinutes > 0) {
+    startupWarnings.push(`FTP_SYNC_MINUTES=${ftp.syncMinutes} 在 NETOPS_AI_SOURCE=clickhouse 時不使用(已改由對帳後每日同步),請從 .env 移除`);
+    ftp.syncMinutes = 0;
+  }
   return {
     gateway,
     monitor: loadMonitorEnv(gateway.gwEnv, env),
     port,
     logLevel: env.LOG_LEVEL ?? (gateway.gwEnv === 'dev' ? 'debug' : 'info'),
     dataDir: loadDataDir(env, gateway.gwEnv),
-    ftp: loadFtp(env, gateway.gwEnv),
+    ftp,
     // 掃描秒數上限 600:工作模式不受路由逾時限制,但仍要有上限(AGENT.md §7.3)
     search: { limit: int(env, 'PA_SEARCH_LIMIT', 2000, 1, 10000), seconds: int(env, 'PA_SEARCH_SECONDS', 180, 10, 600) },
-    ai: loadAi(env, gateway.gwEnv),
+    ai,
     redisUrl: loadRedisUrl(env, gateway.gwEnv),
     clickhouse: loadClickHouse(env, gateway.gwEnv),
     // 正式區 TRAFFIC 保留 30 天(CQ12);測試區 TTL 3 天,多的天數只是查不到
@@ -353,6 +370,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, cwd?: string): 
     dailySync: boolDefault(env, 'NETOPS_DAILY_SYNC', true),
     paTtlDays: loadPaTtlDays(env, gateway.gwEnv),
     clickhouseCold: loadClickHouseCold(env, gateway.gwEnv),
+    startupWarnings,
   };
 }
 

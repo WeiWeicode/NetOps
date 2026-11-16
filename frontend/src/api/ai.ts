@@ -233,8 +233,38 @@ export interface ExplainMeta {
   types?: ExplainEventType[];
 }
 
+/** AC7 每日摘要(GET /ai/daily-summary;docs/API.md §10.4) */
+export type DailySummaryState = 'disabled' | 'waiting' | 'running' | 'retrying' | 'done' | 'failed';
+export interface DailySummaryRecord {
+  day: string;
+  state: 'done' | 'failed';
+  tries: number;
+  at: string;
+  result: {
+    text: string;
+    model: string;
+    partial: boolean;
+    clipped: boolean;
+    contextChars: number;
+    counts: { sessions: number | null; threat: number | null; url: number | null; data: number | null; wildfire: number | null };
+  } | null;
+  error: { code: string; message: string } | null;
+}
+export interface DailySummaryStatus {
+  enabled: boolean;
+  at: string | null;
+  /** 今天要產生的日子(前一天) */
+  target: string;
+  state: DailySummaryState;
+  error: { code: string; message: string } | null;
+  summary: DailySummaryRecord | null;
+  days: { day: string; state: 'done' | 'failed' }[];
+}
+
 export const ai = {
   status: () => http.get<AiStatus>('/api/netops/ai/status'),
+  /** AC7 每日摘要:不帶 day = 最近一份完成的摘要 */
+  dailySummary: (day?: string) => http.get<DailySummaryStatus>('/api/netops/ai/daily-summary', day ? { query: { day } } : undefined),
   /** 期間分析:from / to 為 YYYY-MM-DD */
   analyze: (body: { from: string; to: string; think: boolean; question: string }, onEvent: (e: SseEvent) => void, signal?: AbortSignal) =>
     streamPost('/api/netops/ai/analyses', body, onEvent, signal),

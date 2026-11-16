@@ -934,6 +934,28 @@ AI 串流(§10.1)開始後的錯誤以 `error` 事件回傳 `{ code, message }`:
 - AC5 畫面:熱力圖頁首「AI 指出異常格」(`netops.pa-heatmap.ai`,對話框,送目前顯示的粒度 / 指標 / 日期);時段明細抽屜威脅類明細列「說明」(同抽屜的按鈕權限,面板開在抽屜內,期間 = 該時段);Log 明細查詢威脅結果列與明細對話框「AI 說明」(新按鈕 `netops.pa-search.ai`,`includes` `netops.ai.use`、`netops.pa-log.read`、`netops.kb.read`;期間 = 這次查詢的期間)。
 - AC6 畫面:安全事件頁頁首「AI 摘要安全事件」(新按鈕 `netops.pa-events.ai`,`includes` `netops.ai.use`、`netops.pa.read`、`netops.kb.read`;對話框,期間 = 頁面目前的期間,和選的類型無關)。
 
+### 10.4 AI 每日摘要(AC7,ARCHITECTURE D44 ②)— 批次 `feature/ac7-daily-summary`
+
+`GET /v1/ai/daily-summary?day=YYYY-MM-DD`(`netops.ai.use`,稽核 `meta`;`day` 省略 = 最近一份完成的摘要)。
+
+- **何時產生**:每天自動對帳(§5.3,`NETOPS_RECON_TIME`,預設 08:10)的每一輪之後、每日同步(§5.4)這一輪結束(完成、停止重試或未啟用)時,在背景產生**前一天**的摘要;不等 AI 回答,AI 主機無法使用不影響對帳與同步。同一時間只跑一個。
+- **送給模型的資料**:前一天的流量(同 `GET /pa/insight/traffic` 的快取,含和再前一天比較)+ 威脅、URL 過濾、資料過濾、WildFire 四類總覽(同 `kind: 'events'`),只有統計與排行(各段 4,000 字、合計 8,000 字上限),附 IP 對照(AQ2)與知識庫筆記;不送原始 log。某一段取不到時只在資料中註明、`partial: true`;兩段都取不到算失敗。模型用非串流呼叫(回答上限 20,000 字)。
+- **失敗**:重試一次(隔 10 分鐘以上,對帳的下一輪);仍失敗存成 `failed`,畫面標示「今天的摘要產生失敗」。完成與失敗都存檔(`infra/store` `palogs/ai-daily/YYYYMMDD.json`),重新啟動後不重做;重試次數只在記憶體(重新啟動後當天最多再試 2 次)。
+- **設定**:`NETOPS_AI_DAILY_SUMMARY`,未設定時 test 開、prod / dev 關(正式區 C6 之前沒有 ClickHouse,C6 後再開);另外要有 `LLM_URL` 與自動對帳。
+- **日誌**:只寫日期、次數、錯誤代碼與字數;摘要內容(含 IP 與姓名)不寫日誌與稽核。
+
+回應:
+
+| 欄位 | 說明 |
+| --- | --- |
+| `enabled`、`at` | 是否啟用;每天幾點(同對帳,未啟用 null) |
+| `target`、`state`、`error` | 今天要產生的日子(前一天)與狀態:`disabled`、`waiting`(等對帳 / 每日同步)、`running`、`retrying`(第一次失敗)、`done`、`failed`;`error { code, message }` 只放分類過的訊息 |
+| `summary` | `{ day, state, tries, at, result: { text, model, partial, clipped, contextChars, counts { sessions, threat, url, data, wildfire } } \| null, error }`;沒有時 null |
+| `days` | 有存檔的日子 `[{ day, state }]`(新的在前,最多 30 天) |
+
+- 畫面:流量總覽篩選列下方「AI 每日摘要」卡片(沿用 `netops.pa-dashboard.ai`,不新增權限代碼):狀態標籤、日期選單、筆數、資料不完整提示、預設收合 / 展開全文;回答經 DOMPurify。
+- **`FTP_SYNC_MINUTES`**:`NETOPS_AI_SOURCE=clickhouse` 時一律當 0(啟動記 warn);只剩 `ftp` 來源(正式區 C6 前的 AI 舊路徑,AQ4)使用。C6 後正式區改 clickhouse 時從 `.env` 與 Compose 移除。
+
 ## 11. IP 對照表 — 批次 `feature/ac3-ip-names`(IMPL-PLAN AC3,ARCHITECTURE D45)
 
 IP / 網段 → 使用者姓名、部門、設備名稱、設備類型、備註。姓名、部門屬個資:只給網管(`netops-admin`),稽核一律 `x-audit-level: meta`(不記內容),服務日誌不記內容;關鍵字搜尋用 POST(姓名不出現在網址與存取日誌)。存檔 `ipnames/ip-names.json`(經 `infra/store` 的 `listIpNames` / `saveIpNames`),以最新為準、不記歷史,上限 20,000 筆。第一版只支援 IPv4。

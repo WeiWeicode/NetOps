@@ -4,11 +4,17 @@
  *   連結一律另開分頁並加 rel;圖片只留同網域來源(避免外部追蹤圖片記錄讀者);不允許 download 屬性。
  *   使用本模組專用的 DOMPurify 實例,hook 不影響其他地方。知識庫筆記是資料,不是指令(不可被當成權限依據)。
  *   「~」改全形,避免被當成刪除線(同舊版)。
+ *   AI 回答不會有正當的 HTML:原始 HTML(含 <Name>、<threat_name> 之類的英文佔位符)一律轉成文字顯示,不交給 DOMPurify 整段清掉
+ *   (驗收報告 2026-11-16 §3.3-1:模型寫的英文佔位符被清成「如 , 等」)。
  */
 import createDOMPurify, { type DOMPurify } from 'dompurify';
-import { marked } from 'marked';
+import { Marked, marked } from 'marked';
 
 let purifier: DOMPurify | null = null;
+
+const escapeHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+/** AI 回答專用:原始 HTML(區塊與行內)當文字輸出 */
+const aiMarked = new Marked({ gfm: true, renderer: { html: ({ text, block }) => (block ? `<p>${escapeHtml(text.trim())}</p>\n` : escapeHtml(text)) } });
 
 function getPurifier(): DOMPurify {
   if (purifier) return purifier;
@@ -38,7 +44,8 @@ function getPurifier(): DOMPurify {
  *   不顯示圖片(顯示時會自動帶 Cookie 發 GET);不同網域的連結只留文字與網址(不能點),同網域照常另開分頁
  */
 export function renderMarkdown(text: string | null | undefined, opts: { ai?: boolean } = {}): string {
-  const html = marked.parse((text ?? '').replace(/~/g, '～'), { gfm: true, async: false });
+  const src = (text ?? '').replace(/~/g, '～');
+  const html = opts.ai ? aiMarked.parse(src, { async: false }) : marked.parse(src, { gfm: true, async: false });
   const out = getPurifier().sanitize(html, {
     USE_PROFILES: { html: true },
     FORBID_TAGS: ['style', 'form', 'input', 'button', 'iframe', ...(opts.ai ? ['img'] : [])],

@@ -8,7 +8,7 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import type { HeatReader, HeatRow, SliceData } from '../../src/infra/clickhouse/heat.js';
-import { clean, EXPLAIN_MAX_CHARS, sliceContext, threatInsightContext, trafficInsightContext, type SliceForAi, type ThreatInsightForAi, type TrafficInsightForAi } from '../../src/modules/ai/core/explain.js';
+import { clean, EXPLAIN_MAX_CHARS, EXPLAIN_PROMPT, sliceContext, threatInsightContext, trafficInsightContext, type SliceForAi, type ThreatInsightForAi, type TrafficInsightForAi } from '../../src/modules/ai/core/explain.js';
 import { createDashboardCache } from '../../src/infra/redis/cache.js';
 import { parseDay } from '../../src/modules/pa-heat/heat.js';
 import { fakeAiHost } from '../fixtures/fake-ai.js';
@@ -45,6 +45,10 @@ describe('AI 解讀的資料整理(純函式)', () => {
     assert.match(c.text, /篩選條件：IP = 10\.10\.1\.5/);
     assert.match(c.text, /連線數：200；阻擋（非 allow）：50（25\.0%）/);
     assert.match(c.text, /## Top 10 來源 IP（流量｜連線數）\n1\. 10\.10\.1\.5｜4\.0 KB｜150 次/);
+    // 驗收報告 §3.3-1:TRAFFIC 時段只有威脅筆數,沒寫明時模型會用 <名稱> 佔位符(畫面被當 HTML 清掉成「如 , 等」)
+    assert.match(c.text, /只有威脅筆數，沒有威脅名稱與類別/);
+    assert.ok(!sliceContext(sliceResult({ type: 'threat', top: { name: [{ key: 'X', count: 1 }] } })).text.includes('沒有威脅名稱與類別'));
+    assert.match(EXPLAIN_PROMPT, /不要用 <名稱>、\[類別\]、XXX 之類的佔位符/);
     assert.equal(c.clipped, false);
   });
 

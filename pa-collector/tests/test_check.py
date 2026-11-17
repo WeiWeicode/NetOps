@@ -52,6 +52,15 @@ def test_check_config_errors():
     assert "GW_ENV" in lines[0]
 
 
+def test_load_poll_prod_allows_insecure(tmp_path):
+    # 需求方 2026-11-17:正式區也可不驗證 PA-560 管理介面憑證;預設仍驗證
+    key = tmp_path / "k"
+    key.write_text("k")
+    base = {"GW_ENV": "prod", "PA_HOST": "h", "PA_API_KEY_FILE": str(key)}
+    assert load_poll({**base, "PA_TLS_INSECURE": "1"}).tls_insecure
+    assert not load_poll(base).tls_insecure
+
+
 def test_hint_certificate():
     assert "SAN" in hint("SSLCertVerificationError: certificate verify failed: IP address mismatch")
     assert load_poll({"GW_ENV": "test", "PA_HOST": "pa", "PA_API_KEY": "k"}).port == 443

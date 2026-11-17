@@ -2,9 +2,86 @@
 
 > 接手時先讀 `AGENT.md`,再讀 `docs/ARCHITECTURE.md`、`docs/IMPL-PLAN.md`。
 
+## 2026-11-17 收工:正式區 PA 轉送完成,明天對帳
+
+**接手方式**:新討論串說「從 `NetOps/docs/HANDOFF.md`「2026-11-17 收工」接手,做正式區對帳」。
+
+### 已完成(2026-11-17 08:30–08:49)
+
+- PA-560:`netops-forward` 的 threat / url / data / wildfire / decryption 加 `netops-http-prod`;traffic 只走 Syslog `netops-syslog`(內含 `netops-test` 10.10.130.124、`netops-prod` 10.10.130.122,TCP 51294,Custom Log Format 不變);刪除誤建的 **Syslog 類** profile `netops-http-prod`(HTTP 類同名 profile 保留);`interzone-default`、`intrazone-default` 確認已設 Log at Session End + `netops-forward`。
+- 主機 3 心跳(00:48 → 00:49 UTC):`received` 27,112 → 39,255(約 1.2 萬筆 / 分),`syslogOkAt`、`httpOkAt` 持續更新,`dropped` / `rejected` / `malformed` 0;測試區 Syslog 同時正常。
+- **教訓**:PA Syslog TCP 送一批後斷線,PA 沒有 `error 110` 也不重連;只 Commit 沒改到該 profile 不會重連 → 刪除 server 項目 Commit、再加回 Commit 才恢復。Preview Changes 的差異對齊會錯位,Custom Log Format 要在 GUI 確認。
+
+### 下一步(依序)
+
+1. 11-18:正式區對帳(一整天資料進 ClickHouse、`interzone-default` deny 有進、誤差 < 0.5%);測試區 AC1 / AC7 跨日驗收照下段。
+2. **(已完成 2026-11-17)測試區歷史已匯入正式區 ClickHouse**:需求方決定先匯入、對帳明天做。主機 2 匯出 → 主機 3 雜湊一致 → 需求方執行 INSERT。核對:正式區 08:30 前 traffic 20,022,979 筆、threat 405,008 筆(405,005 + 3 筆 11-16 Send Test Log),範圍 11-14 00:00 ~ 11-17 08:29:59;每小時彙總與熱力圖已由 MV 補上;主機 2、3 匯出檔已刪。11-16 11:30 前沒有 `interzone-default` deny(被阻擋數字偏低)。**對帳時注意**:11-17 當天正式區 = 08:30 前匯入 + 08:30 後自收,比對 FTP 時以 11-18 整天為準。**教訓**:Windows 對 WSL 下大檔複製(`/mnt/c`)或大檔串流 / 大量匯入期間,`wsl` 指令會逾時(0x8007274c),等幾分鐘自行恢復,容器不受影響,不要急著重啟 WSL。
+3. 查 PA 雲端 `tls-X509-validation` 是否改設定前就有(指令見下段第 2 步)。
+4. C6 驗收後:`NETOPS_AI_SOURCE=clickhouse`、移除 `FTP_SYNC_MINUTES`、`NETOPS_AI_DAILY_SUMMARY=1`(RUNBOOK-prod §4 第 4 步)。
+5. 文件:下段第 5 項,另補本段教訓到 PF F.4.1。
+
+## 2026-11-16 收工:正式區第二段進行中(紀錄)
+
+**接手方式**:(已被上段取代)。
+
+### 現況(主機 3)
+
+- **E5 核准、PA 專用 API 帳號已建立**(需求方 2026-11-16);專用帳號的 Key 已寫入 `/srv/giganexus/netops-secrets/pa_api_key`。
+- `netops.env`(備份 `netops.env.bak-stage1`):`NETOPS_PA_PIPELINE=1`、`PA_RECEIVE_ENABLED=1`、`PA_RECEIVE_PLAINTEXT=1`、`PA_ALLOWED_SOURCES=192.168.64.1/32`(`giganexus-netops-prod_pa-ingress` 閘道,網段 `192.168.64.0/20`)、`PA_POLL_ENABLED=0`、`PA_QUERY_ENABLED=0`、`PA_HOST=10.10.115.35`、`PA_CA_FILE=/run/pa-tls/pa-mgmt-ca.pem`(輪詢未開,目前不使用)。
+- `deploy-prod`(main pipeline 1018 Retry)成功:`netops-clickhouse`(`apply-schema.sh prod`)、`netops-ingest`、`netops-pa` 都 healthy;`netops-pa` 日誌「接收端點已啟用:HTTP :51293、Syslog :51294;允許來源 192.168.64.1/32」。
+- Windows(系統管理員):portproxy `10.10.130.122:51293/51294 → 127.0.0.1`;防火牆規則 `NetOps PA log 51293-51294`(只允許 `10.10.115.35`);`Docker-WSL2-AllServices-TCP` 的 port 清單不含 51293 / 51294;舊系統 5121、443 測試正常。
+
+### 需求方 2026-11-16 決定(照做,不要重新討論)
+
+- **正式區照測試區方式明文接收**(需求方原話:「改用連測試機的方式 post給正式區好了 不要那麼複雜」):HTTP 51293、Syslog TCP 51294,`PA_RECEIVE_PLAINTEXT=1`。來源只靠 Windows 防火牆與 HTTP Token(同測試區,PF F.4.1)。
+- **正式區輪詢先不開**(`PA_POLL_ENABLED=0`):即時監控「設備狀態」在正式區不顯示;log 轉送、ClickHouse、總覽、安全事件、明細、熱力圖不受影響。
+- NetOps PA CA(!107,`deploy/host3-pa-pki.sh`):CA 不加名稱限制、私鑰不加密不備份、`netops-pa-tls` 權限維持、`deploy-prod` 擋 CA 目錄掛進容器。
+
+### PA-560 已做 / 未做
+
+- **已做**:Permitted IP 原本就有 `10.10.130.122`;`netops-http-prod`(由 `netops-http` Clone,Server `10.10.130.122` HTTP 51293、正式區 Token)Send Test Log 成功(`Successfully sent`)。`netops-syslog` 的 `netops-prod`(`10.10.130.122` TCP 51294)是否已加:**未確認**。
+- **未做**:Objects › Log Forwarding › `netops-forward` 每一列 HTTP 欄位加 `netops-http-prod`;**Commit**(PA 上可能留有未 Commit 的候選設定,接手時先在 Commit 視窗 Preview Changes 看差異)。
+- **Commit 後驗證**:`docker exec giganexus-netops-prod-netops-redis-1 redis-cli --no-auth-warning hgetall netops:pa:heartbeat` 隔 1 分鐘兩次,`received` 增加、`dropped` / `rejected` / `malformed` 為 0;正式區即時監控有 TRAFFIC;PA System log 有 `syslog connection failed … error 110` 時對 `netops-syslog` 再 Commit。
+
+### 管理介面憑證(已還原,不要再套)
+
+- 主機 3 已建 CA「GigaNexus NetOps PA CA (prod)」(指紋 `9E:4F:31:D4…43:79:B4`,到期 2036-11-13)與接收端 `server.crt`(SAN `IP:10.10.130.122`,到期 2029-02-18);改明文後 `PA_TLS_CERT_FILE` / `PA_TLS_KEY_FILE` 已從 `netops.env` 移除,檔案留著未用。
+- PA 上已匯入 `netops-pa-ca-prod`(Trusted Root)、`pa-mgmt-prod`(CSR 簽發,指紋 `B7:99:02:16…41:0E:F5`,到期 2029-02-18)、SSL/TLS Service Profile `netops-mgmt-prod`。
+- **把 `netops-mgmt-prod` 套到管理介面並 Commit(job 22801)後,管理網頁 443 拒絕連線**(SSH 22 正常、`websrvr` 有重啟);已在 SSH `delete deviceconfig system ssl-tls-service-profile` + commit 還原,管理網頁恢復。原因未查(可能是憑證欄位不符 PAN-OS 管理網頁要求,例如缺 Key Usage)。管理介面原本沒有設定 SSL/TLS Service Profile(出廠憑證)。
+- PA System log 16:35 有大量 `tls-X509-validation`(PAN-DB / MLAV / DNS Security 雲端 `self-signed certificate in certificate chain`);**是否在 16:24 改設定前就有:未確認**。待需求方查 `show log system subtype equal tls start-time equal 2026/11/16@15:00:00 end-time equal 2026/11/16@16:20:00`;改設定前就有 → PA 既有問題,交網管。
+
+### 下一步(依序)
+
+1. PA:確認 `netops-syslog` 有 `netops-prod`;`netops-forward` 加 `netops-http-prod`;Preview Changes 後 Commit;主機 3 驗證心跳。
+2. 查雲端憑證錯誤是否改設定前就存在(上面指令),結果寫進本段。
+3. 11-17 08:10 後:正式區對帳(`interzone-default` deny 進 ClickHouse、誤差 < 0.5%);測試區 AC1 / AC7 跨日驗收照下段。
+4. C6 驗收後:`NETOPS_AI_SOURCE=clickhouse`、移除 `FTP_SYNC_MINUTES`、`NETOPS_AI_DAILY_SUMMARY=1`(RUNBOOK-prod §4 第 4 步);E2 核准後歸檔。
+5. 文件:RUNBOOK-prod §4 / PF F.4.1、G4、G7 補「正式區明文、輪詢不開」與管理介面憑證失敗紀錄;IMPL-PLAN C6 狀態;PROJECT-MAP 補 `host3-pa-pki.sh`。
+
+### 清理(需求方)
+
+- 開發機 `D:\檔案分享\程式碼\GigaNexusAI\NetOps\pa-pki\`、`pa-pki-tmp\`(根目錄)不要 commit,用完刪除(只含公開憑證、CSR 與腳本)。
+- 主機 3 `C:\Users\user\pa-pki\`、`/root/netops-deploy/` 用完刪除。
+
+## 2026-11-16 正式區第一段上架完成
+
+**接手方式**:第二段(C6,PA log 管線)見上段「2026-11-16 收工」。
+
+- **已上線範圍(主機 3,`https://giganexus.gigasolar.com.tw/netops/`)**:`netops-api`、`/netops/` 前端、`netops-redis`、`netops-kb-backup`。
+- **開關**:`NETOPS_PA_PIPELINE=0`(`netops-clickhouse`、`netops-ingest`、`netops-pa` 不啟動,PA 接收留第二段);AI 走 FTP(`NETOPS_AI_SOURCE=ftp`);`FTP_SYNC_MINUTES=60`;FTP 目錄沿用 `server/.env.example` 預設值(需求方 2026-11-16 確認,表格見 RUNBOOK-prod §1)。因沒有 ClickHouse,流量總覽、安全事件、明細查詢、熱力圖在第二段前無法使用(D43)。
+- **MR**:NetOps !104(正式區 CI:`build-prod` / `deploy-prod` / `rbac-prod`)、!105(`develop` → `main`);Gateway !26(`develop` → `main`,正式區 Nginx 加 `/netops/`)、!27(`super-admin-grants` 補齊 `netops-admin` 28 項)。
+- **舊版 IIS**:保留在標籤 `legacy-iis`(`d07847c`),照常運作;`main` 改為正式區新版(ARCHITECTURE D12)。
+- **預設 `netops-admin`**:S112009、S094009、S114010、S111003。
+- **上架時遇到的問題與處理**:
+  1. 正式區 Gateway `main` 沒有 `/netops/` location → Gateway !26。
+  2. 主機 3 的 Gateway 共用目錄(`/srv/giganexus/shared/giga-api-gateway-bff/deploy/`)沒有 `gateway-apps.yaml`、`super-admin-grants*` 檔案:正式區 deploy 不會複製 `deploy/`,要從 Gateway `main` 手動複製(步驟寫在 RUNBOOK-prod §3 第 8 步、Gateway DEPLOYMENT §3.5.1)。
+  3. 超級管理員缺 NetOps 權限,指派 `netops-admin` 被防提權檢查擋下 → Gateway !27 補齊 28 項後重新套用。
+- **第二段待辦**:照 `deploy/RUNBOOK-prod.md` §4 與 IMPL-PLAN C6;`pa_api_key` 第二段前要換成專用帳號的 Key;**E2(NAS 150 GB / 年)、E5(主機 3 磁碟預留 20 GB)核准**;PA-560 憑證與接收端點憑證(RUNBOOK-prod §4 前提)。D2 第 3、4 步(知識庫複製、新舊數字核對與通知使用者)狀態:未確認。
+- **測試區待續照舊**:11-17 起 AC1 / AC7 跨日驗收、6b 對帳與 6c evidence 比對(見下段)。
+
 ## 2026-11-16 AC 驗收與修正
 
-**接手方式**:新討論串說「從 `NetOps/docs/HANDOFF.md`「2026-11-16 AC 驗收與修正」接手,做正式區上架」。報告 `docs/test-reports/2026-11-16-ac-uat.md`。
+**接手方式**:(已被上段取代)原寫「從「2026-11-16 AC 驗收與修正」接手,做正式區上架」;正式區第一段已完成,測試區待續與第二段看上段與下列。報告 `docs/test-reports/2026-11-16-ac-uat.md`。
 
 - **已完成**:!93–!99(AC1–AC7)合併上線測試區;驗收 !100(**通過 16 / 不通過 1**,另 1 項未測、2 項跨日待續);修正 **!101**(每日同步中斷判定:FTP 連續 2 天以上沒檔的類型不擋當天完成,API.md §5.4、ARCHITECTURE D43 / D44)與 **!102**(AI 回答原始 HTML 轉文字、時段資料註明沒有威脅名稱並禁止佔位符,API.md §10.3)已在測試區驗證。
 - **不通過項目 6b(對帳誤差 < 0.5%)的原因與處理**:驗收報告 §3.1。**是 PA 設定問題,不是程式**:預設規則 `interzone-default`(Deny)沒套 Log Forwarding `netops-forward`;需求方 2026-11-16 11:30 在 PA 改套並 Commit,**11:31 起 ClickHouse 收得到**(PA-FORWARDING-SPEC D.1、G11)。TRAFFIC 每天約由 350 萬增為 730 萬筆(×2.1)。
@@ -18,7 +95,7 @@
 
 **測試區待續**:11-17 起 AC1 / AC7 跨日驗收(每日同步卡片、流量總覽前一天摘要)與 6b 對帳(誤差 < 0.5%)、6c evidence 比對,上架正式區不等這些(上架與測試區驗收並行,結果補在本段)。
 
-### 正式區上架(下一步,依序)
+### 正式區上架清單(紀錄;第一段已於 2026-11-16 完成,見最上段;第二段仍照此清單)
 
 只整理既有文件已寫的前提,沒有新決策;「文件未記載,上架時確認」= 查不到,不要自己補數值。出處縮寫:IP = IMPL-PLAN.md、API = API.md、PF = PA-FORWARDING-SPEC.md、CG = PA-LOG-CLICKHOUSE-GUIDE.md。
 

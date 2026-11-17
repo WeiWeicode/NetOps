@@ -99,7 +99,7 @@
 - 本 repo 的 GitLab remote 是 `origin`(`giganexus/NetOps`);下指令前仍先看 `git remote -v`。
 - 開發在工作分支(`feature/*`、`fix/*`、`docs/*`、`refactor/*`),從最新的 `origin/develop` 開。開工第一步 `git fetch` 並回報落後基準分支幾個 commit。
 - 只推送工作分支;`develop`、`main` **只透過 GitLab Merge Request 由 Maintainer 合併**。AI 不得推送 `develop` / `main`、不得 force push。
-- **切換前 `main` 維持舊 IIS 版本**(ARCHITECTURE D12):接入 Gateway 的程式只進 `develop`;舊版緊急修正進 `main` 後,再合回 `develop`。
+- **`main` 為正式區新版**(2026-11-16 起,ARCHITECTURE D12):`develop` → `main` 經 MR 由 Maintainer 合併,`main` pipeline 的 `build-prod` / `deploy-prod` / `rbac-prod` 部署主機 3。**舊版 IIS 以標籤 `legacy-iis`(`d07847c`)保留**,舊版緊急修正從該標籤另開分支。
 - 合併遇到衝突時 AI 立即停止,依 `../AGENT.md` §9.3 列出影響,不自行解衝突。
 - 提交前確認 diff 只含本次任務的檔案,不提交 `.env*` 與任何機密;提交訊息用 `<type>(<scope>): <中文說明>`。
 
@@ -110,7 +110,7 @@
 | 項目 | 內容 |
 | --- | --- |
 | 做什麼 | 資訊網通管理系統:PA-560 防火牆 log(流量總覽、安全事件、明細查詢、**即時監控**)、AD 事件記錄、網通知識庫、AI 分析與問答。2026-11-04 取消 AI 中控台:**AI 搬進新版**(A1,D23);PA 即時監控用 pan-os-python + Redis(R1,D19);不寫關聯式資料庫(D20)。**2026-11-10 核准 PA log 寫 ClickHouse**(C0–C6,D27–D33):TRAFFIC 與威脅類原始 log 存 NetOps 自有的 `netops-clickhouse`,冷資料歸檔 NAS。細節見 `docs/PA-LIVE-PLAN.md`、`docs/PA-LOG-CLICKHOUSE-GUIDE.md` |
-| 狀態 | **D1 已上測試區**(`backend/`、`frontend/` 經 Gateway);舊版根目錄 `server/`、`src/` 仍在 IIS `/NetOps` 運作。進度看 `docs/HANDOFF.md` |
+| 狀態 | **D1 已上測試區**(`backend/`、`frontend/` 經 Gateway);**2026-11-16 正式區第一段上線**(`netops-api`、`/netops/`、redis、kb-backup;PA log 管線留第二段);舊版根目錄 `server/`、`src/` 仍在 IIS `/NetOps` 運作。進度看 `docs/HANDOFF.md` |
 | 系統代碼 / SPA 子路徑 | `netops` / `/netops/` |
 | 服務代碼 / port | `netops-api` / **51292**(Gateway BACKEND-GUIDE §3.3 登記中,不可自行換 port) |
 | API | 對外 `/api/netops/*`,後端 `/v1/*` |

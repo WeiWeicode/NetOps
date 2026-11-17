@@ -1,10 +1,10 @@
 /**
- * 戰情室 API(WR-1,docs/WARROOM-PLAN.md §3):/v1/pa-live/warroom,權限 netops.pa-realtime.read。
+ * 戰情室 API(WR-1、WR-2,docs/WARROOM-PLAN.md §3):/v1/pa-live/warroom、/v1/pa-live/risk,權限 netops.pa-realtime.read。
  * 只做驗證、權限宣告與格式轉換;聚合在 warroom.ts。回應只有統計與 IP(與 /pa-live/top 同等級),不含原始明細。
  */
 import type { FastifyPluginAsync } from 'fastify';
 import { looseObject } from '../../shared/schemas.js';
-import { WARROOM_MINUTES, type WarroomService } from './warroom.js';
+import { RISK_MINUTES, WARROOM_MINUTES, type WarroomService } from './warroom.js';
 
 const PERMISSION = 'netops.pa-realtime.read';
 
@@ -60,6 +60,43 @@ const warroomRoutes: FastifyPluginAsync<{ warroom: WarroomService }> = async (ap
       },
     },
     async (req) => warroom.warroom(req.query.minutes ?? 5),
+  );
+
+  app.get<{ Querystring: { minutes?: number } }>(
+    '/v1/pa-live/risk',
+    {
+      config: { ipNames: true },
+      schema: {
+        operationId: 'netops.pa-live.risk',
+        summary: '即時監控戰情室:近一小時高風險統計',
+        description:
+          '最近 minutes 分鐘(15 / 60,預設 60)的威脅數 threats、TRAFFIC 阻擋數 denies、Critical 數 critical(每分鐘統計,精確)、攻擊來源數 attackSources(合併每分鐘前 200 名的不重複來源數;attackSourcesLowerBound 為 true 時是下限,畫面標示 ≥)、' +
+          'topThreats(name、severity、count)、topSources(key、label、country、count、denyRatio)。severity 與 denyRatio 來自威脅明細樣本(最多 5000 筆,樣本內沒有為 null)。' +
+          '結果快取 60 秒(partial 不快取)。Redis 不可用時回 200、partial true、數值為 null 並附 message,不回假資料。',
+        tags: ['PA 即時監控'],
+        'x-permission': PERMISSION,
+        'x-gherkin': [
+          '場景: 查詢近一小時高風險統計',
+          '  假如 最近一小時有 critical 威脅',
+          '  當 呼叫 GET /api/netops/pa-live/risk?minutes=60',
+          '  那麼 回應 200 且 partial 為 false',
+          '  而且 critical 大於 0',
+          '  而且 topThreats 依 count 由大到小,每筆有 name、severity、count',
+          '',
+          '場景: Redis 連不上時明確標示',
+          '  假如 netops-redis 停止',
+          '  當 呼叫 GET /api/netops/pa-live/risk',
+          '  那麼 回應 200 且 partial 為 true,threats 為 null',
+        ].join('\n'),
+        querystring: {
+          type: 'object',
+          additionalProperties: false,
+          properties: { minutes: { type: 'integer', enum: [...RISK_MINUTES], default: 60 } },
+        },
+        response: { 200: looseObject('{ generatedAt, minutes, partial, threats, denies, attackSources, critical, topThreats, topSources, sample, message? }(WARROOM-PLAN §3 WR-2)') },
+      },
+    },
+    async (req) => warroom.risk(req.query.minutes ?? 60),
   );
 };
 

@@ -1,0 +1,103 @@
+# PA 即時監控戰情室(WR)規劃
+
+> 狀態:規劃(需求方 2026-11-17 定稿樣稿 v5)。樣稿:[`docs/mockups/warroom-v5.html`](mockups/warroom-v5.html)(瀏覽器直接開,資料全為假資料)。
+> 頁面:`/netops/firewall/live`(正式區 `https://giganexus.gigasolar.com.tw/netops/firewall/live`)。
+> 上位文件:`docs/PA-LIVE-PLAN.md`(R1 即時監控)、`docs/PA-LOG-CLICKHOUSE-GUIDE.md`、`docs/ARCHITECTURE.md`。本文件的待決事項定案後,決策併入 ARCHITECTURE。
+
+## 1. 目標
+
+把即時監控做成「戰情室」畫面:參考 Vizceral 的視覺邏輯,防火牆在中央、外部來源在左、內部網段在右,用**粒子密度 + 顏色**表示流量與阻擋,取代折線圖。現有 R1 的收集器、Redis、SSE 串流沿用,不改收集器。
+
+## 2. 畫面區塊與資料來源
+
+| # | 區塊(樣稿位置) | 內容 | 資料來源 | 現況 |
+| --- | --- | --- | --- | --- |
+| A | 頂部 KPI | 吞吐量、連線數、新連線/秒、阻擋/分、威脅/5 分、DP CPU | `GET /pa-live/snapshot`(既有)+ WR-1 | 阻擋/分、威脅/5 分要新增 |
+| B | 左側節點 | 外部來源:依**國家**聚合 + Top 攻擊 IP;大小=5 分鐘連線數,顏色=阻擋比例 | WR-1 | **新增**;國家欄位見 Q2 |
+| C | 中央核心 | 六角盾 + DP 負載環、吞吐量弧(滿格 1 Gbps)、連線數弧(滿格 64K)、阻擋/新連線、log 類型衛星、擴散波(頻率=新連線/秒)、阻擋時閃紅 | snapshot + WR-1 | 滿格值改設定(Q5) |
+| D | 右側節點 | 內部網段(VLAN / 核心服務);大小=5 分鐘連線數 | WR-1 | **新增**;網段對照見 Q3 |
+| E | 連線與粒子 | 每條「來源→防火牆→網段」的每秒連線數、允許/阻擋/威脅比例;前端依比例產生粒子 | WR-1(比例)+ SSE(實際事件抽樣) | **新增** |
+| F | 右欄即時事件 | 阻擋 / 允許 / 威脅事件逐筆 | SSE `/pa-live/stream`(既有) | 沿用 |
+| G | 上方 AI 分析框 | 每整點自動分析近一小時;可手動「立即分析」;顯示時間、自動/手動、模型 | WR-3 | **新增** |
+| H | 下方高風險統計 | 近一小時:威脅數、阻擋數、攻擊來源 IP 數、Critical 數;Top 威脅類型、Top 攻擊來源 | WR-2 | **新增** |
+| I | 底部 TRAFFIC LOG | 完整欄位表格(時間、動作、來源、國家、目的、區段、Port、App、規則、Bytes、Session);篩選全部/阻擋/允許/威脅、暫停;點節點同步篩選;最多 200 筆 | SSE(既有)+ WR-1 的區段對照 | 區段、國家欄位要補 |
+| J | 左側說明 | 圖例與操作說明,可收摺(記在 localStorage),收摺後中央圖放大 | 前端 | 純畫面 |
+
+互動:滑過節點顯示明細(5 分鐘連線、阻擋比例、Top 目的、Top App);點節點聚焦(其他淡出、Log 同步篩選);點空白取消。
+
+## 3. 後端工作(Claude)
+
+API 都掛在既有模組,權限沿用 `netops.pa-realtime.read`(AI 手動執行見 WR-3)。行為變更依 AGENT §4:`docs/API.md` → OpenAPI `x-gherkin` → 測試。
+
+### WR-1 戰情室聚合 `GET /v1/pa-live/warroom?minutes=5`
+
+- 回應:`{ generatedAt, minutes, partial, sources[], segments[], links[], kpis }`
+  - `sources[]`:`{ id, kind: 'country'|'ip'|'other', label, conn, deny, threat, topDst[], topApp[] }`;國家取前 N(預設 8)、Top 攻擊 IP 取前 2–3(阻擋比例 ≥ 門檻),其餘併成「其他」。
+  - `segments[]`:`{ id, kind: 'vlan'|'service', label, icon, conn, bytes, threat }`。
+  - `links[]`:`{ source, segment, conn, allow, deny, threat }`(每秒速率,前端用來決定粒子密度與顏色)。
+  - `kpis`:`{ denyPerMin, threat5m }`(其他 KPI 用 snapshot)。
+- 資料:Redis TRAFFIC 統計(1 天)+ threat 統計;國家依 Q2、網段依 Q3。
+- 快取 2–5 秒(多人同時開戰情室不重算);Redis 不可用時回 `partial: true`,不回假資料(AGENT §5)。
+- SSE 事件補 `segment`、`country` 兩個衍生欄位(後端計算,不改收集器欄位,符合 D28)。
+
+### WR-2 近一小時高風險統計 `GET /v1/pa-live/risk?minutes=60`
+
+- 回應:`{ threats, denies, attackSources, critical, topThreats[{name,severity,count}], topSources[{key,label,count,denyRatio}], partial }`。
+- 資料:Redis threat / traffic 統計(threat 保留 2 天,足夠);ClickHouse 不可用時不影響。快取 60 秒(畫面每分鐘更新)。
+
+### WR-3 AI 每小時分析
+
+- 排程:程序內每整點(`HH:00`,台北時間)跑一次,分析「上一個整點到現在」;沿用 `modules/ai` 與 `infra/llm`(AI 主機 `LLM_URL`),只送 WR-1 / WR-2 的**彙整統計**,不送原始 log(AGENT §7.4)。
+- 結果經 `infra/store` 存檔(保留天數見 Q4),日誌不寫內容(比照 daily-summary)。
+- API:
+  - `GET /v1/ai/hourly-insight`(最新一筆;可帶 `hour` 查歷史):`{ hour, text, model, trigger: 'auto'|'manual', partial, status }`。
+  - `POST /v1/ai/hourly-insight/run`:手動執行,送出工作 → 查結果 / SSE 逐字回傳(沿用 `ai/sse.ts`);同一時間只跑一個、冷卻 5 分鐘;權限 `netops.ai.use`(畫面按鈕節點見 Q4)。
+- AI 主機不可用:存 `failed`,畫面顯示「本小時分析失敗」,不影響其他區塊。
+
+### WR-4 前端邏輯層(Claude)
+
+- `frontend/src/api/warroom.ts`:WR-1、WR-2、WR-3 的呼叫與型別。
+- `frontend/src/composables/useWarroom.ts`:輪詢 WR-1(5 秒)/ WR-2(60 秒)、整合 snapshot 與 SSE;輸出畫面要的 `nodes`、`links`、`rates`、`events`、`logs`(含篩選、暫停、聚焦狀態);頁面不直接 fetch。
+- `useWarroomAi.ts`:讀最新分析、手動執行、逐字串流狀態;依權限決定按鈕是否可用。
+- **mock 模式**:composable 提供假資料來源(對應樣稿的隨機資料),讓 Gemini 在後端完成前就能做畫面。
+- 測試:composable 單元測試(篩選、聚焦、速率換算、斷線重連、partial 標示)。
+
+## 4. 前端畫面(Gemini)
+
+依樣稿 v5 實作,只用 WR-4 的 composable,不自行 fetch、不寫權限判斷(AGENT「Gemini 寫前端頁面與元件」)。
+
+| 元件 | 內容 |
+| --- | --- |
+| `pages/firewall/Live.vue`(或 Q1 決定的新頁) | 版面組合 |
+| `components/warroom/WarroomCanvas.vue` | Canvas 繪製:節點(線條圖示、六角/圓、旋轉光弧、危險脈衝)、連線、粒子拖尾、阻擋火花、中央核心全部動畫;只讀 composable 給的資料與速率 |
+| `components/warroom/AiPanel.vue` | 上方 AI 分析框(光球、逐字顯示、立即分析按鈕) |
+| `components/warroom/RiskPanel.vue` | 下方高風險統計 |
+| `components/warroom/EventFeed.vue`、`TrafficLogTable.vue`、`LegendPanel.vue` | 右欄事件、底部 Log 表、左側可收摺說明 |
+| 元件測試 | 自己負責的元件 |
+
+注意:Canvas 動畫要在分頁不可見時暫停(`requestAnimationFrame` 本來就會)、粒子數設上限(建議 ≤ 1500),長時間掛在電視牆不可記憶體成長。需要新資料或狀態時寫在 MR 說明交給 Claude。
+
+## 5. 批次與順序
+
+| 批 | 內容 | 負責 | 依賴 |
+| --- | --- | --- | --- |
+| WR-0 | 本計畫 + 樣稿;待決事項定案 | Claude 主串 / 需求方 | — |
+| WR-1 | 聚合 API、網段對照、SSE 衍生欄位 | Claude(Opus 子任務) | Q2、Q3 |
+| WR-2 | 高風險統計 API | Claude(與 WR-1 同一子任務、堆疊分支) | WR-1 |
+| WR-4 | 前端 api / composable + mock 模式 | Claude | WR-1 介面定稿(可先依本文件) |
+| WR-5 | 戰情室畫面與元件 | **Gemini** | WR-4 的 mock 模式 |
+| WR-3 | AI 每小時分析(排程、存檔、API) | Claude | Q4 |
+| WR-6 | 整合、測試區驗收、測試報告 | Gemini 執行測試寫報告;Claude 修正 | 全部 |
+| WR-7 | 文件(API.md、PROJECT-MAP、HANDOFF、ARCHITECTURE 決策) | Claude(Sonnet 子任務) | 全部 |
+
+WR-4 完成後即可交給 Gemini;WR-3 與 WR-5 可並行。
+
+## 6. 待決事項
+
+| # | 問題 | 建議 |
+| --- | --- | --- |
+| Q1 | 戰情室取代現有 `/firewall/live` 還是另開頁面? | 取代現頁;現有的收集器狀態、測試區暫停開關、明細查詢移到收摺的「系統狀態」抽屜 |
+| Q2 | 國家資料來源:Redis 即時 log 沒有國家欄位(ClickHouse 有 `src_country`) | 後端用離線 GeoIP 資料庫(例如 MaxMind GeoLite2 / DB-IP Lite,放映像內,不連外)查詢並快取;不改收集器 |
+| Q3 | 內部網段(VLAN / 服務)對照從哪來? | 新增設定檔 `segments`(CIDR → 名稱、類型、圖示),經 `infra/store` 讀取,網通提供清單;之後可在畫面維護 |
+| Q4 | AI 每小時分析:保留多久?手動執行權限綁哪個按鈕? | 保留 7 天;新增按鈕節點 `netops.pa-live.ai`(includes `netops.ai.use`) |
+| Q5 | 吞吐量 / 連線數儀表的滿格值 | 設定值(預設 1 Gbps / 64K,依 PA-560 規格調整) |

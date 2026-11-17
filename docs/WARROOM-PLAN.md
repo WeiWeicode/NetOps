@@ -50,7 +50,7 @@ API 都掛在既有模組,權限沿用 `netops.pa-realtime.read`(AI 手動執行
 - 排程:程序內每整點(`HH:00`,台北時間)跑一次,分析「上一個整點到現在」;沿用 `modules/ai` 與 `infra/llm`(AI 主機 `LLM_URL`),只送 WR-1 / WR-2 的**彙整統計**,不送原始 log(AGENT §7.4)。
 - 結果經 `infra/store` 存檔(只留最新一筆,Q4),日誌不寫內容(比照 daily-summary)。
 - API:
-  - `GET /v1/ai/hourly-insight`(最新一筆;可帶 `hour` 查歷史):`{ hour, text, model, trigger: 'auto'|'manual', partial, status }`。
+  - `GET /v1/ai/hourly-insight`(只有最新一筆,Q4):`{ hour, text, model, trigger: 'auto'|'manual', partial, status }`。
   - `POST /v1/ai/hourly-insight/run`:手動執行,送出工作 → 查結果 / SSE 逐字回傳(沿用 `ai/sse.ts`);同一時間只跑一個、冷卻 5 分鐘;權限 `netops.ai.use`(畫面按鈕節點見 Q4)。
 - AI 主機不可用:存 `failed`,畫面顯示「本小時分析失敗」,不影響其他區塊。
 

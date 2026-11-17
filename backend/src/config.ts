@@ -96,6 +96,8 @@ export interface Config {
   ai: AiConfig;
   /** PA 即時監控的 netops-redis(R1,只讀);dev 未設定時為 null(即時監控回 424 / unavailable),test / prod 必填 */
   redisUrl: string | null;
+  /** 戰情室離線 GeoIP 資料庫(DB-IP Country Lite .mmdb,WARROOM-PLAN Q2);映像內預設 /app/geoip/dbip-country-lite.mmdb,未設定為 null(國家欄位停用) */
+  geoipDb: string | null;
   /**
    * netops-clickhouse 唯讀查詢(C3,帳號 netops_reader)。PA 總覽、安全事件、明細只查 ClickHouse(ARCHITECTURE D43),
    * test / prod 必填;dev 未設定時為 null(這些 API 回 503)
@@ -359,6 +361,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, cwd?: string): 
     search: { limit: int(env, 'PA_SEARCH_LIMIT', 2000, 1, 10000), seconds: int(env, 'PA_SEARCH_SECONDS', 180, 10, 600) },
     ai,
     redisUrl: loadRedisUrl(env, gateway.gwEnv),
+    geoipDb: str(env, 'GEOIP_DB') || null,
     clickhouse: loadClickHouse(env, gateway.gwEnv),
     // 正式區 TRAFFIC 保留 30 天(CQ12);測試區 TTL 3 天,多的天數只是查不到
     chSummary: { days: int(env, 'NETOPS_CH_SUMMARY_DAYS', 30, 1, 92), minutes: int(env, 'NETOPS_CH_SUMMARY_MINUTES', 5, 0, 60) },

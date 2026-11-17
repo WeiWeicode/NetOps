@@ -75,7 +75,10 @@ const formatCursor = (c: Partial<Record<LogType, string>>) =>
     .map(([t, id]) => `${t}:${id}`)
     .join(',');
 
-const paLiveLiveRoutes: FastifyPluginAsync<{ live: PaLiveService; stream?: LiveStreamOptions }> = async (app, { live, stream: opts = {} }) => {
+/** SSE logs 事件每筆的衍生欄位(戰情室 WR-1:country、segment;D28 不改收集器欄位,只在送出前加) */
+export type LogEnricher = <T extends Record<string, unknown>>(item: T) => T;
+
+const paLiveLiveRoutes: FastifyPluginAsync<{ live: PaLiveService; stream?: LiveStreamOptions; enrich?: LogEnricher }> = async (app, { live, stream: opts = {}, enrich }) => {
   const heartbeatMs = opts.heartbeatMs ?? 15_000;
   const pollMs = opts.pollMs ?? 1_000;
   const snapshotMs = opts.snapshotMs ?? 10_000;
@@ -321,7 +324,7 @@ const paLiveLiveRoutes: FastifyPluginAsync<{ live: PaLiveService; stream?: LiveS
         operationId: 'netops.pa-live.stream',
         summary: '即時監控串流(SSE)',
         description:
-          'Server-Sent Events:連線後立即送 open;每 10 秒 snapshot(同 GET /snapshot);有新 log 時每秒檢查一次並送 logs(types 指定的類型,預設 traffic,threat;可依 ip、port、action 篩選;每個類型每秒最多讀 1500 筆,一個 logs 事件最多 200 筆、較多時分成數個事件,只有最後一個帶 id;跟不上時跳到最新並帶 skipped);每 15 秒 heartbeat。' +
+          'Server-Sent Events:連線後立即送 open;logs 每筆另有衍生欄位 country(外部端 IP 的國家代碼,離線 GeoIP;查無為 null)與 segment(內部端 IP 的網段 id,對不到為 unmatched)(戰情室 WR-1);每 10 秒 snapshot(同 GET /snapshot);有新 log 時每秒檢查一次並送 logs(types 指定的類型,預設 traffic,threat;可依 ip、port、action 篩選;每個類型每秒最多讀 1500 筆,一個 logs 事件最多 200 筆、較多時分成數個事件,只有最後一個帶 id;跟不上時跳到最新並帶 skipped);每 15 秒 heartbeat。' +
           'logs 事件的 id 為各類型的游標,斷線後瀏覽器以 Last-Event-ID 重連時接續(超過保留時間的已不存在)。單一連線最長 5 分鐘後由伺服器結束,瀏覽器 5 秒後自動重連(BFF 重新檢查登入與權限)。' +
           '每人同時 3 條、全系統 20 條,超過回 429 NETOPS_STREAM_BUSY。原始明細,稽核記錄查詢條件。',
         tags: ['PA 即時監控'],
@@ -339,6 +342,7 @@ const paLiveLiveRoutes: FastifyPluginAsync<{ live: PaLiveService; stream?: LiveS
           '  假如 已連線 GET /api/netops/pa-live/stream?types=traffic',
           '  當 收集器寫入新的 TRAFFIC log',
           '  那麼 收到 event 為 "logs" 的事件,id 為游標',
+          '  而且 每筆 log 帶衍生欄位 country(外部端國家代碼或 null)與 segment(內部網段 id 或 "unmatched")',
           '',
           '場景: 斷線後以 Last-Event-ID 接續',
           '  假如 上一次連線最後收到的 id 為 traffic 的游標',
@@ -425,7 +429,11 @@ const paLiveLiveRoutes: FastifyPluginAsync<{ live: PaLiveService; stream?: LiveS
                 skipped.push(t);
                 cursor[t] = await redis.latestLogId(t);
               } else cursor[t] = rows[rows.length - 1]!.id;
-              for (const e of rows) if (matchLog(e.data, filter)) items.push(toLogItem(t, e));
+              for (const e of rows)
+                if (matchLog(e.data, filter)) {
+                  const item = toLogItem(t, e);
+                  items.push(enrich ? enrich(item) : item);
+                }
             } catch (err) {
               // 這個類型的游標不推進,下次重讀;其他類型照常送出
               failed.push(t);

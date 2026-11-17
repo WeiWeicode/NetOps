@@ -8,6 +8,10 @@ RUN --mount=type=secret,id=npm_token GITLAB_NPM_TOKEN="$(cat /run/secrets/npm_to
 COPY tsconfig.json tsconfig.build.json ./
 COPY src/ src/
 RUN npm run build && npm prune --omit=dev
+# 戰情室離線 GeoIP(WARROOM-PLAN Q2):DB-IP「IP to Country Lite」,CC BY 4.0(畫面須標示 IP Geolocation by DB-IP,連到 https://db-ip.com)。
+# 只在建置時下載、執行時不連外;每月初發布新版,更新時改 DBIP_MONTH(或 --build-arg)重新建置。下載失敗 → 建置失敗(不靜默缺檔)
+ARG DBIP_MONTH=2026-11
+RUN mkdir -p /app/geoip && wget -qO- "https://download.db-ip.com/free/dbip-country-lite-${DBIP_MONTH}.mmdb.gz" | gunzip > /app/geoip/dbip-country-lite.mmdb   && test -s /app/geoip/dbip-country-lite.mmdb
 
 FROM node:22-alpine
 # PA / AD log 與知識庫的時間是台灣當地時間(舊版 IIS 主機時區);Node 內建 ICU 時區資料,不需 tzdata
@@ -16,6 +20,8 @@ WORKDIR /app
 COPY --from=build /app/node_modules node_modules/
 COPY --from=build /app/dist dist/
 COPY package.json ./
+COPY --from=build /app/geoip geoip/
+ENV GEOIP_DB=/app/geoip/dbip-country-lite.mmdb
 # netops-ingest 冷歸檔的本機暫存(C4;Compose 掛 named volume,第一次掛載時沿用這裡的擁有者 node)
 RUN mkdir -p /var/lib/netops-ingest/staging && chown -R node:node /var/lib/netops-ingest
 USER node

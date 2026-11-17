@@ -2,6 +2,12 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。範圍:`frontend/`。
 
+## 2026-11-17 戰情室 Log 表 IP 名稱單行
+- 工作項目:WR 複測(!123 上線後)
+- 內容:測試區複測發現有 IP 對照名稱的列高 48px(GIpLabel 在 150px 欄寬時名稱換行),虛擬捲動以固定列高 25 計算位置會偏。`TrafficLogTable.vue` 在表內把 GIpLabel 改為不換行、名稱行高 18px、超出省略;共用元件不動。同時補 `docs/WARROOM-PLAN.md` §7(流暢度改善總結、量測、回歸方法、未處理項目)與 HANDOFF。
+- 檔案:`frontend/src/components/warroom/TrafficLogTable.vue`、`docs/WARROOM-PLAN.md`、`docs/HANDOFF.md`
+- 驗證:typecheck、`npm test`(251 通過);測試區頁面暫時注入同樣 CSS 量測,13 列有名稱全部 25px。!123 測試區複測:Canvas 2.4 / p95 3.9ms、71 fps、20 秒長任務 0、未降級
+
 ## 2026-11-17 戰情室 Log 表虛擬捲動、Log / 事件 / 高風險可收摺、核心避開上下框
 - 工作項目:WR 複測後改善(需求方:「Log 表每秒重排仍會卡,改虛擬捲動,並且可以收摺(即時事件也是)」「連線數會被近一小時風險擋住」「近一小時也可以收摺」)
 - 內容:測試區複測 Canvas 已降到每幀 1.7ms、文字清晰,但 Log 表每秒更新造成長任務(10 秒 27 次、50–197ms;暫停 Log 表 95 fps)。`TrafficLogTable.vue` 改虛擬捲動(固定列高 25、`table-layout: fixed` + colgroup、只渲染可見列 + 上下 pad 列、只有新進列閃);Log 表、即時事件、高風險統計都可收摺(localStorage `wr-log` / `wr-feed` / `wr-risk`,收摺時內容卸載不更新 DOM);Log 表收摺時 Canvas 往下放大(CSS 變數 `--wr-log-h`),事件欄收摺時右側節點右移。`Live.vue` 以 ResizeObserver 量 AI 框與高風險框高度傳給 Canvas(`topReserve` / `bottomReserve`),寬版面時核心在兩框之間置中、空間不足時縮小,核心區文字依 R 等比縮放,吞吐量 / 連線數儀表數字不再被蓋。

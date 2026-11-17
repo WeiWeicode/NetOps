@@ -235,7 +235,12 @@ describe('useWarroomAi', () => {
   });
 
   it('沒有權限不能執行;執行逐字後進入冷卻', async () => {
-    wr.insight.mockResolvedValue(none());
+    // 手動執行後伺服器回 cooldownUntil(!116)
+    let cdAt: string | null = null;
+    wr.insight.mockImplementation(async () => {
+      if (wr.runInsight.mock.calls.length && !cdAt) cdAt = new Date(Date.now() + 300_000).toISOString();
+      return none({ cooldownUntil: cdAt && Date.parse(cdAt) > Date.now() ? cdAt : null });
+    });
     wr.runInsight.mockImplementation(async (on: (e: { event: string; data: unknown }) => void) => {
       on({ event: 'content', data: { text: '你' } });
       on({ event: 'content', data: { text: '好' } });
@@ -296,6 +301,19 @@ describe('useWarroomAi', () => {
     scope.stop();
   });
 
+  it('伺服器 cooldownUntil 為 null 時解除本機冷卻', async () => {
+    wr.insight.mockResolvedValue(none());
+    wr.runInsight.mockRejectedValue(new ApiError(429, 'X', '冷卻中', null, [{ field: 'retryAfterSec', message: '200' }]));
+    const scope = effectScope();
+    const a = scope.run(() => useWarroomAi({ mock: false, can: () => true }))!;
+    await vi.advanceTimersByTimeAsync(0);
+    await a.run();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(a.cooldownSec.value).toBe(0);
+    expect(a.runError.value).toBeTruthy();
+    scope.stop();
+  });
+
   it('後端 cooldownUntil 決定冷卻', async () => {
     wr.insight.mockResolvedValue(none({ cooldownUntil: new Date(Date.now() + 120_000).toISOString() }));
     const scope = effectScope();
@@ -307,7 +325,7 @@ describe('useWarroomAi', () => {
   });
 
   it('429 → 顯示錯誤並依 retryAfter 冷卻', async () => {
-    wr.insight.mockResolvedValue(none());
+    wr.insight.mockImplementation(async () => none({ cooldownUntil: wr.runInsight.mock.calls.length ? new Date(Date.now() + 60_000).toISOString() : null }));
     wr.runInsight.mockRejectedValue(new ApiError(429, 'NETOPS_AI_COOLDOWN', '冷卻中', null, [{ field: 'retryAfterSec', message: '60' }]));
     const scope = effectScope();
     const a = scope.run(() => useWarroomAi({ mock: false, can: () => true }))!;

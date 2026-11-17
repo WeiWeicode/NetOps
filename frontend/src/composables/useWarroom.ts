@@ -329,11 +329,11 @@ export function useWarroom(options: UseWarroomOptions = {}) {
   /** 儀表滿格值(後端設定;還沒載入時用預設 1 Gbps / 64K) */
   const gauge = computed(() => data.value?.gauge ?? DEFAULT_GAUGE);
   /** GeoIP 授權標示(畫面必須顯示並連結);GeoIP 不可用時 null */
-  /** DB-IP 授權標示(CC BY 4.0 必須顯示);連結只接受 http(s),其他改用官方網址 */
+  /** DB-IP 授權標示(CC BY 4.0 必須顯示);連結只接受 https://db-ip.com,其他改用官方網址 */
   const geoAttribution = computed(() => {
     const a = data.value?.geo?.available ? data.value.geo.attribution : null;
     if (!a) return null;
-    return { text: a.text || 'IP Geolocation by DB-IP', url: /^https?:\/\//i.test(a.url) ? a.url : 'https://db-ip.com' };
+    return { text: a.text || 'IP Geolocation by DB-IP', url: /^https:\/\/(www\.)?db-ip\.com(\/|$)/i.test(a.url) ? a.url : 'https://db-ip.com' };
   });
   const connected = computed(() => (mock ? true : (stream?.connected.value ?? false)));
   const streamError = computed(() => stream?.streamError.value ?? '');

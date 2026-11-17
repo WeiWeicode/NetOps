@@ -727,7 +727,11 @@ function renderFrame(ts: number) {
   }
   const cv = canvasEl.value;
   const ctx = cv?.getContext?.('2d');
-  if (!cv || !ctx) return;
+  if (!cv || !ctx) {
+    // 還拿不到 context:下一幀重試,迴圈不會卡死
+    rafId = requestAnimationFrame(renderFrame);
+    return;
+  }
 
   const dtSec = lastFrameTs ? Math.min(0.1, (ts - lastFrameTs) / 1000) : 0.016;
   lastFrameTs = ts;

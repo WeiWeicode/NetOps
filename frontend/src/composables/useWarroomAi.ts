@@ -71,7 +71,8 @@ export function useWarroomAi(options: { mock?: boolean; can?: (code: string) => 
         insight.value = r;
         loadError.value = null;
         const until = r.cooldownUntil ? Date.parse(r.cooldownUntil) : NaN;
-        if (Number.isFinite(until)) cooldownUntil.value = until;
+        // 伺服器是冷卻的依據;null 代表已解除(例如別人的串流中斷不計冷卻)
+        cooldownUntil.value = Number.isFinite(until) ? until : null;
         clearTimeout(follow);
         if (r.running) follow = setTimeout(() => void poll.run(), RUNNING_POLL_MS);
       }

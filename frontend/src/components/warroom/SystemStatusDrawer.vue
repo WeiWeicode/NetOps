@@ -6,9 +6,7 @@
  *   - 內嵌 C5 PA 精準查詢(PaQueryPanel)與歷史 Log 明細查詢入口連結
  */
 import { computed, ref } from 'vue';
-import { can } from '@/api/gateway';
 import { fmtNum, fmtSize, fmtTime } from '@/api/format';
-import { UI } from '@/api/perms';
 import type { CollectorControl, PaLiveSnapshot } from '@/api/paLive';
 import { collectorBadges, collectorView, controlView, fmtBps, interfaceView, latestSnapTime } from '@/composables/paLive';
 import PaQueryPanel from '@/components/PaQueryPanel.vue';
@@ -19,6 +17,8 @@ const props = defineProps<{
   modelValue: boolean;
   snapshot: PaLiveSnapshot | null;
   connected: boolean;
+  /** 測試區暫停開關權限(useWarroom().canManage) */
+  canManage: boolean;
   streamError?: string;
   setControl: (change: { pollPaused?: boolean; receivePaused?: boolean }) => Promise<CollectorControl>;
 }>();
@@ -33,7 +33,7 @@ const view = computed(() => collectorView(c.value));
 const badges = computed(() => collectorBadges(c.value));
 const snapTime = computed(() => latestSnapTime(m.value));
 const ifs = computed(() => interfaceView(c.value, m.value?.interfaces));
-const ctl = computed(() => controlView(c.value, props.snapshot?.control, can(UI.paLiveManage)));
+const ctl = computed(() => controlView(c.value, props.snapshot?.control, props.canManage));
 
 const switching = ref<'poll' | 'receive' | null>(null);
 

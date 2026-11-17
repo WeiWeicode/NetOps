@@ -224,11 +224,17 @@ export function createWarroomMock(rand: () => number = Math.random) {
     return {
       hour: hour.toISOString(),
       text: '近一小時阻擋以俄羅斯、中國來源為主,45.155.205.12 對 DMZ Web 持續掃描(阻擋 97%);SSH 暴力破解命中 14 次,集中在 VLAN 30 MES。建議確認 MES 主機是否開放 SSH 對外。(mock 資料)',
+      enabled: true,
+      status: 'done',
+      running: false,
+      until: new Date().toISOString(),
       model: 'mock',
       trigger,
       partial: false,
-      status: 'done',
-      createdAt: new Date().toISOString(),
+      statsMinutes: { traffic: 15, risk: 60 },
+      at: new Date().toISOString(),
+      error: null,
+      cooldownUntil: null,
     };
   }
 

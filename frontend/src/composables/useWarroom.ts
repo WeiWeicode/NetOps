@@ -7,6 +7,8 @@
  * 純函式(classifyLog、filterLogs、buildNodes、sumRates…)另外匯出,方便畫面與測試共用。
  */
 import { computed, getCurrentScope, onScopeDispose, ref, shallowRef, watch } from 'vue';
+import { can } from '@/api/gateway';
+import { UI } from '@/api/perms';
 import { paLive, type CollectorControl, type LiveLog, type PaLiveSnapshot } from '@/api/paLive';
 import { LAN_SOURCE, OTHER_SOURCE, warroom as api, type Warroom, type WarroomLink, type WarroomRisk, type WarroomSegment, type WarroomSource } from '@/api/warroom';
 import { absorbNames } from './ipNames';
@@ -205,6 +207,8 @@ export interface UseWarroomOptions {
   mock?: boolean;
   /** mock 用的亂數(測試給固定種子) */
   rand?: () => number;
+  /** 權限判斷(測試注入);預設 gateway can() */
+  can?: (code: string) => boolean;
 }
 
 export function useWarroom(options: UseWarroomOptions = {}) {
@@ -325,7 +329,12 @@ export function useWarroom(options: UseWarroomOptions = {}) {
   /** 儀表滿格值(後端設定;還沒載入時用預設 1 Gbps / 64K) */
   const gauge = computed(() => data.value?.gauge ?? DEFAULT_GAUGE);
   /** GeoIP 授權標示(畫面必須顯示並連結);GeoIP 不可用時 null */
-  const geoAttribution = computed(() => (data.value?.geo?.available ? data.value.geo.attribution : null));
+  /** DB-IP 授權標示(CC BY 4.0 必須顯示);連結只接受 http(s),其他改用官方網址 */
+  const geoAttribution = computed(() => {
+    const a = data.value?.geo?.available ? data.value.geo.attribution : null;
+    if (!a) return null;
+    return { text: a.text || 'IP Geolocation by DB-IP', url: /^https?:\/\//i.test(a.url) ? a.url : 'https://db-ip.com' };
+  });
   const connected = computed(() => (mock ? true : (stream?.connected.value ?? false)));
   const streamError = computed(() => stream?.streamError.value ?? '');
 
@@ -378,6 +387,8 @@ export function useWarroom(options: UseWarroomOptions = {}) {
     paused,
     toggleFocus,
     setControl,
+    /** 測試區暫停 / 繼續開關的權限(netops.pa-live.manage);畫面不自行判斷 */
+    canManage: computed(() => (options.can ?? can)(UI.paLiveManage)),
     stop,
   };
 }

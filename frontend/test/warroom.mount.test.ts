@@ -244,7 +244,13 @@ beforeEach(() => {
     trigger: 'auto',
     partial: false,
     status: 'done',
-    createdAt: '2026-11-17T03:00:05Z',
+    enabled: true,
+    running: false,
+    until: null,
+    statsMinutes: { traffic: 15, risk: 60 },
+    error: null,
+    cooldownUntil: null,
+    at: '2026-11-17T03:00:05Z',
   } satisfies HourlyInsight);
   mocks.liveSnapshot.mockResolvedValue(makeSnapshot());
   mocks.liveLogs.mockImplementation(async (type: string) => ({
@@ -340,11 +346,17 @@ describe('AiPanel.vue 上方 AI 分析框', () => {
       trigger: 'manual',
       partial: false,
       status: 'done',
-      createdAt: '2026-11-17T03:05:00Z',
+      enabled: true,
+      running: false,
+      until: null,
+      statsMinutes: { traffic: 15, risk: 60 },
+      error: null,
+      cooldownUntil: null,
+      at: '2026-11-17T03:05:00Z',
     };
     const w = mount(AiPanel, {
       props: {
-        text: insight.text,
+        text: insight.text ?? '',
         insight,
         running: false,
         failed: false,
@@ -372,6 +384,12 @@ describe('AiPanel.vue 上方 AI 分析框', () => {
     // 本小時分析失敗
     await w.setProps({ failed: true, text: '' });
     expect(w.text()).toContain('本小時分析失敗');
+    await w.setProps({ failReason: 'AI 主機無法連線' });
+    expect(w.text()).toContain('AI 主機無法連線');
+
+    // 後端未啟用:按鈕顯示未啟用
+    await w.setProps({ enabled: false, cooldownSec: 0 });
+    expect(w.find('#aiBtn').text()).toContain('未啟用');
 
     // 無權限時隱藏按鈕
     await w.setProps({ allowed: false });
@@ -513,6 +531,7 @@ describe('SystemStatusDrawer.vue 系統狀態收摺抽屜', () => {
         modelValue: true,
         snapshot: makeSnapshot(),
         connected: true,
+        canManage: true,
         setControl,
       },
       global: { plugins: [ui], stubs: { teleport: true, RouterLink: true } },

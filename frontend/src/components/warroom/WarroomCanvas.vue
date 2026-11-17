@@ -971,7 +971,8 @@ onMounted(() => {
     resizeObs = new ResizeObserver(() => updateLayout());
     resizeObs.observe(wrapEl.value);
   }
-  startLoop();
+  // 背景分頁開啟時不啟動,等 visibilitychange 再開始
+  if (!document.hidden) startLoop();
 });
 
 onBeforeUnmount(() => {

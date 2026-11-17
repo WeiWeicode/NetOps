@@ -12,18 +12,22 @@ import { fmtClock } from '@/api/format';
 import type { HourlyInsight } from '@/api/warroom';
 import AiMarkdown from '@/components/AiMarkdown.vue';
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   text: string;
   insight: HourlyInsight | null;
   running: boolean;
   failed: boolean;
+  /** 失敗原因(useWarroomAi().failReason) */
+  failReason?: string;
+  /** 後端是否啟用(useWarroomAi().enabled) */
+  enabled?: boolean;
   runError: string;
   loadError?: Error | null;
   allowed: boolean;
   canRun: boolean;
   cooldownSec: number;
   centerX?: number | null;
-}>();
+}>(), { enabled: true, failReason: '', loadError: null, centerX: null });
 
 const emit = defineEmits<{
   (e: 'run'): void;
@@ -33,11 +37,11 @@ const bodyEl = ref<HTMLElement | null>(null);
 
 const metaText = computed(() => {
   const ins = props.insight;
-  if (!ins || ins.status === 'none' || (!ins.hour && !ins.createdAt)) {
+  if (!ins || ins.status === 'none' || (!ins.hour && !ins.at)) {
     return '每整點自動分析';
   }
   const trig = ins.trigger === 'manual' ? '手動分析' : '自動分析';
-  const timeStr = fmtClock(ins.createdAt ?? ins.hour);
+  const timeStr = fmtClock(ins.at ?? ins.hour);
   const parts = ['每整點自動分析', timeStr ? `${trig} ${timeStr}` : trig];
   if (ins.model) parts.push(ins.model);
   if (ins.partial) parts.push('部分資料');
@@ -45,7 +49,8 @@ const metaText = computed(() => {
 });
 
 const btnLabel = computed(() => {
-  if (props.running || props.insight?.status === 'running') return '分析中…';
+  if (props.running) return '分析中…';
+  if (props.enabled === false) return '未啟用';
   if (props.cooldownSec > 0) return `冷卻 ${props.cooldownSec}s`;
   return '立即分析';
 });
@@ -65,7 +70,7 @@ watch(
 <template>
   <section id="ai" class="wr-ov wr-ai" :style="styleObj" aria-label="AI 每小時分析">
     <h3 class="wr-ai__hd">
-      <span class="aiorb" :class="{ run: running || insight?.status === 'running' }" aria-hidden="true" />
+      <span class="aiorb" :class="{ run: running }" aria-hidden="true" />
       <span>AI 分析</span>
       <span class="meta">{{ metaText }}</span>
       <button
@@ -87,9 +92,9 @@ watch(
       </div>
 
       <div v-if="failed && !running" class="wr-ai__failed" role="status">
-        本小時分析失敗<span v-if="insight?.partial">（資料不完整）</span>
+        本小時分析失敗<span v-if="insight?.partial">（資料不完整）</span><span v-if="failReason">：{{ failReason }}</span>
       </div>
-      <div v-else-if="(running || insight?.status === 'running') && !text" class="wr-ai__dim">
+      <div v-else-if="running && !text" class="wr-ai__dim">
         彙整近一小時統計中…<span class="cur" />
       </div>
       <div v-else-if="text" class="wr-ai__md-wrap">

@@ -157,8 +157,10 @@ const kpiCpu = computed(() => {
       <AiPanel
         :text="a.text.value"
         :insight="a.insight.value"
-        :running="a.running.value"
+        :running="a.busy.value"
         :failed="a.failed.value"
+        :fail-reason="a.failReason.value"
+        :enabled="a.enabled.value"
         :run-error="a.runError.value"
         :load-error="a.loadError.value"
         :allowed="a.allowed.value"
@@ -191,6 +193,7 @@ const kpiCpu = computed(() => {
       :snapshot="w.snapshot.value"
       :connected="w.connected.value"
       :stream-error="w.streamError.value"
+      :can-manage="w.canManage.value"
       :set-control="w.setControl"
     />
   </div>

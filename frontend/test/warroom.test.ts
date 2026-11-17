@@ -215,6 +215,12 @@ describe('useWarroom', () => {
   });
 });
 
+/** !116 GET /ai/hourly-insight 無資料時的實際形狀 */
+const none = (over: Record<string, unknown> = {}) => ({
+  enabled: true, status: 'none', running: false, hour: null, until: null, text: null, model: null, trigger: null,
+  partial: false, statsMinutes: null, at: null, error: null, cooldownUntil: null, ...over,
+});
+
 describe('useWarroomAi', () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -223,13 +229,13 @@ describe('useWarroomAi', () => {
   afterEach(() => vi.useRealTimers());
 
   it('cooldownFromError:429 用 retryAfter,沒有時 5 分鐘', () => {
-    expect(cooldownFromError(new ApiError(429, 'X', '', null, { retryAfter: 30 }), 0)).toBe(30_000);
+    expect(cooldownFromError(new ApiError(429, 'X', '', null, [{ field: 'retryAfterSec', message: '30' }]), 0)).toBe(30_000);
     expect(cooldownFromError(new ApiError(429, 'X', '', null), 0)).toBe(COOLDOWN_MS);
     expect(cooldownFromError(new ApiError(409, 'X', '', null), 0)).toBeNull();
   });
 
   it('沒有權限不能執行;執行逐字後進入冷卻', async () => {
-    wr.insight.mockResolvedValue({ hour: null, text: '', model: '', trigger: 'auto', partial: false, status: 'none' });
+    wr.insight.mockResolvedValue(none());
     wr.runInsight.mockImplementation(async (on: (e: { event: string; data: unknown }) => void) => {
       on({ event: 'content', data: { text: '你' } });
       on({ event: 'content', data: { text: '好' } });
@@ -251,9 +257,58 @@ describe('useWarroomAi', () => {
     scope.stop();
   });
 
+  it('SSE meta 事件的 hour / model / partial 寫回最新一筆', async () => {
+    wr.insight.mockResolvedValueOnce(none()).mockRejectedValue(new Error('net'));
+    wr.runInsight.mockImplementation(async (on: (e: { event: string; data: unknown }) => void) => {
+      on({ event: 'open', data: {} });
+      on({ event: 'meta', data: { hour: '2026-11-17T09:00:00+08:00', until: '2026-11-17T09:20:00+08:00', trigger: 'manual', model: 'Qwen', partial: true, statsMinutes: { traffic: 15, risk: 60 } } });
+      on({ event: 'thinking', data: { chars: 10 } });
+      on({ event: 'content', data: { text: 'ok' } });
+      on({ event: 'done', data: {} });
+    });
+    const scope = effectScope();
+    const a = scope.run(() => useWarroomAi({ mock: false, can: () => true }))!;
+    await vi.advanceTimersByTimeAsync(0);
+    await a.run();
+    expect(a.insight.value).toMatchObject({ hour: '2026-11-17T09:00:00+08:00', model: 'Qwen', partial: true, trigger: 'manual', status: 'done', text: 'ok', running: false });
+    expect(a.text.value).toBe('ok');
+    scope.stop();
+  });
+
+  it('後端 running:busy、不能執行,並以短間隔追結果;enabled false 不能執行;failed 帶原因', async () => {
+    wr.insight
+      .mockResolvedValueOnce(none({ running: true }))
+      .mockResolvedValueOnce(none({ status: 'failed', error: { code: 'NETOPS_AI_UNAVAILABLE', message: 'AI 主機無法連線' } }))
+      .mockResolvedValue(none({ enabled: false }));
+    const scope = effectScope();
+    const a = scope.run(() => useWarroomAi({ mock: false, can: () => true }))!;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(a.busy.value).toBe(true);
+    expect(a.canRun.value).toBe(false);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(wr.insight).toHaveBeenCalledTimes(2);
+    expect(a.failed.value).toBe(true);
+    expect(a.failReason.value).toBe('AI 主機無法連線');
+    expect(a.canRun.value).toBe(true);
+    await a.reload();
+    expect(a.enabled.value).toBe(false);
+    expect(a.canRun.value).toBe(false);
+    scope.stop();
+  });
+
+  it('後端 cooldownUntil 決定冷卻', async () => {
+    wr.insight.mockResolvedValue(none({ cooldownUntil: new Date(Date.now() + 120_000).toISOString() }));
+    const scope = effectScope();
+    const a = scope.run(() => useWarroomAi({ mock: false, can: () => true }))!;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(a.cooldownSec.value).toBeGreaterThan(110);
+    expect(a.canRun.value).toBe(false);
+    scope.stop();
+  });
+
   it('429 → 顯示錯誤並依 retryAfter 冷卻', async () => {
-    wr.insight.mockResolvedValue({ hour: null, text: '', model: '', trigger: 'auto', partial: false, status: 'none' });
-    wr.runInsight.mockRejectedValue(new ApiError(429, 'NETOPS_AI_COOLDOWN', '冷卻中', null, { retryAfter: 60 }));
+    wr.insight.mockResolvedValue(none());
+    wr.runInsight.mockRejectedValue(new ApiError(429, 'NETOPS_AI_COOLDOWN', '冷卻中', null, [{ field: 'retryAfterSec', message: '60' }]));
     const scope = effectScope();
     const a = scope.run(() => useWarroomAi({ mock: false, can: () => true }))!;
     await vi.advanceTimersByTimeAsync(0);

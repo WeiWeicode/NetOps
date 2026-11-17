@@ -30,7 +30,8 @@ const statusDrawerOpen = ref(false);
 /** 即時排行抽屜:開啟時才輪詢(useLiveTop) */
 const rankingOpen = ref(false);
 const rk = useLiveTop({ active: rankingOpen, mock: w.mock });
-const rkSource = computed(() => logSource(w.snapshot.value?.collector));
+// 快照還沒載入時不判斷來源(避免誤報「沒有 log 來源」)
+const rkSource = computed(() => (w.snapshot.value ? logSource(w.snapshot.value.collector) : { live: true, empty: '', stale: '' }));
 const canvasCenterX = ref<number | null>(null);
 
 const colView = computed(() => collectorView(w.snapshot.value?.collector));

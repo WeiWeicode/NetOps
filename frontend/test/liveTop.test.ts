@@ -58,8 +58,48 @@ describe('useLiveTop', () => {
     await vi.advanceTimersByTimeAsync(TOP_POLL_MS);
     expect(mocks.top).toHaveBeenCalledTimes(2);
     active.value = false;
+    await nextTick();
     await vi.advanceTimersByTimeAsync(TOP_POLL_MS * 3);
-    expect(mocks.top).toHaveBeenCalledTimes(3); // 關閉前已排的那一輪跑完後不再排
+    expect(mocks.top).toHaveBeenCalledTimes(2); // 關閉後不再查詢
+    scope.stop();
+  });
+
+  it('關閉後立刻重開只有一條輪詢;在途舊回應被丟棄;重開時過期結果先清掉', async () => {
+    const active = ref(true);
+    const scope = effectScope();
+    const t = scope.run(() => useLiveTop({ active, mock: false }))!;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.top).toHaveBeenCalledTimes(1);
+    // 在途請求遇到切換:舊回應不可蓋掉新結果
+    let resolveOld!: (v: PaLiveTop) => void;
+    mocks.top.mockImplementationOnce(() => new Promise((r) => (resolveOld = r)));
+    await vi.advanceTimersByTimeAsync(TOP_POLL_MS);
+    mocks.top.mockResolvedValueOnce(sample({ minutes: 60 }));
+    t.minutes.value = 60;
+    await nextTick();
+    await vi.advanceTimersByTimeAsync(0);
+    resolveOld(sample({ minutes: 15 }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(t.top.value?.minutes).toBe(60);
+    // 關閉後立刻重開
+    const before = mocks.top.mock.calls.length;
+    active.value = false;
+    await nextTick();
+    active.value = true;
+    await nextTick();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.top.mock.calls.length).toBe(before + 1);
+    await vi.advanceTimersByTimeAsync(TOP_POLL_MS);
+    expect(mocks.top.mock.calls.length).toBe(before + 2);
+    // 關閉超過一輪再開:先清掉過期結果
+    active.value = false;
+    await nextTick();
+    await vi.advanceTimersByTimeAsync(TOP_POLL_MS * 2);
+    mocks.top.mockImplementationOnce(() => new Promise(() => {}));
+    active.value = true;
+    await nextTick();
+    expect(t.top.value).toBeNull();
+    expect(t.loading.value).toBe(true);
     scope.stop();
   });
 
@@ -75,10 +115,19 @@ describe('useLiveTop', () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(mocks.top).toHaveBeenLastCalledWith('traffic', 60, 10);
     expect(t.error.value?.message).toBe('boom');
+    t.type.value = 'url';
+    await nextTick();
+    expect(t.error.value).toBeNull(); // 切換時清掉舊錯誤
+    t.type.value = 'traffic';
+    mocks.top.mockRejectedValueOnce(new Error('boom'));
+    t.minutes.value = 5;
+    await nextTick();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(t.error.value?.message).toBe('boom');
     t.type.value = 'threat';
     await nextTick();
     await vi.advanceTimersByTimeAsync(0);
-    expect(mocks.top).toHaveBeenLastCalledWith('threat', 60, 10);
+    expect(mocks.top).toHaveBeenLastCalledWith('threat', 5, 10);
     expect(t.error.value).toBeNull();
     scope.stop();
   });

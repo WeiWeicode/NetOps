@@ -1,13 +1,12 @@
 /**
  * 戰情室「即時排行」收摺面板(需求方 2026-11-17:舊即時監控頁的排行卡加回,含 5 / 15 / 60 分鐘切換)。
- *   - 資料:既有 GET /pa-live/top(paLive.top);每 30 秒更新,只在面板開啟時輪詢(關閉就停,不佔 API)
+ *   - 資料:既有 GET /pa-live/top(paLive.top);每 30 秒更新(分頁隱藏時放慢 5 倍),只在面板開啟時輪詢;關閉時清掉排程並作廢在途請求
  *   - 切換類型或分鐘數:清掉舊結果並立即重查
  *   - mock 模式(warroomMock):回固定假資料,不呼叫 API
  * 純函式 topListsOf、kpiListsOf 匯出給畫面與測試共用。
  */
 import { computed, getCurrentScope, onScopeDispose, ref, shallowRef, watch, type Ref } from 'vue';
 import { paLive, type LogType, type PaLiveTop } from '@/api/paLive';
-import { usePolling } from './usePolling';
 import { resolveMock } from './warroomMock';
 
 export const TOP_POLL_MS = 30_000;
@@ -74,36 +73,55 @@ export function useLiveTop(options: { active: Ref<boolean>; mock?: boolean }) {
   const error = ref<Error | null>(null);
   const loading = ref(false);
 
-  const poll = usePolling(
-    () => {
-      loading.value = true;
-      return mock ? Promise.resolve(mockTop(type.value, minutes.value)) : paLive.top(type.value, minutes.value, 10);
-    },
-    (r) => {
-      loading.value = false;
-      if (r instanceof Error) error.value = r;
-      else {
-        top.value = r;
-        error.value = null;
-      }
-      // 面板關閉就不再排下一輪
-      return options.active.value;
-    },
-    TOP_POLL_MS,
-  );
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let seq = 0;
+  let lastOkAt = 0;
+
+  /** 作廢在途請求並清掉排程(關閉面板、切換條件、卸載) */
+  function halt() {
+    seq++;
+    clearTimeout(timer);
+    timer = undefined;
+    loading.value = false;
+  }
+
+  async function run(): Promise<void> {
+    halt();
+    const my = seq;
+    loading.value = true;
+    let r: PaLiveTop | Error;
+    try {
+      r = await (mock ? Promise.resolve(mockTop(type.value, minutes.value)) : paLive.top(type.value, minutes.value, 10));
+    } catch (e) {
+      r = e as Error;
+    }
+    if (my !== seq) return;
+    loading.value = false;
+    if (r instanceof Error) error.value = r;
+    else {
+      top.value = r;
+      error.value = null;
+      lastOkAt = Date.now();
+    }
+    if (options.active.value) timer = setTimeout(run, typeof document !== 'undefined' && document.hidden ? TOP_POLL_MS * 5 : TOP_POLL_MS);
+  }
 
   watch([type, minutes], () => {
     top.value = null;
-    if (options.active.value) void poll.run();
+    error.value = null;
+    if (options.active.value) void run();
   });
   watch(
     options.active,
     (on) => {
-      if (on) void poll.run();
+      if (!on) return halt();
+      // 重新開啟:結果已超過一輪就清掉,先顯示載入中而不是過期排行
+      if (Date.now() - lastOkAt > TOP_POLL_MS) top.value = null;
+      void run();
     },
     { immediate: true },
   );
-  if (getCurrentScope()) onScopeDispose(() => poll.stop());
+  if (getCurrentScope()) onScopeDispose(halt);
 
   return {
     mock,
@@ -114,6 +132,6 @@ export function useLiveTop(options: { active: Ref<boolean>; mock?: boolean }) {
     loading,
     lists: computed(() => topListsOf(top.value)),
     kpis: computed(() => kpiListsOf(top.value)),
-    reload: poll.run,
+    reload: run,
   };
 }

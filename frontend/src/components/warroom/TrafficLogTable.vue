@@ -382,6 +382,17 @@ tr.wr-vrow td {
   box-sizing: border-box;
   line-height: 23px;
 }
+/* IP 對照名稱(GIpLabel)在窄欄會換行把列撐到 48px,虛擬捲動位置就會偏:表內強制單行、超出省略 */
+tr.wr-vrow td :deep(.g-ip) {
+  flex-wrap: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+}
+tr.wr-vrow td :deep(.g-ip .name) {
+  line-height: 18px;
+  min-width: 0;
+  flex-shrink: 1;
+}
 tr.pad td {
   padding: 0;
   border: 0;

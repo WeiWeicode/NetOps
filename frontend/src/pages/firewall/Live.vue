@@ -326,6 +326,8 @@ const kpiCpu = computed(() => {
   color: var(--dim);
 }
 .wr-main {
+  /* 窄版面:AI / 高風險框依主視覺區寬度改排到右欄(見 AiPanel、RiskPanel、EventFeed 的 @container) */
+  container: wrmain / inline-size;
   position: relative;
   flex: 1;
   min-height: 0;

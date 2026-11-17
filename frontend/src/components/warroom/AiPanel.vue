@@ -113,13 +113,13 @@ watch(
   transform: translateX(-50%);
   width: min(560px, calc(100% - 540px));
   min-width: 300px;
-  background: rgba(10, 18, 34, 0.84);
+  background: rgba(10, 18, 34, 0.93);
   border: 1px solid #23406b;
   border-radius: 10px;
   padding: 10px 14px;
   font-size: 12px;
   color: #cfe3ff;
-  backdrop-filter: blur(6px);
+  /* 不用 backdrop-filter:疊在動畫 Canvas 上每幀都要重算模糊 */
   box-shadow: 0 0 24px rgba(62, 168, 255, 0.15);
   z-index: 6;
 }
@@ -220,6 +220,20 @@ watch(
 @media (max-width: 1100px) {
   .wr-ov {
     width: min(520px, calc(100% - 280px));
+  }
+}
+/* 窄版面:置中會蓋住核心,改排到右欄(事件欄在此寬度隱藏,同樣資訊在 Log 表) */
+@container wrmain (max-width: 1150px) {
+  .wr-ov {
+    left: auto !important;
+    right: 12px;
+    transform: none;
+    width: 270px;
+    min-width: 0;
+  }
+  .wr-ai {
+    max-height: calc(50% - 150px);
+    overflow: auto;
   }
 }
 </style>

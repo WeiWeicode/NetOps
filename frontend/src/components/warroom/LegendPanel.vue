@@ -90,13 +90,13 @@ export function readLegendOpen(): boolean {
   top: 64px;
   left: 12px;
   width: 250px;
-  background: rgba(12, 20, 36, 0.82);
+  background: rgba(12, 20, 36, 0.93);
   border: 1px solid #1c2a44;
   border-radius: 8px;
   padding: 12px;
   font-size: 12px;
   color: #cfe3ff;
-  backdrop-filter: blur(4px);
+  /* 不用 backdrop-filter:疊在動畫 Canvas 上每幀都要重算模糊(流暢度改善 2026-11-17) */
   transition: width 0.3s ease;
   z-index: 6;
 }

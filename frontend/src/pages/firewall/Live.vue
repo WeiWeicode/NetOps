@@ -8,7 +8,8 @@
  */
 import { computed, ref } from 'vue';
 import { fmtNum } from '@/api/format';
-import { collectorView, fmtBps } from '@/composables/paLive';
+import { collectorView, fmtBps, logSource } from '@/composables/paLive';
+import { useLiveTop } from '@/composables/useLiveTop';
 import { useWarroom } from '@/composables/useWarroom';
 import { useWarroomAi } from '@/composables/useWarroomAi';
 import AiPanel from '@/components/warroom/AiPanel.vue';
@@ -16,6 +17,7 @@ import EventFeed from '@/components/warroom/EventFeed.vue';
 import LegendPanel, { readLegendOpen } from '@/components/warroom/LegendPanel.vue';
 import Notices from '@/components/warroom/Notices.vue';
 import RiskPanel from '@/components/warroom/RiskPanel.vue';
+import RankingDrawer from '@/components/warroom/RankingDrawer.vue';
 import SystemStatusDrawer from '@/components/warroom/SystemStatusDrawer.vue';
 import TrafficLogTable from '@/components/warroom/TrafficLogTable.vue';
 import WarroomCanvas from '@/components/warroom/WarroomCanvas.vue';
@@ -25,6 +27,10 @@ const a = useWarroomAi();
 
 const legendOpen = ref(readLegendOpen());
 const statusDrawerOpen = ref(false);
+/** 即時排行抽屜:開啟時才輪詢(useLiveTop) */
+const rankingOpen = ref(false);
+const rk = useLiveTop({ active: rankingOpen, mock: w.mock });
+const rkSource = computed(() => logSource(w.snapshot.value?.collector));
 const canvasCenterX = ref<number | null>(null);
 
 const colView = computed(() => collectorView(w.snapshot.value?.collector));
@@ -72,6 +78,9 @@ const kpiCpu = computed(() => {
       </GBadge>
       <GButton size="sm" variant="secondary" icon="radio" @click="statusDrawerOpen = true">
         系統狀態
+      </GButton>
+      <GButton size="sm" variant="secondary" icon="trending-up" @click="rankingOpen = true">
+        即時排行
       </GButton>
       <RouterLink to="/firewall/search">
         <GButton size="sm" variant="ghost" icon="search">Log 明細查詢</GButton>
@@ -186,6 +195,19 @@ const kpiCpu = computed(() => {
         @clear-focus="w.toggleFocus(null)"
       />
     </div>
+
+    <!-- 即時排行收摺抽屜(需求方 2026-11-17 加回舊頁排行卡) -->
+    <RankingDrawer
+      v-model="rankingOpen"
+      v-model:type="rk.type.value"
+      v-model:minutes="rk.minutes.value"
+      :top="rk.top.value"
+      :lists="rk.lists.value"
+      :kpis="rk.kpis.value"
+      :error="rk.error.value"
+      :loading="rk.loading.value"
+      :source="rkSource"
+    />
 
     <!-- 系統狀態收摺抽屜(原 Live.vue 收集器狀態、測試區暫停開關、PA 精準查詢) -->
     <SystemStatusDrawer

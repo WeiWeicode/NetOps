@@ -159,8 +159,9 @@ describe('C4 歸檔(真 ClickHouse)', () => {
   });
 
   // 放在最後:這裡新增的一列讓來源和歸檔不一致,不影響前面「重新歸檔」的筆數
-  it('剩餘空間不足 2 GB:不歸檔,狀態 disk-low;鎖已釋放', async () => {
+  it('剩餘空間不足 2 GB:不歸檔,狀態 disk-low;不取鎖', async () => {
     const before = await cold.manifest([D]);
+    const parquetBefore = await cold.parquetCount('threat', D);
     const issues = { badTime: false };
     await createClickHouseWriter(writerCfg).insert('threat', [toThreatRow('threat', { time: taipeiText(H + 20 * 60_000), src: '10.77.0.3', dst: '10.77.0.1', severity: 'low', action: 'alert' }, H, issues)], `c4-int-${randomUUID()}`);
     const a = archiver(Date.parse(`${TODAY}T03:00:00+08:00`), async () => MIN_FREE_BYTES - 1);
@@ -168,6 +169,7 @@ describe('C4 歸檔(真 ClickHouse)', () => {
     assert.equal(a.status.state, 'disk-low', JSON.stringify(a.status));
     assert.match(a.status.lastError?.message ?? '', /剩餘空間不足/);
     assert.deepEqual(await cold.manifest([D]), before);
+    assert.equal(await cold.parquetCount('threat', D), parquetBefore);
     assert.equal(await redis.get('netops:cold:lock'), null);
   });
 });

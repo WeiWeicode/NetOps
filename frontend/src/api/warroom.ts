@@ -114,21 +114,42 @@ export interface WarroomRisk {
   names?: Record<string, string>;
 }
 
-export type HourlyInsightStatus = 'none' | 'running' | 'done' | 'failed';
+/** WR-3(!116)實際狀態;執行中看 running 布林,不是 status */
+export type HourlyInsightStatus = 'none' | 'done' | 'failed';
 
-/** 最新一筆每小時分析(Q4:不留歷史) */
+/** GET /api/netops/ai/hourly-insight:最新一筆(Q4:不留歷史) */
 export interface HourlyInsight {
-  /** 分析的整點(ISO);還沒有任何分析時為 null */
-  hour: string | null;
-  text: string;
-  model: string;
-  trigger: 'auto' | 'manual';
-  partial: boolean;
+  /** AI 每小時分析是否啟用(LLM_URL、NETOPS_AI_HOURLY);false 時不能手動分析 */
+  enabled: boolean;
   status: HourlyInsightStatus;
-  /** 後端若回傳下次可手動執行的時間(冷卻),畫面以此為準;沒有時前端自行計算 */
-  cooldownUntil?: string | null;
-  /** 產生時間 */
-  createdAt?: string | null;
+  /** 分析進行中(自動或別人手動) */
+  running: boolean;
+  /** 分析區間開始(台北時間 ISO);沒有分析時 null */
+  hour: string | null;
+  /** 分析區間結束 */
+  until: string | null;
+  text: string | null;
+  model: string | null;
+  trigger: 'auto' | 'manual' | null;
+  partial: boolean;
+  /** 送給模型的統計視窗(分鐘) */
+  statsMinutes: { traffic: number; risk: number } | null;
+  /** 完成時間 */
+  at: string | null;
+  /** status failed 時的分類原因 */
+  error: { code: string; message: string } | null;
+  /** 手動冷卻結束時間;沒有冷卻為 null */
+  cooldownUntil: string | null;
+}
+
+/** POST .../run 的 SSE meta 事件 */
+export interface HourlyInsightMeta {
+  hour: string;
+  until: string;
+  trigger: 'auto' | 'manual';
+  model: string;
+  partial: boolean;
+  statsMinutes: { traffic: number; risk: number } | null;
 }
 
 export const warroom = {
@@ -137,6 +158,6 @@ export const warroom = {
   /** minutes:15 / 60 */
   risk: (minutes: 15 | 60 = 60) => http.get<WarroomRisk>('/api/netops/pa-live/risk', { query: { minutes } }),
   insight: () => http.get<HourlyInsight>('/api/netops/ai/hourly-insight'),
-  /** 手動執行:SSE 逐字回傳(content {text}、done);開始前的 409(執行中)/ 429(冷卻)丟 ApiError */
+  /** 手動執行:SSE 逐字回傳(open、meta、thinking、content {text}、done、error、heartbeat);開始前的 409 NETOPS_AI_HOURLY_BUSY / 429 NETOPS_AI_HOURLY_COOLDOWN(details[{field:'retryAfterSec'}])/ 503 丟 ApiError */
   runInsight: (onEvent: (e: SseEvent) => void, signal?: AbortSignal) => streamPost('/api/netops/ai/hourly-insight/run', {}, onEvent, signal),
 };

@@ -15,7 +15,7 @@
 ### 下一步(依序)
 
 1. 11-18:正式區對帳(一整天資料進 ClickHouse、`interzone-default` deny 有進、誤差 < 0.5%);測試區 AC1 / AC7 跨日驗收照下段。
-2. **對帳通過後:把測試區歷史匯入正式區 ClickHouse**(需求方 2026-11-17 決定:範圍「全部 11-14 起」、時間「明天對帳後」)。測試區 TTL 只有 3 天,已先匯出快照到主機 2 `/srv/netops-export-20261117/`:`pa_traffic_logs.native`(2,002 萬筆,3.1 GB)、`pa_threat_logs.native`(40.5 萬筆),範圍 11-14 00:00 ~ 11-17 08:29:59(正式區 08:30 起自己收,不重疊);`counts.tsv`、`SHA256SUMS` 同目錄。步驟:搬到主機 3 → 核對雜湊 → 由需求方在正式區 `INSERT INTO netops.<表> FORMAT Native`(MV 會自動補每小時彙總與熱力圖)→ 主線唯讀核對筆數。注意:11-16 11:30 以前沒有 `interzone-default` 的 deny(資料不完整),要在畫面或文件註明;匯入完成後刪除主機 2、3 的匯出檔。
+2. **(已完成 2026-11-17)測試區歷史已匯入正式區 ClickHouse**:需求方決定先匯入、對帳明天做。主機 2 匯出 → 主機 3 雜湊一致 → 需求方執行 INSERT。核對:正式區 08:30 前 traffic 20,022,979 筆、threat 405,008 筆(405,005 + 3 筆 11-16 Send Test Log),範圍 11-14 00:00 ~ 11-17 08:29:59;每小時彙總與熱力圖已由 MV 補上;主機 2、3 匯出檔已刪。11-16 11:30 前沒有 `interzone-default` deny(被阻擋數字偏低)。**對帳時注意**:11-17 當天正式區 = 08:30 前匯入 + 08:30 後自收,比對 FTP 時以 11-18 整天為準。**教訓**:Windows 對 WSL 下大檔複製(`/mnt/c`)或大檔串流 / 大量匯入期間,`wsl` 指令會逾時(0x8007274c),等幾分鐘自行恢復,容器不受影響,不要急著重啟 WSL。
 3. 查 PA 雲端 `tls-X509-validation` 是否改設定前就有(指令見下段第 2 步)。
 4. C6 驗收後:`NETOPS_AI_SOURCE=clickhouse`、移除 `FTP_SYNC_MINUTES`、`NETOPS_AI_DAILY_SUMMARY=1`(RUNBOOK-prod §4 第 4 步)。
 5. 文件:下段第 5 項,另補本段教訓到 PF F.4.1。

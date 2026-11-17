@@ -104,12 +104,13 @@ export interface WarroomRisk {
   threats: number | null;
   denies: number | null;
   attackSources: number | null;
-  /** true = attackSources 是下限(樣本不完整,實際可能更多;畫面顯示「≥」) */
-  attackSourcesLowerBound: boolean;
+  /** partial 時沒有這個欄位;true = attackSources 是下限(樣本不完整,實際可能更多;畫面顯示「≥」) */
+  attackSourcesLowerBound?: boolean;
   critical: number | null;
   topThreats: { name: string; severity: string | null; count: number }[];
   topSources: { key: string; label: string; country: string | null; count: number; denyRatio: number | null }[];
-  sample: { threat: number; complete: boolean } | null;
+  /** partial 時沒有這個欄位 */
+  sample?: { threat: number; complete: boolean } | null;
   names?: Record<string, string>;
 }
 

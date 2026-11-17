@@ -84,6 +84,8 @@ const APPS: [string, number][] = [
   ['ping', 0],
   ['globalprotect', 443],
 ];
+/** 後端 topSources.label 是 GeoIP 國家英文名 */
+const GEO_NAME: Record<string, string> = { TW: 'Taiwan', US: 'United States', JP: 'Japan', CN: 'China', RU: 'Russia', NL: 'Netherlands', DE: 'Germany' };
 const THREATS = ['SSH Brute Force', 'SMB Exploit Attempt', 'Suspicious DNS Query', 'HTTP SQL Injection', 'RDP Scan'];
 
 export function createWarroomMock(rand: () => number = Math.random) {
@@ -112,7 +114,7 @@ export function createWarroomMock(rand: () => number = Math.random) {
       minutes: 5,
       partial: false,
       segmentsSource: 'example',
-      gauge: { throughputMaxBps: 1e9, sessionMax: 65536 },
+      gauge: { throughputMaxBps: 1e9, sessionMax: 64_000 },
       geo: { available: true, version: 'mock', attribution: { text: 'IP Geolocation by DB-IP', url: 'https://db-ip.com' } },
       sample: { traffic: 5000, trafficSec: 300, threat: 40, threatSec: 300, complete: true },
       sources: SOURCES.map((s) => ({
@@ -154,7 +156,7 @@ export function createWarroomMock(rand: () => number = Math.random) {
       attackSources: 30 + Math.floor(rand() * 10),
       critical: 2 + Math.floor(rand() * 4),
       topThreats: THREATS.map((name, i) => ({ name, severity: i < 2 ? 'critical' : i < 4 ? 'high' : 'medium', count: 14 - i * 3 + Math.floor(rand() * 3) })),
-      topSources: SOURCES.filter((s) => s.d > 0.3).map((s) => ({ key: s.id, label: s.label, country: s.country, count: Math.round(s.v * 3600 * s.d), denyRatio: s.d })),
+      topSources: SOURCES.filter((s) => s.d > 0.3).map((s, i) => ({ key: s.kind === 'ip' ? s.label : `${s.ipPrefix}.${i}.${i + 7}`, label: GEO_NAME[s.country ?? ''] ?? 'Unknown', country: s.country, count: Math.round(s.v * 3600 * s.d), denyRatio: s.d })),
       partial: false,
     };
   }

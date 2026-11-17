@@ -55,6 +55,8 @@ describe('純函式', () => {
     expect(classifyLog(L({ action: 'deny' }))).toBe('deny');
     expect(classifyLog(L({ action: 'reset-both' }))).toBe('deny');
     expect(classifyLog(L({ action: 'allow' }))).toBe('allow');
+    expect(classifyLog(L({ action: 'sinkhole' }))).toBe('deny');
+    expect(classifyLog(L({ action: 'allow-block' }))).toBe('allow');
   });
 
   it('sourceIdOf:同後端規則(攻擊 IP 只計連入、內部互連、國家、其他)', () => {
@@ -78,6 +80,7 @@ describe('純函式', () => {
     const keys = (w: Partial<Warroom>, r: Partial<WarroomRisk> | null = null) => warroomNotices({ ...WR, ...w }, r as WarroomRisk | null).map((n) => n.key);
     expect(keys({ segmentsSource: 'example' })).toEqual(['segments-example']);
     expect(keys({ segmentsSource: 'invalid' })).toEqual(['segments-invalid']);
+    expect(keys({ geo: { ...WR.geo, available: false } })).toEqual(['geo-unavailable']);
     expect(keys({ sample: { ...WR.sample!, complete: false } })).toEqual(['estimated']);
     expect(keys({ partial: true, message: 'Redis 連不上' }, { partial: true, sample: { threat: 1, complete: false } })).toEqual(['partial', 'risk-partial', 'risk-estimated']);
   });
@@ -161,7 +164,7 @@ describe('useWarroom', () => {
     expect(w.nodes.value.sources.length).toBe(10);
     expect(w.notices.value.map((n) => n.key)).toEqual(['segments-example']);
     expect(w.geoAttribution.value?.url).toBe('https://db-ip.com');
-    expect(w.gauge.value.sessionMax).toBe(65536);
+    expect(w.gauge.value.sessionMax).toBe(64_000);
     expect(w.logs.value.length).toBe(20);
     expect(wr.get).not.toHaveBeenCalled();
     expect(live.snapshot).not.toHaveBeenCalled();

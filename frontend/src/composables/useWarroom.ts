@@ -29,7 +29,8 @@ export interface Focus {
   id: string;
 }
 
-const DENY_RE = /deny|drop|reset|block/i;
+/** 同後端 isDenyAction */
+const DENY_RE = /^(deny|drop|reset|block|sinkhole)/;
 
 /** log → 阻擋 / 允許 / 威脅(威脅類 log 一律算威脅;TRAFFIC 依 action) */
 export function classifyLog(l: LiveLog): LogKind {
@@ -178,10 +179,10 @@ export function buildNodes(w: Warroom | null, focus: Focus | null): { sources: S
   };
 }
 
-export const DEFAULT_GAUGE = { throughputMaxBps: 1e9, sessionMax: 65536 };
+export const DEFAULT_GAUGE = { throughputMaxBps: 1e9, sessionMax: 64_000 };
 
 export interface WarroomNotice {
-  key: 'segments-example' | 'segments-invalid' | 'estimated' | 'risk-estimated' | 'partial' | 'risk-partial';
+  key: 'segments-example' | 'segments-invalid' | 'estimated' | 'risk-estimated' | 'partial' | 'risk-partial' | 'geo-unavailable';
   tone: 'info' | 'warning' | 'danger';
   text: string;
 }
@@ -193,6 +194,7 @@ export function warroomNotices(w: Warroom | null, r: WarroomRisk | null): Warroo
   if (r?.partial) out.push({ key: 'risk-partial', tone: 'danger', text: r.message || '高風險統計暫時無法取得' });
   if (w?.segmentsSource === 'example') out.push({ key: 'segments-example', tone: 'info', text: '目前顯示範例網段(網通網段清單尚未設定)' });
   if (w?.segmentsSource === 'invalid') out.push({ key: 'segments-invalid', tone: 'warning', text: '網段設定檔格式錯誤,暫時改用範例網段' });
+  if (w && !w.partial && w.geo && !w.geo.available) out.push({ key: 'geo-unavailable', tone: 'warning', text: 'GeoIP 資料庫無法使用,國家歸入「其他」' });
   if (w?.sample && !w.sample.complete) out.push({ key: 'estimated', tone: 'warning', text: `流量較大,只讀到最近 ${w.sample.trafficSec} 秒的 log,數字為推估` });
   if (r?.sample && !r.sample.complete) out.push({ key: 'risk-estimated', tone: 'warning', text: '高風險統計的嚴重度與阻擋比例依部分樣本推估' });
   return out;

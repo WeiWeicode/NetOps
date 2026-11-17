@@ -303,7 +303,7 @@ services:
       PA_PORT: ${PA_PORT:-}
       PA_API_KEY_FILE: /run/secrets/pa_api_key
       PA_POLL_SECONDS: ${PA_POLL_SECONDS:-}
-      # 測試區 PA-560 是自簽憑證、尚未取得憑證時才設 1(正式區設了會啟動失敗)
+      # 測試區 PA-560 是自簽憑證、尚未取得憑證時才設 1(正式區也可設,需求方 2026-11-17;啟動時記 WARNING)
       PA_TLS_INSECURE: ${PA_TLS_INSECURE:-}
       PA_RECEIVE_ENABLED: ${PA_RECEIVE_ENABLED:-0}
       PA_QUERY_ENABLED: ${PA_QUERY_ENABLED:-0}

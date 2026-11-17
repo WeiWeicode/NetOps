@@ -91,7 +91,7 @@ class PollConfig:
     host: str
     port: int
     api_key: str
-    # PA-560 管理介面憑證:預設驗證(系統 CA 或 PA_CA_FILE);PA_TLS_INSECURE=1 只允許 dev / test
+    # PA-560 管理介面憑證:預設驗證(系統 CA 或 PA_CA_FILE);PA_TLS_INSECURE=1 不驗證(正式區也允許,需求方 2026-11-17)
     ca_file: str
     tls_insecure: bool
     interval: int
@@ -166,9 +166,8 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
         missing = [k for k, v in (("PA_HOST", host), ("PA_API_KEY_FILE", api_key)) if not v]
         if missing:
             raise ConfigError(f"PA_POLL_ENABLED=1 缺少必要設定:{'、'.join(missing)}")
+        # 正式區也允許(需求方 2026-11-17:PA-560 管理介面是出廠自簽憑證);啟動時 __main__ 記 WARNING
         insecure = _bool(env, "PA_TLS_INSECURE")
-        if insecure and gw_env == "prod":
-            raise ConfigError("正式區不可設定 PA_TLS_INSECURE")
         poll = PollConfig(
             host=host,
             port=_int(env, "PA_PORT", 443, 1, 65535),
@@ -187,9 +186,8 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
         missing = [k for k, v in (("PA_HOST", host), ("PA_API_KEY_FILE", api_key)) if not v]
         if missing:
             raise ConfigError(f"PA_QUERY_ENABLED=1 缺少必要設定:{'、'.join(missing)}")
+        # 正式區也允許(需求方 2026-11-17:PA-560 管理介面是出廠自簽憑證);啟動時 __main__ 記 WARNING
         insecure = _bool(env, "PA_TLS_INSECURE")
-        if insecure and gw_env == "prod":
-            raise ConfigError("正式區不可設定 PA_TLS_INSECURE")
         query = QueryConfig(
             host=host,
             port=_int(env, "PA_PORT", 443, 1, 65535),

@@ -17,10 +17,10 @@ const warroomRoutes: FastifyPluginAsync<{ warroom: WarroomService }> = async (ap
         operationId: 'netops.pa-live.warroom',
         summary: '即時監控戰情室:外部來源 → 防火牆 → 內部網段聚合',
         description:
-          '最近 minutes 分鐘(1 / 5 / 15,預設 5)的聚合:sources(外部來源,依國家取前 8、阻擋比例 ≥ 50% 的 Top 攻擊 IP 最多 3 個,其餘併成 other;內部互連為 lan)、' +
+          '最近 minutes 分鐘(1 / 5 / 15,預設 5)的聚合:sources(外部來源,依國家取前 8、連入且阻擋比例 ≥ 50% 的 Top 攻擊 IP 最多 3 個,其餘併成 other;內部互連為 lan)、' +
           'segments(內部網段,依網段設定檔;對不到的內部 IP 併入 unmatched)、links(每條來源 → 網段的每秒 conn / allow / deny / threat 速率)、kpis(denyPerMin、threat5m)、gauge(儀表滿格值)。' +
           '來源與網段的配對由 TRAFFIC 明細計算,一次最多讀 20000 筆;讀不到期間開頭時以實際涵蓋秒數換算(sample.complete 為 false)。國家用離線 GeoIP(DB-IP Lite,geo.attribution 須顯示在畫面)。' +
-          '網段設定檔不存在時用內建範例(segmentsSource "example"),格式錯誤時也用範例並標示 "invalid"。結果快取 3 秒。Redis 不可用時回 200、partial true、陣列為空並附 message,不回假資料。',
+          '網段設定檔不存在時用內建範例(segmentsSource "example"),格式錯誤時也用範例並標示 "invalid"。結果快取 3 秒(partial 不快取)。Redis 不可用時回 200、partial true、陣列為空並附 message,不回假資料。',
         tags: ['PA 即時監控'],
         'x-permission': PERMISSION,
         'x-gherkin': [

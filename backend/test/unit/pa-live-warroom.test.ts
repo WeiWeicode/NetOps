@@ -75,12 +75,12 @@ describe('戰情室純函式', () => {
   });
   it('方向:外部端查國家、內部端對網段', () => {
     const c = createClassifier(fakeGeo, createSegmentMatcher(CFG.segments));
-    assert.deepEqual(c({ src: '8.8.8.8', dst: '10.10.130.5' }), { externalIp: '8.8.8.8', internalIp: '10.10.130.5', country: 'US', countryName: 'United States', segment: 'server' });
+    assert.deepEqual(c({ src: '8.8.8.8', dst: '10.10.130.5' }), { externalIp: '8.8.8.8', internalIp: '10.10.130.5', country: 'US', countryName: 'United States', inbound: true, segment: 'server' });
     // 連出:外部端是目的
     assert.equal(c({ src: '10.10.1.1', dst: '1.1.1.1' }).country, 'AU');
     assert.equal(c({ src: '10.10.1.1', dst: '1.1.1.1' }).segment, 'office');
     // 內部互連 / 沒對到網段
-    assert.deepEqual(c({ src: '10.10.1.1', dst: '10.99.0.1' }), { externalIp: null, internalIp: '10.99.0.1', country: null, countryName: null, segment: 'unmatched' });
+    assert.deepEqual(c({ src: '10.10.1.1', dst: '10.99.0.1' }), { externalIp: null, internalIp: '10.99.0.1', country: null, countryName: null, inbound: false, segment: 'unmatched' });
     assert.equal(c({ src: '9.9.9.9', dst: '8.8.8.8' }).segment, 'unmatched');
   });
   it('聚合:國家、Top 攻擊 IP 拆出、其他、網段、速率', () => {
@@ -121,7 +121,17 @@ describe('戰情室純函式', () => {
     );
     const atk = r.links.find((l) => l.source === 'ip:5.5.5.5')!;
     assert.equal(atk.deny, 0.2);
-    assert.equal(atk.threat, 0.02);
+    assert.equal(atk.threat, 0.017);
+  });
+  it('聚合:連出被阻擋的外部目的不算攻擊 IP', () => {
+    const c = createClassifier(fakeGeo, createSegmentMatcher(CFG.segments));
+    const traffic = Array.from({ length: 20 }, () => ({ src: '10.10.1.1', dst: '5.5.5.5', action: 'deny' }));
+    const r = aggregateWarroom(traffic, [], c, CFG, 60);
+    assert.deepEqual(
+      r.sources.map((s) => s.id),
+      ['cc:RU'],
+    );
+    assert.equal(r.sources[0]!.deny, 20);
   });
   it('聚合:抽樣時次數與速率按比例放大', () => {
     const c = createClassifier(fakeGeo, createSegmentMatcher(CFG.segments));
@@ -178,7 +188,7 @@ describe('戰情室 API', () => {
     assert.equal(b.segments.find((s: { id: string }) => s.id === 'server').conn, 20);
     assert.deepEqual(b.kpis, { denyPerMin: 5, threat5m: 4 });
     assert.equal(b.sample.complete, true);
-    assert.equal(b.links[0].conn, 0.07); // 20 / 300 秒
+    assert.equal(b.links[0].conn, 0.067); // 20 / 300 秒
   });
 
   it('資料目錄的設定檔優先;格式錯誤時用範例並標示 invalid', async () => {
@@ -223,6 +233,9 @@ describe('戰情室 API', () => {
     assert.deepEqual([b.sources, b.segments, b.links], [[], [], []]);
     assert.deepEqual(b.kpis, { denyPerMin: null, threat5m: null });
     assert.match(b.message, /Redis/);
+    // partial 不快取:Redis 恢復後立即重算
+    redis.fail = false;
+    assert.equal((await t.call({ url: '/v1/pa-live/warroom' })).json().partial, false);
   });
 
   it('不支援的期間 400', async () => {

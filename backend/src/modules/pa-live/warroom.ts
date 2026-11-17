@@ -11,6 +11,7 @@
  * 失敗要明確(AGENT.md §5):Redis 不可用 → 200 + partial: true、陣列為空、message 說明,不回假資料;
  * 網段設定檔不存在 → 用內建範例並標示 segmentsSource "example";GeoIP 不可用 → geo.available false、國家併入「未知」。
  */
+import { isIP } from 'node:net';
 import { GEOIP_ATTRIBUTION, type GeoIp } from '../../infra/geoip/index.js';
 import { RedisReplyError, RedisUnavailableError, type PaLiveRedis, type StreamEntry } from '../../infra/redis/index.js';
 import type { WarroomStore } from '../../infra/store/index.js';
@@ -155,6 +156,8 @@ export interface Classified {
   country: string | null;
   /** 國家英文名(GeoIP) */
   countryName: string | null;
+  /** 連入(來源是外部);Top 攻擊 IP 只計連入 */
+  inbound: boolean;
   segment: string;
 }
 
@@ -162,8 +165,9 @@ export type Classifier = (d: Record<string, unknown>) => Classified;
 
 export function createClassifier(geo: GeoIp, matchSegment: (ip: string) => string | null): Classifier {
   return (d) => {
-    const src = typeof d.src === 'string' ? d.src : '';
-    const dst = typeof d.dst === 'string' ? d.dst : '';
+    // 只接受合法 IP(偽造的 log 欄位不進統計鍵)
+    const src = typeof d.src === 'string' && isIP(d.src) ? d.src : '';
+    const dst = typeof d.dst === 'string' && isIP(d.dst) ? d.dst : '';
     const srcIn = !!src && isPrivateIp(src);
     const dstIn = !!dst && isPrivateIp(dst);
     // 外部:優先來源(連入),來源是內部時取目的(連出的對象)
@@ -176,6 +180,7 @@ export function createClassifier(geo: GeoIp, matchSegment: (ip: string) => strin
       internalIp,
       country: g?.code ?? null,
       countryName: g?.name ?? null,
+      inbound: !!src && !srcIn,
       segment: (internalIp && matchSegment(internalIp)) || UNMATCHED_SEGMENT,
     };
   };
@@ -251,7 +256,6 @@ const topOf = (m: Map<string, number>, n: number, scale: number): TopItem[] =>
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
     .slice(0, n)
     .map(([key, count]) => ({ key, count: Math.round(count * scale) }));
-const round2 = (v: number) => Math.round(v * 100) / 100;
 
 /**
  * TRAFFIC 與 THREAT 明細 → sources / segments / links。
@@ -285,8 +289,8 @@ export function aggregateWarroom(
     const countryKey = c.externalIp ? (c.country ?? UNKNOWN) : LAN;
     const country = byCountry.get(countryKey) ?? byCountry.set(countryKey, newAcc()).get(countryKey)!;
     const seg = bySeg.get(c.segment) ?? bySeg.set(c.segment, newAcc()).get(c.segment)!;
-    const ipAcc = c.externalIp ? (byIp.get(c.externalIp) ?? byIp.set(c.externalIp, { ...newAcc(), country: c.country }).get(c.externalIp)!) : null;
-    const pk = `${c.externalIp ?? ''}|${countryKey}|${c.segment}`;
+    const ipAcc = c.externalIp && c.inbound ? (byIp.get(c.externalIp) ?? byIp.set(c.externalIp, { ...newAcc(), country: c.country }).get(c.externalIp)!) : null;
+    const pk = JSON.stringify([c.inbound ? (c.externalIp ?? '') : '', countryKey, c.segment]);
     const pair = pairs.get(pk) ?? pairs.set(pk, { conn: 0, allow: 0, deny: 0, threat: 0 }).get(pk)!;
     if (isThreat) {
       country.threat++;
@@ -314,7 +318,7 @@ export function aggregateWarroom(
 
   // Top 攻擊 IP:阻擋比例 ≥ 門檻且阻擋次數 ≥ 下限,依阻擋次數排序
   const attackIps = [...byIp.entries()]
-    .filter(([, a]) => a.deny >= opts.ipMinDeny && a.deny / Math.max(1, a.conn) >= opts.ipDenyRatio)
+    .filter(([, a]) => a.deny * scale >= opts.ipMinDeny && a.deny / Math.max(1, a.conn) >= opts.ipDenyRatio)
     .sort((a, b) => b[1].deny - a[1].deny || a[0].localeCompare(b[0]))
     .slice(0, opts.topIps);
   const ipSet = new Set(attackIps.map(([ip]) => ip));
@@ -374,7 +378,7 @@ export function aggregateWarroom(
   const linkMap = new Map<string, WarroomLink>();
   const sec = Math.max(1, windowSec);
   for (const [pk, p] of pairs) {
-    const [ip, countryKey, segment] = pk.split('|') as [string, string, string];
+    const [ip, countryKey, segment] = JSON.parse(pk) as [string, string, string];
     const source = sourceIdOf(ip, countryKey);
     const key = `${source}|${segment}`;
     const l = linkMap.get(key) ?? linkMap.set(key, { source, segment, conn: 0, allow: 0, deny: 0, threat: 0 }).get(key)!;
@@ -383,15 +387,16 @@ export function aggregateWarroom(
     l.deny += p.deny;
     l.threat += p.threat;
   }
+  const r3 = (v: number) => Math.round(v * 1000) / 1000;
   const links = [...linkMap.values()]
+    .filter((l) => l.conn > 0 || l.threat > 0)
     .map((l) => ({
       ...l,
-      conn: round2((l.conn * scale) / sec),
-      allow: round2((l.allow * scale) / sec),
-      deny: round2((l.deny * scale) / sec),
-      threat: round2((l.threat * threatScale) / sec),
+      conn: r3((l.conn * scale) / sec),
+      allow: r3((l.allow * scale) / sec),
+      deny: r3((l.deny * scale) / sec),
+      threat: r3((l.threat * threatScale) / sec),
     }))
-    .filter((l) => l.conn > 0 || l.threat > 0)
     .sort((a, b) => b.conn - a.conn || a.source.localeCompare(b.source) || a.segment.localeCompare(b.segment));
 
   return { sources, segments, links };
@@ -404,6 +409,8 @@ export const TRAFFIC_SCAN_MAX = 20_000;
 export const THREAT_SCAN_MAX = 5_000;
 const SCAN_CHUNK = 2_000;
 export const WARROOM_CACHE_MS = 3_000;
+/** 設定檔修改時間檢查間隔 */
+export const CONFIG_CHECK_MS = 5_000;
 export const WARROOM_MINUTES = [1, 5, 15] as const;
 
 type Log = { warn: (obj: object, msg: string) => void };
@@ -436,8 +443,13 @@ function memo<T>(ttlMs: number, now: () => number) {
     if (hit && now() - hit.at < ttlMs) return hit.value;
     const value = fn();
     cache.set(key, { at: now(), value });
-    // 失敗不快取
-    value.catch(() => cache.delete(key));
+    // 失敗與 partial(Redis 不可用)不快取:恢復後下一次就重算
+    value.then(
+      (v) => {
+        if ((v as { partial?: unknown })?.partial === true && cache.get(key)?.value === value) cache.delete(key);
+      },
+      () => cache.delete(key),
+    );
     return value;
   };
 }
@@ -451,7 +463,11 @@ export function createWarroomService(
 
   // 設定檔依修改時間快取;格式錯誤時回 400 等級的錯誤不合適(是部署問題):記 warn 並改用範例,畫面標示 segmentsSource "invalid"
   let cfgCache: { mtime: number | null; cfg: WarroomConfig; source: 'file' | 'example' | 'invalid' } | null = null;
+  // 修改時間最多每 CONFIG_CHECK_MS 檢查一次:SSE 每筆 log 都會呼叫(statSync 不可每筆執行)
+  let checkedAt = -Infinity;
   const config = () => {
+    if (cfgCache && now() - checkedAt < CONFIG_CHECK_MS) return cfgCache;
+    checkedAt = now();
     const mtime = deps.store.mtime();
     if (cfgCache && cfgCache.mtime === mtime) return cfgCache;
     let next: NonNullable<typeof cfgCache>;
@@ -525,7 +541,7 @@ export function createWarroomService(
         };
       } catch (err) {
         if (!isRedisError(err)) throw err;
-        deps.log?.warn({ err }, '戰情室:無法讀取 netops-redis');
+        deps.log?.warn({ code: (err as Error).name }, '戰情室:無法讀取 netops-redis');
         return { ...empty, message: REDIS_DOWN };
       }
     });

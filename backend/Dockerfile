@@ -9,9 +9,11 @@ COPY tsconfig.json tsconfig.build.json ./
 COPY src/ src/
 RUN npm run build && npm prune --omit=dev
 # 戰情室離線 GeoIP(WARROOM-PLAN Q2):DB-IP「IP to Country Lite」,CC BY 4.0(畫面須標示 IP Geolocation by DB-IP,連到 https://db-ip.com)。
-# 只在建置時下載、執行時不連外;每月初發布新版,更新時改 DBIP_MONTH(或 --build-arg)重新建置。下載失敗 → 建置失敗(不靜默缺檔)
+# 只在建置時下載、執行時不連外;每月初發布新版,更新時改 DBIP_MONTH(或 --build-arg)重新建置。下載或雜湊不符 → 建置失敗(不靜默缺檔)
 ARG DBIP_MONTH=2026-11
-RUN mkdir -p /app/geoip && wget -qO- "https://download.db-ip.com/free/dbip-country-lite-${DBIP_MONTH}.mmdb.gz" | gunzip > /app/geoip/dbip-country-lite.mmdb   && test -s /app/geoip/dbip-country-lite.mmdb
+# 下載檔的 SHA-256(換月份時一併更新;在可連外的電腦下載後 sha256sum 取得)
+ARG DBIP_SHA256=75fe430010f6d38a8c4331c202bf0df6ce3221a6e6d823b9e5a6d951e4cf975
+RUN mkdir -p /app/geoip   && wget -qO /tmp/dbip.mmdb.gz "https://download.db-ip.com/free/dbip-country-lite-${DBIP_MONTH}.mmdb.gz"   && echo "${DBIP_SHA256}  /tmp/dbip.mmdb.gz" | sha256sum -c -   && gunzip -c /tmp/dbip.mmdb.gz > /app/geoip/dbip-country-lite.mmdb   && rm /tmp/dbip.mmdb.gz && test -s /app/geoip/dbip-country-lite.mmdb
 
 FROM node:22-alpine
 # PA / AD log 與知識庫的時間是台灣當地時間(舊版 IIS 主機時區);Node 內建 ICU 時區資料,不需 tzdata

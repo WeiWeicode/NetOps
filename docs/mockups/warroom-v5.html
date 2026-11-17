@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PA 戰情室 v5</title>
+<style>
+:root{--bg:#060b14;--panel:#0c1424cc;--line:#1c2a44;--txt:#cfe3ff;--dim:#6f86a8;--ok:#22d3a6;--warn:#f5b03a;--bad:#ff4d5e;--acc:#3ea8ff}
+*{box-sizing:border-box}html,body{margin:0;height:100%;background:var(--bg);color:var(--txt);font-family:"Segoe UI","Microsoft JhengHei",sans-serif;overflow:hidden}
+header{position:absolute;top:0;left:0;right:0;height:52px;display:flex;align-items:center;gap:24px;padding:0 20px;border-bottom:1px solid var(--line);background:linear-gradient(#0b1528,#060b14)}
+header h1{font-size:17px;margin:0;letter-spacing:2px}header .live{color:var(--ok);font-size:12px}header .live::before{content:"●";margin-right:4px;animation:blink 1s infinite}
+@keyframes blink{50%{opacity:.2}}
+.kpis{display:flex;gap:18px;margin-left:auto}.kpi{text-align:right}.kpi b{display:block;font-size:18px;font-variant-numeric:tabular-nums}.kpi span{font-size:11px;color:var(--dim)}
+canvas{position:absolute;top:52px;left:0}
+.side{position:absolute;top:64px;bottom:12px;width:250px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px;font-size:12px;backdrop-filter:blur(4px)}
+.side h3{margin:0 0 8px;font-size:12px;color:var(--dim);letter-spacing:1px}
+#feed{position:absolute;right:12px}#legend{left:12px;bottom:auto;height:auto}
+#feed .ev{padding:5px 0;border-bottom:1px dashed var(--line);animation:in .4s}@keyframes in{from{opacity:0;transform:translateX(20px)}}
+.ev .t{color:var(--dim)}.deny{color:var(--bad)}.allow{color:var(--ok)}.threat{color:var(--warn)}
+.lg{display:flex;align-items:center;gap:8px;margin:4px 0}.dot{width:10px;height:10px;border-radius:50%}
+#tip{position:absolute;pointer-events:none;background:#0b1424ee;border:1px solid var(--acc);border-radius:6px;padding:8px 10px;font-size:12px;display:none;min-width:180px}
+.note{font-size:11px;color:var(--dim);margin-left:auto}
+.side{bottom:252px!important}
+#logbar{position:absolute;left:12px;right:12px;bottom:12px;height:230px;background:var(--panel);border:1px solid var(--line);border-radius:8px;display:flex;flex-direction:column;font-size:12px}
+#logbar .hd{display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid var(--line)}
+#logbar .hd h3{margin:0;font-size:12px;color:var(--dim);letter-spacing:1px}
+.chip{padding:2px 8px;border:1px solid var(--line);border-radius:10px;color:var(--dim);cursor:pointer}.chip.on{border-color:var(--acc);color:var(--txt)}
+#logbar .bd{overflow:auto;flex:1}
+#logbar table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+#logbar th{position:sticky;top:0;background:#0c1424;text-align:left;font-weight:normal;color:var(--dim);padding:5px 10px}
+#logbar td{padding:4px 10px;border-top:1px solid #111d33;white-space:nowrap}
+#logbar tr.new td{animation:flash 1.2s}@keyframes flash{from{background:rgba(62,168,255,.25)}}
+#logbar tr:hover td{background:rgba(62,168,255,.08)}
+#lgBtn{position:absolute;top:6px;right:6px;background:#14223a;color:var(--txt);border:1px solid var(--line);border-radius:4px;width:22px;height:22px;cursor:pointer;padding:0}
+#legend{transition:width .3s}
+#legend.mini{width:34px;padding:0;overflow:hidden}#legend.mini>*:not(#lgBtn){display:none}
+#legend.mini #lgBtn{right:5px;transform:rotate(180deg)}
+#legend.mini::after{content:"說明";position:absolute;top:40px;left:9px;writing-mode:vertical-rl;color:var(--dim);font-size:12px;letter-spacing:4px}
+.ov{position:absolute;left:50%;transform:translateX(-50%);width:min(560px,40vw);background:rgba(10,18,34,.82);border:1px solid #23406b;border-radius:10px;padding:10px 14px;font-size:12px;backdrop-filter:blur(6px);box-shadow:0 0 24px rgba(62,168,255,.15)}
+.ov h3{margin:0;font-size:12px;letter-spacing:1px;color:#8fc3ff;display:flex;align-items:center;gap:8px}
+#ai{top:62px}#risk{bottom:262px}
+#ai .meta{color:var(--dim);font-weight:normal;margin-left:auto}
+#ai button{background:linear-gradient(90deg,#1f6fd1,#7b4dff);color:#fff;border:0;border-radius:12px;padding:3px 10px;font-size:11px;cursor:pointer}
+#ai button:disabled{opacity:.5;cursor:wait}
+#aiText{margin-top:6px;line-height:1.6;height:72px;overflow:auto;color:#d8e8ff}
+#aiText .cur{display:inline-block;width:7px;height:12px;background:#8fc3ff;animation:blink .8s infinite;vertical-align:middle}
+.aiorb{width:14px;height:14px;border-radius:50%;background:radial-gradient(circle at 35% 35%,#fff,#7b4dff 50%,#1f6fd1);box-shadow:0 0 10px #7b4dff}
+.aiorb.run{animation:spin 1s linear infinite}@keyframes spin{to{transform:rotate(360deg);filter:hue-rotate(90deg)}}
+#risk .grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-top:8px}
+#risk .col h4{margin:0 0 4px;font-size:11px;color:var(--dim);font-weight:normal}
+.rb{display:flex;align-items:center;gap:6px;margin:3px 0}.rb .l{width:84px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rb .b{flex:1;height:6px;background:#14223a;border-radius:3px;overflow:hidden}.rb .b i{display:block;height:100%;border-radius:3px;transition:width .6s}
+.rb .v{width:34px;text-align:right;font-variant-numeric:tabular-nums}
+.big{display:flex;gap:14px;margin-top:2px}.big div{flex:1}.big b{font-size:18px;display:block}.big span{color:var(--dim);font-size:10px}
+</style></head><body>
+<header><h1>NETOPS ▸ PA-560 戰情室</h1><span class="live">LIVE</span>
+<div class="kpis">
+<div class="kpi"><b id="kBps">-</b><span>吞吐量</span></div>
+<div class="kpi"><b id="kSess">-</b><span>連線數</span></div>
+<div class="kpi"><b id="kCps">-</b><span>新連線/秒</span></div>
+<div class="kpi"><b id="kDeny" style="color:var(--bad)">-</b><span>阻擋/分</span></div>
+<div class="kpi"><b id="kThr" style="color:var(--warn)">-</b><span>威脅/5分</span></div>
+<div class="kpi"><b id="kCpu">-</b><span>DP CPU</span></div>
+</div></header>
+<canvas id="c"></canvas>
+<div class="side" id="legend">
+<button id="lgBtn" title="收摺 / 展開說明">«</button>
+<h3>圖例</h3>
+<div class="lg"><span class="dot" style="background:var(--ok)"></span>允許流量</div>
+<div class="lg"><span class="dot" style="background:var(--bad)"></span>阻擋 (deny/drop)</div>
+<div class="lg"><span class="dot" style="background:var(--warn)"></span>威脅事件</div>
+<div class="lg" style="color:var(--dim)">粒子密度 = 每秒連線量<br>節點大小 = 5 分鐘流量<br>連線顏色 = 阻擋比例<br>核心環 = 防火牆負載</div>
+<h3 style="margin-top:14px">操作</h3>
+<div style="color:var(--dim)">滑過節點看明細<br>點節點聚焦(其他淡出)<br>點空白取消聚焦</div>
+</div>
+<div class="side" id="feed"><h3>即時事件</h3><div id="evs"></div></div>
+<div id="tip"></div>
+<div class="ov" id="ai"><h3><span class="aiorb" id="orb"></span>AI 分析 <span class="meta" id="aiMeta">每整點自動分析 · 上次 10:00</span><button id="aiBtn">立即分析</button></h3>
+<div id="aiText"></div></div>
+<div class="ov" id="risk"><h3>⚠ 近一小時高風險統計 <span class="meta" style="margin-left:auto;color:var(--dim);font-weight:normal">每分鐘更新</span></h3>
+<div class="grid">
+<div class="col"><h4>總覽</h4><div class="big"><div><b id="rThreat" style="color:var(--warn)">-</b><span>威脅事件</span></div><div><b id="rDeny" style="color:var(--bad)">-</b><span>阻擋次數</span></div></div>
+<div class="big" style="margin-top:6px"><div><b id="rSrc">-</b><span>攻擊來源 IP</span></div><div><b id="rCrit" style="color:var(--bad)">-</b><span>Critical</span></div></div></div>
+<div class="col"><h4>Top 威脅類型</h4><div id="rTypes"></div></div>
+<div class="col"><h4>Top 攻擊來源</h4><div id="rTop"></div></div>
+</div></div>
+<div id="logbar"><div class="hd"><h3>TRAFFIC LOG</h3>
+<span class="chip on" data-f="all">全部</span><span class="chip" data-f="deny">阻擋</span><span class="chip" data-f="allow">允許</span><span class="chip" data-f="threat">威脅</span>
+<span class="chip" id="pause">⏸ 暫停</span><span class="note">樣稿:隨機假資料 · 點上方節點會同步篩選此表</span></div>
+<div class="bd"><table><thead><tr><th>時間</th><th>動作</th><th>來源 IP</th><th>國家</th><th>目的 IP</th><th>區段</th><th>Port</th><th>App</th><th>規則</th><th>Bytes</th><th>Session</th></tr></thead><tbody id="lb"></tbody></table></div></div>
+<script>
+const cv=document.getElementById('c'),ctx=cv.getContext('2d');let W,H,cx,cy,R;
+const left=[{n:'台灣',k:'TW',v:900,d:.02,ic:'globe'},{n:'美國',k:'US',v:520,d:.06,ic:'globe'},{n:'日本',k:'JP',v:300,d:.03,ic:'globe'},{n:'中國',k:'CN',v:260,d:.55,ic:'globe'},{n:'俄羅斯',k:'RU',v:140,d:.8,ic:'globe'},{n:'荷蘭',k:'NL',v:110,d:.35,ic:'globe'},{n:'45.155.x.x',k:'IP',v:90,d:.97,atk:1,ic:'skull'},{n:'185.220.x.x',k:'IP',v:70,d:.95,atk:1,ic:'skull'},{n:'其他',k:'..',v:180,d:.2,ic:'cloud'}];
+const right=[{n:'VLAN 10 辦公',v:700,ic:'pc'},{n:'VLAN 20 廠務',v:380,ic:'factory'},{n:'VLAN 30 MES',v:260,ic:'gear'},{n:'DMZ Web',v:520,svc:1,ic:'server'},{n:'Mail',v:240,svc:1,ic:'mail'},{n:'AD / DNS',v:200,svc:1,ic:'key'},{n:'VPN (GP)',v:150,svc:1,ic:'lock'},{n:'Guest WiFi',v:120,ic:'wifi'}];
+const ICONS={
+ globe:'M12 2a10 10 0 1 0 0 20a10 10 0 1 0 0-20M2 12h20M12 2c3 3 4 6.5 4 10s-1 7-4 10M12 2c-3 3-4 6.5-4 10s1 7 4 10',
+ skull:'M12 2c-5 0-8 3.5-8 8c0 3 1.5 5 3 6v3h10v-3c1.5-1 3-3 3-6c0-4.5-3-8-8-8M9 10.5a1.5 1.5 0 1 0 0 .1M15 10.5a1.5 1.5 0 1 0 0 .1M10 19v3M14 19v3',
+ cloud:'M7 18h11a4 4 0 0 0 0-8a6 6 0 0 0-11.5-1A4.5 4.5 0 0 0 7 18',
+ pc:'M3 4h18v12H3zM8 20h8M12 16v4',
+ factory:'M2 21h20M3 21V10l6 4V10l6 4V6h4v15M17 10v2',
+ gear:'M12 8a4 4 0 1 0 0 8a4 4 0 1 0 0-8M12 1v4M12 19v4M1 12h4M19 12h4M4.2 4.2l2.8 2.8M17 17l2.8 2.8M4.2 19.8l2.8-2.8M17 7l2.8-2.8',
+ server:'M3 3h18v6H3zM3 15h18v6H3zM7 6h.1M7 18h.1M3 9v6M21 9v6',
+ mail:'M2 5h20v14H2zM2 5l10 8l10-8',
+ key:'M7 14a4 4 0 1 0 0 .1M10 12l11-11M17 5l3 3M14 8l3 3',
+ lock:'M5 11h14v11H5zM8 11V7a4 4 0 0 1 8 0v4M12 15v3',
+ wifi:'M2 9c6-5 14-5 20 0M5 13c4-3.5 10-3.5 14 0M8.5 16.5c2-1.5 5-1.5 7 0M12 20h.1',
+ shield:'M12 2l8 3v6c0 5-3.5 9-8 11c-4.5-2-8-6-8-11V5zM8.5 12l2.5 2.5l5-5'};
+const P2={};for(const k in ICONS)P2[k]=new Path2D(ICONS[k]);
+function icon(name,x,y,s,stroke,lw){ctx.save();ctx.translate(x-s/2,y-s/2);ctx.scale(s/24,s/24);ctx.strokeStyle=stroke;ctx.lineWidth=lw*24/s;ctx.lineCap='round';ctx.lineJoin='round';ctx.stroke(P2[name]);ctx.restore()}
+let parts=[],focus=null,hover=null,load=.45;
+let legendOpen=true;try{legendOpen=localStorage.getItem('wr-legend')!=='0'}catch(e){}
+function layout(){W=cv.width=innerWidth;H=cv.height=innerHeight-52-250;
+ const lx=legendOpen?Math.max(330,W*.25):Math.max(170,W*.16),rx=Math.min(W-330,W*.75);
+ cx=(lx+rx)/2;cy=H/2;R=Math.min(rx-lx,H)*(legendOpen?.15:.17);
+ document.querySelectorAll('.ov').forEach(o=>o.style.left=cx+'px');
+ document.getElementById('legend').classList.toggle('mini',!legendOpen);
+ place0(lx,rx)}
+function place0(lx,rx){
+ const place=(arr,x)=>{const top=60,bot=H-60;arr.forEach((o,i)=>{o.x=x;o.y=top+(bot-top)*(i+.5)/arr.length})};
+ place(left,lx);place(right,rx);}
+addEventListener('resize',layout);
+document.getElementById('lgBtn').onclick=()=>{legendOpen=!legendOpen;try{localStorage.setItem('wr-legend',legendOpen?'1':'0')}catch(e){}parts.forEach(p=>p.px=undefined);layout()};
+layout();
+const col=d=>d>.6?[255,77,94]:d>.25?[245,176,58]:[34,211,166];
+function bez(a,b,t,side){const mx=(a.x+b.x)/2;const p0=a,p3=b,p1={x:mx,y:a.y},p2={x:mx,y:b.y},u=1-t;
+ return{x:u*u*u*p0.x+3*u*u*t*p1.x+3*u*t*t*p2.x+t*t*t*p3.x,y:u*u*u*p0.y+3*u*u*t*p1.y+3*u*t*t*p2.y+t*t*t*p3.y}}
+const core=()=>({x:cx,y:cy});
+function spawn(){left.forEach((s,i)=>{if(Math.random()<s.v/2500){const deny=Math.random()<s.d;
+  parts.push({s:i,t:0,sp:.006+Math.random()*.006,deny,threat:!deny&&Math.random()<.03,dst:Math.floor(Math.random()*right.length),seg:0});}});}
+function ent(i){return{x:cx-R,y:cy+(left[i].y-cy)*.25}} function ext(j){return{x:cx+R,y:cy+(right[j].y-cy)*.25}}
+function link(a,b,c,w,a2){ctx.strokeStyle=`rgba(${c},${a2})`;ctx.lineWidth=w;ctx.beginPath();ctx.moveTo(a.x,a.y);const mx=(a.x+b.x)/2;ctx.bezierCurveTo(mx,a.y,mx,b.y,b.x,b.y);ctx.stroke();}
+function dim(on){return focus===null||on?1:.12}
+function draw(ts){ctx.fillStyle='rgba(6,11,20,.35)';ctx.fillRect(0,0,W,H);
+ // grid
+ ctx.strokeStyle='rgba(30,50,80,.15)';ctx.lineWidth=1;for(let x=0;x<W;x+=40){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke()}
+ left.forEach((s,i)=>link(s,ent(i),col(s.d).join(','),1+s.v/200,.25*dim(focus==='L'+i)));
+ right.forEach((d,j)=>link(ext(j),d,'62,168,255',1+d.v/200,.25*dim(focus==='R'+j)));
+ // particles
+ spawn();parts=parts.filter(p=>{p.t+=p.sp;let pos,a=1;
+  const fo=focus===null||focus==='L'+p.s||(focus==='R'+p.dst&&!p.deny);
+  if(p.seg===0){pos=bez(left[p.s],ent(p.s),p.t);if(p.t>=1){if(p.deny){burst(ent(p.s));return false}p.seg=1;p.t=0}}
+  else if(p.seg===1){const a1=ent(p.s),b1=ext(p.dst);pos={x:a1.x+(b1.x-a1.x)*p.t,y:a1.y+(b1.y-a1.y)*p.t};a=.5;if(p.t>=1){p.seg=2;p.t=0}}
+  else{pos=bez(ext(p.dst),right[p.dst],p.t);if(p.t>=1)return false}
+  const c=p.deny?[255,77,94]:p.threat?[245,176,58]:p.seg===2?[62,168,255]:[34,211,166];
+  const al=a*(fo?1:.08);ctx.globalCompositeOperation='lighter';
+  if(p.px!==undefined){ctx.strokeStyle=`rgba(${c},${al*.45})`;ctx.lineWidth=p.threat?3:1.6;ctx.beginPath();ctx.moveTo(p.px,p.py);ctx.lineTo(pos.x,pos.y);ctx.stroke()}
+  p.px=pos.x;p.py=pos.y;
+  const sz=p.threat?4:2;const gg=ctx.createRadialGradient(pos.x,pos.y,0,pos.x,pos.y,sz*3);gg.addColorStop(0,`rgba(255,255,255,${al})`);gg.addColorStop(.3,`rgba(${c},${al})`);gg.addColorStop(1,`rgba(${c},0)`);
+  ctx.fillStyle=gg;ctx.beginPath();ctx.arc(pos.x,pos.y,sz*3,0,7);ctx.fill();ctx.globalCompositeOperation='source-over';return true});
+ drawBursts();
+ drawCore(ts);
+ // nodes
+ left.forEach((s,i)=>node(s,col(s.d),'right',focus==='L'+i,hover==='L'+i,s.atk?'⚠ ':''));
+ right.forEach((d,j)=>node(d,d.svc?[160,120,255]:[62,168,255],'left',focus==='R'+j,hover==='R'+j,''));
+ requestAnimationFrame(draw)}
+let bursts=[];function burst(p){bursts.push({x:p.x,y:p.y,r:2,a:1});shieldHit=1}
+let shieldHit=0;
+function drawBursts(){ctx.globalCompositeOperation='lighter';bursts=bursts.filter(b=>{b.r+=1;b.a-=.045;
+ ctx.strokeStyle=`rgba(255,77,94,${b.a})`;ctx.lineWidth=2;ctx.beginPath();ctx.arc(b.x,b.y,b.r,Math.PI*.6,Math.PI*1.4);ctx.stroke();
+ for(let k=0;k<5;k++){const an=Math.PI*.7+k*Math.PI*.15;ctx.fillStyle=`rgba(255,140,120,${b.a})`;ctx.fillRect(b.x+Math.cos(an)*b.r*1.4,b.y+Math.sin(an)*b.r*1.4,2,2)}
+ return b.a>0});ctx.globalCompositeOperation='source-over'}
+function hex(x,y,r,rot){ctx.beginPath();for(let i=0;i<6;i++){const a=rot+i*Math.PI/3;ctx[i?'lineTo':'moveTo'](x+r*Math.cos(a),y+r*Math.sin(a))}ctx.closePath()}
+function drawCore(ts){const t=ts/1000;
+ load+=(Math.random()-.5)*.02;load=Math.max(.2,Math.min(.95,load));
+ const lc=col(load*.7);shieldHit*=.9;
+ const g=ctx.createRadialGradient(cx,cy,R*.2,cx,cy,R*2.2);g.addColorStop(0,`rgba(${62+shieldHit*190|0},${168-shieldHit*100|0},255,.28)`);g.addColorStop(1,'rgba(62,168,255,0)');ctx.fillStyle=g;ctx.beginPath();ctx.arc(cx,cy,R*2.2,0,7);ctx.fill();
+ if(ctx.createConicGradient){const sg=ctx.createConicGradient(t*1.2%(Math.PI*2),cx,cy);sg.addColorStop(0,'rgba(62,168,255,.35)');sg.addColorStop(.12,'rgba(62,168,255,0)');sg.addColorStop(1,'rgba(62,168,255,0)');ctx.fillStyle=sg;ctx.beginPath();ctx.arc(cx,cy,R*1.45,0,7);ctx.fill()}
+ ctx.save();ctx.translate(cx,cy);ctx.rotate(t*.15);
+ for(let i=0;i<72;i++){const a=i*Math.PI/36,l=i%6?4:10;ctx.strokeStyle=i%6?'rgba(62,168,255,.35)':'rgba(120,200,255,.8)';ctx.lineWidth=1.2;ctx.beginPath();ctx.moveTo(Math.cos(a)*R*1.45,Math.sin(a)*R*1.45);ctx.lineTo(Math.cos(a)*(R*1.45-l),Math.sin(a)*(R*1.45-l));ctx.stroke()}
+ ctx.restore();
+ const seg=40;for(let i=0;i<seg;i++){const a0=-Math.PI/2+i*Math.PI*2/seg+.02,a1=a0+Math.PI*2/seg-.04,on=i/seg<load;
+  ctx.strokeStyle=on?`rgba(${lc},${.6+.4*Math.sin(t*4+i*.3)**2})`:'rgba(30,50,80,.6)';ctx.lineWidth=12;ctx.beginPath();ctx.arc(cx,cy,R*1.18,a0,a1);ctx.stroke()}
+ ctx.lineWidth=1.5;ctx.strokeStyle='rgba(62,168,255,.5)';ctx.setLineDash([3,7]);ctx.beginPath();ctx.arc(cx,cy,R*.95,-t*.6,-t*.6+Math.PI*2);ctx.stroke();ctx.setLineDash([]);
+ const sats=[['TRAFFIC','34,211,166'],['THREAT','245,176,58'],['URL','62,168,255'],['WILDFIRE','255,77,94'],['GP','160,120,255']];
+ sats.forEach((s,i)=>{const a=t*.5+i*Math.PI*2/sats.length,x=cx+Math.cos(a)*R*.95,y=cy+Math.sin(a)*R*.95;
+  ctx.fillStyle=`rgb(${s[1]})`;ctx.shadowColor=`rgb(${s[1]})`;ctx.shadowBlur=12;ctx.beginPath();ctx.arc(x,y,3.5,0,7);ctx.fill();ctx.shadowBlur=0;
+  ctx.fillStyle=`rgba(${s[1]},.8)`;ctx.font='9px Segoe UI';ctx.textAlign='center';ctx.fillText(s[0],x,y-7)});
+ const hr=R*.62;ctx.shadowColor=`rgb(${lc})`;ctx.shadowBlur=25+shieldHit*30;
+ const hg=ctx.createLinearGradient(cx,cy-hr,cx,cy+hr);hg.addColorStop(0,'rgba(20,45,80,.95)');hg.addColorStop(1,'rgba(8,18,34,.95)');
+ hex(cx,cy,hr,Math.PI/6);ctx.fillStyle=hg;ctx.fill();ctx.lineWidth=2;ctx.strokeStyle=shieldHit>.1?'rgba(255,77,94,.9)':'rgba(120,200,255,.9)';ctx.stroke();ctx.shadowBlur=0;
+ hex(cx,cy,hr*.86,Math.PI/6);ctx.strokeStyle='rgba(62,168,255,.25)';ctx.lineWidth=1;ctx.stroke();
+ icon('shield',cx,cy-hr*.32,hr*.5,`rgb(${lc})`,2.2);
+ ctx.fillStyle='#e6f2ff';ctx.textAlign='center';ctx.font='bold 15px Segoe UI';ctx.fillText('PA-560',cx,cy+hr*.22);
+ ctx.font='bold 20px Segoe UI';ctx.fillStyle=`rgb(${lc})`;ctx.fillText(Math.round(load*100)+'%',cx,cy+hr*.55);
+ ctx.font='10px Segoe UI';ctx.fillStyle='#6f86a8';ctx.fillText('DATAPLANE',cx,cy+hr*.72);
+ drawCoreExtras(t);}
+let BPS=500,SESS=43000,CPS=1100,dBps=500,dSess=43000,ripples=[],lastRip=0;
+function gauge(a0,a1,frac,rad,c,label,val,lx,ly,al){
+ ctx.lineCap='round';ctx.lineWidth=6;ctx.strokeStyle='rgba(30,50,80,.7)';ctx.beginPath();ctx.arc(cx,cy,rad,a0,a1,al);ctx.stroke();
+ const ae=a0+(a1-a0)*frac;const gr=ctx.createLinearGradient(cx-rad,cy,cx+rad,cy);gr.addColorStop(0,`rgba(${c},.3)`);gr.addColorStop(1,`rgb(${c})`);
+ ctx.strokeStyle=gr;ctx.shadowColor=`rgb(${c})`;ctx.shadowBlur=14;ctx.beginPath();ctx.arc(cx,cy,rad,a0,ae,al);ctx.stroke();ctx.shadowBlur=0;
+ // 端點亮點
+ ctx.fillStyle='#fff';ctx.beginPath();ctx.arc(cx+Math.cos(ae)*rad,cy+Math.sin(ae)*rad,3.5,0,7);ctx.fill();ctx.lineCap='butt';
+ ctx.textAlign='center';ctx.fillStyle=`rgb(${c})`;ctx.font='bold 22px Segoe UI';ctx.fillText(val,lx,ly);
+ ctx.fillStyle='#6f86a8';ctx.font='10px Segoe UI, Microsoft JhengHei';ctx.fillText(label,lx,ly+14)}
+function drawCoreExtras(t){
+ dBps+=(BPS-dBps)*.05;dSess+=(SESS-dSess)*.05;
+ // 擴散波:頻率隨新連線/秒
+ if(t-lastRip>1.6-CPS/1400){ripples.push({r:R*.65,a:.6});lastRip=t}
+ ripples=ripples.filter(p=>{p.r+=1.6;p.a-=.006;ctx.strokeStyle=`rgba(62,168,255,${p.a})`;ctx.lineWidth=1;hex(cx,cy,p.r,Math.PI/6);ctx.stroke();return p.a>0&&p.r<R*2.4});
+ const gR=R*1.7;
+ // 上弧:吞吐量  下弧:連線數
+ gauge(Math.PI*1.2,Math.PI*1.8,Math.min(1,dBps/1000),gR,'34,211,166','吞吐量 Mbps / 1 Gbps',dBps.toFixed(0),cx,cy-gR-18,false);
+ gauge(Math.PI*.8,Math.PI*.2,Math.min(1,dSess/64000),gR,'160,120,255','連線數 / 64K',Math.round(dSess).toLocaleString(),cx,cy+gR+30,true);
+ // 左右小指標:阻擋率、新連線
+ const deny=parseInt(kDeny.textContent)||0;
+ ctx.textAlign='center';ctx.font='bold 15px Segoe UI';
+ ctx.fillStyle='#ff4d5e';ctx.fillText(deny+'/分',cx-gR-6,cy-R*1.9);ctx.fillStyle='#6f86a8';ctx.font='10px Segoe UI, Microsoft JhengHei';ctx.fillText('阻擋',cx-gR-6,cy-R*1.9+13);
+ ctx.font='bold 15px Segoe UI';ctx.fillStyle='#3ea8ff';ctx.fillText(CPS+'/s',cx+gR+6,cy-R*1.9);ctx.fillStyle='#6f86a8';ctx.font='10px Segoe UI, Microsoft JhengHei';ctx.fillText('新連線',cx+gR+6,cy-R*1.9+13);
+ // 環繞資料流:二進位字元沿外圈流動
+ ctx.font='9px Consolas';ctx.fillStyle='rgba(62,168,255,.35)';
+ for(let i=0;i<48;i++){const a=i/48*Math.PI*2-t*.25;ctx.save();ctx.translate(cx+Math.cos(a)*R*1.58,cy+Math.sin(a)*R*1.58);ctx.rotate(a+Math.PI/2);ctx.fillText(((i*7+Math.floor(t*3))%5)>2?'1':'0',0,0);ctx.restore()}
+ // 能量電弧:隨機從盾牌射向分段環
+ if(Math.random()<.25){const a=Math.random()*Math.PI*2;ctx.strokeStyle='rgba(180,220,255,.7)';ctx.lineWidth=1;ctx.beginPath();let x=cx+Math.cos(a)*R*.62,y=cy+Math.sin(a)*R*.62;ctx.moveTo(x,y);
+  for(let k=1;k<=5;k++){const rr=R*(.62+k*.11);x=cx+Math.cos(a+(Math.random()-.5)*.15)*rr;y=cy+Math.sin(a+(Math.random()-.5)*.15)*rr;ctx.lineTo(x,y)}ctx.stroke()}
+}
+function node(o,c,al,f,h,pre){const r=10+Math.sqrt(o.v)/3.2;o.r=r;const a=focus===null||f?1:.25,now=performance.now();
+ if(o.d>.6){for(let k=0;k<2;k++){const ph=((now/900)+k*.5)%1;ctx.strokeStyle=`rgba(255,77,94,${(1-ph)*.7*a})`;ctx.lineWidth=2;ctx.beginPath();ctx.arc(o.x,o.y,r+ph*22,0,7);ctx.stroke()}}
+ ctx.strokeStyle=`rgba(${c},${.8*a})`;ctx.lineWidth=2;const ro=now/1500*(al==='right'?1:-1);
+ for(let k=0;k<3;k++){ctx.beginPath();ctx.arc(o.x,o.y,r+5,ro+k*2.09,ro+k*2.09+1.2);ctx.stroke()}
+ ctx.shadowColor=`rgb(${c})`;ctx.shadowBlur=h?25:12;
+ const ng=ctx.createRadialGradient(o.x,o.y-r*.4,1,o.x,o.y,r);ng.addColorStop(0,`rgba(${c},${.45*a})`);ng.addColorStop(1,`rgba(8,16,30,${.95*a})`);
+ if(o.svc){hex(o.x,o.y,r,0)}else{ctx.beginPath();ctx.arc(o.x,o.y,r,0,7)}
+ ctx.fillStyle=ng;ctx.fill();ctx.lineWidth=h?2.5:1.5;ctx.strokeStyle=`rgba(${c},${a})`;ctx.stroke();ctx.shadowBlur=0;
+ icon(o.ic,o.x,o.y,r*1.05,`rgba(${o.atk?'255,200,200':'230,242,255'},${a})`,1.6);
+ const tx=o.x+(al==='right'?-r-14:r+14);ctx.textAlign=al==='right'?'right':'left';
+ ctx.fillStyle=`rgba(230,242,255,${a})`;ctx.font='bold 13px Segoe UI, Microsoft JhengHei';ctx.fillText(pre+o.n,tx,o.y-2);
+ const bw=Math.min(90,o.v/10),bx=al==='right'?tx-bw:tx;ctx.fillStyle=`rgba(${c},${.7*a})`;ctx.fillRect(bx,o.y+5,bw,3);
+ ctx.font='10px Segoe UI';ctx.fillStyle=`rgba(111,134,168,${a})`;ctx.fillText((o.v*12|0).toLocaleString()+' conn/5m',al==='right'?tx-bw-6:tx+bw+6,o.y+9)}
+function hit(x,y){y-=52;for(const[i,s]of left.entries())if(Math.hypot(s.x-x,s.y-y)<s.r+6)return'L'+i;for(const[j,d]of right.entries())if(Math.hypot(d.x-x,d.y-y)<d.r+6)return'R'+j;return null}
+const tip=document.getElementById('tip');
+cv.onmousemove=e=>{hover=hit(e.clientX,e.clientY);if(!hover){tip.style.display='none';return}
+ const L=hover[0]==='L',o=(L?left:right)[+hover.slice(1)];tip.style.display='block';tip.style.left=e.clientX+14+'px';tip.style.top=e.clientY+14+'px';
+ tip.innerHTML=L?`<b>${o.n}</b><br>5 分鐘連線:${(o.v*12).toLocaleString()}<br>阻擋比例:<span class="${o.d>.6?'deny':o.d>.25?'threat':'allow'}">${Math.round(o.d*100)}%</span><br>Top 目的:${right[(o.v)%right.length].n}<br>Top App:ssl, web-browsing`
+ :`<b>${o.n}</b><br>5 分鐘流量:${(o.v/10).toFixed(1)} Mbps<br>連線數:${(o.v*8).toLocaleString()}<br>威脅命中:${Math.round(o.v/90)}`};
+cv.onclick=e=>{const h=hit(e.clientX,e.clientY);focus=h===focus?null:h};
+// KPIs & feed
+const r=(a,b)=>a+Math.random()*(b-a);
+setInterval(()=>{BPS=r(380,620);SESS=Math.round(r(41000,46000));CPS=Math.round(r(900,1400));kBps.textContent=BPS.toFixed(0)+' Mbps';kSess.textContent=SESS.toLocaleString();kCps.textContent=Math.round(r(900,1400));kDeny.textContent=Math.round(r(300,900));kThr.textContent=Math.round(r(8,30));kCpu.textContent=Math.round(load*100)+'%';
+ left.forEach(s=>s.v=Math.max(40,s.v*(1+(Math.random()-.5)*.15)))},1000);
+const acts=[['deny','阻擋'],['allow','允許'],['threat','威脅']];
+setInterval(()=>{const s=left[Math.floor(Math.random()*left.length)],d=right[Math.floor(Math.random()*right.length)];const a=Math.random()<s.d?acts[0]:Math.random()<.1?acts[2]:acts[1];
+ const el=document.createElement('div');el.className='ev';el.innerHTML=`<span class="t">${new Date().toLocaleTimeString()}</span> <span class="${a[0]}">${a[1]}</span><br>${s.n} → ${d.n}${a[0]==='threat'?'<br><span class="threat">SSH brute force</span>':''}`;
+ evs.prepend(el);while(evs.children.length>22)evs.lastChild.remove();addLog(s,d,a[0])},700);
+// 下方完整 TRAFFIC LOG
+const ipPre={TW:'114.32',US:'52.14',JP:'126.77',CN:'223.104',RU:'91.240',NL:'89.248','..':'102.88'};
+const dstIp=['10.10.10','10.10.20','10.10.30','10.10.200','10.10.201','10.10.1','10.10.250','172.16.8'];
+const apps=['ssl','web-browsing','smtp','dns','ssh','rdp','ms-ds-smb','ping','globalprotect'];
+let lf='all',paused=false,lfocus=null;
+function addLog(s,d,act){if(paused)return;const si=left.indexOf(s),di=right.indexOf(d);
+ if(lf!=='all'&&lf!==act)return;if(lfocus&&lfocus!=='L'+si&&lfocus!=='R'+di)return;
+ const src=s.atk?s.n.replace(/x/g,()=>Math.floor(Math.random()*255)):ipPre[s.k]+'.'+(Math.random()*255|0)+'.'+(Math.random()*255|0);
+ const app=apps[Math.random()*apps.length|0];const port={ssl:443,'web-browsing':80,smtp:25,dns:53,ssh:22,rdp:3389,'ms-ds-smb':445,ping:0,globalprotect:443}[app];
+ const tr=document.createElement('tr');tr.className='new';
+ tr.innerHTML=`<td>${new Date().toLocaleTimeString()}</td><td class="${act}">${act==='deny'?'deny':act==='threat'?'alert':'allow'}</td><td>${src}</td><td>${s.k==='IP'?'—':s.k}</td><td>${dstIp[di]}.${Math.random()*254+1|0}</td><td>${d.n}</td><td>${port}</td><td>${app}</td><td>${act==='deny'?'block-geo':act==='threat'?'av-vp-default':'allow-'+(d.svc?'dmz':'lan')}</td><td>${act==='deny'?0:(Math.random()*90000|0).toLocaleString()}</td><td>${(Math.random()*9e5|0)}</td>`;
+ lb.prepend(tr);while(lb.children.length>200)lb.lastChild.remove()}
+document.querySelectorAll('.chip[data-f]').forEach(c=>c.onclick=()=>{document.querySelectorAll('.chip[data-f]').forEach(x=>x.classList.remove('on'));c.classList.add('on');lf=c.dataset.f;lb.innerHTML=''});
+pause.onclick=()=>{paused=!paused;pause.textContent=paused?'▶ 繼續':'⏸ 暫停';pause.classList.toggle('on',paused)};
+cv.addEventListener('click',()=>{if(lfocus!==focus){lfocus=focus;lb.innerHTML=''}});
+// AI 分析(樣稿:打字機效果模擬串流回應)
+const AI_SAMPLES=[
+ '過去一小時共 <b style="color:#f5b03a">22</b> 筆威脅,以 <b>SSH brute force</b> 為主(14 筆),來源集中在 <b>45.155.x.x、185.220.x.x</b>(Tor 出口節點),全部已被 block-geo 阻擋,未見成功登入。<br>俄羅斯來源阻擋比例 80%,較前一小時上升 12%。<br><b style="color:#22d3a6">建議</b>:將 45.155.0.0/16 加入 DAG 封鎖清單;確認 VPN (GP) 是否啟用 MFA。',
+ 'DMZ Web 流量較平日同時段高 <b style="color:#f5b03a">35%</b>,主要為 TW 來源 ssl,屬正常業務尖峰。<br>VLAN 20 廠務有 3 次對外 SMB(445)嘗試被阻擋,來源 10.10.20.57,<b style="color:#ff4d5e">建議檢查該主機是否中毒</b>。<br>防火牆 DP 負載 58–64%,仍在安全範圍。'];
+let aiIdx=0,aiTimer=null;
+function runAI(manual){if(aiTimer)return;aiBtn.disabled=true;orb.classList.add('run');aiText.innerHTML='<span style="color:var(--dim)">彙整近一小時統計中…</span>';
+ setTimeout(()=>{const html=AI_SAMPLES[aiIdx++%AI_SAMPLES.length];let i=0;
+  aiTimer=setInterval(()=>{i+=3;while(i<html.length&&html[i-1]!=='>'&&html.lastIndexOf('<',i)>html.lastIndexOf('>',i))i++;
+   aiText.innerHTML=html.slice(0,i)+'<span class="cur"></span>';aiText.scrollTop=1e4;
+   if(i>=html.length){clearInterval(aiTimer);aiTimer=null;aiText.innerHTML=html;aiBtn.disabled=false;orb.classList.remove('run');
+    aiMeta.textContent=(manual?'手動':'自動')+'分析 · '+new Date().toLocaleTimeString()+' · Qwen3.6'}},30)},1200)}
+aiBtn.onclick=()=>runAI(true);runAI(false);
+// 近一小時高風險統計
+const TYPES=[['SSH brute force','#ff4d5e'],['SMB 掃描','#f5b03a'],['SQL Injection','#ff4d5e'],['Port Scan','#f5b03a'],['Malware C2','#a078ff']];
+let tc=[14,9,4,6,2];
+function bars(el,rows,max){el.innerHTML=rows.map(([l,v,c])=>`<div class="rb"><span class="l" title="${l}">${l}</span><span class="b"><i style="width:${v/max*100}%;background:${c}"></i></span><span class="v">${v}</span></div>`).join('')}
+function risk(){tc=tc.map(v=>Math.max(1,v+(Math.random()*3-1|0)));
+ rThreat.textContent=tc.reduce((a,b)=>a+b);rDeny.textContent=(Math.round(r(18000,24000))).toLocaleString();rSrc.textContent=Math.round(r(140,190));rCrit.textContent=tc[0]+tc[4];
+ bars(rTypes,TYPES.map((t,i)=>[t[0],tc[i],t[1]]),Math.max(...tc));
+ const srcs=left.filter(s=>s.d>.3).map(s=>[s.n,Math.round(s.v*s.d*12/10),s.d>.6?'#ff4d5e':'#f5b03a']).sort((a,b)=>b[1]-a[1]).slice(0,5);
+ bars(rTop,srcs,srcs[0][1])}
+risk();setInterval(risk,3000);
+requestAnimationFrame(draw);
+</script></body></html>

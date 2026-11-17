@@ -10,6 +10,7 @@
 
 - PA-560:`netops-forward` 的 threat / url / data / wildfire / decryption 加 `netops-http-prod`;traffic 只走 Syslog `netops-syslog`(內含 `netops-test` 10.10.130.124、`netops-prod` 10.10.130.122,TCP 51294,Custom Log Format 不變);刪除誤建的 **Syslog 類** profile `netops-http-prod`(HTTP 類同名 profile 保留);`interzone-default`、`intrazone-default` 確認已設 Log at Session End + `netops-forward`。
 - 主機 3 心跳(00:48 → 00:49 UTC):`received` 27,112 → 39,255(約 1.2 萬筆 / 分),`syslogOkAt`、`httpOkAt` 持續更新,`dropped` / `rejected` / `malformed` 0;測試區 Syslog 同時正常。
+- **正式區輪詢已開(09:47)**:需求方原話「是,正式區也不驗證」→ !109(`pa-collector` 正式區允許 `PA_TLS_INSECURE=1`,啟動記 WARNING;`deploy-prod` 不再擋,`FTP_TLS_INSECURE` 仍擋)、!110(develop → main,pipeline 1039)。主機 3 `netops.env`:`PA_POLL_ENABLED=1`、`PA_TLS_INSECURE=1`(備份 `netops.env.bak-poll`;`PA_CA_FILE` 留著未用)。日誌「SDK 輪詢已啟用:每 15 秒」,心跳 `pollEnabled=1`,即時監控設備狀態有資料。RUNBOOK-prod §4、PF G4 / 附錄已改。上段「正式區輪詢先不開」作廢。
 - **教訓**:PA Syslog TCP 送一批後斷線,PA 沒有 `error 110` 也不重連;只 Commit 沒改到該 profile 不會重連 → 刪除 server 項目 Commit、再加回 Commit 才恢復。Preview Changes 的差異對齊會錯位,Custom Log Format 要在 GUI 確認。
 
 ### 下一步(依序)
@@ -19,6 +20,13 @@
 3. 查 PA 雲端 `tls-X509-validation` 是否改設定前就有(指令見下段第 2 步)。
 4. C6 驗收後:`NETOPS_AI_SOURCE=clickhouse`、移除 `FTP_SYNC_MINUTES`、`NETOPS_AI_DAILY_SUMMARY=1`(RUNBOOK-prod §4 第 4 步)。
 5. 文件:下段第 5 項,另補本段教訓到 PF F.4.1。
+
+## 2026-11-17 戰情室驗收與流暢度改善(完成)
+
+- !121 / !122 / !123 已合併並上測試區;!124(Log 表 IP 名稱單行)與本次文件待合併。
+- 測試區真實流量:Canvas 每幀 2.4ms、71 fps、長任務 0、不再降級、文字清晰。細節、量測表與回歸方法見 `docs/WARROOM-PLAN.md` §7。
+- 未處理(待需求方 / 後端確認):系統狀態抽屜「輪詢中」與「停用」矛盾、Log 篩選「威脅」常為空、DP CPU 0%。見 WARROOM-PLAN §7 最後一段。
+- 正式區尚未上(`develop` → `main` 由需求方決定時機)。
 
 ## 2026-11-16 收工:正式區第二段進行中(紀錄)
 

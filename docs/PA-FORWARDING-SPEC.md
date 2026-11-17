@@ -48,7 +48,7 @@
 | 會執行的指令 | `show session info`、`show system resources`、`show running resource-monitor second last "1"`、`show counter interface "all"`(連線檢查印出的就是這 4 個;引號表示「值」,在 CLI 上等同 `second last 1`、`show counter interface all`)|
 | 頻率 | 正式區每 10–15 秒一輪;測試區平常不輪詢,測試期間才開 |
 | Key 失效 | 改密碼或 Device > Setup > Management > Authentication Settings 的 **API Key Lifetime** 到期時 Key 會失效,畫面會顯示「資料停止更新」;換 Key 時請通知需求方 |
-| 憑證 | NetOps 預設**驗證**管理介面的 HTTPS 憑證,而且**連線用的位址要出現在憑證的 SAN**:用 IP 連線時 SAN 要有該 IP(只在 CN 不算)。PA 出廠的自簽憑證通常沒有 IP SAN。請提供:① 管理介面憑證(或簽發的內部 CA 憑證,公開資訊、非機密);② 憑證 SAN 內的名稱或 IP(NetOps 會用它當 `PA_HOST`;用名稱時公司 DNS 要查得到)。無法提供時,測試區可暫時不驗證(`PA_TLS_INSECURE=1`),正式區不行,需重新簽發含 SAN 的憑證(Device > Certificate Management) |
+| 憑證 | NetOps 預設**驗證**管理介面的 HTTPS 憑證,而且**連線用的位址要出現在憑證的 SAN**:用 IP 連線時 SAN 要有該 IP(只在 CN 不算)。PA 出廠的自簽憑證通常沒有 IP SAN。請提供:① 管理介面憑證(或簽發的內部 CA 憑證,公開資訊、非機密);② 憑證 SAN 內的名稱或 IP(NetOps 會用它當 `PA_HOST`;用名稱時公司 DNS 要查得到)。無法提供時,可不驗證(`PA_TLS_INSECURE=1`;正式區 2026-11-17 需求方同意也可,!109),或重新簽發含 SAN 的憑證(Device > Certificate Management) |
 
 ---
 
@@ -343,7 +343,7 @@ netsh interface portproxy show v4tov4
    ```
 
    - SAN 有該 IP 或名稱、且由公司 CA 簽發 → `PA_HOST` 用 SAN 裡的值,把 CA 憑證放 `/srv/giganexus/netops-pa-tls/pa-mgmt-ca.pem` 並設 `PA_CA_FILE=/run/pa-tls/pa-mgmt-ca.pem`(F.6)。
-   - 自簽、沒有 SAN(出廠憑證常見)→ 測試區先設 `PA_TLS_INSECURE=1`,請網通重新簽發含 SAN 的憑證後再拿掉(正式區不可用 `PA_TLS_INSECURE`)。
+   - 自簽、沒有 SAN(出廠憑證常見)→ 測試區先設 `PA_TLS_INSECURE=1`,請網通重新簽發含 SAN 的憑證後再拿掉(正式區 2026-11-17 起也用 `PA_TLS_INSECURE=1`)。
 3. `netops.env`:`PA_HOST=<上一步決定的值>`,**先不要**打開 `PA_POLL_ENABLED`;重建 `netops-pa`(同 F.3 第 3 步)後執行連線檢查(只跑一次唯讀查詢、不寫 Redis):
 
    ```bash
@@ -407,7 +407,7 @@ CA 私鑰在 `/srv/giganexus/netops-pa-ca/`(root 700,不掛進容器)。步驟�
 | G1 | 唯讀 API Key(A 節) | SDK 輪詢 | **已取得**(需求方以 `deploy/host2-set-pa-secrets.sh` 寫入主機,AI 不經手) |
 | G2 | PA-560 管理介面 IP(或 DNS 名稱) | `PA_HOST` | **10.10.115.35**(`:443`) |
 | G3 | PAN-OS 版本(Dashboard 或 `show system info` 的 sw-version) | 核對 B、C 節標「版本」的欄位;連線檢查也會印出 | **12.1.7-h3**(2026-11-09 在開發機 10.10.112.13 跑連線檢查取得);B、C 節變數 2026-11-10 已對照設備(B.4 `status` → `$decryption_status`) |
-| G4 | 管理介面憑證:是否自簽、SAN 內有哪些名稱 / IP、簽發的 CA 憑證 | `PA_CA_FILE`;決定是否需暫用 `PA_TLS_INSECURE`(只限測試區) | **出廠自簽**:CN 與 SAN 都只有 `DNS:044109003916`(序號),沒有 IP SAN。測試區暫用 `PA_TLS_INSECURE=1`;**正式區要請網通換成公司 CA 簽發、SAN 含 `10.10.115.35`(或公司 DNS 名稱)的憑證**,並提供 CA 憑證。**2026-11-16 需求方決定**:改由主機 3 的 NetOps 專用 CA 簽發——網通在 PA 產生 CSR(SAN 含 `10.10.115.35`,私鑰留在 PA),主機 3 `deploy/host3-pa-pki.sh sign-csr` 簽發後匯回,設為管理介面 SSL/TLS Service Profile(RUNBOOK-prod §4.1 第 3 步);**未執行** |
+| G4 | 管理介面憑證:是否自簽、SAN 內有哪些名稱 / IP、簽發的 CA 憑證 | `PA_CA_FILE`;決定是否需暫用 `PA_TLS_INSECURE`(只限測試區) | **出廠自簽**:CN 與 SAN 都只有 `DNS:044109003916`(序號),沒有 IP SAN。測試區暫用 `PA_TLS_INSECURE=1`;**正式區要請網通換成公司 CA 簽發、SAN 含 `10.10.115.35`(或公司 DNS 名稱)的憑證**,並提供 CA 憑證。**2026-11-16 需求方決定**:改由主機 3 的 NetOps 專用 CA 簽發——網通在 PA 產生 CSR(SAN 含 `10.10.115.35`,私鑰留在 PA),主機 3 `deploy/host3-pa-pki.sh sign-csr` 簽發後匯回,設為管理介面 SSL/TLS Service Profile(RUNBOOK-prod §4.1 第 3 步);**未執行**。**2026-11-17 改決定**:套管理介面憑證後 443 掉線(已還原),正式區改設 `PA_TLS_INSECURE=1` 開輪詢(需求方原話「是,正式區也不驗證」,!109、!110) |
 | G5 | 管理介面 Permitted IP Addresses 已加入 `10.10.130.124`(與正式區 `.122`)、網路放行到管理介面 `:443` | 輪詢 | 待回覆 |
 | G6 | PA-560 送 log 的**來源 IP**(管理介面或 service route 指定的介面) | 主機 Windows 防火牆規則(附錄 F.2) | **10.10.115.35**(管理介面;2026-11-10 主機 2 抓封包確認,51293、51294 都是這個來源) |
 | G7 | HTTP 用 HTTPS 或 HTTP;Syslog 用 SSL 或 TCP;PA-560 是否信任公司內部 CA(信任才能用 HTTPS / SSL) | 接收端點憑證(F.6) | 測試區:**HTTP、TCP 明文**(需求方同意);內部 CA 信任未確認。**正式區(2026-11-16 需求方決定)**:**HTTPS、SSL**;PA 匯入 NetOps 專用 CA 為 Trusted Root(RUNBOOK-prod §4.1 第 2、4 步);**未執行** |

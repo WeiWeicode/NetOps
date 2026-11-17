@@ -2,6 +2,30 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。範圍:`frontend/`。
 
+## 2026-11-17 戰情室 Log 表 IP 名稱單行
+- 工作項目:WR 複測(!123 上線後)
+- 內容:測試區複測發現有 IP 對照名稱的列高 48px(GIpLabel 在 150px 欄寬時名稱換行),虛擬捲動以固定列高 25 計算位置會偏。`TrafficLogTable.vue` 在表內把 GIpLabel 改為不換行、名稱行高 18px、超出省略;共用元件不動。同時補 `docs/WARROOM-PLAN.md` §7(流暢度改善總結、量測、回歸方法、未處理項目)與 HANDOFF。
+- 檔案:`frontend/src/components/warroom/TrafficLogTable.vue`、`docs/WARROOM-PLAN.md`、`docs/HANDOFF.md`
+- 驗證:typecheck、`npm test`(251 通過);測試區頁面暫時注入同樣 CSS 量測,13 列有名稱全部 25px。!123 測試區複測:Canvas 2.4 / p95 3.9ms、71 fps、20 秒長任務 0、未降級
+
+## 2026-11-17 戰情室 Log 表虛擬捲動、Log / 事件 / 高風險可收摺、核心避開上下框
+- 工作項目:WR 複測後改善(需求方:「Log 表每秒重排仍會卡,改虛擬捲動,並且可以收摺(即時事件也是)」「連線數會被近一小時風險擋住」「近一小時也可以收摺」)
+- 內容:測試區複測 Canvas 已降到每幀 1.7ms、文字清晰,但 Log 表每秒更新造成長任務(10 秒 27 次、50–197ms;暫停 Log 表 95 fps)。`TrafficLogTable.vue` 改虛擬捲動(固定列高 25、`table-layout: fixed` + colgroup、只渲染可見列 + 上下 pad 列、只有新進列閃);Log 表、即時事件、高風險統計都可收摺(localStorage `wr-log` / `wr-feed` / `wr-risk`,收摺時內容卸載不更新 DOM);Log 表收摺時 Canvas 往下放大(CSS 變數 `--wr-log-h`),事件欄收摺時右側節點右移。`Live.vue` 以 ResizeObserver 量 AI 框與高風險框高度傳給 Canvas(`topReserve` / `bottomReserve`),寬版面時核心在兩框之間置中、空間不足時縮小,核心區文字依 R 等比縮放,吞吐量 / 連線數儀表數字不再被蓋。
+- 檔案:`frontend/src/components/warroom/{TrafficLogTable,EventFeed,RiskPanel,WarroomCanvas}.vue`、`frontend/src/pages/firewall/Live.vue`、`frontend/test/warroom.mount.test.ts`
+- 驗證:typecheck、`npm test`(251 通過,新增虛擬捲動 / 收摺 / localStorage 失敗測試)、build;code-reviewer(收摺後 scrollTop、資料變少夾範圍、收摺高度、rAF 防護已修);本機高流量 mock 1080p:長任務 15 秒內 0 次、>50ms 間隔 6 → 0、59 fps、Log 表只渲染 14 列
+
+## 2026-11-17 戰情室文字模糊與 Canvas 字型設定過慢
+- 工作項目:WR 複測(需求方:「已知問題字太模糊」)
+- 內容:測試區複測發現 Canvas 每幀 21ms,其中 `ctx.font` 每幀 54 次共 20ms:頁面上的 canvas 設定字型會強制整頁樣式重算,Log 表 / 事件欄持續改 DOM 時每次約 5ms;fps 因此降到 27,自動降級到第 2 級(畫布 0.75 倍)使字變糊。另外文字畫在有拖尾的畫布上每幀疊畫、邊緣暈開,且從未處理高 dpr。改法:`WarroomCanvas.vue` 改兩層畫布並 `transferControlToOffscreen`(字型設定不再觸發樣式重算);文字與線條圖示畫在文字層,每幀清空、解析度跟 dpr(上限 2);特效層維持省效能解析度。AI / 高風險框置中位置取整。窄版面門檻 1150 → 1400(測試區 1205px 寬時兩框仍蓋住核心)。
+- 檔案:`frontend/src/components/warroom/{WarroomCanvas,AiPanel,RiskPanel,EventFeed}.vue`
+- 驗證:typecheck、`npm test`(248 通過)、build;code-reviewer(建議的文字層只嘗試一次已修);本機高流量 mock Canvas 2.4 / p95 3.8ms、未降級,前後截圖文字明顯清晰
+
+## 2026-11-17 戰情室流暢度(A+B+C、高解析省效能、自動降級、窄版面)
+- 工作項目:WR 驗收後改善(需求方 2026-11-17 決定全做)
+- 內容:量測發現測試區真實流量每幀約 1100 顆粒子、Canvas 繪製 25ms(p95 49ms),且每秒資料更新都重設 Canvas 造成頓一下。`WarroomCanvas.vue`:A 資料更新不再設 `cv.width`,節點依 id 補間移動、粒子依 id 改對應索引,`placed*` 改 `shallowRef`;B 粒子上限 1500 → 400,每秒產生總量上限 80(各連線依比例縮減),粒子光暈改預繪貼圖 + `globalAlpha`,整批只切一次 `lighter`;C 移除全部 `shadowBlur`(改發光貼圖 / 較粗半透明弧),網格改靜態層一次 `drawImage`;高解析:不跟 dpr,畫布超過約 210 萬像素時降解析繪製(4K 約 0.6 倍);自動降級 0–2 級(3 秒平均 < 45 fps 且每幀 > 8ms 或掉幀抖動才升級,避免省電模式誤判;> 57 fps 持續 30 秒降級),等級寫在 canvas `data-degrade`。五個疊在 Canvas 上的框移除 `backdrop-filter`(改較不透明底色)。窄版面(主視覺區 < 1150px,`@container wrmain`):AI 框與高風險框改排右欄、事件欄隱藏(同樣資訊在 Log 表)、右側節點往左讓出標籤寬度。Log 表 / 事件欄:`useWarroom` 畫面用 log 最多每秒更新一次(串流照收,進頁預載立即顯示),高流量下逐筆重繪 200 列表格是第二個瓶頸(暫停 Log 表時 95 fps、不暫停 42 fps)。mock 加 `?mock=1&load=high`(流量 8 倍、log 每 0.1 秒)供回歸量測。依 code review:滑過中的節點依 id 對到新索引;降級只改畫布解析度不重排節點。
+- 檔案:`frontend/src/components/warroom/{WarroomCanvas,AiPanel,RiskPanel,EventFeed,LegendPanel,TrafficLogTable}.vue`、`frontend/src/pages/firewall/Live.vue`、`frontend/src/composables/{useWarroom,warroomMock}.ts`
+- 驗證:typecheck、`npm test`(248 通過);本機 mock 量測每幀 JS 1080p 8.6 → 2.2ms、4K 8.5 → 3.5ms(畫布 2095×1002),每幀漸層 228 → 20、`shadowBlur` 28 → 0,畫面 88 fps 未降級;高流量 mock(粒子 ≈386):Canvas JS 4.1 / p95 6.3ms、66 fps、15 秒內 >50ms 間隔 49 → 6 次(剩 Log 表每秒重排);build 通過;窄版面截圖確認核心與網段標籤不被遮。測試區真實流量待合併後複測
+
 ## 2026-11-14 IP 對照表頁與 PA 畫面顯示名稱(AC3)
 - 工作項目:AC3(需求方:這次前端 UI 也由 Claude 完成)
 - 內容:`pages/knowledge/IpNames.vue`(搜尋用 POST、清單、單筆編輯對話框、匯入預覽:新增 / 修改 / 刪除 / 有問題分頁,有刪除時再確認;匯出 Excel / CSV、範本);`ui/components/GIpLabel.vue` + `ui/ipLabel.ts`(ui 不依賴應用,名稱由 `main.ts` provide);`GTable` 欄位 `ip: true`;`composables/ipNames.ts`(`api/gateway.ts` 與即時監控串流收 `names`,回應出現但沒有名稱的 IP 移除舊名稱,不存瀏覽器);`TopList` IP 項目附名稱;Log 明細「使用者 / 部門」條件(不寫進網址)與明細對話框名稱;各 PA 頁 IP 欄改 `ip: true`;選單「網通知識 › IP 對照表」。

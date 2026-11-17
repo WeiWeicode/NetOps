@@ -31,6 +31,9 @@ import paLiveRoutes, { type StreamTestOptions } from './modules/pa-live/routes.j
 import { connectPaLiveRedis, type PaLiveRedis } from './infra/redis/index.js';
 import paLiveLiveRoutes, { type LiveStreamOptions } from './modules/pa-live/live-routes.js';
 import { createPaLiveService } from './modules/pa-live/service.js';
+import warroomRoutes from './modules/pa-live/warroom-routes.js';
+import { createWarroomService } from './modules/pa-live/warroom.js';
+import { loadGeoIp, type GeoIp } from './infra/geoip/index.js';
 import pingRoutes from './modules/ping/routes.js';
 import { registerAi } from './modules/ai/index.js';
 import type { DailySummaryScheduler } from './modules/ai/daily-summary.js';
@@ -88,6 +91,10 @@ export async function buildApp(
     streamTest?: StreamTestOptions;
     paLiveRedis?: PaLiveRedis;
     liveStream?: LiveStreamOptions;
+    /** 戰情室 GeoIP(測試注入;預設依 GEOIP_DB) */
+    geoIp?: GeoIp;
+    /** 戰情室的「現在」(測試用) */
+    warroomNow?: () => number;
     /** 測試區手動開關可否使用(預設依 GW_ENV:正式區 false) */
     paLiveControl?: boolean;
     ai?: { fetch?: typeof fetch; heartbeatMs?: number };
@@ -195,7 +202,14 @@ export async function buildApp(
   // PA 即時監控(R1):只讀 netops-redis;Redis 停止時只有即時監控受影響(不影響 /readyz 與其他功能)
   const paLiveRedis = deps.paLiveRedis ?? (config.redisUrl ? connectPaLiveRedis(config.redisUrl, app.log) : null);
   if (paLiveRedis) app.addHook('onClose', async () => paLiveRedis.close());
-  await app.register(paLiveLiveRoutes, { live: createPaLiveService(paLiveRedis, { log: app.log, controlAllowed: deps.paLiveControl ?? ['dev', 'test'].includes(config.gateway.gwEnv) }), stream: deps.liveStream });
+  // 戰情室(WR-1、WR-2):離線 GeoIP + 網段設定檔;SSE logs 每筆補 country、segment
+  const warroom = createWarroomService(paLiveRedis, { geo: deps.geoIp ?? loadGeoIp(config.geoipDb, app.log), store: app.store.warroom, log: app.log, now: deps.warroomNow });
+  await app.register(paLiveLiveRoutes, {
+    live: createPaLiveService(paLiveRedis, { log: app.log, controlAllowed: deps.paLiveControl ?? ['dev', 'test'].includes(config.gateway.gwEnv) }),
+    stream: deps.liveStream,
+    enrich: warroom.enrich,
+  });
+  await app.register(warroomRoutes, { warroom });
 
   // PA 匯入(背景同步在程序內執行,單一容器,D9)
   const ftp = deps.ftp ?? createFtp(config.ftp);
@@ -322,6 +336,7 @@ export async function buildApp(
     now: deps.chNow,
     explain,
     daily: { autoRecon: Boolean(recon) && config.reconAt >= 0, syncReady },
+    hourly: { sources: warroom, store: app.store.warroom, now: deps.warroomNow },
     ...deps.ai,
   });
   aiDaily = aiReg.daily;

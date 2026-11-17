@@ -44,6 +44,8 @@ export const UI = {
   paSearchAi: 'netops.pa-search.ai',
   // AC6:安全事件頁「AI 摘要安全事件」(四類一起)
   paEventsAi: 'netops.pa-events.ai',
+  // WR-3:戰情室 AI 每小時分析「立即分析」(includes netops.ai.use;節點由後端 WR-3 登記 deploy/gateway-rbac.yaml)
+  paLiveAi: 'netops.pa-live.ai',
 } as const;
 
 export const API = {

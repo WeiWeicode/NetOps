@@ -29,6 +29,8 @@ import { createChAiSource } from './ch-source.js';
 import aiRoutes from './routes.js';
 import { createAiService, type ExplainSources } from './service.js';
 import { createSseHub } from './sse.js';
+import { createHourlyInsight, HOURLY_CHECK_MS, type HourlyInsightStore, type HourlySources } from './hourly-insight.js';
+import hourlyRoutes from './hourly-routes.js';
 import { createDailySummary, type DailySummaryScheduler } from './daily-summary.js';
 import { aiNamesSection } from '../ip-names/service.js';
 
@@ -61,6 +63,8 @@ export interface AiDeps {
    * syncReady = 每日同步(AC1)今天這一輪已結束(完成、停止重試或未啟用)
    */
   daily?: { autoRecon: boolean; syncReady(): boolean };
+  /** WR-3 戰情室 AI 每小時分析:統計來源(WR-1、WR-2)與存檔;沒有時不啟用 */
+  hourly?: { sources: HourlySources; store: HourlyInsightStore; now?: () => number };
 }
 
 export async function registerAi(app: FastifyInstance, deps: AiDeps): Promise<{ daily: DailySummaryScheduler }> {
@@ -217,6 +221,26 @@ export async function registerAi(app: FastifyInstance, deps: AiDeps): Promise<{ 
   });
   const hub = createSseHub(app, { maxStreams: cfg.maxStreams, maxPerUser: cfg.maxStreamsPerUser, heartbeatMs: deps.heartbeatMs });
   await app.register(aiRoutes, { ai, hub, daily });
+  // WR-3:每整點分析上一小時(背景,不等結果);手動執行走 SSE
+  const hourlyAbort = new AbortController();
+  const hourly = createHourlyInsight({
+    enabled: cfg.hourly && Boolean(llm) && Boolean(deps.hourly),
+    llm,
+    sources: deps.hourly?.sources ?? { warroom: async () => ({ partial: true }), risk: async () => ({ partial: true }) },
+    store: deps.hourly?.store ?? { readHourlyInsight: () => null, saveHourlyInsight: () => undefined },
+    log: app.log,
+    now: deps.hourly?.now,
+    signal: hourlyAbort.signal,
+  });
+  let hourlyTimer: NodeJS.Timeout | null = null;
+  app.addHook('onReady', async () => {
+    hourlyTimer = setInterval(() => hourly.tick(), HOURLY_CHECK_MS).unref();
+  });
+  app.addHook('onClose', async () => {
+    if (hourlyTimer) clearInterval(hourlyTimer);
+    hourlyAbort.abort();
+  });
+  await app.register(hourlyRoutes, { hourly, hub });
   await app.register(kbAiRoutes, { kb, vector, learner, learnHour: cfg.ipLearn.hour, learnDefaults: { days: cfg.ipLearn.days, max: cfg.ipLearn.max }, log });
   return { daily };
 }

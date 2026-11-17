@@ -18,7 +18,7 @@ import { addDays, createArchiveWriterClient, createColdFileClient, taipeiDay } f
 import { createHeatReader } from '../../src/infra/clickhouse/heat.js';
 import { createClickHouseWriter } from '../../src/infra/clickhouse/index.js';
 import { createColdLock, type ColdLockClient } from '../../src/infra/redis/cold-lock.js';
-import { ARCHIVE_MARKER, Archiver } from '../../src/ingest/archive.js';
+import { ARCHIVE_MARKER, Archiver, MIN_FREE_BYTES } from '../../src/ingest/archive.js';
 import { toThreatRow, toTrafficRow } from '../../src/ingest/rows.js';
 import { createColdSlice } from '../../src/modules/pa-heat/cold.js';
 import { taipeiText } from '../../src/shared/time.js';
@@ -76,8 +76,10 @@ after(async () => {
 });
 
 const lockClient = () => redis as unknown as ColdLockClient;
-const archiver = (now = Date.now()) =>
-  new Archiver({ ch, cold, lock: createColdLock(lockClient()), log, now: () => now, lockWaitMs: 2000, pauseMs: 0 }, { dir: ARCHIVE_DIR, staging, keepDays: 14, alertDays: 2, ttlDays: { traffic: 3, threat: 3 }, maxBytes: 1024 ** 3 });
+/** 剩餘空間固定注入(不看 CI 主機 /tmp 的實際空間;2026-11-17 主機 2 /tmp 不足 2 GB 時整個 suite 失敗) */
+const ENOUGH = 100 * 1024 ** 3;
+const archiver = (now = Date.now(), freeBytes: (dir: string) => Promise<number> = async () => ENOUGH) =>
+  new Archiver({ ch, cold, lock: createColdLock(lockClient()), log, now: () => now, lockWaitMs: 2000, pauseMs: 0, freeBytes }, { dir: ARCHIVE_DIR, staging, keepDays: 14, alertDays: 2, ttlDays: { traffic: 3, threat: 3 }, maxBytes: 1024 ** 3 });
 
 describe('C4 歸檔(真 ClickHouse)', () => {
   it('匯出一天:Parquet 列數 = 來源列數、雜湊和 .sha256 一致、manifest ok', async () => {
@@ -154,5 +156,20 @@ describe('C4 歸檔(真 ClickHouse)', () => {
     assert.equal(m.status, 'ok');
     assert.equal(m.rows, before + 1);
     assert.equal(await cold.parquetCount('threat', D), before + 1);
+  });
+
+  // 放在最後:這裡新增的一列讓來源和歸檔不一致,不影響前面「重新歸檔」的筆數
+  it('剩餘空間不足 2 GB:不歸檔,狀態 disk-low;不取鎖', async () => {
+    const before = await cold.manifest([D]);
+    const parquetBefore = await cold.parquetCount('threat', D);
+    const issues = { badTime: false };
+    await createClickHouseWriter(writerCfg).insert('threat', [toThreatRow('threat', { time: taipeiText(H + 20 * 60_000), src: '10.77.0.3', dst: '10.77.0.1', severity: 'low', action: 'alert' }, H, issues)], `c4-int-${randomUUID()}`);
+    const a = archiver(Date.parse(`${TODAY}T03:00:00+08:00`), async () => MIN_FREE_BYTES - 1);
+    await a.tick(signal);
+    assert.equal(a.status.state, 'disk-low', JSON.stringify(a.status));
+    assert.match(a.status.lastError?.message ?? '', /剩餘空間不足/);
+    assert.deepEqual(await cold.manifest([D]), before);
+    assert.equal(await cold.parquetCount('threat', D), parquetBefore);
+    assert.equal(await redis.get('netops:cold:lock'), null);
   });
 });

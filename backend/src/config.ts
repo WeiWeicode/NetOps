@@ -74,6 +74,8 @@ export interface AiConfig {
    * 未設定時依部署區:test 開;prod 與 dev 關(正式區 C6 之前沒有 ClickHouse,C6 後再開)。另外要有 LLM_URL 與自動對帳才會跑
    */
   dailySummary: boolean;
+  /** 戰情室 AI 每小時分析(WR-3;NETOPS_AI_HOURLY,預設開;沒有 LLM_URL 時不跑) */
+  hourly: boolean;
   /** 每次送給 AI 的知識庫筆記最多幾個字(同舊版 KB_MAX_CHARS) */
   kbMaxChars: number;
   /** 同時進行的 AI 串流上限:全系統、每人(超過回 429,不回 5xx;S0 報告 §3.6) */
@@ -296,6 +298,7 @@ function loadAi(env: NodeJS.ProcessEnv, gwEnv: GwEnv): AiConfig {
     ipLearn: { hour: int(env, 'IPLEARN_HOUR', -1, -1, 23), days: int(env, 'IPLEARN_DAYS', 7, 1, IPLEARN_MAX_DAYS), max: int(env, 'IPLEARN_MAX', 150, 1, 500), ttlDays: int(env, 'IPLEARN_TTL_DAYS', 90, 1, 3650) },
     source: loadAiSource(env, gwEnv),
     dailySummary: boolDefault(env, 'NETOPS_AI_DAILY_SUMMARY', gwEnv === 'test'),
+    hourly: boolDefault(env, 'NETOPS_AI_HOURLY', true),
     kbMaxChars: int(env, 'KB_MAX_CHARS', 20000, 1000, 200000),
     maxStreams: int(env, 'AI_MAX_STREAMS', 6, 1, 50),
     maxStreamsPerUser: int(env, 'AI_MAX_STREAMS_PER_USER', 2, 1, 10),

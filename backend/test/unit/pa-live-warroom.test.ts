@@ -233,19 +233,53 @@ describe('戰情室 API', () => {
     assert.deepEqual([b.sources, b.segments, b.links], [[], [], []]);
     assert.deepEqual(b.kpis, { denyPerMin: null, threat5m: null });
     assert.match(b.message, /Redis/);
+    const r = (await t.call({ url: '/v1/pa-live/risk' })).json();
+    assert.equal(r.partial, true);
+    assert.equal(r.threats, null);
     // partial 不快取:Redis 恢復後立即重算
     redis.fail = false;
     assert.equal((await t.call({ url: '/v1/pa-live/warroom' })).json().partial, false);
+    assert.equal((await t.call({ url: '/v1/pa-live/risk' })).json().partial, false);
   });
 
   it('不支援的期間 400', async () => {
     assert.equal((await t.call({ url: '/v1/pa-live/warroom?minutes=30' })).statusCode, 400);
+    assert.equal((await t.call({ url: '/v1/pa-live/risk?minutes=5' })).statusCode, 400);
   });
 
+  it('risk:每分鐘統計 + 樣本補嚴重度與阻擋比例', async () => {
+    const now = clock;
+    const b0 = minuteBucket(now);
+    const b1 = minuteBucket(now - 60_000);
+    redis.setAgg('threat', b0, { count: 7, 'severity:critical': 2, 'severity:high': 5 });
+    redis.setAgg('threat', b1, { count: 3, 'severity:critical': 1 });
+    redis.setAgg('traffic', b0, { count: 100, 'action:allow': 90, 'action:deny': 6, 'action:reset-both': 4 });
+    redis.setTop('threat', 'name', b0, { brute: 5, scan: 2 });
+    redis.setTop('threat', 'name', b1, { scan: 3 });
+    redis.setTop('threat', 'src', b0, { '5.5.5.5': 6, '10.10.1.1': 1 });
+    redis.setTop('threat', 'src', b1, { '5.5.5.5': 3 });
+    redis.addLog('threat', { src: '5.5.5.5', name: 'brute', severity: 'high', action: 'reset-both' }, now - 1000);
+    redis.addLog('threat', { src: '5.5.5.5', name: 'brute', severity: 'critical', action: 'alert' }, now - 2000);
+    const res = await t.call({ url: '/v1/pa-live/risk?minutes=60' });
+    assert.equal(res.statusCode, 200);
+    const b = res.json();
+    assert.equal(b.partial, false);
+    assert.equal(b.threats, 10);
+    assert.equal(b.critical, 3);
+    assert.equal(b.denies, 10);
+    assert.equal(b.attackSources, 2);
+    assert.equal(b.attackSourcesLowerBound, false);
+    assert.deepEqual(b.topThreats, [
+      { name: 'brute', severity: 'critical', count: 5 },
+      { name: 'scan', severity: null, count: 5 },
+    ]);
+    assert.deepEqual(b.topSources[0], { key: '5.5.5.5', label: 'Russia', country: 'RU', count: 9, denyRatio: 0.5 });
+    assert.equal(b.topSources[1].label, '內部');
+  });
 
   it('OpenAPI 必填欄位', async () => {
     const doc = (await t.app.inject({ url: '/openapi.json' })).json();
-    for (const p of ['/v1/pa-live/warroom']) {
+    for (const p of ['/v1/pa-live/warroom', '/v1/pa-live/risk']) {
       const op = doc.paths[p].get;
       assert.equal(op['x-permission'], 'netops.pa-realtime.read');
       assert.ok(op['x-gherkin'].includes('場景'));

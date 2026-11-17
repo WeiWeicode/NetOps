@@ -7,6 +7,7 @@
  *   - 外部 / 內部:私有位址(RFC 1918、CGNAT、loopback、link-local、ULA)算內部,其他算外部;外部 IP 以離線 GeoIP 查國家(Q2),
  *     內部 IP 以設定檔 CIDR 對照網段(Q3)。兩端都是內部 → 來源 "lan";兩端都是外部 → 網段 "unmatched"。
  *   - 速率(links 每秒)= 次數 / 涵蓋秒數;前端用來決定粒子密度與顏色。
+ * WR-2 GET /v1/pa-live/risk:近一小時威脅 / 阻擋統計,主要用每分鐘統計(精確),嚴重度與阻擋比例由威脅明細抽樣補上。
  *
  * 失敗要明確(AGENT.md §5):Redis 不可用 → 200 + partial: true、陣列為空、message 說明,不回假資料;
  * 網段設定檔不存在 → 用內建範例並標示 segmentsSource "example";GeoIP 不可用 → geo.available false、國家併入「未知」。
@@ -256,6 +257,7 @@ const topOf = (m: Map<string, number>, n: number, scale: number): TopItem[] =>
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
     .slice(0, n)
     .map(([key, count]) => ({ key, count: Math.round(count * scale) }));
+const round2 = (v: number) => Math.round(v * 100) / 100;
 
 /**
  * TRAFFIC 與 THREAT 明細 → sources / segments / links。
@@ -411,7 +413,10 @@ const SCAN_CHUNK = 2_000;
 export const WARROOM_CACHE_MS = 3_000;
 /** 設定檔修改時間檢查間隔 */
 export const CONFIG_CHECK_MS = 5_000;
+export const RISK_CACHE_MS = 60_000;
 export const WARROOM_MINUTES = [1, 5, 15] as const;
+export const RISK_MINUTES = [15, 60] as const;
+const CRITICAL = 'critical';
 
 type Log = { warn: (obj: object, msg: string) => void };
 
@@ -491,6 +496,7 @@ export function createWarroomService(
   const geoInfo = () => ({ available: deps.geo.available, version: deps.geo.version, attribution: GEOIP_ATTRIBUTION });
 
   const warroomMemo = memo<Record<string, unknown>>(WARROOM_CACHE_MS, now);
+  const riskMemo = memo<Record<string, unknown>>(RISK_CACHE_MS, now);
 
   /** WR-1 */
   function warroom(minutes: number) {
@@ -547,13 +553,83 @@ export function createWarroomService(
     });
   }
 
+  /** WR-2 */
+  function risk(minutes: number) {
+    return riskMemo(String(minutes), async () => {
+      const base = { generatedAt: new Date(now()).toISOString(), minutes };
+      const empty = { ...base, partial: true, threats: null, denies: null, attackSources: null, critical: null, topThreats: [], topSources: [] };
+      if (!redis) return { ...empty, message: '即時監控未設定(REDIS_URL)' };
+      try {
+        const t = now();
+        const buckets = bucketsOf(minutes, t);
+        const [threatAggs, trafficAggs, nameTops, srcTops, sample] = await Promise.all([
+          Promise.all(buckets.map((b) => redis.minuteAgg('threat', b))),
+          Promise.all(buckets.map((b) => redis.minuteAgg('traffic', b))),
+          Promise.all(buckets.map((b) => redis.minuteTop('threat', 'name', b, 200))),
+          Promise.all(buckets.map((b) => redis.minuteTop('threat', 'src', b, 200))),
+          scanWindow(redis, 'threat', t - minutes * 60_000, THREAT_SCAN_MAX),
+        ]);
+        const sumField = (aggs: Record<string, string>[], pred: (f: string) => boolean) =>
+          aggs.reduce((s, h) => s + Object.entries(h).reduce((x, [f, v]) => (pred(f) ? x + (Number(v) || 0) : x), 0), 0);
+        const threats = sumField(threatAggs, (f) => f === 'count');
+        const critical = sumField(threatAggs, (f) => f === `severity:${CRITICAL}`);
+        const denies = sumField(trafficAggs, (f) => f.startsWith('action:') && isDenyAction(f.slice(7)));
+        const merge = (lists: [string, number][][]) => {
+          const m = new Map<string, number>();
+          for (const l of lists) for (const [k, v] of l) m.set(k, (m.get(k) ?? 0) + v);
+          return [...m.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+        };
+        // 嚴重度與阻擋比例由明細抽樣補上(每分鐘統計沒有 name × severity、src × action)
+        const sev = new Map<string, string>();
+        const RANK = new Map<string, number>([['critical', 5], ['high', 4], ['medium', 3], ['low', 2], ['informational', 1]]);
+        const bySrc = new Map<string, { n: number; deny: number }>();
+        for (const e of sample.entries) {
+          const name = typeof e.data.name === 'string' ? e.data.name : '';
+          const s = typeof e.data.severity === 'string' ? e.data.severity : '';
+          if (name && (RANK.get(s) ?? 0) > (RANK.get(sev.get(name) ?? '') ?? 0)) sev.set(name, s);
+          if (typeof e.data.src === 'string') {
+            const a = bySrc.get(e.data.src) ?? bySrc.set(e.data.src, { n: 0, deny: 0 }).get(e.data.src)!;
+            a.n++;
+            if (isDenyAction(e.data.action)) a.deny++;
+          }
+        }
+        const srcAll = merge(srcTops);
+        const topSources = srcAll.slice(0, 10).map(([key, count]) => {
+          const g = isPrivateIp(key) ? null : deps.geo.lookup(key);
+          const a = bySrc.get(key);
+          return { key, label: g ? g.name : isPrivateIp(key) ? '內部' : '未知', country: g?.code ?? null, count, denyRatio: a ? round2(a.deny / a.n) : null };
+        });
+        return {
+          ...base,
+          partial: false,
+          threats,
+          denies,
+          attackSources: srcAll.length,
+          // 每分鐘排行只留前 200 名:任一分鐘滿 200 名時為下限(畫面標示 ≥)
+          attackSourcesLowerBound: srcTops.some((l) => l.length >= 200),
+          critical,
+          topThreats: merge(nameTops)
+            .slice(0, 10)
+            .map(([name, count]) => ({ name, severity: sev.get(name) ?? null, count })),
+          topSources,
+          // attackSources 為合併每分鐘前 200 名的不重複數(下限);嚴重度與阻擋比例來自威脅明細樣本
+          sample: { threat: sample.entries.length, complete: sample.reachedStart },
+        };
+      } catch (err) {
+        if (!isRedisError(err)) throw err;
+        deps.log?.warn({ code: (err as Error).name }, '高風險統計:無法讀取 netops-redis');
+        return { ...empty, message: REDIS_DOWN };
+      }
+    });
+  }
+
   /** SSE logs 事件的衍生欄位(D28:不改收集器欄位,只在送出前加 country、segment) */
   function enrich<T extends Record<string, unknown>>(item: T): T & { country: string | null; segment: string } {
     const c = classifier()(item);
     return { ...item, country: c.country, segment: c.segment };
   }
 
-  return { warroom, enrich, config };
+  return { warroom, risk, enrich, config };
 }
 
 export type WarroomService = ReturnType<typeof createWarroomService>;

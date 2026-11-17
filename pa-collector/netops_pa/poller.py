@@ -48,7 +48,7 @@ class SdkClient:
     """pan-os-python 的 Firewall,只開放唯讀 op。
 
     pan-os-python 預設不驗證 PA 的 HTTPS 憑證(pan.xapi 用 _create_unverified_context),這裡一律自己給
-    ssl_context:預設驗證(系統 CA 或 PA_CA_FILE);PA_TLS_INSECURE=1 只允許 dev / test(config.py 擋正式區)。
+    ssl_context:預設驗證(系統 CA 或 PA_CA_FILE);PA_TLS_INSECURE=1 不驗證(正式區也允許,啟動時記 WARNING)。
     """
 
     def __init__(self, cfg: PollConfig, *, use_http: bool = False) -> None:

@@ -55,6 +55,8 @@ def main() -> int:
         log.error("設定錯誤:%s", e)
         return 2
     logging.getLogger().setLevel(cfg.log_level)
+    if cfg.gw_env == "prod" and any(c and c.tls_insecure for c in (cfg.poll, cfg.query)):
+        log.warning("正式區不驗證 PA-560 管理介面憑證(PA_TLS_INSECURE=1)")
     quiet_sdk_logs()
 
     # 機密值登記到遮罩清單:不論以什麼格式出現在錯誤訊息都會被取代

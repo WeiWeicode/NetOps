@@ -19,7 +19,7 @@ from .status import mask, register_secret
 
 HINTS: list[tuple[tuple[str, ...], str]] = [
     (("certificate verify failed", "hostname", "ip address mismatch", "doesn't match"),
-     "憑證驗證失敗:PA_HOST 要和憑證的 SAN 相同(IP 要在 SAN 的 IP 欄位),或設 PA_CA_FILE 指向簽發的 CA;測試區可暫設 PA_TLS_INSECURE=1"),
+     "憑證驗證失敗:PA_HOST 要和憑證的 SAN 相同(IP 要在 SAN 的 IP 欄位),或設 PA_CA_FILE 指向簽發的 CA;或設 PA_TLS_INSECURE=1 不驗證"),
     (("403", "invalid credential", "unauthorized"), "API Key 無效、過期或角色沒有 XML API Operational Requests 權限"),
     (("timed out", "timeout"), "連線逾時:網路未放行,或管理介面 Permitted IP Addresses 沒有加入本主機"),
     (("refused", "unreachable", "no route", "name or service", "getaddrinfo", "errno"), "連不到 PA-560:確認 PA_HOST、PA_PORT 與網路放行"),
@@ -53,8 +53,6 @@ def load_poll(env: dict[str, str]) -> PollConfig:
     if missing:
         raise ConfigError(f"缺少必要設定:{'、'.join(missing)}")
     insecure = _bool(env, "PA_TLS_INSECURE")
-    if insecure and gw_env == "prod":
-        raise ConfigError("正式區不可設定 PA_TLS_INSECURE")
     return PollConfig(host=host, port=_int(env, "PA_PORT", 443, 1, 65535), api_key=key, ca_file=_file(env, "PA_CA_FILE"),
                       tls_insecure=insecure, interval=15, timeout=_int(env, "PA_TIMEOUT_SECONDS", 8, 2, 30))
 
@@ -67,7 +65,7 @@ def run(env: dict[str, str] | None = None, out: Callable[[str], None] = print, c
         out(f"設定錯誤:{e}")
         return 2
     register_secret(cfg.api_key)
-    tls = "不驗證憑證(PA_TLS_INSECURE=1,只限測試區)" if cfg.tls_insecure else f"驗證憑證({'PA_CA_FILE' if cfg.ca_file else '系統 CA'})"
+    tls = "不驗證憑證(PA_TLS_INSECURE=1)" if cfg.tls_insecure else f"驗證憑證({'PA_CA_FILE' if cfg.ca_file else '系統 CA'})"
     out(f"PA-560 {cfg.host}:{cfg.port},{tls},逾時 {cfg.timeout} 秒")
     try:
         c = client or SdkClient(cfg)

@@ -34,15 +34,17 @@ def test_invalid(env, msg):
         load_config(env)
 
 
-def test_prod_rejects_plaintext_and_insecure(tmp_path):
+def test_prod_rejects_plaintext_allows_insecure(tmp_path):
     prod = {"GW_ENV": "prod", "REDIS_URL": "redis://x", "PA_POLL_ENABLED": "1", "PA_HOST": "pa"}
     with pytest.raises(ConfigError, match="PA_API_KEY_FILE"):
         load_config({**prod, "PA_API_KEY": "k"})
     key = tmp_path / "k"
     key.write_text("secret-api-key\n")
-    with pytest.raises(ConfigError, match="PA_TLS_INSECURE"):
-        load_config({**prod, "PA_API_KEY_FILE": str(key), "PA_TLS_INSECURE": "1"})
+    # 需求方 2026-11-17:正式區也可不驗證 PA-560 管理介面憑證(輪詢與精準查詢同一規則)
+    cfg = load_config({**prod, "PA_API_KEY_FILE": str(key), "PA_TLS_INSECURE": "1", "PA_QUERY_ENABLED": "1"})
+    assert cfg.poll.tls_insecure and cfg.query.tls_insecure
     cfg = load_config({**prod, "PA_API_KEY_FILE": str(key)})
+    assert not cfg.poll.tls_insecure  # 預設仍驗證
     assert cfg.poll.api_key == "secret-api-key" and cfg.poll.port == 443 and cfg.poll.interval == 15
 
 

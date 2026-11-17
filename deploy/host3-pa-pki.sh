@@ -80,7 +80,7 @@ print_env() {
   echo "PA_TLS_CERT_FILE=/run/pa-tls/server.crt"
   echo "PA_TLS_KEY_FILE=/run/pa-tls/server.key"
   echo "PA_HOST=$PA_IP"
-  echo "(不可設 PA_TLS_INSECURE;有 server.crt 就不需要 PA_RECEIVE_PLAINTEXT)"
+  echo "(有 server.crt 就不需要 PA_RECEIVE_PLAINTEXT)"
 }
 
 cmd_init() {

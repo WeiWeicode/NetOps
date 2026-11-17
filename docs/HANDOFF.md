@@ -2,9 +2,26 @@
 
 > 接手時先讀 `AGENT.md`,再讀 `docs/ARCHITECTURE.md`、`docs/IMPL-PLAN.md`。
 
-## 2026-11-16 收工:正式區第二段進行中(PA 轉送設定剩 Log Forwarding)
+## 2026-11-17 收工:正式區 PA 轉送完成,明天對帳
 
-**接手方式**:新討論串說「從 `NetOps/docs/HANDOFF.md`「2026-11-16 收工:正式區第二段進行中」接手,繼續 PA 轉送設定」。
+**接手方式**:新討論串說「從 `NetOps/docs/HANDOFF.md`「2026-11-17 收工」接手,做正式區對帳」。
+
+### 已完成(2026-11-17 08:30–08:49)
+
+- PA-560:`netops-forward` 的 threat / url / data / wildfire / decryption 加 `netops-http-prod`;traffic 只走 Syslog `netops-syslog`(內含 `netops-test` 10.10.130.124、`netops-prod` 10.10.130.122,TCP 51294,Custom Log Format 不變);刪除誤建的 **Syslog 類** profile `netops-http-prod`(HTTP 類同名 profile 保留);`interzone-default`、`intrazone-default` 確認已設 Log at Session End + `netops-forward`。
+- 主機 3 心跳(00:48 → 00:49 UTC):`received` 27,112 → 39,255(約 1.2 萬筆 / 分),`syslogOkAt`、`httpOkAt` 持續更新,`dropped` / `rejected` / `malformed` 0;測試區 Syslog 同時正常。
+- **教訓**:PA Syslog TCP 送一批後斷線,PA 沒有 `error 110` 也不重連;只 Commit 沒改到該 profile 不會重連 → 刪除 server 項目 Commit、再加回 Commit 才恢復。Preview Changes 的差異對齊會錯位,Custom Log Format 要在 GUI 確認。
+
+### 下一步(依序)
+
+1. 11-18:正式區對帳(一整天資料進 ClickHouse、`interzone-default` deny 有進、誤差 < 0.5%);測試區 AC1 / AC7 跨日驗收照下段。
+2. 查 PA 雲端 `tls-X509-validation` 是否改設定前就有(指令見下段第 2 步)。
+3. C6 驗收後:`NETOPS_AI_SOURCE=clickhouse`、移除 `FTP_SYNC_MINUTES`、`NETOPS_AI_DAILY_SUMMARY=1`(RUNBOOK-prod §4 第 4 步)。
+4. 文件:下段第 5 項,另補本段教訓到 PF F.4.1。
+
+## 2026-11-16 收工:正式區第二段進行中(紀錄)
+
+**接手方式**:(已被上段取代)。
 
 ### 現況(主機 3)
 

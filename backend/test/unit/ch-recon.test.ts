@@ -5,6 +5,9 @@
  *   - 補漏:只補 seqno 不在 ClickHouse 的列(source = 'ftp'),沒有 seqno 的略過;佇列滿回 409
  */
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { createBackfillQueue, type BackfillClient, type BackfillQueue } from '../../src/infra/redis/backfill.js';
 import { runBackfill, validateJob } from '../../src/ingest/backfill.js';
@@ -14,6 +17,10 @@ import { createFakeReader, type FakeReader } from '../fixtures/fake-ch.js';
 import { FakeClickHouse } from '../fixtures/fake-ingest.js';
 import { trafficCsv } from '../fixtures/fake-logs.js';
 import { createTestApp, waitFor, type TestApp } from '../helpers.js';
+
+// 對帳排程測試的暫存資料目錄放在同一個根目錄,測試結束時一起刪除(不在 /tmp 留下 adlogs/palogs… 目錄)
+const reconTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'netops-recon-'));
+after(() => fs.rmSync(reconTmp, { recursive: true, force: true }));
 
 /** 記憶體版 Redis(只有佇列用到的指令) */
 function memRedis(): BackfillClient {
@@ -259,7 +266,7 @@ describe('自動對帳(每天 at 起,自己同步 FTP;有缺口自動補漏)', (
     const ch = { n: 0 };
     reader.trafficHours = async (from) => [{ hour: from + 3 * 3600_000, action: 'allow', n: ch.n, bytes: 0 }];
     reader.earliestTrafficHour = async () => day('2026-11-01');
-    const dir = (await import('node:fs')).mkdtempSync((await import('node:path')).join((await import('node:os')).tmpdir(), 'netops-recon-'));
+    const dir = fs.mkdtempSync(path.join(reconTmp, 'r-'));
     const { createStore } = await import('../../src/infra/store/index.js');
     const { createChSummaryBuilder } = await import('../../src/modules/pa/ch-summary.js');
     const { createReconciler } = await import('../../src/modules/pa/reconcile.js');

@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { describe, it } from 'node:test';
+import { after, describe, it } from 'node:test';
 import { createStore } from '../../src/infra/store/index.js';
 import { createDailySync, DAILY_MAX_TRIES, type DailyDayState } from '../../src/modules/ftp/daily-sync.js';
 import { createEventImporter } from '../../src/modules/pa-events/importer.js';
@@ -20,7 +20,10 @@ import { createFakeFtp } from '../fixtures/fake-ftp.js';
 import { createFakeReader } from '../fixtures/fake-ch.js';
 import { waitFor } from '../helpers.js';
 
-const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'netops-daily-'));
+// 所有暫存資料目錄放在同一個根目錄,測試結束時一起刪除(不在 /tmp 留下 adlogs/palogs… 目錄)
+const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'netops-daily-'));
+after(() => fs.rmSync(tmpRoot, { recursive: true, force: true }));
+const tmp = () => fs.mkdtempSync(path.join(tmpRoot, 'd-'));
 
 describe('fileDataDay', () => {
   it('匯出檔名是匯出日,last_calendar_day 往前一天;沒有日期回 null', () => {

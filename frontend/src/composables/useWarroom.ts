@@ -6,12 +6,12 @@
  *   - mock 模式(warroomMockEnabled() 或 options.mock):全部改用 warroomMock 的假資料,不呼叫 API
  * 純函式(classifyLog、filterLogs、buildNodes、sumRates…)另外匯出,方便畫面與測試共用。
  */
-import { computed, onScopeDispose, ref, shallowRef, watch } from 'vue';
+import { computed, getCurrentScope, onScopeDispose, ref, shallowRef, watch } from 'vue';
 import { paLive, type CollectorControl, type LiveLog, type PaLiveSnapshot } from '@/api/paLive';
 import { warroom as api, type Warroom, type WarroomLink, type WarroomRisk, type WarroomSegment, type WarroomSource } from '@/api/warroom';
-import { useLiveStream } from './paLive';
+import { MAX_LOGS, useLiveStream } from './paLive';
 import { usePolling } from './usePolling';
-import { createWarroomMock, warroomMockEnabled, type WarroomMock } from './warroomMock';
+import { createWarroomMock, resolveMock, type WarroomMock } from './warroomMock';
 
 export const WARROOM_POLL_MS = 5_000;
 export const RISK_POLL_MS = 60_000;
@@ -151,7 +151,7 @@ export interface UseWarroomOptions {
 }
 
 export function useWarroom(options: UseWarroomOptions = {}) {
-  const mock = options.mock ?? warroomMockEnabled();
+  const mock = resolveMock(options.mock);
   const data = shallowRef<Warroom | null>(null);
   const risk = shallowRef<WarroomRisk | null>(null);
   const snapshot = shallowRef<PaLiveSnapshot | null>(null);
@@ -202,7 +202,7 @@ export function useWarroom(options: UseWarroomOptions = {}) {
   function start() {
     if (mock) {
       mockSrc = createWarroomMock(options.rand);
-      const pushLog = () => (mockLogs.value = [mockSrc!.log(), ...mockLogs.value].slice(0, 500));
+      const pushLog = () => (mockLogs.value = [mockSrc!.log(), ...mockLogs.value].slice(0, MAX_LOGS));
       const refresh = () => {
         mockSrc!.tick();
         data.value = mockSrc!.warroom();
@@ -221,15 +221,25 @@ export function useWarroom(options: UseWarroomOptions = {}) {
         () => undefined,
       );
       stream!.connect(['traffic', 'threat'], {});
-      void paLive.logs('traffic', {}, 100).then(
-        (r) => stream!.preload(r.items),
-        () => undefined,
-      );
+      // 進頁先補最近的 log(威脅也要,篩選「威脅」與事件欄才不會是空的);preload 依時間由新到舊合併
+      void Promise.allSettled([paLive.logs('traffic', {}, 100), paLive.logs('threat', {}, 50)]).then((rs) => {
+        const items = rs.flatMap((r) => (r.status === 'fulfilled' ? r.value.items : []));
+        stream!.preload(items.sort((a, b) => (a.receivedAt < b.receivedAt ? 1 : -1)));
+      });
+      if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisible);
     }
     timers.push(setInterval(() => (now.value = Date.now()), 1000));
   }
 
+  /** 分頁切回前景:立即更新(背景時輪詢放慢 5 倍) */
+  function onVisible() {
+    if (document.hidden) return;
+    void wPoll.run();
+    void rPoll.run();
+  }
+
   function stop() {
+    if (!mock && typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisible);
     timers.splice(0).forEach(clearInterval);
     wPoll.stop();
     rPoll.stop();
@@ -244,7 +254,11 @@ export function useWarroom(options: UseWarroomOptions = {}) {
   /** 右欄即時事件:不受篩選、暫停影響 */
   const events = computed(() => allLogs.value.slice(0, MAX_EVENTS).map((l) => ({ log: l, kind: classifyLog(l) })));
   const rates = computed(() => sumRates(data.value?.links ?? []));
-  const stale = computed(() => lastOkAt.value === null || now.value - lastOkAt.value > STALE_MS);
+  /** 背景分頁輪詢放慢,不判過期(切回前景會立即更新) */
+  const stale = computed(() => {
+    if (typeof document !== 'undefined' && document.hidden && lastOkAt.value !== null) return false;
+    return lastOkAt.value === null || now.value - lastOkAt.value > STALE_MS;
+  });
   /** 資料不完整:WR-1 / WR-2 partial、串流部分類型讀不到 */
   const partial = computed(() => !!data.value?.partial || !!risk.value?.partial || !!stream?.degraded.value);
   const connected = computed(() => (mock ? true : (stream?.connected.value ?? false)));
@@ -272,7 +286,7 @@ export function useWarroom(options: UseWarroomOptions = {}) {
   }
 
   start();
-  onScopeDispose(stop);
+  if (getCurrentScope()) onScopeDispose(stop);
 
   return {
     mock,

@@ -19,6 +19,12 @@ export function warroomMockEnabled(
   return env.VITE_WARROOM_MOCK === '1' || new URLSearchParams(search).get('mock') === '1';
 }
 
+/** composable 用:正式建置一律 false(即使呼叫端傳 mock: true) */
+export function resolveMock(opt: boolean | undefined, env: { PROD?: boolean; VITE_WARROOM_MOCK?: string } = import.meta.env): boolean {
+  if (env.PROD) return false;
+  return opt ?? warroomMockEnabled(env);
+}
+
 /** 可重現的亂數(測試用固定種子) */
 export function seededRandom(seed = 1): () => number {
   let s = seed >>> 0 || 1;

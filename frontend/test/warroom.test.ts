@@ -17,7 +17,7 @@ vi.mock('@/api/paLive', async (orig) => {
 import { ApiError } from '@giganexus/web-kit';
 import { buildNodes, classifyLog, denyTone, filterLogs, particleRate, perMinutes, sourceIdOf, sumRates, useWarroom, STALE_MS } from '@/composables/useWarroom';
 import { cooldownFromError, useWarroomAi, COOLDOWN_MS } from '@/composables/useWarroomAi';
-import { createWarroomMock, seededRandom, warroomMockEnabled } from '@/composables/warroomMock';
+import { createWarroomMock, resolveMock, seededRandom, warroomMockEnabled } from '@/composables/warroomMock';
 
 const SOURCES: WarroomSource[] = [
   { id: 'TW', kind: 'country', label: '台灣', conn: 100, deny: 2, threat: 0, topDst: [], topApp: [] },
@@ -93,6 +93,9 @@ describe('mock 切換', () => {
     expect(warroomMockEnabled({ PROD: false }, '?mock=1')).toBe(true);
     expect(warroomMockEnabled({ PROD: false, VITE_WARROOM_MOCK: '1' }, '')).toBe(true);
     expect(warroomMockEnabled({ PROD: false }, '')).toBe(false);
+    // 呼叫端傳 mock: true 也不能在正式建置開啟
+    expect(resolveMock(true, { PROD: true })).toBe(false);
+    expect(resolveMock(true, { PROD: false })).toBe(true);
   });
 
   it('mock 資料形狀與 API 相同', () => {

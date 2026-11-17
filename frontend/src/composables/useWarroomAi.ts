@@ -6,16 +6,18 @@
  *   - mock 模式同 useWarroom(假逐字輸出,不呼叫 API)
  */
 import { ApiError } from '@giganexus/web-kit';
-import { computed, onScopeDispose, ref, shallowRef } from 'vue';
+import { computed, getCurrentScope, onScopeDispose, ref, shallowRef } from 'vue';
 import { AiStreamError } from '@/api/ai';
 import { can, describeError } from '@/api/gateway';
 import { UI } from '@/api/perms';
 import { warroom as api, type HourlyInsight } from '@/api/warroom';
 import { usePolling } from './usePolling';
-import { createWarroomMock, warroomMockEnabled } from './warroomMock';
+import { createWarroomMock, resolveMock } from './warroomMock';
 
 export const INSIGHT_POLL_MS = 5 * 60_000;
 export const COOLDOWN_MS = 5 * 60_000;
+/** 分析執行中(自動或別人手動)時,短間隔追結果 */
+export const RUNNING_POLL_MS = 5_000;
 
 /** 429 回應的冷卻秒數(details.retryAfter),沒有時用預設 5 分鐘 */
 export function cooldownFromError(e: unknown, now = Date.now()): number | null {
@@ -25,7 +27,7 @@ export function cooldownFromError(e: unknown, now = Date.now()): number | null {
 }
 
 export function useWarroomAi(options: { mock?: boolean; can?: (code: string) => boolean } = {}) {
-  const mock = options.mock ?? warroomMockEnabled();
+  const mock = resolveMock(options.mock);
   const check = options.can ?? can;
   const insight = shallowRef<HourlyInsight | null>(null);
   const loadError = ref<Error | null>(null);
@@ -36,6 +38,7 @@ export function useWarroomAi(options: { mock?: boolean; can?: (code: string) => 
   const now = ref(Date.now());
   const tick = setInterval(() => (now.value = Date.now()), 1000);
   let abort: AbortController | null = null;
+  let follow: ReturnType<typeof setTimeout> | undefined;
   const mockSrc = mock ? createWarroomMock() : null;
 
   const poll = usePolling(
@@ -47,6 +50,8 @@ export function useWarroomAi(options: { mock?: boolean; can?: (code: string) => 
         loadError.value = null;
         const until = r.cooldownUntil ? Date.parse(r.cooldownUntil) : NaN;
         if (Number.isFinite(until)) cooldownUntil.value = until;
+        clearTimeout(follow);
+        if (r.status === 'running') follow = setTimeout(() => void poll.run(), RUNNING_POLL_MS);
       }
       return true;
     },
@@ -83,8 +88,13 @@ export function useWarroomAi(options: { mock?: boolean; can?: (code: string) => 
           const d = e.data as { text?: unknown };
           if (e.event === 'content') streamText.value += String(d?.text ?? '');
         }, abort.signal);
+      if (abort.signal.aborted) return;
       cooldownUntil.value = Date.now() + COOLDOWN_MS;
-      if (!mockSrc) await poll.run();
+      if (!mockSrc) {
+        // 先保留串流結果,重新讀取失敗時文字不會消失
+        insight.value = { ...(insight.value ?? { hour: null, model: '', partial: false }), text: streamText.value, trigger: 'manual', status: 'done' };
+        await poll.run();
+      }
     } catch (e) {
       if ((e as Error).name === 'AbortError') return;
       const cd = cooldownFromError(e);
@@ -98,11 +108,13 @@ export function useWarroomAi(options: { mock?: boolean; can?: (code: string) => 
   }
 
   void poll.run();
-  onScopeDispose(() => {
-    clearInterval(tick);
-    abort?.abort();
-    poll.stop();
-  });
+  if (getCurrentScope())
+    onScopeDispose(() => {
+      clearTimeout(follow);
+      clearInterval(tick);
+      abort?.abort();
+      poll.stop();
+    });
 
   return { mock, insight, loadError, running, streamText, runError, text, failed, allowed, canRun, cooldownSec, run, reload: poll.run };
 }

@@ -18,7 +18,7 @@ const hourlyRoutes: FastifyPluginAsync<{ hourly: HourlyInsight; hub: SseHub }> =
         summary: '戰情室 AI 每小時分析:最新一筆',
         description:
           '每整點(台北時間)自動分析上一個整點的戰情室彙整統計(WR-1、WR-2,只送統計不送原始 log),或手動分析這個整點到現在;只保留最新一筆。' +
-          '回應 { enabled, status(none、done、failed), running, hour(分析區間開始,台北時間 ISO), until, text, model, trigger(auto、manual), partial, at, error, cooldownUntil }。' +
+          '回應 { enabled, status(none、done、failed), running, hour(分析區間開始,台北時間 ISO), until, text, model, trigger(auto、manual), partial, statsMinutes(送給模型的統計視窗:流量 15、高風險 60 分鐘), at, error, cooldownUntil }。整點後 5 分鐘內才補跑上一小時。' +
           'status failed 時 error 為分類過的原因(畫面顯示「本小時分析失敗」);AI 主機不可用不影響其他 API。',
         tags: ['AI'],
         'x-permission': 'netops.pa-realtime.read',

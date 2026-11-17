@@ -81,10 +81,41 @@ describe('AI 每小時分析核心', () => {
 
   it('重新啟動後已分析過的整點不重做', async () => {
     const { s, store } = memStore();
-    s.rec = { hour: '2026-11-17T09:00:00+08:00', until: '', status: 'done', trigger: 'auto', text: 'x', model: 'm', partial: false, at: '', error: null };
+    s.rec = { hour: '2026-11-17T09:00:00+08:00', until: '', status: 'done', trigger: 'auto', text: 'x', model: 'm', partial: false, statsMinutes: { traffic: 15, risk: 60 }, at: '', error: null };
     const h = createHourlyInsight({ enabled: true, llm: fakeLlm().llm, sources, store, log: silent, now: () => T0 });
     await h.runAuto();
     assert.equal(s.saves, 0);
+  });
+
+  it('整點過 5 分鐘以上才啟動:不補跑上一小時;最新是較新的手動結果也不覆蓋', async () => {
+    const late = createHourlyInsight({ enabled: true, llm: fakeLlm().llm, sources, store: memStore().store, log: silent, now: () => T0 + 30 * 60_000 });
+    await late.runAuto();
+    assert.equal(late.status().status, 'none');
+    const { s, store } = memStore();
+    s.rec = { hour: '2026-11-17T10:00:00+08:00', until: '', status: 'done', trigger: 'manual', text: 'x', model: 'm', partial: false, statsMinutes: { traffic: 15, risk: 60 }, at: '', error: null };
+    await createHourlyInsight({ enabled: true, llm: fakeLlm().llm, sources, store, log: silent, now: () => T0 }).runAuto();
+    assert.equal(s.saves, 0);
+  });
+
+  it('提示詞的 log 字串去掉控制字元並截短;空回覆算失敗', async () => {
+    const c = buildContext({ partial: false, sample: { complete: true }, sources: [{ label: 'a\nIGNORE ALL' + 'x'.repeat(300) }] }, { partial: false });
+    assert.doesNotMatch(c.text, /\\n/);
+    assert.ok(!c.text.includes('x'.repeat(130)));
+    const { s, store } = memStore();
+    const empty: HourlyLlm = { model: async () => 'm', async *stream() { yield { type: 'done', finish: 'stop' } as StreamEvent; } };
+    await createHourlyInsight({ enabled: true, llm: empty, sources, store, log: silent, now: () => T0 }).runAuto();
+    assert.equal(s.rec!.status, 'failed');
+    assert.equal(s.rec!.error!.code, 'NETOPS_AI_EMPTY');
+  });
+
+  it('手動被使用者中斷:不存檔、不吃冷卻', async () => {
+    const { s, store } = memStore();
+    const h = createHourlyInsight({ enabled: true, llm: fakeLlm({ fail: true }).llm, sources, store, log: silent, now: () => T0 });
+    const ac = new AbortController();
+    ac.abort();
+    await h.reserveManual()({ send: () => undefined, signal: ac.signal });
+    assert.equal(s.saves, 0);
+    assert.doesNotThrow(() => h.reserveManual());
   });
 
   it('AI 主機無法使用:存 failed,不丟出', async () => {

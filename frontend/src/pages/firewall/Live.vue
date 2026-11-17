@@ -6,26 +6,52 @@
  *     右即時事件(EventFeed)、上 AI 分析框(AiPanel)、下近一小時高風險統計(RiskPanel)、底部 Log 表(TrafficLogTable)
  *   - 收集器狀態與測試區暫停開關移至收摺的「系統狀態」抽屜(SystemStatusDrawer)
  */
-import { computed, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { fmtNum } from '@/api/format';
 import { collectorView, fmtBps, logSource } from '@/composables/paLive';
 import { useLiveTop } from '@/composables/useLiveTop';
 import { useWarroom } from '@/composables/useWarroom';
 import { useWarroomAi } from '@/composables/useWarroomAi';
 import AiPanel from '@/components/warroom/AiPanel.vue';
-import EventFeed from '@/components/warroom/EventFeed.vue';
+import EventFeed, { readFeedOpen } from '@/components/warroom/EventFeed.vue';
 import LegendPanel, { readLegendOpen } from '@/components/warroom/LegendPanel.vue';
 import Notices from '@/components/warroom/Notices.vue';
-import RiskPanel from '@/components/warroom/RiskPanel.vue';
+import RiskPanel, { readRiskOpen } from '@/components/warroom/RiskPanel.vue';
 import RankingDrawer from '@/components/warroom/RankingDrawer.vue';
 import SystemStatusDrawer from '@/components/warroom/SystemStatusDrawer.vue';
-import TrafficLogTable from '@/components/warroom/TrafficLogTable.vue';
+import TrafficLogTable, { readLogOpen } from '@/components/warroom/TrafficLogTable.vue';
 import WarroomCanvas from '@/components/warroom/WarroomCanvas.vue';
 
 const w = useWarroom();
 const a = useWarroomAi();
 
 const legendOpen = ref(readLegendOpen());
+const feedOpen = ref(readFeedOpen());
+const logOpen = ref(readLogOpen());
+const riskOpen = ref(readRiskOpen());
+/**
+ * AI 框與高風險框在 Canvas 上佔用的高度(AI:上緣 12 + 框高;高風險:框高 + 與 Log 表間距 14),
+ * 傳給 Canvas 讓核心與儀表避開;收摺、文字長短變動時由 ResizeObserver 自動更新
+ */
+const aiRef = ref<{ $el: HTMLElement } | null>(null);
+const riskRef = ref<{ $el: HTMLElement } | null>(null);
+const aiReserve = ref(0);
+const riskReserve = ref(0);
+let panelObs: ResizeObserver | null = null;
+onMounted(() => {
+  const ai = aiRef.value?.$el;
+  const risk = riskRef.value?.$el;
+  if (typeof ResizeObserver === 'undefined') return;
+  panelObs = new ResizeObserver(() => {
+    if (ai) aiReserve.value = Math.round(ai.offsetTop + ai.offsetHeight);
+    if (risk) riskReserve.value = Math.round(risk.offsetHeight) + 14;
+  });
+  if (ai) panelObs.observe(ai);
+  if (risk) panelObs.observe(risk);
+});
+onBeforeUnmount(() => panelObs?.disconnect());
+/** Log 表佔用的高度:Canvas、高風險框、事件欄的底邊跟著它(收摺時 Canvas 往下放大);58 = 收摺高 46 + 底距 12,見 TrafficLogTable .mini */
+const mainStyle = computed(() => ({ '--wr-log-h': logOpen.value ? '242px' : '58px' }));
 const statusDrawerOpen = ref(false);
 /** 即時排行抽屜:開啟時才輪詢(useLiveTop) */
 const rankingOpen = ref(false);
@@ -141,7 +167,7 @@ const kpiCpu = computed(() => {
     />
 
     <!-- 主視覺區 -->
-    <div class="wr-main">
+    <div class="wr-main" :style="mainStyle">
       <WarroomCanvas
         :sources="w.nodes.value.sources"
         :segments="w.nodes.value.segments"
@@ -152,6 +178,9 @@ const kpiCpu = computed(() => {
         :gauge="w.gauge.value"
         :focus="w.focus.value"
         :legend-open="legendOpen"
+        :feed-open="feedOpen"
+        :top-reserve="aiReserve"
+        :bottom-reserve="riskReserve"
         @toggle-focus="w.toggleFocus"
         @center-change="canvasCenterX = $event"
       />
@@ -159,12 +188,14 @@ const kpiCpu = computed(() => {
       <LegendPanel v-model="legendOpen" :geo-attribution="w.geoAttribution.value" />
 
       <EventFeed
+        v-model:open="feedOpen"
         :events="w.events.value"
         :sources="w.nodes.value.sources"
         :segments="w.nodes.value.segments"
       />
 
       <AiPanel
+        ref="aiRef"
         :text="a.text.value"
         :insight="a.insight.value"
         :running="a.busy.value"
@@ -181,12 +212,15 @@ const kpiCpu = computed(() => {
       />
 
       <RiskPanel
+        ref="riskRef"
+        v-model:open="riskOpen"
         :risk="w.risk.value"
         :error="w.riskError.value"
         :center-x="canvasCenterX"
       />
 
       <TrafficLogTable
+        v-model:open="logOpen"
         v-model:filter="w.filter.value"
         v-model:paused="w.paused.value"
         :logs="w.logs.value"

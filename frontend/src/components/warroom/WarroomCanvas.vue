@@ -33,6 +33,12 @@ const props = defineProps<{
   gauge: { throughputMaxBps: number; sessionMax: number };
   focus: Focus | null;
   legendOpen: boolean;
+  /** 右側即時事件欄是否展開;收摺時右側節點往右移、Canvas 可用寬度變大(預設展開) */
+  feedOpen?: boolean;
+  /** 寬版面時 AI 框(置中疊在 Canvas 頂部)佔用到的高度 px;核心與上方儀表會避開這段 */
+  topReserve?: number;
+  /** 寬版面時高風險框(置中疊在 Canvas 底部)佔用的高度 px;核心與下方儀表會避開這段 */
+  bottomReserve?: number;
 }>();
 
 const emit = defineEmits<{
@@ -178,6 +184,9 @@ const placedLeft = shallowRef<PlacedSource[]>([]);
 const placedRight = shallowRef<PlacedSegment[]>([]);
 let colL = 150;
 let colR = 900;
+/** 核心區文字縮放比例(見 updateLayout) */
+let coreK = 1;
+const fs = (px: number) => Math.round(px * coreK * 10) / 10;
 /** 畫布像素 / CSS px 比例(見 MAX_CANVAS_PIXELS) */
 let pxScale = 1;
 /** 自動降級等級 0–2 */
@@ -401,10 +410,31 @@ function updateLayout() {
 
   colL = props.legendOpen ? Math.max(290, W * 0.23) : Math.max(150, W * 0.14);
   // 窄版面(< 1400,與 AiPanel / RiskPanel 的 @container 同門檻):右欄 270px 給 AI / 高風險框,節點再往左讓出標籤寬度
-  colR = W < 1400 ? Math.max(colL + 200, W - 440) : Math.min(W - 290, W * 0.76);
+  colR =
+    W < 1400
+      ? Math.max(colL + 200, W - 440)
+      : props.feedOpen === false
+        ? Math.min(W - 190, W * 0.84)
+        : Math.min(W - 290, W * 0.76);
   cx = (colL + colR) / 2;
   cy = H / 2;
   R = Math.min(Math.max(160, colR - colL), H) * (props.legendOpen ? 0.135 : 0.155);
+  // 寬版面 AI 框(頂)與高風險框(底)置中疊在 Canvas 上:核心在兩框之間置中、必要時縮小,
+  // 讓上方「吞吐量」與下方「連線數」儀表數字不被蓋住。
+  // 儀表弧半徑 gR = 1.7R;吞吐量數字頂端約 cy - gR - 40,連線數說明文字底端約 cy + gR + 50
+  // 核心區文字與間距跟著 R 等比縮放(R 90 為原尺寸),空間不夠時核心縮小但文字不擠在一起
+  coreK = 1;
+  if (W >= 1400) {
+    const topRes = Math.max(8, props.topReserve ?? 0);
+    const botRes = Math.max(8, props.bottomReserve ?? 0);
+    const avail = H - topRes - botRes;
+    // 需要的高度 ≈ 3.4R + 90k(上下儀表數字),k = min(1, R / 90) → 解出可用的 R
+    let r = Math.min(R, avail / (3.4 + 1));
+    if (r >= 90) r = Math.min(R, (avail - 90) / 3.4);
+    R = Math.max(48, r);
+    coreK = Math.max(0.6, Math.min(1, R / 90));
+    cy = topRes + 40 * coreK + 1.7 * R + Math.max(0, (avail - (3.4 * R + 90 * coreK)) / 2);
+  }
 
   // 取整:AI / 高風險框以此置中,小數像素會讓 DOM 文字發糊
   emit('centerChange', Math.round(cx));
@@ -480,7 +510,10 @@ function easeNodes(dtSec: number) {
   }
 }
 
-watch(() => props.legendOpen, () => updateLayout());
+watch(
+  () => [props.legendOpen, props.feedOpen, props.topReserve, props.bottomReserve] as const,
+  () => updateLayout(),
+);
 watch(
   () => [props.sources, props.segments] as const,
   () => placeNodes(false),
@@ -647,11 +680,11 @@ function drawGauge(
 
   tc.textAlign = 'center';
   tc.fillStyle = `rgb(${c})`;
-  tc.font = 'bold 21px "Segoe UI", sans-serif';
+  tc.font = `bold ${fs(21)}px "Segoe UI", sans-serif`;
   tc.fillText(val, lx, ly);
   tc.fillStyle = '#6f86a8';
-  tc.font = '10px "Segoe UI", "Microsoft JhengHei", sans-serif';
-  tc.fillText(label, lx, ly + 14);
+  tc.font = `${fs(10)}px "Segoe UI", "Microsoft JhengHei", sans-serif`;
+  tc.fillText(label, lx, ly + 14 * coreK);
 }
 
 function fmtThroughputMax(maxBps: number): string {
@@ -756,9 +789,9 @@ function drawCore(ctx: CanvasRenderingContext2D, ts: number) {
     ctx.arc(x, y, 3.5, 0, Math.PI * 2);
     ctx.fill();
     tc.fillStyle = `rgba(${s[1]},.8)`;
-    tc.font = '9px "Segoe UI", sans-serif';
+    tc.font = `${fs(9)}px "Segoe UI", sans-serif`;
     tc.textAlign = 'center';
-    tc.fillText(s[0], x, y - 7);
+    tc.fillText(s[0], x, y - 7 * coreK);
   });
 
   // 六角盾牌核心
@@ -784,12 +817,12 @@ function drawCore(ctx: CanvasRenderingContext2D, ts: number) {
   drawIcon(tc, 'shield', cx, cy - hr * 0.32, hr * 0.5, `rgb(${lc})`, 2.2);
   tc.fillStyle = '#e6f2ff';
   tc.textAlign = 'center';
-  tc.font = 'bold 15px "Segoe UI", sans-serif';
+  tc.font = `bold ${fs(15)}px "Segoe UI", sans-serif`;
   tc.fillText('PA-560', cx, cy + hr * 0.22);
-  tc.font = 'bold 20px "Segoe UI", sans-serif';
+  tc.font = `bold ${fs(20)}px "Segoe UI", sans-serif`;
   tc.fillStyle = `rgb(${lc})`;
   tc.fillText(dpCpu != null ? `${Math.round(dpCpu)}%` : '—', cx, cy + hr * 0.55);
-  tc.font = '10px "Segoe UI", sans-serif';
+  tc.font = `${fs(10)}px "Segoe UI", sans-serif`;
   tc.fillStyle = '#6f86a8';
   tc.fillText('DATAPLANE', cx, cy + hr * 0.72);
 
@@ -831,7 +864,7 @@ function drawCore(ctx: CanvasRenderingContext2D, ts: number) {
     `吞吐量 Mbps / ${fmtThroughputMax(maxBps)}`,
     props.snapshot?.metrics?.throughput?.bps != null ? dMbps.toFixed(0) : '—',
     cx,
-    cy - gR - 18,
+    cy - gR - 18 * coreK,
     false,
   );
   drawGauge(
@@ -844,7 +877,7 @@ function drawCore(ctx: CanvasRenderingContext2D, ts: number) {
     `連線數 / ${fmtSessionMax(maxSess)}`,
     props.snapshot?.metrics?.session?.active != null ? Math.round(dSess).toLocaleString('zh-TW') : '—',
     cx,
-    cy + gR + 30,
+    cy + gR + 30 * coreK,
     true,
   );
 
@@ -852,19 +885,19 @@ function drawCore(ctx: CanvasRenderingContext2D, ts: number) {
   const denyStr = props.kpis?.denyPerMin != null ? `${fmtNum(props.kpis.denyPerMin)}/分` : '—';
   const cpsStr = props.snapshot?.metrics?.throughput?.cps != null ? `${fmtNum(rawCps)}/s` : `${Math.round(props.rates.conn)}/s`;
   tc.textAlign = 'center';
-  tc.font = 'bold 15px "Segoe UI", sans-serif';
+  tc.font = `bold ${fs(15)}px "Segoe UI", sans-serif`;
   tc.fillStyle = '#ff4d5e';
   tc.fillText(denyStr, cx - gR - 6, cy - R * 1.9);
   tc.fillStyle = '#6f86a8';
-  tc.font = '10px "Segoe UI", "Microsoft JhengHei", sans-serif';
-  tc.fillText('阻擋', cx - gR - 6, cy - R * 1.9 + 13);
+  tc.font = `${fs(10)}px "Segoe UI", "Microsoft JhengHei", sans-serif`;
+  tc.fillText('阻擋', cx - gR - 6, cy - R * 1.9 + 13 * coreK);
 
-  tc.font = 'bold 15px "Segoe UI", sans-serif';
+  tc.font = `bold ${fs(15)}px "Segoe UI", sans-serif`;
   tc.fillStyle = '#3ea8ff';
   tc.fillText(cpsStr, cx + gR + 6, cy - R * 1.9);
   tc.fillStyle = '#6f86a8';
-  tc.font = '10px "Segoe UI", "Microsoft JhengHei", sans-serif';
-  tc.fillText('新連線', cx + gR + 6, cy - R * 1.9 + 13);
+  tc.font = `${fs(10)}px "Segoe UI", "Microsoft JhengHei", sans-serif`;
+  tc.fillText('新連線', cx + gR + 6, cy - R * 1.9 + 13 * coreK);
 
   // 環繞二進位字元流(降級時關閉)
   if (degrade === 0) drawBinaryRing(tc, t);
@@ -873,7 +906,7 @@ function drawCore(ctx: CanvasRenderingContext2D, ts: number) {
 }
 
 function drawBinaryRing(ctx: CanvasRenderingContext2D, t: number) {
-  ctx.font = '9px Consolas, monospace';
+  ctx.font = `${fs(9)}px Consolas, monospace`;
   ctx.fillStyle = 'rgba(62,168,255,.35)';
   for (let i = 0; i < 48; i++) {
     const a = (i / 48) * Math.PI * 2 - t * 0.25;
@@ -1358,7 +1391,7 @@ onBeforeUnmount(() => {
   top: 52px;
   left: 0;
   right: 0;
-  bottom: 242px;
+  bottom: var(--wr-log-h, 242px);
   overflow: hidden;
 }
 .wr-canvas {

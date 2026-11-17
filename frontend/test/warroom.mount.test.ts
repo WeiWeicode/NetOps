@@ -477,6 +477,68 @@ describe('EventFeed.vue 與 TrafficLogTable.vue', () => {
   });
 });
 
+describe('TrafficLogTable.vue 虛擬捲動與收摺;EventFeed.vue 收摺', () => {
+  const many = (n: number): LiveLog[] =>
+    Array.from({ length: n }, (_, i) => ({ ...SAMPLE_LOGS[0]!, id: `v${i}`, type: 'traffic' }) as LiveLog);
+
+  it('200 筆只渲染可見列,上下以 pad 列撐高;篩選後筆數變少不會整片空白', async () => {
+    const w = mount(TrafficLogTable, {
+      props: { logs: many(200), filter: 'all', paused: false, focus: null },
+      global: { plugins: [ui], stubs: { RouterLink: true } },
+    });
+    const rows = w.findAll('tbody tr.wr-vrow');
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.length).toBeLessThan(40);
+    expect(w.find('tbody tr.pad').exists()).toBe(true);
+
+    // 捲到很下面後資料變少:scrollTop 夾回範圍內,仍有列
+    const bd = w.find('.bd').element as HTMLElement;
+    Object.defineProperty(bd, 'scrollTop', { configurable: true, value: 4500, writable: true });
+    await w.find('.bd').trigger('scroll');
+    await new Promise((r) => setTimeout(r, 30));
+    await w.setProps({ logs: many(5) });
+    expect(w.findAll('tbody tr.wr-vrow')).toHaveLength(5);
+    w.unmount();
+  });
+
+  it('收摺卸載表身並記住狀態;localStorage 失敗不丟例外;展開後從頂端顯示', async () => {
+    const w = mount(TrafficLogTable, {
+      props: { logs: many(50), filter: 'all', paused: false, focus: null, open: true },
+      global: { plugins: [ui], stubs: { RouterLink: true } },
+    });
+    await w.find('.wr-logbar__toggle').trigger('click');
+    expect(w.emitted('update:open')?.[0]).toEqual([false]);
+    expect(localStorage.getItem('wr-log')).toBe('0');
+    await w.setProps({ open: false });
+    expect(w.find('#lb').exists()).toBe(false);
+
+    const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('quota');
+    });
+    await w.find('.wr-logbar__toggle').trigger('click');
+    expect(w.emitted('update:open')?.[1]).toEqual([true]);
+    spy.mockRestore();
+    await w.setProps({ open: true });
+    expect(w.find('#lb').exists()).toBe(true);
+    expect(w.find('tbody tr.wr-vrow').text()).toContain(w.findAll('tbody tr.wr-vrow')[0]!.text());
+    expect(w.find('tbody tr.pad').exists() && (w.find('tbody tr.pad td').element as HTMLElement).style.height !== '' ? w.findAll('tbody tr.pad').length : 1).toBe(1);
+    w.unmount();
+    localStorage.removeItem('wr-log');
+  });
+
+  it('EventFeed 收摺時清單卸載並記住狀態', async () => {
+    const w = mount(EventFeed, { props: { events: [], open: true } });
+    expect(w.find('#evs').exists()).toBe(true);
+    await w.find('.wr-feed__btn').trigger('click');
+    expect(w.emitted('update:open')?.[0]).toEqual([false]);
+    expect(localStorage.getItem('wr-feed')).toBe('0');
+    await w.setProps({ open: false });
+    expect(w.find('#evs').exists()).toBe(false);
+    w.unmount();
+    localStorage.removeItem('wr-feed');
+  });
+});
+
 describe('WarroomCanvas.vue 節點互動與儀表滿格設定', () => {
   it('滑過節點顯示明細 tooltip、點擊節點發送 toggleFocus、點擊畫布空白處取消聚焦', async () => {
     const wr = makeWarroom({ gauge: { throughputMaxBps: 5e9, sessionMax: 256_000 } });

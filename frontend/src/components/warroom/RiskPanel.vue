@@ -1,3 +1,14 @@
+<script lang="ts">
+export const RISK_OPEN_KEY = 'wr-risk';
+export function readRiskOpen(): boolean {
+  try {
+    return localStorage.getItem(RISK_OPEN_KEY) !== '0';
+  } catch {
+    return true;
+  }
+}
+</script>
+
 <script setup lang="ts">
 /**
  * 戰情室下方近一小時高風險統計(WR-5;WARROOM-GEMINI-HANDOFF §2、§3):
@@ -5,6 +16,7 @@
  *   - partial 時數字為 null,顯示「—」
  *   - Top 威脅類型長條(依 severity 著色)
  *   - Top 攻擊來源長條(依 denyRatio 著色,支援 IP 對照表名稱提示)
+ *   - 可收摺(v-model:open,localStorage 'wr-risk');收摺只留標題列,Canvas 依框的實際高度把核心放回
  */
 import { computed } from 'vue';
 import { fmtNum } from '@/api/format';
@@ -12,11 +24,29 @@ import { describeError } from '@/api/gateway';
 import type { WarroomRisk } from '@/api/warroom';
 import { ipLabel } from '@/composables/ipNames';
 
-const props = defineProps<{
-  risk: WarroomRisk | null;
-  error?: Error | null;
-  centerX?: number | null;
+const props = withDefaults(
+  defineProps<{
+    risk: WarroomRisk | null;
+    error?: Error | null;
+    centerX?: number | null;
+    open?: boolean;
+  }>(),
+  { error: null, centerX: null, open: true },
+);
+
+const emit = defineEmits<{
+  (e: 'update:open', v: boolean): void;
 }>();
+
+function toggleOpen() {
+  const next = !props.open;
+  try {
+    localStorage.setItem(RISK_OPEN_KEY, next ? '1' : '0');
+  } catch {
+    /* 無法寫入 localStorage 時僅影響重整後記憶 */
+  }
+  emit('update:open', next);
+}
 
 const styleObj = computed(() => (props.centerX ? { left: `${props.centerX}px` } : undefined));
 
@@ -83,12 +113,23 @@ const topSources = computed(() => {
 <template>
   <section id="risk" class="wr-ov wr-risk" :style="styleObj" aria-label="近一小時高風險統計">
     <h3 class="wr-risk__hd">
+      <button
+        type="button"
+        class="wr-risk__toggle"
+        :aria-expanded="open"
+        :title="open ? '收摺高風險統計' : '展開高風險統計'"
+        aria-label="收摺或展開高風險統計"
+        @click="toggleOpen"
+      >
+        {{ open ? '▾' : '▸' }}
+      </button>
       <span>⚠ 近一小時高風險統計</span>
       <span class="meta">
         <template v-if="risk?.partial">資料不完整 · </template>每分鐘更新
       </span>
     </h3>
 
+    <template v-if="open">
     <div v-if="error && !risk" class="wr-risk__err" role="alert">
       無法取得高風險統計：{{ describeError(error) }}
     </div>
@@ -146,6 +187,7 @@ const topSources = computed(() => {
         </div>
       </div>
     </div>
+    </template>
   </section>
 </template>
 
@@ -167,7 +209,7 @@ const topSources = computed(() => {
   z-index: 6;
 }
 .wr-risk {
-  bottom: 256px;
+  bottom: calc(var(--wr-log-h, 242px) + 14px);
 }
 .wr-risk__hd {
   margin: 0;
@@ -177,6 +219,20 @@ const topSources = computed(() => {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+.wr-risk__toggle {
+  border: 1px solid #1c2a44;
+  border-radius: 6px;
+  background: transparent;
+  color: #6f86a8;
+  font: inherit;
+  line-height: 16px;
+  padding: 0 6px;
+  cursor: pointer;
+}
+.wr-risk__toggle:hover {
+  border-color: #3ea8ff;
+  color: #cfe3ff;
 }
 .meta {
   margin-left: auto;

@@ -336,6 +336,7 @@ export async function buildApp(
     now: deps.chNow,
     explain,
     daily: { autoRecon: Boolean(recon) && config.reconAt >= 0, syncReady },
+    hourly: { sources: warroom, store: app.store.warroom, now: deps.warroomNow },
     ...deps.ai,
   });
   aiDaily = aiReg.daily;

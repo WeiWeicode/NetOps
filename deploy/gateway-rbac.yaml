@@ -30,6 +30,9 @@ permissions:
   # C5 PA 精準查詢(XML API log、Session Browser;D31):只給 netops-admin(CQ7,netops-viewer 不列)。
   # 熱力圖 / 儀表板的同名按鈕(netops.pa-heatmap.query、netops.pa-insight.query)等那兩個選單(!78)合併後再登記
   - { code: netops.pa-live.query, name: 查詢 PA 即時連線 / 精準 log, kind: button, parent: netops.pa-live.read, sort: 20, includes: [netops.pa-query.read] }
+  # WR-3 戰情室 AI 每小時分析「立即分析」(WARROOM-PLAN Q4,需求方 2026-11-17):資料是戰情室彙整統計(即時監控 Redis),綁 netops.ai.use 與 netops.pa-realtime.read;
+  #   讀最新一筆 GET /ai/hourly-insight 用 netops.pa-realtime.read(選單本身就有)
+  - { code: netops.pa-live.ai, name: AI 立即分析, kind: button, parent: netops.pa-live.read, sort: 30, includes: [netops.ai.use, netops.pa-realtime.read] }
   - { code: netops.pa-dashboard.read, name: 流量總覽, kind: menu, parent: netops.group.firewall, sort: 10, includes: [netops.pa.read] }
   # V-b1(VIZ-RULES-DESIGN §4.8,X15:熱力圖 sort 12、儀表板 sort 15;時段明細抽屜要 netops.pa-log.read)
   # 「查詢即時連線」按鈕(netops.pa-heatmap.query / netops.pa-insight.query)等 C5 完成才登記
@@ -115,6 +118,8 @@ roles:
       - netops.pa-search.ai
       # AC6
       - netops.pa-events.ai
+      # WR-3
+      - netops.pa-live.ai
   - code: netops-viewer
     name: 資訊網通管理系統檢視者
     description: 資訊網通管理系統全部畫面唯讀(不含 FTP 同步 / 分析與知識庫編輯;含 AI 分析與問答)
@@ -144,3 +149,5 @@ roles:
       - netops.pa-search.ai
       # AC6
       - netops.pa-events.ai
+      # WR-3
+      - netops.pa-live.ai

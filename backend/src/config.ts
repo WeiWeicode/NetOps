@@ -74,6 +74,8 @@ export interface AiConfig {
    * 未設定時依部署區:test 開;prod 與 dev 關(正式區 C6 之前沒有 ClickHouse,C6 後再開)。另外要有 LLM_URL 與自動對帳才會跑
    */
   dailySummary: boolean;
+  /** 戰情室 AI 每小時分析(WR-3;NETOPS_AI_HOURLY,預設開;沒有 LLM_URL 時不跑) */
+  hourly: boolean;
   /** 每次送給 AI 的知識庫筆記最多幾個字(同舊版 KB_MAX_CHARS) */
   kbMaxChars: number;
   /** 同時進行的 AI 串流上限:全系統、每人(超過回 429,不回 5xx;S0 報告 §3.6) */
@@ -96,6 +98,8 @@ export interface Config {
   ai: AiConfig;
   /** PA 即時監控的 netops-redis(R1,只讀);dev 未設定時為 null(即時監控回 424 / unavailable),test / prod 必填 */
   redisUrl: string | null;
+  /** 戰情室離線 GeoIP 資料庫(DB-IP Country Lite .mmdb,WARROOM-PLAN Q2);映像內預設 /app/geoip/dbip-country-lite.mmdb,未設定為 null(國家欄位停用) */
+  geoipDb: string | null;
   /**
    * netops-clickhouse 唯讀查詢(C3,帳號 netops_reader)。PA 總覽、安全事件、明細只查 ClickHouse(ARCHITECTURE D43),
    * test / prod 必填;dev 未設定時為 null(這些 API 回 503)
@@ -294,6 +298,7 @@ function loadAi(env: NodeJS.ProcessEnv, gwEnv: GwEnv): AiConfig {
     ipLearn: { hour: int(env, 'IPLEARN_HOUR', -1, -1, 23), days: int(env, 'IPLEARN_DAYS', 7, 1, IPLEARN_MAX_DAYS), max: int(env, 'IPLEARN_MAX', 150, 1, 500), ttlDays: int(env, 'IPLEARN_TTL_DAYS', 90, 1, 3650) },
     source: loadAiSource(env, gwEnv),
     dailySummary: boolDefault(env, 'NETOPS_AI_DAILY_SUMMARY', gwEnv === 'test'),
+    hourly: boolDefault(env, 'NETOPS_AI_HOURLY', true),
     kbMaxChars: int(env, 'KB_MAX_CHARS', 20000, 1000, 200000),
     maxStreams: int(env, 'AI_MAX_STREAMS', 6, 1, 50),
     maxStreamsPerUser: int(env, 'AI_MAX_STREAMS_PER_USER', 2, 1, 10),
@@ -359,6 +364,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, cwd?: string): 
     search: { limit: int(env, 'PA_SEARCH_LIMIT', 2000, 1, 10000), seconds: int(env, 'PA_SEARCH_SECONDS', 180, 10, 600) },
     ai,
     redisUrl: loadRedisUrl(env, gateway.gwEnv),
+    geoipDb: str(env, 'GEOIP_DB') || null,
     clickhouse: loadClickHouse(env, gateway.gwEnv),
     // 正式區 TRAFFIC 保留 30 天(CQ12);測試區 TTL 3 天,多的天數只是查不到
     chSummary: { days: int(env, 'NETOPS_CH_SUMMARY_DAYS', 30, 1, 92), minutes: int(env, 'NETOPS_CH_SUMMARY_MINUTES', 5, 0, 60) },

@@ -2,6 +2,12 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。範圍:`frontend/`。
 
+## 2026-11-17 戰情室 Log 表虛擬捲動、Log / 事件 / 高風險可收摺、核心避開上下框
+- 工作項目:WR 複測後改善(需求方:「Log 表每秒重排仍會卡,改虛擬捲動,並且可以收摺(即時事件也是)」「連線數會被近一小時風險擋住」「近一小時也可以收摺」)
+- 內容:測試區複測 Canvas 已降到每幀 1.7ms、文字清晰,但 Log 表每秒更新造成長任務(10 秒 27 次、50–197ms;暫停 Log 表 95 fps)。`TrafficLogTable.vue` 改虛擬捲動(固定列高 25、`table-layout: fixed` + colgroup、只渲染可見列 + 上下 pad 列、只有新進列閃);Log 表、即時事件、高風險統計都可收摺(localStorage `wr-log` / `wr-feed` / `wr-risk`,收摺時內容卸載不更新 DOM);Log 表收摺時 Canvas 往下放大(CSS 變數 `--wr-log-h`),事件欄收摺時右側節點右移。`Live.vue` 以 ResizeObserver 量 AI 框與高風險框高度傳給 Canvas(`topReserve` / `bottomReserve`),寬版面時核心在兩框之間置中、空間不足時縮小,核心區文字依 R 等比縮放,吞吐量 / 連線數儀表數字不再被蓋。
+- 檔案:`frontend/src/components/warroom/{TrafficLogTable,EventFeed,RiskPanel,WarroomCanvas}.vue`、`frontend/src/pages/firewall/Live.vue`、`frontend/test/warroom.mount.test.ts`
+- 驗證:typecheck、`npm test`(251 通過,新增虛擬捲動 / 收摺 / localStorage 失敗測試)、build;code-reviewer(收摺後 scrollTop、資料變少夾範圍、收摺高度、rAF 防護已修);本機高流量 mock 1080p:長任務 15 秒內 0 次、>50ms 間隔 6 → 0、59 fps、Log 表只渲染 14 列
+
 ## 2026-11-17 戰情室文字模糊與 Canvas 字型設定過慢
 - 工作項目:WR 複測(需求方:「已知問題字太模糊」)
 - 內容:測試區複測發現 Canvas 每幀 21ms,其中 `ctx.font` 每幀 54 次共 20ms:頁面上的 canvas 設定字型會強制整頁樣式重算,Log 表 / 事件欄持續改 DOM 時每次約 5ms;fps 因此降到 27,自動降級到第 2 級(畫布 0.75 倍)使字變糊。另外文字畫在有拖尾的畫布上每幀疊畫、邊緣暈開,且從未處理高 dpr。改法:`WarroomCanvas.vue` 改兩層畫布並 `transferControlToOffscreen`(字型設定不再觸發樣式重算);文字與線條圖示畫在文字層,每幀清空、解析度跟 dpr(上限 2);特效層維持省效能解析度。AI / 高風險框置中位置取整。窄版面門檻 1150 → 1400(測試區 1205px 寬時兩框仍蓋住核心)。

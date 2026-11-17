@@ -15,9 +15,10 @@
 ### 下一步(依序)
 
 1. 11-18:正式區對帳(一整天資料進 ClickHouse、`interzone-default` deny 有進、誤差 < 0.5%);測試區 AC1 / AC7 跨日驗收照下段。
-2. 查 PA 雲端 `tls-X509-validation` 是否改設定前就有(指令見下段第 2 步)。
-3. C6 驗收後:`NETOPS_AI_SOURCE=clickhouse`、移除 `FTP_SYNC_MINUTES`、`NETOPS_AI_DAILY_SUMMARY=1`(RUNBOOK-prod §4 第 4 步)。
-4. 文件:下段第 5 項,另補本段教訓到 PF F.4.1。
+2. **對帳通過後:把測試區歷史匯入正式區 ClickHouse**(需求方 2026-11-17 決定:範圍「全部 11-14 起」、時間「明天對帳後」)。測試區 TTL 只有 3 天,已先匯出快照到主機 2 `/srv/netops-export-20261117/`:`pa_traffic_logs.native`(2,002 萬筆,3.1 GB)、`pa_threat_logs.native`(40.5 萬筆),範圍 11-14 00:00 ~ 11-17 08:29:59(正式區 08:30 起自己收,不重疊);`counts.tsv`、`SHA256SUMS` 同目錄。步驟:搬到主機 3 → 核對雜湊 → 由需求方在正式區 `INSERT INTO netops.<表> FORMAT Native`(MV 會自動補每小時彙總與熱力圖)→ 主線唯讀核對筆數。注意:11-16 11:30 以前沒有 `interzone-default` 的 deny(資料不完整),要在畫面或文件註明;匯入完成後刪除主機 2、3 的匯出檔。
+3. 查 PA 雲端 `tls-X509-validation` 是否改設定前就有(指令見下段第 2 步)。
+4. C6 驗收後:`NETOPS_AI_SOURCE=clickhouse`、移除 `FTP_SYNC_MINUTES`、`NETOPS_AI_DAILY_SUMMARY=1`(RUNBOOK-prod §4 第 4 步)。
+5. 文件:下段第 5 項,另補本段教訓到 PF F.4.1。
 
 ## 2026-11-16 收工:正式區第二段進行中(紀錄)
 

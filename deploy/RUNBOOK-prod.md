@@ -133,7 +133,7 @@ getent passwd 1000 101                      # 記下讀得到機密的帳號(機
    做完從開發機與主機 2 再測一次舊系統 port。portproxy 會遺失來源 IP:Syslog 51294 在用戶端憑證(F.6)前只靠這條防火牆規則。
 3. **機密與憑證**:`sudo rm /srv/giganexus/netops-secrets/pa_api_key && sudo sh host3-set-pa-secrets.sh`(輸入專用帳號的 Key);
    憑證照 **§4.1 第 1 步**(`host3-pa-pki.sh init`、`server`),把腳本結尾印的 `PA_CA_FILE`、`PA_TLS_CERT_FILE`、`PA_TLS_KEY_FILE`、`PA_HOST=10.10.115.35` 寫進 `netops.env`;
-   **不可設 `PA_TLS_INSECURE`**(`deploy-prod` 與 `netops-pa` 都會擋),有 `server.crt` 就不設 `PA_RECEIVE_PLAINTEXT`。
+   PA-560 管理介面是出廠自簽憑證時設 `PA_TLS_INSECURE=1`(需求方 2026-11-17,!109;`netops-pa` 啟動記 WARNING;正式區 2026-11-17 起即如此),有 `server.crt` 就不設 `PA_RECEIVE_PLAINTEXT`。
 4. **開關**(`/srv/giganexus/deploy/netops.env`):
    - `NETOPS_PA_PIPELINE=1`:`deploy-prod` 啟動 `netops-pa`(拉 Registry 映像)、`netops-clickhouse`(2 GB,`apply-schema.sh prod`:TRAFFIC 30 天、威脅 90 天、App 彙總 13 個月、來源彙總 90 天、熱力圖 5m 1 年、1h / 1d 5 年,CG §10.3)、`netops-ingest`;
      netops-api 改依 netops.env 對帳(`NETOPS_RECON_TIME` 預設 08:10)、每日同步、ClickHouse 摘要。

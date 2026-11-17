@@ -38,6 +38,7 @@ export function seededRandom(seed = 1): () => number {
 
 interface MockSrc {
   id: string;
+  country: string | null;
   kind: WarroomSource['kind'];
   label: string;
   /** 每秒連線(基準) */
@@ -48,15 +49,16 @@ interface MockSrc {
 }
 
 const SOURCES: MockSrc[] = [
-  { id: 'TW', kind: 'country', label: '台灣', v: 9, d: 0.02, ipPrefix: '114.32' },
-  { id: 'US', kind: 'country', label: '美國', v: 5.2, d: 0.06, ipPrefix: '52.14' },
-  { id: 'JP', kind: 'country', label: '日本', v: 3, d: 0.03, ipPrefix: '126.77' },
-  { id: 'CN', kind: 'country', label: '中國', v: 2.6, d: 0.55, ipPrefix: '223.104' },
-  { id: 'RU', kind: 'country', label: '俄羅斯', v: 1.4, d: 0.8, ipPrefix: '91.240' },
-  { id: 'NL', kind: 'country', label: '荷蘭', v: 1.1, d: 0.35, ipPrefix: '89.248' },
-  { id: '45.155.205.12', kind: 'ip', label: '45.155.205.12', v: 0.9, d: 0.97, ipPrefix: '' },
-  { id: '185.220.101.7', kind: 'ip', label: '185.220.101.7', v: 0.7, d: 0.95, ipPrefix: '' },
-  { id: 'other', kind: 'other', label: '其他', v: 1.8, d: 0.2, ipPrefix: '102.88' },
+  { id: 'cc:TW', country: 'TW', kind: 'country', label: '台灣', v: 9, d: 0.02, ipPrefix: '114.32' },
+  { id: 'cc:US', country: 'US', kind: 'country', label: '美國', v: 5.2, d: 0.06, ipPrefix: '52.14' },
+  { id: 'cc:JP', country: 'JP', kind: 'country', label: '日本', v: 3, d: 0.03, ipPrefix: '126.77' },
+  { id: 'cc:CN', country: 'CN', kind: 'country', label: '中國', v: 2.6, d: 0.55, ipPrefix: '223.104' },
+  { id: 'cc:RU', country: 'RU', kind: 'country', label: '俄羅斯', v: 1.4, d: 0.8, ipPrefix: '91.240' },
+  { id: 'cc:NL', country: 'NL', kind: 'country', label: '荷蘭', v: 1.1, d: 0.35, ipPrefix: '89.248' },
+  { id: 'ip:45.155.205.12', country: 'NL', kind: 'ip', label: '45.155.205.12', v: 0.9, d: 0.97, ipPrefix: '' },
+  { id: 'ip:185.220.101.7', country: 'DE', kind: 'ip', label: '185.220.101.7', v: 0.7, d: 0.95, ipPrefix: '' },
+  { id: 'other', country: null, kind: 'other', label: '其他', v: 1.8, d: 0.2, ipPrefix: '102.88' },
+  { id: 'lan', country: null, kind: 'other', label: '內部互連', v: 1.5, d: 0.01, ipPrefix: '10.10.112' },
 ];
 
 const SEGMENTS: (Omit<WarroomSegment, 'conn' | 'bytes' | 'threat'> & { w: number; net: string })[] = [
@@ -67,7 +69,8 @@ const SEGMENTS: (Omit<WarroomSegment, 'conn' | 'bytes' | 'threat'> & { w: number
   { id: 'mail', kind: 'service', label: 'Mail', icon: 'mail', w: 2.4, net: '10.10.201' },
   { id: 'ad-dns', kind: 'service', label: 'AD / DNS', icon: 'key', w: 2, net: '10.10.1' },
   { id: 'vpn', kind: 'service', label: 'VPN (GP)', icon: 'lock', w: 1.5, net: '10.10.250' },
-  { id: 'guest', kind: 'vlan', label: 'Guest WiFi', icon: 'wifi', w: 1.2, net: '172.16.8' },
+  { id: 'guest', kind: 'vlan', label: 'Guest WiFi', icon: 'wifi', w: 1.2, net: '192.168.8' },
+  { id: 'unmatched', kind: 'other', label: '未分類', icon: 'network', w: 0.6, net: '10.99.0' },
 ];
 
 const APPS: [string, number][] = [
@@ -108,15 +111,23 @@ export function createWarroomMock(rand: () => number = Math.random) {
       generatedAt: new Date().toISOString(),
       minutes: 5,
       partial: false,
+      segmentsSource: 'example',
+      gauge: { throughputMaxBps: 1e9, sessionMax: 65536 },
+      geo: { available: true, version: 'mock', attribution: { text: 'IP Geolocation by DB-IP', url: 'https://db-ip.com' } },
+      sample: { traffic: 5000, trafficSec: 300, threat: 40, threatSec: 300, complete: true },
       sources: SOURCES.map((s) => ({
         id: s.id,
         kind: s.kind,
         label: s.label,
+        country: s.country,
         conn: Math.round(sum((l) => l.source === s.id, 'conn')),
         deny: Math.round(sum((l) => l.source === s.id, 'deny')),
         threat: Math.round(sum((l) => l.source === s.id, 'threat')),
-        topDst: SEGMENTS.slice(0, 2).map((g) => g.label),
-        topApp: ['ssl', 'web-browsing'],
+        topDst: SEGMENTS.slice(0, 2).map((g, k) => ({ key: `${g.net}.${10 + k}`, count: 120 - k * 40 })),
+        topApp: [
+          { key: 'ssl', count: 300 },
+          { key: 'web-browsing', count: 120 },
+        ],
       })),
       segments: SEGMENTS.map((g) => ({
         id: g.id,
@@ -134,12 +145,16 @@ export function createWarroomMock(rand: () => number = Math.random) {
 
   function risk(): WarroomRisk {
     return {
+      generatedAt: new Date().toISOString(),
+      minutes: 60,
+      attackSourcesLowerBound: false,
+      sample: { threat: 140, complete: true },
       threats: 120 + Math.floor(rand() * 40),
       denies: 4200 + Math.floor(rand() * 800),
       attackSources: 30 + Math.floor(rand() * 10),
       critical: 2 + Math.floor(rand() * 4),
       topThreats: THREATS.map((name, i) => ({ name, severity: i < 2 ? 'critical' : i < 4 ? 'high' : 'medium', count: 14 - i * 3 + Math.floor(rand() * 3) })),
-      topSources: SOURCES.filter((s) => s.d > 0.3).map((s) => ({ key: s.id, label: s.label, count: Math.round(s.v * 3600 * s.d), denyRatio: s.d })),
+      topSources: SOURCES.filter((s) => s.d > 0.3).map((s) => ({ key: s.id, label: s.label, country: s.country, count: Math.round(s.v * 3600 * s.d), denyRatio: s.d })),
       partial: false,
     };
   }
@@ -178,7 +193,7 @@ export function createWarroomMock(rand: () => number = Math.random) {
     const [app, dport] = pick(APPS);
     const deny = rand() < s.d;
     const threat = !deny && rand() < 0.1;
-    const src = s.kind === 'ip' ? s.id : `${s.ipPrefix}.${Math.floor(rand() * 255)}.${Math.floor(rand() * 255)}`;
+    const src = s.kind === 'ip' ? s.label : `${s.ipPrefix}.${Math.floor(rand() * 255)}${s.id === 'lan' ? '' : `.${Math.floor(rand() * 255)}`}`;
     const base = {
       id: `mock-${++seq}`,
       receivedAt: new Date().toISOString(),
@@ -186,7 +201,8 @@ export function createWarroomMock(rand: () => number = Math.random) {
       dst: `${g.net}.${1 + Math.floor(rand() * 254)}`,
       dport,
       app,
-      country: s.kind === 'country' ? s.id : null,
+      // other 用不在清單的國家代碼(SSE country 是外部端的國家代碼;內部互連為 null)
+      country: s.id === 'lan' ? null : (s.country ?? 'BR'),
       segment: g.id,
     };
     if (threat) return { ...base, type: 'threat', action: 'alert', severity: pick(['critical', 'high', 'medium']), name: pick(THREATS), rule: 'av-vp-default' };

@@ -8,7 +8,8 @@
  */
 import { computed, getCurrentScope, onScopeDispose, ref, shallowRef, watch } from 'vue';
 import { paLive, type CollectorControl, type LiveLog, type PaLiveSnapshot } from '@/api/paLive';
-import { warroom as api, type Warroom, type WarroomLink, type WarroomRisk, type WarroomSegment, type WarroomSource } from '@/api/warroom';
+import { LAN_SOURCE, OTHER_SOURCE, warroom as api, type Warroom, type WarroomLink, type WarroomRisk, type WarroomSegment, type WarroomSource } from '@/api/warroom';
+import { absorbNames } from './ipNames';
 import { MAX_LOGS, useLiveStream } from './paLive';
 import { usePolling } from './usePolling';
 import { createWarroomMock, resolveMock, type WarroomMock } from './warroomMock';
@@ -41,16 +42,50 @@ export function denyTone(ratio: number): Tone {
   return ratio > 0.6 ? 'deny' : ratio > 0.25 ? 'warn' : 'allow';
 }
 
-/** log 屬於哪個來源節點:先比對攻擊 IP,再比對國家(WR-1 SSE 衍生欄位 country),都不中歸「其他」 */
-export function sourceIdOf(l: LiveLog, sources: readonly WarroomSource[]): string | null {
-  const ip = sources.find((s) => s.kind === 'ip' && s.id === l.src);
-  if (ip) return ip.id;
-  const c = typeof l.country === 'string' ? sources.find((s) => s.kind === 'country' && s.id === l.country) : undefined;
-  if (c) return c.id;
-  return sources.find((s) => s.kind === 'other')?.id ?? null;
+const PRIVATE_V4: [number, number][] = [
+  ['10.0.0.0', 8],
+  ['172.16.0.0', 12],
+  ['192.168.0.0', 16],
+  ['100.64.0.0', 10],
+  ['127.0.0.0', 8],
+  ['169.254.0.0', 16],
+].map(([ip, bits]) => [ipv4ToInt(ip as string)!, bits as number]);
+
+function ipv4ToInt(ip: string): number | null {
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(ip);
+  if (!m) return null;
+  const p = m.slice(1).map(Number);
+  if (p.some((n) => n > 255)) return null;
+  return ((p[0]! << 24) | (p[1]! << 16) | (p[2]! << 8) | p[3]!) >>> 0;
 }
 
-/** log 屬於哪個網段(WR-1 SSE 衍生欄位 segment) */
+/** 內部位址(同後端 pa-live/warroom.ts isPrivateIp):私有 IPv4、CGNAT、loopback、link-local、IPv6 ULA / link-local */
+export function isPrivateIp(ip: string): boolean {
+  const n = ipv4ToInt(ip);
+  if (n !== null) return PRIVATE_V4.some(([base, bits]) => (bits === 0 ? 0 : (n >>> (32 - bits)) === base >>> (32 - bits)));
+  const v6 = ip.toLowerCase();
+  return v6 === '::1' || /^f[cd][0-9a-f]{0,2}:/.test(v6) || /^fe[89ab][0-9a-f]?:/.test(v6);
+}
+
+const isIpLike = (v: unknown): v is string => typeof v === 'string' && (ipv4ToInt(v) !== null || v.includes(':'));
+
+/**
+ * log 屬於哪個來源節點(同後端 WR-1 聚合規則):
+ *   來源是外部 IP 而且在 Top 攻擊 IP → ip:<src>;兩端都是內部 → lan;外部端國家(SSE 衍生欄位 country)在清單 → cc:<國家>;其餘 → other
+ */
+export function sourceIdOf(l: LiveLog, sources: readonly WarroomSource[]): string | null {
+  const has = (id: string) => sources.some((s) => s.id === id);
+  const src = isIpLike(l.src) ? l.src : '';
+  const dst = isIpLike(l.dst) ? l.dst : '';
+  const srcExt = !!src && !isPrivateIp(src);
+  const external = srcExt || (!!dst && !isPrivateIp(dst));
+  if (srcExt && has(`ip:${src}`)) return `ip:${src}`;
+  if (!external) return has(LAN_SOURCE) ? LAN_SOURCE : null;
+  if (typeof l.country === 'string' && has(`cc:${l.country}`)) return `cc:${l.country}`;
+  return has(OTHER_SOURCE) ? OTHER_SOURCE : null;
+}
+
+/** log 屬於哪個網段(SSE 衍生欄位 segment;對不到為 unmatched) */
 export function segmentIdOf(l: LiveLog): string | null {
   return typeof l.segment === 'string' && l.segment ? l.segment : null;
 }
@@ -143,6 +178,26 @@ export function buildNodes(w: Warroom | null, focus: Focus | null): { sources: S
   };
 }
 
+export const DEFAULT_GAUGE = { throughputMaxBps: 1e9, sessionMax: 65536 };
+
+export interface WarroomNotice {
+  key: 'segments-example' | 'segments-invalid' | 'estimated' | 'risk-estimated' | 'partial' | 'risk-partial';
+  tone: 'info' | 'warning' | 'danger';
+  text: string;
+}
+
+/** WR-1 / WR-2 的狀態 → 畫面提示(AGENT §5:不完整要明確標示) */
+export function warroomNotices(w: Warroom | null, r: WarroomRisk | null): WarroomNotice[] {
+  const out: WarroomNotice[] = [];
+  if (w?.partial) out.push({ key: 'partial', tone: 'danger', text: w.message || '即時資料庫無法連線,戰情室資料不完整' });
+  if (r?.partial) out.push({ key: 'risk-partial', tone: 'danger', text: r.message || '高風險統計暫時無法取得' });
+  if (w?.segmentsSource === 'example') out.push({ key: 'segments-example', tone: 'info', text: '目前顯示範例網段(網通網段清單尚未設定)' });
+  if (w?.segmentsSource === 'invalid') out.push({ key: 'segments-invalid', tone: 'warning', text: '網段設定檔格式錯誤,暫時改用範例網段' });
+  if (w?.sample && !w.sample.complete) out.push({ key: 'estimated', tone: 'warning', text: `流量較大,只讀到最近 ${w.sample.trafficSec} 秒的 log,數字為推估` });
+  if (r?.sample && !r.sample.complete) out.push({ key: 'risk-estimated', tone: 'warning', text: '高風險統計的嚴重度與阻擋比例依部分樣本推估' });
+  return out;
+}
+
 export interface UseWarroomOptions {
   /** 強制開關 mock;沒給時依 warroomMockEnabled() */
   mock?: boolean;
@@ -178,6 +233,7 @@ export function useWarroom(options: UseWarroomOptions = {}) {
     (r) => {
       if (r instanceof Error) warroomError.value = r;
       else {
+        absorbNames(r);
         data.value = r;
         warroomError.value = null;
         lastOkAt.value = Date.now();
@@ -191,6 +247,7 @@ export function useWarroom(options: UseWarroomOptions = {}) {
     (r) => {
       if (r instanceof Error) riskError.value = r;
       else {
+        absorbNames(r);
         risk.value = r;
         riskError.value = null;
       }
@@ -261,6 +318,12 @@ export function useWarroom(options: UseWarroomOptions = {}) {
   });
   /** 資料不完整:WR-1 / WR-2 partial、串流部分類型讀不到 */
   const partial = computed(() => !!data.value?.partial || !!risk.value?.partial || !!stream?.degraded.value);
+  /** 畫面提示:範例網段、網段設定錯誤、樣本不完整(推估)、partial 說明 */
+  const notices = computed(() => warroomNotices(data.value, risk.value));
+  /** 儀表滿格值(後端設定;還沒載入時用預設 1 Gbps / 64K) */
+  const gauge = computed(() => data.value?.gauge ?? DEFAULT_GAUGE);
+  /** GeoIP 授權標示(畫面必須顯示並連結);GeoIP 不可用時 null */
+  const geoAttribution = computed(() => (data.value?.geo?.available ? data.value.geo.attribution : null));
   const connected = computed(() => (mock ? true : (stream?.connected.value ?? false)));
   const streamError = computed(() => stream?.streamError.value ?? '');
 
@@ -297,6 +360,9 @@ export function useWarroom(options: UseWarroomOptions = {}) {
     riskError,
     stale,
     partial,
+    notices,
+    gauge,
+    geoAttribution,
     connected,
     streamError,
     nodes: computed(() => ({ sources: view.value.sources, segments: view.value.segments })),

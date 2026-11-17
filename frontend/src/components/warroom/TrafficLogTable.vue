@@ -157,14 +157,14 @@ function sessionOrThreat(l: LiveLog): string {
   right: 12px;
   bottom: 12px;
   height: 230px;
-  background: rgba(12, 20, 36, 0.86);
+  background: rgba(12, 20, 36, 0.94);
   border: 1px solid #1c2a44;
   border-radius: 8px;
   display: flex;
   flex-direction: column;
   font-size: 12px;
   color: #cfe3ff;
-  backdrop-filter: blur(4px);
+  /* 不用 backdrop-filter:疊在動畫 Canvas 上每幀都要重算模糊 */
   z-index: 6;
 }
 .hd {

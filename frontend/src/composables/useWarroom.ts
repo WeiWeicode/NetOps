@@ -14,11 +14,13 @@ import { LAN_SOURCE, OTHER_SOURCE, warroom as api, type Warroom, type WarroomLin
 import { absorbNames } from './ipNames';
 import { MAX_LOGS, useLiveStream } from './paLive';
 import { usePolling } from './usePolling';
-import { createWarroomMock, resolveMock, type WarroomMock } from './warroomMock';
+import { createWarroomMock, resolveMock, warroomMockLoadScale, type WarroomMock } from './warroomMock';
 
 export const WARROOM_POLL_MS = 5_000;
 export const RISK_POLL_MS = 60_000;
 export const MAX_WARROOM_LOGS = 200;
+/** 戰情室 Log 表 / 事件欄最快更新間隔 */
+export const LOG_RENDER_MS = 1000;
 export const MAX_EVENTS = 30;
 /** 超過這麼久沒有成功更新 WR-1,視為資料過期(輪詢 3 輪) */
 export const STALE_MS = 15_000;
@@ -264,7 +266,8 @@ export function useWarroom(options: UseWarroomOptions = {}) {
 
   function start() {
     if (mock) {
-      mockSrc = createWarroomMock(options.rand);
+      const loadScale = warroomMockLoadScale();
+      mockSrc = createWarroomMock(options.rand, { loadScale });
       const pushLog = () => (mockLogs.value = [mockSrc!.log(), ...mockLogs.value].slice(0, MAX_LOGS));
       const refresh = () => {
         mockSrc!.tick();
@@ -275,7 +278,8 @@ export function useWarroom(options: UseWarroomOptions = {}) {
       refresh();
       risk.value = mockSrc.risk();
       for (let i = 0; i < 20; i++) pushLog();
-      timers.push(setInterval(refresh, 1000), setInterval(pushLog, 700), setInterval(() => (risk.value = mockSrc!.risk()), RISK_POLL_MS));
+      flushLogs();
+      timers.push(setInterval(refresh, 1000), setInterval(pushLog, loadScale > 1 ? 100 : 700), setInterval(() => (risk.value = mockSrc!.risk()), RISK_POLL_MS));
     } else {
       void wPoll.run();
       void rPoll.run();
@@ -288,6 +292,7 @@ export function useWarroom(options: UseWarroomOptions = {}) {
       void Promise.allSettled([paLive.logs('traffic', {}, 100), paLive.logs('threat', {}, 50)]).then((rs) => {
         const items = rs.flatMap((r) => (r.status === 'fulfilled' ? r.value.items : []));
         stream!.preload(items.sort((a, b) => (a.receivedAt < b.receivedAt ? 1 : -1)));
+        flushLogs();
       });
       if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisible);
     }
@@ -309,13 +314,40 @@ export function useWarroom(options: UseWarroomOptions = {}) {
     stream?.close();
   }
 
+  /**
+   * 畫面用的 log:最多每 LOG_RENDER_MS 更新一次(串流照收)。真實流量每秒上百筆,
+   * 逐筆重繪 200 列表格會讓戰情室掉到 40 fps(2026-11-17 量測:暫停 Log 表後 95 fps、0 次卡頓)。
+   */
+  const shownLogs = shallowRef<LiveLog[]>(allLogs.value);
+  let lastShow = 0;
+  let showTimer: ReturnType<typeof setTimeout> | null = null;
+  watch(allLogs, (v) => {
+    const wait = LOG_RENDER_MS - (Date.now() - lastShow);
+    if (wait <= 0) {
+      lastShow = Date.now();
+      shownLogs.value = v;
+    } else if (!showTimer) {
+      showTimer = setTimeout(() => {
+        showTimer = null;
+        lastShow = Date.now();
+        shownLogs.value = allLogs.value;
+      }, wait);
+    }
+  });
+  if (getCurrentScope()) onScopeDispose(() => showTimer && clearTimeout(showTimer));
+  /** 進頁預載後立即顯示(不等節流) */
+  function flushLogs() {
+    lastShow = Date.now();
+    shownLogs.value = allLogs.value;
+  }
+
   watch(paused, (p) => (frozen.value = p ? allLogs.value : null));
 
   const view = computed(() => buildNodes(data.value, focus.value));
   const sources = computed(() => data.value?.sources ?? []);
-  const logs = computed(() => filterLogs(frozen.value ?? allLogs.value, filter.value, focus.value, sources.value));
+  const logs = computed(() => filterLogs(frozen.value ?? shownLogs.value, filter.value, focus.value, sources.value));
   /** 右欄即時事件:不受篩選、暫停影響 */
-  const events = computed(() => allLogs.value.slice(0, MAX_EVENTS).map((l) => ({ log: l, kind: classifyLog(l) })));
+  const events = computed(() => shownLogs.value.slice(0, MAX_EVENTS).map((l) => ({ log: l, kind: classifyLog(l) })));
   const rates = computed(() => sumRates(data.value?.links ?? []));
   /** 背景分頁輪詢放慢,不判過期(切回前景會立即更新) */
   const stale = computed(() => {

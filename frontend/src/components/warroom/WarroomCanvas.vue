@@ -3,13 +3,13 @@
  * 戰情室中央 Canvas(WR-5;WARROOM-GEMINI-HANDOFF §2、§3、§4,對照樣稿 warroom-v5.html):
  *   - 左側節點:外部來源(國家 / Top 攻擊 IP / 其他 / 內部互連)，線條圖示、旋轉光弧、阻擋比例 > 60% 的紅色脈衝
  *   - 右側節點:內部網段(VLAN / 核心服務六角形 / 未分類)，線條圖示、旋轉光弧
- *   - 連線與粒子:貝茲曲線、粒子數由匯出的 particleRate(link, rates.conn) 決定(畫面上限 ≤ 1500)、拖尾、阻擋火花(bursts)與盾牌閃紅
+ *   - 連線與粒子:貝茲曲線、粒子數由匯出的 particleRate(link, rates.conn) 決定(畫面上限 400,每秒產生量另有總預算)、拖尾、阻擋火花(bursts)與盾牌閃紅
  *   - 中央核心:六角盾、分段負載環(DP CPU)、刻度環、雷達掃描、log 類型衛星、擴散波(頻率隨新連線/秒)、二進位環繞資料流、能量電弧
  *   - 儀表弧:吞吐量 / 連線數滿格值使用傳入的 gauge({ throughputMaxBps, sessionMax })，絕不寫死
  *   - 互動:滑過節點顯示明細 tooltip、點擊節點切換聚焦(toggleFocus)、點空白處取消聚焦(toggleFocus(null))
  *   - 效能與生命週期:分頁隱藏時暫停動畫、卸載時取消 requestAnimationFrame 並移除事件監聽
  */
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
 import { fmtNum, fmtShort, fmtSize } from '@/api/format';
 import type { PaLiveSnapshot } from '@/api/paLive';
 import { fmtBps } from '@/composables/paLive';
@@ -103,12 +103,17 @@ interface PlacedSource {
   x: number;
   y: number;
   r: number;
+  /** 版面目標位置:資料更新時節點由目前位置補間移到這裡(不重設 Canvas) */
+  tx: number;
+  ty: number;
 }
 interface PlacedSegment {
   node: SegmentNode;
   x: number;
   y: number;
   r: number;
+  tx: number;
+  ty: number;
 }
 interface Particle {
   si: number;
@@ -132,7 +137,23 @@ interface Ripple {
   a: number;
 }
 
-const MAX_PARTICLES = 1500;
+/** 畫面粒子上限:真實流量下原本 ≈1100 顆、每幀 25ms;粒子是視覺示意,多出的流量由連線粗細表現 */
+const MAX_PARTICLES = 400;
+/**
+ * 高解析省效能(需求方 2026-11-17):不跟 devicePixelRatio 放大;畫布實際像素超過約 1080p 面積時
+ * 以較低解析度繪製再由 CSS 放大(4K 約 0.55 倍),座標仍以 CSS px 計算。
+ */
+const MAX_CANVAS_PIXELS = 2_100_000;
+/**
+ * 自動降級:最近 3 秒平均 < 45 fps 升一級、> 57 fps 持續 30 秒降一級(避免來回切換)。
+ * 0 = 完整;1 = 粒子上限 220、關閉二進位環與雷達;2 = 再把解析度乘 0.75、粒子上限 120、關閉拖尾線
+ */
+const DEGRADE_PARTICLES = [MAX_PARTICLES, 220, 120] as const;
+const DEGRADE_SCALE = [1, 1, 0.75] as const;
+/** 每秒產生粒子總量上限(粒子存活約 5 秒 → 畫面約 400 顆);超過時各連線依比例縮減,不偏向排在前面的連線 */
+const SPAWN_BUDGET_PER_SEC = 80;
+/** 節點補間速度(每秒趨近比例) */
+const NODE_EASE_PER_SEC = 6;
 const MAX_BURSTS = 80;
 const MAX_RIPPLES = 24;
 
@@ -150,8 +171,55 @@ let dSess = 0;
 let dLoad = 0.45;
 let resizeObs: ResizeObserver | null = null;
 
-const placedLeft = ref<PlacedSource[]>([]);
-const placedRight = ref<PlacedSegment[]>([]);
+// shallowRef:每幀補間會改 x / y,不能觸發 Vue 重新渲染;只有換新陣列(資料或版面變動)時才更新按鈕
+const placedLeft = shallowRef<PlacedSource[]>([]);
+const placedRight = shallowRef<PlacedSegment[]>([]);
+let colL = 150;
+let colR = 900;
+/** 畫布像素 / CSS px 比例(見 MAX_CANVAS_PIXELS) */
+let pxScale = 1;
+/** 自動降級等級 0–2 */
+let degrade = 0;
+let fpsAcc = 0;
+let fpsGoodSec = 0;
+let workAcc = 0;
+let lastWorkMs = 0;
+const intervals: number[] = [];
+
+/**
+ * 每幀累計;每 3 秒判斷一次是否升 / 降級。
+ * 只看 fps 會誤判:瀏覽器限速(省電模式 30 fps、視窗被遮住)時間隔穩定但很低,這時降級沒有幫助。
+ * 所以升級還要符合其一:本元件每幀耗時平均 > 8ms(CPU 忙),或間隔抖動大(p90 / 中位數 > 1.4,掉幀)。
+ */
+function trackFps(dtMs: number) {
+  if (dtMs <= 0 || dtMs > 1000) return; // 分頁切回等異常間隔不算
+  fpsAcc += dtMs;
+  workAcc += lastWorkMs;
+  intervals.push(dtMs);
+  if (fpsAcc < 3000) return;
+  const n = intervals.length;
+  const fps = (n * 1000) / fpsAcc;
+  const avgWork = workAcc / n;
+  const sorted = intervals.slice().sort((a, b) => a - b);
+  const med = sorted[n >> 1] ?? dtMs;
+  const p90 = sorted[Math.floor(n * 0.9)] ?? dtMs;
+  const janky = avgWork > 8 || p90 / med > 1.4;
+  fpsAcc = 0;
+  workAcc = 0;
+  intervals.length = 0;
+  if (fps < 45 && janky && degrade < 2) {
+    degrade++;
+    fpsGoodSec = 0;
+    sizeCanvas(); // 只改畫布解析度,節點位置不動(避免跳動)
+  } else if (fps > 57) {
+    fpsGoodSec += 3;
+    if (fpsGoodSec >= 30 && degrade > 0) {
+      degrade--;
+      fpsGoodSec = 0;
+      sizeCanvas();
+    }
+  } else fpsGoodSec = 0;
+}
 const hoverTarget = ref<{ side: 'source' | 'segment'; index: number; clientX: number; clientY: number } | null>(null);
 
 let parts: Particle[] = [];
@@ -162,6 +230,116 @@ function computeRadius(size: number): number {
   return 11 + Math.sqrt(Math.max(0.04, size)) * 12;
 }
 
+// ── 預繪貼圖(取代每幀 createRadialGradient 與 shadowBlur) ──────────────────────────
+// 粒子光暈、節點 / 衛星 / 核心的發光都改成「先畫一次到離屏 Canvas,每幀 drawImage + globalAlpha」。
+type Sprite = HTMLCanvasElement | OffscreenCanvas;
+const spriteCache = new Map<string, Sprite>();
+
+function makeCanvas(size: number): Sprite | null {
+  if (typeof OffscreenCanvas !== 'undefined') return new OffscreenCanvas(size, size);
+  if (typeof document === 'undefined') return null;
+  const c = document.createElement('canvas');
+  c.width = size;
+  c.height = size;
+  return c;
+}
+
+/** 粒子貼圖:白心 → 顏色 → 透明(與原本逐粒子漸層同樣的色標),半徑 rad */
+function particleSprite(rgb: string, rad: number): Sprite | null {
+  const key = `p|${rgb}|${rad}`;
+  const hit = spriteCache.get(key);
+  if (hit) return hit;
+  const size = Math.ceil(rad * 2);
+  const c = makeCanvas(size);
+  const g = c?.getContext('2d') as CanvasRenderingContext2D | null | undefined;
+  if (!c || !g) return null;
+  const gg = g.createRadialGradient(rad, rad, 0, rad, rad, rad);
+  gg.addColorStop(0, 'rgba(255,255,255,1)');
+  gg.addColorStop(0.3, `rgba(${rgb},1)`);
+  gg.addColorStop(1, `rgba(${rgb},0)`);
+  g.fillStyle = gg;
+  g.beginPath();
+  g.arc(rad, rad, rad, 0, Math.PI * 2);
+  g.fill();
+  spriteCache.set(key, c);
+  return c;
+}
+
+/** 發光貼圖(取代 shadowBlur):顏色從中心淡出,半徑 rad */
+function glowSprite(rgb: string, rad: number): Sprite | null {
+  const r = Math.max(2, Math.round(rad));
+  const key = `g|${rgb}|${r}`;
+  const hit = spriteCache.get(key);
+  if (hit) return hit;
+  const size = r * 2;
+  const c = makeCanvas(size);
+  const g = c?.getContext('2d') as CanvasRenderingContext2D | null | undefined;
+  if (!c || !g) return null;
+  const gg = g.createRadialGradient(r, r, 0, r, r, r);
+  gg.addColorStop(0, `rgba(${rgb},.55)`);
+  gg.addColorStop(0.45, `rgba(${rgb},.22)`);
+  gg.addColorStop(1, `rgba(${rgb},0)`);
+  g.fillStyle = gg;
+  g.fillRect(0, 0, size, size);
+  spriteCache.set(key, c);
+  return c;
+}
+
+/** 在 (x, y) 畫發光,rad 為發光半徑 */
+function drawGlow(ctx: CanvasRenderingContext2D, rgb: string, x: number, y: number, rad: number, alpha = 1) {
+  const s = glowSprite(rgb, rad);
+  if (!s) return;
+  const prevA = ctx.globalAlpha;
+  ctx.globalAlpha = prevA * alpha;
+  ctx.drawImage(s as CanvasImageSource, x - s.width / 2, y - s.height / 2);
+  ctx.globalAlpha = prevA;
+}
+
+/** 背景網格靜態層:尺寸改變才重畫,每幀一次 drawImage(原本每幀 ~40 次 stroke) */
+let gridLayer: Sprite | null = null;
+function drawGrid(ctx: CanvasRenderingContext2D) {
+  if (!gridLayer || gridLayer.width !== W || gridLayer.height !== H) {
+    let c: Sprite | null = null;
+    if (typeof OffscreenCanvas !== 'undefined') c = new OffscreenCanvas(W, H);
+    else if (typeof document !== 'undefined') {
+      c = document.createElement('canvas');
+      c.width = W;
+      c.height = H;
+    }
+    const g = c?.getContext('2d') as CanvasRenderingContext2D | null | undefined;
+    if (!c || !g) return;
+    g.strokeStyle = 'rgba(30,50,80,.15)';
+    g.lineWidth = 1;
+    g.beginPath();
+    for (let x = 0; x < W; x += 40) {
+      g.moveTo(x, 0);
+      g.lineTo(x, H);
+    }
+    g.stroke();
+    gridLayer = c;
+  }
+  ctx.drawImage(gridLayer as CanvasImageSource, 0, 0);
+}
+
+/** 依 W、H 與降級等級設定畫布實際像素;尺寸沒變就不設 cv.width(設了會清空畫布與拖尾) */
+function sizeCanvas() {
+  const cv = canvasEl.value;
+  if (!cv) return;
+  pxScale = Math.min(1, Math.sqrt(MAX_CANVAS_PIXELS / (W * H))) * (DEGRADE_SCALE[degrade] ?? 1);
+  const bw = Math.max(1, Math.round(W * pxScale));
+  const bh = Math.max(1, Math.round(H * pxScale));
+  if (cv.width !== bw || cv.height !== bh) {
+    cv.width = bw;
+    cv.height = bh;
+  }
+  // 降級等級寫在屬性上,方便現場用 DevTools 確認(只在版面或等級變動時更新)
+  cv.dataset.degrade = String(degrade);
+}
+
+/**
+ * 版面(尺寸 / 說明欄開合)變動:只有尺寸真的改變才設 cv.width(設了會清空畫布與拖尾、重新配置記憶體),
+ * 節點直接跳到新位置。資料更新不走這裡,見 placeNodes(false)。
+ */
 function updateLayout() {
   const wrap = wrapEl.value;
   const cv = canvasEl.value;
@@ -169,49 +347,92 @@ function updateLayout() {
   const rect = wrap.getBoundingClientRect();
   W = Math.max(640, Math.floor(rect.width || innerWidth));
   H = Math.max(360, Math.floor(rect.height || innerHeight - 300));
-  cv.width = W;
-  cv.height = H;
+  sizeCanvas();
 
-  const lx = props.legendOpen ? Math.max(290, W * 0.23) : Math.max(150, W * 0.14);
-  const rx = Math.min(W - 290, W * 0.76);
-  cx = (lx + rx) / 2;
+  colL = props.legendOpen ? Math.max(290, W * 0.23) : Math.max(150, W * 0.14);
+  // 窄版面(< 1150,與 AiPanel / RiskPanel 的 @container 同門檻):右欄 270px 給 AI / 高風險框,節點再往左讓出標籤寬度
+  colR = W < 1150 ? Math.max(colL + 200, W - 440) : Math.min(W - 290, W * 0.76);
+  cx = (colL + colR) / 2;
   cy = H / 2;
-  R = Math.min(Math.max(160, rx - lx), H) * (props.legendOpen ? 0.135 : 0.155);
+  R = Math.min(Math.max(160, colR - colL), H) * (props.legendOpen ? 0.135 : 0.155);
 
   emit('centerChange', cx);
-  placeNodes(lx, rx);
+  placeNodes(true);
 }
 
-function placeNodes(lx: number, rx: number) {
+/**
+ * 依目前資料排節點。snap=false(每秒資料更新):同 id 的節點從目前位置補間到新位置,
+ * 粒子依 id 改對應到新索引(節點消失的粒子才移除),畫面不中斷。
+ */
+function placeNodes(snap: boolean) {
   const top = 56;
   const bot = Math.max(top + 80, H - 56);
   const sLen = Math.max(1, props.sources.length);
   const gLen = Math.max(1, props.segments.length);
 
-  placedLeft.value = props.sources.map((node, i) => ({
-    node,
-    x: lx,
-    y: top + ((bot - top) * (i + 0.5)) / sLen,
-    r: computeRadius(node.size),
-  }));
+  const oldL = placedLeft.value;
+  const oldR = placedRight.value;
+  const prevL = new Map(oldL.map((s) => [s.node.id, s]));
+  const prevR = new Map(oldR.map((d) => [d.node.id, d]));
 
-  placedRight.value = props.segments.map((node, j) => ({
-    node,
-    x: rx,
-    y: top + ((bot - top) * (j + 0.5)) / gLen,
-    r: computeRadius(node.size),
-  }));
-}
+  const nextL: PlacedSource[] = props.sources.map((node, i) => {
+    const ty = top + ((bot - top) * (i + 0.5)) / sLen;
+    const prev = snap ? undefined : prevL.get(node.id);
+    return { node, x: prev ? prev.x : colL, y: prev ? prev.y : ty, r: computeRadius(node.size), tx: colL, ty };
+  });
+  const nextR: PlacedSegment[] = props.segments.map((node, j) => {
+    const ty = top + ((bot - top) * (j + 0.5)) / gLen;
+    const prev = snap ? undefined : prevR.get(node.id);
+    return { node, x: prev ? prev.x : colR, y: prev ? prev.y : ty, r: computeRadius(node.size), tx: colR, ty };
+  });
 
-watch(
-  () => [props.sources, props.segments, props.legendOpen] as const,
-  () => {
-    for (const p of parts) {
+  // 粒子的 si / di 是索引:依 id 對應到新陣列
+  const idxL = new Map(nextL.map((s, i) => [s.node.id, i]));
+  const idxR = new Map(nextR.map((d, j) => [d.node.id, j]));
+  parts = parts.filter((p) => {
+    const os = oldL[p.si];
+    const od = oldR[p.di];
+    const si = os ? idxL.get(os.node.id) : undefined;
+    const di = od ? idxR.get(od.node.id) : undefined;
+    if (si === undefined || di === undefined) return false;
+    p.si = si;
+    p.di = di;
+    if (snap) {
       p.px = undefined;
       p.py = undefined;
     }
-    updateLayout();
-  },
+    return true;
+  });
+
+  // 滑過中的節點依 id 對到新索引(排序變動時 tooltip 與光暈不會跳到別的節點)
+  const h = hoverTarget.value;
+  if (h) {
+    const old = h.side === 'source' ? oldL[h.index] : oldR[h.index];
+    const ni = old ? (h.side === 'source' ? idxL : idxR).get(old.node.id) : undefined;
+    hoverTarget.value = ni === undefined ? null : { ...h, index: ni };
+  }
+
+  placedLeft.value = nextL;
+  placedRight.value = nextR;
+}
+
+/** 每幀把節點往目標位置補間 */
+function easeNodes(dtSec: number) {
+  const k = 1 - Math.exp(-NODE_EASE_PER_SEC * dtSec);
+  for (const s of placedLeft.value) {
+    s.x += (s.tx - s.x) * k;
+    s.y += (s.ty - s.y) * k;
+  }
+  for (const d of placedRight.value) {
+    d.x += (d.tx - d.x) * k;
+    d.y += (d.ty - d.y) * k;
+  }
+}
+
+watch(() => props.legendOpen, () => updateLayout());
+watch(
+  () => [props.sources, props.segments] as const,
+  () => placeNodes(false),
 );
 
 function bez(a: { x: number; y: number }, b: { x: number; y: number }, t: number) {
@@ -247,7 +468,7 @@ function burst(p: { x: number; y: number }) {
 }
 
 function spawnParticles(dtSec: number) {
-  if (parts.length >= MAX_PARTICLES) return;
+  if (parts.length >= (DEGRADE_PARTICLES[degrade] ?? MAX_PARTICLES)) return;
   const left = placedLeft.value;
   const right = placedRight.value;
   if (!left.length || !right.length) return;
@@ -258,12 +479,15 @@ function spawnParticles(dtSec: number) {
   right.forEach((g, idx) => gMap.set(g.node.id, idx));
 
   const totalConn = props.rates.conn;
+  let sumRate = 0;
+  for (const l of props.links) sumRate += particleRate(l, totalConn);
+  const budgetScale = sumRate > SPAWN_BUDGET_PER_SEC ? SPAWN_BUDGET_PER_SEC / sumRate : 1;
   for (const l of props.links) {
-    if (parts.length >= MAX_PARTICLES) break;
+    if (parts.length >= (DEGRADE_PARTICLES[degrade] ?? MAX_PARTICLES)) break;
     const si = sMap.get(l.source);
     const di = gMap.get(l.segment);
     if (si === undefined || di === undefined) continue;
-    const rate = particleRate(l, totalConn);
+    const rate = particleRate(l, totalConn) * budgetScale;
     const prob = rate * dtSec;
     if (Math.random() < prob) {
       const denyProb = l.conn > 0 ? l.deny / l.conn : 0;
@@ -352,13 +576,17 @@ function drawGauge(
   const gr = ctx.createLinearGradient(cx - rad, cy, cx + rad, cy);
   gr.addColorStop(0, `rgba(${c},.3)`);
   gr.addColorStop(1, `rgb(${c})`);
-  ctx.strokeStyle = gr;
-  ctx.shadowColor = `rgb(${c})`;
-  ctx.shadowBlur = 14;
+  // 發光:以較粗的半透明弧取代 shadowBlur
+  ctx.strokeStyle = `rgba(${c},.18)`;
+  ctx.lineWidth = 14;
   ctx.beginPath();
   ctx.arc(cx, cy, rad, a0, ae, ccw);
   ctx.stroke();
-  ctx.shadowBlur = 0;
+  ctx.lineWidth = 6;
+  ctx.strokeStyle = gr;
+  ctx.beginPath();
+  ctx.arc(cx, cy, rad, a0, ae, ccw);
+  ctx.stroke();
 
   ctx.fillStyle = '#fff';
   ctx.beginPath();
@@ -411,7 +639,7 @@ function drawCore(ctx: CanvasRenderingContext2D, ts: number) {
   ctx.fill();
 
   // 雷達錐形掃描
-  if (typeof ctx.createConicGradient === 'function') {
+  if (degrade === 0 && typeof ctx.createConicGradient === 'function') {
     const sg = ctx.createConicGradient((t * 1.2) % (Math.PI * 2), cx, cy);
     sg.addColorStop(0, 'rgba(62,168,255,.35)');
     sg.addColorStop(0.12, 'rgba(62,168,255,0)');
@@ -471,13 +699,11 @@ function drawCore(ctx: CanvasRenderingContext2D, ts: number) {
     const a = t * 0.5 + (i * Math.PI * 2) / sats.length;
     const x = cx + Math.cos(a) * R * 0.95;
     const y = cy + Math.sin(a) * R * 0.95;
+    drawGlow(ctx, s[1], x, y, 12);
     ctx.fillStyle = `rgb(${s[1]})`;
-    ctx.shadowColor = `rgb(${s[1]})`;
-    ctx.shadowBlur = 12;
     ctx.beginPath();
     ctx.arc(x, y, 3.5, 0, Math.PI * 2);
     ctx.fill();
-    ctx.shadowBlur = 0;
     ctx.fillStyle = `rgba(${s[1]},.8)`;
     ctx.font = '9px "Segoe UI", sans-serif';
     ctx.textAlign = 'center';
@@ -486,8 +712,9 @@ function drawCore(ctx: CanvasRenderingContext2D, ts: number) {
 
   // 六角盾牌核心
   const hr = R * 0.62;
-  ctx.shadowColor = `rgb(${lc})`;
-  ctx.shadowBlur = 25 + shieldHit * 30;
+  // 盾牌發光(取代 shadowBlur 25 + 閃紅時加強);負載色每幀微變,貼圖鍵取整避免快取膨脹
+  const lcKey = ratioRgb(Math.round(dLoad * 0.7 * 20) / 20).join(',');
+  drawGlow(ctx, lcKey, cx, cy, hr * 1.3 + shieldHit * 20, Math.min(1, 0.85 + shieldHit));
   const hg = ctx.createLinearGradient(cx, cy - hr, cx, cy + hr);
   hg.addColorStop(0, 'rgba(20,45,80,.95)');
   hg.addColorStop(1, 'rgba(8,18,34,.95)');
@@ -497,7 +724,6 @@ function drawCore(ctx: CanvasRenderingContext2D, ts: number) {
   ctx.lineWidth = 2;
   ctx.strokeStyle = shieldHit > 0.1 ? 'rgba(255,77,94,.9)' : 'rgba(120,200,255,.9)';
   ctx.stroke();
-  ctx.shadowBlur = 0;
 
   hex(ctx, cx, cy, hr * 0.86, Math.PI / 6);
   ctx.strokeStyle = 'rgba(62,168,255,.25)';
@@ -589,7 +815,13 @@ function drawCore(ctx: CanvasRenderingContext2D, ts: number) {
   ctx.font = '10px "Segoe UI", "Microsoft JhengHei", sans-serif';
   ctx.fillText('新連線', cx + gR + 6, cy - R * 1.9 + 13);
 
-  // 環繞二進位字元流
+  // 環繞二進位字元流(降級時關閉)
+  if (degrade === 0) drawBinaryRing(ctx, t);
+
+  drawArc(ctx);
+}
+
+function drawBinaryRing(ctx: CanvasRenderingContext2D, t: number) {
   ctx.font = '9px Consolas, monospace';
   ctx.fillStyle = 'rgba(62,168,255,.35)';
   for (let i = 0; i < 48; i++) {
@@ -600,8 +832,10 @@ function drawCore(ctx: CanvasRenderingContext2D, ts: number) {
     ctx.fillText((i * 7 + Math.floor(t * 3)) % 5 > 2 ? '1' : '0', 0, 0);
     ctx.restore();
   }
+}
 
-  // 隨機電弧
+/** 隨機電弧 */
+function drawArc(ctx: CanvasRenderingContext2D) {
   if (Math.random() < 0.25) {
     const a = Math.random() * Math.PI * 2;
     ctx.strokeStyle = 'rgba(180,220,255,.7)';
@@ -664,8 +898,8 @@ function drawNode(
   }
 
   // 節點本體(服務六角形 / 其他圓形)
-  ctx.shadowColor = `rgb(${c})`;
-  ctx.shadowBlur = isHovered ? 25 : 12;
+  // 發光貼圖取代 shadowBlur(滑過時加大);半徑取整讓貼圖可重用
+  drawGlow(ctx, c, x, y, Math.round(r + (isHovered ? 25 : 12)), a);
   const ng = ctx.createRadialGradient(x, y - r * 0.4, 1, x, y, r);
   ng.addColorStop(0, `rgba(${c},${0.45 * a})`);
   ng.addColorStop(1, `rgba(8,16,30,${0.95 * a})`);
@@ -679,7 +913,6 @@ function drawNode(
   ctx.lineWidth = isHovered ? 2.5 : 1.5;
   ctx.strokeStyle = `rgba(${c},${a})`;
   ctx.stroke();
-  ctx.shadowBlur = 0;
 
   drawIcon(ctx, iconName, x, y, r * 1.05, `rgba(${isAtk ? '255,200,200' : '230,242,255'},${a})`, 1.6);
 
@@ -733,21 +966,18 @@ function renderFrame(ts: number) {
     return;
   }
 
+  const workStart = performance.now();
   const dtSec = lastFrameTs ? Math.min(0.1, (ts - lastFrameTs) / 1000) : 0.016;
+  if (lastFrameTs) trackFps(ts - lastFrameTs);
   lastFrameTs = ts;
+  ctx.setTransform(pxScale, 0, 0, pxScale, 0, 0);
 
   ctx.fillStyle = 'rgba(6,11,20,.38)';
   ctx.fillRect(0, 0, W, H);
 
-  // 背景網格線
-  ctx.strokeStyle = 'rgba(30,50,80,.15)';
-  ctx.lineWidth = 1;
-  for (let x = 0; x < W; x += 40) {
-    ctx.beginPath();
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x, H);
-    ctx.stroke();
-  }
+  // 背景網格線(靜態層)
+  drawGrid(ctx);
+  easeNodes(dtSec);
 
   const left = placedLeft.value;
   const right = placedRight.value;
@@ -769,6 +999,8 @@ function renderFrame(ts: number) {
 
   // 粒子產生與移動
   spawnParticles(dtSec);
+  // 整批粒子只切一次 lighter;光暈用預繪貼圖 + globalAlpha(原本每粒子一個 createRadialGradient)
+  ctx.globalCompositeOperation = 'lighter';
   parts = parts.filter((p) => {
     const srcP = left[p.si];
     const dstP = right[p.di];
@@ -808,8 +1040,7 @@ function renderFrame(ts: number) {
 
     const c = p.deny ? '255,77,94' : p.threat ? '245,176,58' : p.seg === 2 ? '62,168,255' : '34,211,166';
     const al = segAlpha * (fo ? 1 : 0.08);
-    ctx.globalCompositeOperation = 'lighter';
-    if (p.px !== undefined && p.py !== undefined) {
+    if (degrade < 2 && p.px !== undefined && p.py !== undefined) {
       ctx.strokeStyle = `rgba(${c},${al * 0.45})`;
       ctx.lineWidth = p.threat ? 3 : 1.6;
       ctx.beginPath();
@@ -819,18 +1050,16 @@ function renderFrame(ts: number) {
     }
     p.px = pos.x;
     p.py = pos.y;
-    const sz = p.threat ? 4 : 2;
-    const gg = ctx.createRadialGradient(pos.x, pos.y, 0, pos.x, pos.y, sz * 3);
-    gg.addColorStop(0, `rgba(255,255,255,${al})`);
-    gg.addColorStop(0.3, `rgba(${c},${al})`);
-    gg.addColorStop(1, `rgba(${c},0)`);
-    ctx.fillStyle = gg;
-    ctx.beginPath();
-    ctx.arc(pos.x, pos.y, sz * 3, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.globalCompositeOperation = 'source-over';
+    const rad = (p.threat ? 4 : 2) * 3;
+    const spr = particleSprite(c, rad);
+    if (spr) {
+      ctx.globalAlpha = al;
+      ctx.drawImage(spr as CanvasImageSource, pos.x - rad, pos.y - rad);
+      ctx.globalAlpha = 1;
+    }
     return true;
   });
+  ctx.globalCompositeOperation = 'source-over';
 
   drawBursts(ctx);
   drawCore(ctx, ts);
@@ -883,6 +1112,7 @@ function renderFrame(ts: number) {
     );
   });
 
+  lastWorkMs = performance.now() - workStart;
   rafId = requestAnimationFrame(renderFrame);
 }
 
@@ -1013,7 +1243,7 @@ onBeforeUnmount(() => {
         :data-node-id="s.node.id"
         :aria-pressed="focus?.side === 'source' && focus?.id === s.node.id"
         :aria-label="`來源節點 ${s.node.label}，5 分鐘連線 ${s.node.conn}`"
-        :style="{ left: `${s.x - s.r}px`, top: `${s.y - s.r}px`, width: `${s.r * 2}px`, height: `${s.r * 2}px` }"
+        :style="{ left: `${s.tx - s.r}px`, top: `${s.ty - s.r}px`, width: `${s.r * 2}px`, height: `${s.r * 2}px` }"
         @mouseenter="hoverTarget = { side: 'source', index: idx, clientX: s.x, clientY: s.y }"
         @mouseleave="hoverTarget = null"
         @click.stop="clickNodeButton('source', s.node.id)"
@@ -1027,7 +1257,7 @@ onBeforeUnmount(() => {
         :data-node-id="d.node.id"
         :aria-pressed="focus?.side === 'segment' && focus?.id === d.node.id"
         :aria-label="`網段節點 ${d.node.label}，5 分鐘連線 ${d.node.conn}`"
-        :style="{ left: `${d.x - d.r}px`, top: `${d.y - d.r}px`, width: `${d.r * 2}px`, height: `${d.r * 2}px` }"
+        :style="{ left: `${d.tx - d.r}px`, top: `${d.ty - d.r}px`, width: `${d.r * 2}px`, height: `${d.r * 2}px` }"
         @mouseenter="hoverTarget = { side: 'segment', index: idx, clientX: d.x, clientY: d.y }"
         @mouseleave="hoverTarget = null"
         @click.stop="clickNodeButton('segment', d.node.id)"

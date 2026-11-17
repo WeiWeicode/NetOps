@@ -88,8 +88,17 @@ const APPS: [string, number][] = [
 const GEO_NAME: Record<string, string> = { TW: 'Taiwan', US: 'United States', JP: 'Japan', CN: 'China', RU: 'Russia', NL: 'Netherlands', DE: 'Germany' };
 const THREATS = ['SSH Brute Force', 'SMB Exploit Attempt', 'Suspicious DNS Query', 'HTTP SQL Injection', 'RDP Scan'];
 
-export function createWarroomMock(rand: () => number = Math.random) {
-  const load = SOURCES.map((s) => s.v);
+/**
+ * 回歸量測用:`?mock=1&load=high` 時流量放大(約測試區真實流量,畫面粒子會到上限),log 推送加快。
+ * 正式建置不會進 mock(見 resolveMock)。
+ */
+export function warroomMockLoadScale(search: string = typeof location !== 'undefined' ? location.search : ''): number {
+  return new URLSearchParams(search).get('load') === 'high' ? 8 : 1;
+}
+
+export function createWarroomMock(rand: () => number = Math.random, opts: { loadScale?: number } = {}) {
+  const scale = opts.loadScale ?? 1;
+  const load = SOURCES.map((s) => s.v * scale);
   let seq = 0;
   const pick = <T>(a: readonly T[]): T => a[Math.floor(rand() * a.length)]!;
   const segTotal = SEGMENTS.reduce((n, s) => n + s.w, 0);

@@ -72,13 +72,13 @@ function dstText(log: LiveLog): string {
   right: 12px;
   bottom: 252px;
   width: 250px;
-  background: rgba(12, 20, 36, 0.82);
+  background: rgba(12, 20, 36, 0.93);
   border: 1px solid #1c2a44;
   border-radius: 8px;
   padding: 12px;
   font-size: 12px;
   color: #cfe3ff;
-  backdrop-filter: blur(4px);
+  /* 不用 backdrop-filter:疊在動畫 Canvas 上每幀都要重算模糊(流暢度改善 2026-11-17) */
   display: flex;
   flex-direction: column;
   z-index: 6;
@@ -130,5 +130,11 @@ function dstText(log: LiveLog): string {
 .wr-feed__empty {
   color: #6f86a8;
   padding: 12px 0;
+}
+/* 窄版面:右欄讓給 AI / 高風險框;即時事件同樣資訊在下方 Log 表 */
+@container wrmain (max-width: 1150px) {
+  .wr-feed {
+    display: none;
+  }
 }
 </style>

@@ -48,7 +48,7 @@ API 都掛在既有模組,權限沿用 `netops.pa-realtime.read`(AI 手動執行
 ### WR-3 AI 每小時分析
 
 - 排程:程序內每整點(`HH:00`,台北時間)跑一次,分析「上一個整點到現在」;沿用 `modules/ai` 與 `infra/llm`(AI 主機 `LLM_URL`),只送 WR-1 / WR-2 的**彙整統計**,不送原始 log(AGENT §7.4)。
-- 結果經 `infra/store` 存檔(保留天數見 Q4),日誌不寫內容(比照 daily-summary)。
+- 結果經 `infra/store` 存檔(只留最新一筆,Q4),日誌不寫內容(比照 daily-summary)。
 - API:
   - `GET /v1/ai/hourly-insight`(最新一筆;可帶 `hour` 查歷史):`{ hour, text, model, trigger: 'auto'|'manual', partial, status }`。
   - `POST /v1/ai/hourly-insight/run`:手動執行,送出工作 → 查結果 / SSE 逐字回傳(沿用 `ai/sse.ts`);同一時間只跑一個、冷卻 5 分鐘;權限 `netops.ai.use`(畫面按鈕節點見 Q4)。
@@ -92,12 +92,14 @@ API 都掛在既有模組,權限沿用 `netops.pa-realtime.read`(AI 手動執行
 
 WR-4 完成後即可交給 Gemini;WR-3 與 WR-5 可並行。
 
-## 6. 待決事項
+## 6. 決定(需求方 2026-11-17)
 
-| # | 問題 | 建議 |
+| # | 問題 | 決定 |
 | --- | --- | --- |
-| Q1 | 戰情室取代現有 `/firewall/live` 還是另開頁面? | 取代現頁;現有的收集器狀態、測試區暫停開關、明細查詢移到收摺的「系統狀態」抽屜 |
-| Q2 | 國家資料來源:Redis 即時 log 沒有國家欄位(ClickHouse 有 `src_country`) | 後端用離線 GeoIP 資料庫(例如 MaxMind GeoLite2 / DB-IP Lite,放映像內,不連外)查詢並快取;不改收集器 |
-| Q3 | 內部網段(VLAN / 服務)對照從哪來? | 新增設定檔 `segments`(CIDR → 名稱、類型、圖示),經 `infra/store` 讀取,網通提供清單;之後可在畫面維護 |
-| Q4 | AI 每小時分析:保留多久?手動執行權限綁哪個按鈕? | 保留 7 天;新增按鈕節點 `netops.pa-live.ai`(includes `netops.ai.use`) |
-| Q5 | 吞吐量 / 連線數儀表的滿格值 | 設定值(預設 1 Gbps / 64K,依 PA-560 規格調整) |
+| Q1 | 戰情室取代現有 `/firewall/live` 還是另開頁面? | **取代現頁**;現有的收集器狀態、測試區暫停開關移到收摺的「系統狀態」抽屜,明細查詢改連到既有 Log 頁 |
+| Q2 | 國家資料來源(Redis 即時 log 沒有國家欄位) | **離線 GeoIP 資料庫**(GeoLite2 或 DB-IP Lite,放映像內、不連外),後端查詢並快取;不改收集器、無 migration;資料庫定期更新,授權標示依官方規定 |
+| Q3 | 內部網段(VLAN / 服務)對照 | **設定檔,網通提供**:CIDR → 名稱、類型、圖示,經 `infra/store` 讀取;畫面維護之後再說 |
+| Q4 | AI 每小時分析保留與權限 | **只留最新一筆**(不留歷史,`GET /ai/hourly-insight` 不帶 `hour` 參數);新增按鈕節點 `netops.pa-live.ai`(includes `netops.ai.use`);手動同一時間一個、冷卻 5 分鐘 |
+| Q5 | 吞吐量 / 連線數儀表的滿格值 | 設定值(預設 1 Gbps / 64K,依 PA-560 規格調整)— 未另外詢問,照建議 |
+
+待辦(需求方 / 網通):提供內部網段清單(CIDR、名稱、是否為核心服務)。

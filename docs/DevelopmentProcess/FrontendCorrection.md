@@ -2,6 +2,12 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。範圍:`frontend/`。
 
+## 2026-11-17 戰情室文字模糊與 Canvas 字型設定過慢
+- 工作項目:WR 複測(需求方:「已知問題字太模糊」)
+- 內容:測試區複測發現 Canvas 每幀 21ms,其中 `ctx.font` 每幀 54 次共 20ms:頁面上的 canvas 設定字型會強制整頁樣式重算,Log 表 / 事件欄持續改 DOM 時每次約 5ms;fps 因此降到 27,自動降級到第 2 級(畫布 0.75 倍)使字變糊。另外文字畫在有拖尾的畫布上每幀疊畫、邊緣暈開,且從未處理高 dpr。改法:`WarroomCanvas.vue` 改兩層畫布並 `transferControlToOffscreen`(字型設定不再觸發樣式重算);文字與線條圖示畫在文字層,每幀清空、解析度跟 dpr(上限 2);特效層維持省效能解析度。AI / 高風險框置中位置取整。窄版面門檻 1150 → 1400(測試區 1205px 寬時兩框仍蓋住核心)。
+- 檔案:`frontend/src/components/warroom/{WarroomCanvas,AiPanel,RiskPanel,EventFeed}.vue`
+- 驗證:typecheck、`npm test`(248 通過)、build;code-reviewer(建議的文字層只嘗試一次已修);本機高流量 mock Canvas 2.4 / p95 3.8ms、未降級,前後截圖文字明顯清晰
+
 ## 2026-11-17 戰情室流暢度(A+B+C、高解析省效能、自動降級、窄版面)
 - 工作項目:WR 驗收後改善(需求方 2026-11-17 決定全做)
 - 內容:量測發現測試區真實流量每幀約 1100 顆粒子、Canvas 繪製 25ms(p95 49ms),且每秒資料更新都重設 Canvas 造成頓一下。`WarroomCanvas.vue`:A 資料更新不再設 `cv.width`,節點依 id 補間移動、粒子依 id 改對應索引,`placed*` 改 `shallowRef`;B 粒子上限 1500 → 400,每秒產生總量上限 80(各連線依比例縮減),粒子光暈改預繪貼圖 + `globalAlpha`,整批只切一次 `lighter`;C 移除全部 `shadowBlur`(改發光貼圖 / 較粗半透明弧),網格改靜態層一次 `drawImage`;高解析:不跟 dpr,畫布超過約 210 萬像素時降解析繪製(4K 約 0.6 倍);自動降級 0–2 級(3 秒平均 < 45 fps 且每幀 > 8ms 或掉幀抖動才升級,避免省電模式誤判;> 57 fps 持續 30 秒降級),等級寫在 canvas `data-degrade`。五個疊在 Canvas 上的框移除 `backdrop-filter`(改較不透明底色)。窄版面(主視覺區 < 1150px,`@container wrmain`):AI 框與高風險框改排右欄、事件欄隱藏(同樣資訊在 Log 表)、右側節點往左讓出標籤寬度。Log 表 / 事件欄:`useWarroom` 畫面用 log 最多每秒更新一次(串流照收,進頁預載立即顯示),高流量下逐筆重繪 200 列表格是第二個瓶頸(暫停 Log 表時 95 fps、不暫停 42 fps)。mock 加 `?mock=1&load=high`(流量 8 倍、log 每 0.1 秒)供回歸量測。依 code review:滑過中的節點依 id 對到新索引;降級只改畫布解析度不重排節點。

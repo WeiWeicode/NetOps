@@ -132,7 +132,7 @@ function dstText(log: LiveLog): string {
   padding: 12px 0;
 }
 /* 窄版面:右欄讓給 AI / 高風險框;即時事件同樣資訊在下方 Log 表 */
-@container wrmain (max-width: 1150px) {
+@container wrmain (max-width: 1400px) {
   .wr-feed {
     display: none;
   }

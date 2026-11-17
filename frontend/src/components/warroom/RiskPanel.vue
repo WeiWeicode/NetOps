@@ -271,7 +271,7 @@ const topSources = computed(() => {
   }
 }
 /* 窄版面:置中會蓋住核心,改排到右欄下方 */
-@container wrmain (max-width: 1150px) {
+@container wrmain (max-width: 1400px) {
   .wr-ov {
     left: auto !important;
     right: 12px;

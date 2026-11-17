@@ -42,6 +42,8 @@ const emit = defineEmits<{
 
 const wrapEl = ref<HTMLElement | null>(null);
 const canvasEl = ref<HTMLCanvasElement | null>(null);
+/** 文字層(見「兩層畫布」) */
+const textEl = ref<HTMLCanvasElement | null>(null);
 
 // ---- SVG 線條圖示(對照樣稿 warroom-v5.html ICONS) ----
 const ICONS: Record<string, string> = {
@@ -321,19 +323,67 @@ function drawGrid(ctx: CanvasRenderingContext2D) {
   ctx.drawImage(gridLayer as CanvasImageSource, 0, 0);
 }
 
-/** 依 W、H 與降級等級設定畫布實際像素;尺寸沒變就不設 cv.width(設了會清空畫布與拖尾) */
-function sizeCanvas() {
-  const cv = canvasEl.value;
-  if (!cv) return;
-  pxScale = Math.min(1, Math.sqrt(MAX_CANVAS_PIXELS / (W * H))) * (DEGRADE_SCALE[degrade] ?? 1);
-  const bw = Math.max(1, Math.round(W * pxScale));
-  const bh = Math.max(1, Math.round(H * pxScale));
-  if (cv.width !== bw || cv.height !== bh) {
-    cv.width = bw;
-    cv.height = bh;
+// ── 兩層畫布 ─────────────────────────────────────────────────────────────────
+// 特效層(canvasEl):粒子、連線、光暈、拖尾,解析度依 pxScale 省效能。
+// 文字層(textEl):文字與線條圖示,每幀清空(不留拖尾殘影),解析度跟 devicePixelRatio(上限 2),保持清晰。
+// 兩層都盡量 transferControlToOffscreen:頁面上的 canvas 設定 ctx.font 會強制整頁樣式重算,
+// Log 表 / 事件欄持續改 DOM 時每次約 5ms(測試區 2026-11-17 量到每幀 54 次共 20ms,觸發自動降級、畫面變糊)。
+type Ctx = CanvasRenderingContext2D;
+interface Surface {
+  el: HTMLCanvasElement;
+  target: HTMLCanvasElement | OffscreenCanvas;
+  ctx: Ctx;
+}
+let mainSurf: Surface | null = null;
+let textSurf: Surface | null = null;
+let textTried = false;
+/** 文字層 context(沒有文字層時退回特效層);drawCore / drawNode 的文字與圖示畫在這裡 */
+let tc = null as unknown as Ctx;
+let textScale = 1;
+
+function makeSurface(el: HTMLCanvasElement | null): Surface | null {
+  if (!el) return null;
+  // 測試環境(happy-dom)的 OffscreenCanvas 不完整:只在有 OffscreenCanvasRenderingContext2D 時轉移
+  const canTransfer = typeof el.transferControlToOffscreen === 'function' && typeof OffscreenCanvasRenderingContext2D !== 'undefined';
+  try {
+    if (canTransfer) {
+      const off = el.transferControlToOffscreen();
+      const c = off.getContext('2d');
+      return c ? { el, target: off, ctx: c as unknown as Ctx } : null;
+    }
+    const c = el.getContext?.('2d');
+    return c ? { el, target: el, ctx: c } : null;
+  } catch {
+    return null;
   }
+}
+
+function ensureSurfaces(): boolean {
+  if (!mainSurf) mainSurf = makeSurface(canvasEl.value);
+  // 文字層只嘗試一次:失敗(例如已轉移但拿不到 context)就固定畫在特效層,不每幀重試丟例外
+  if (mainSurf && !textSurf && !textTried && textEl.value) {
+    textTried = true;
+    textSurf = makeSurface(textEl.value);
+    sizeCanvas();
+  }
+  return !!mainSurf;
+}
+
+function setSize(t: HTMLCanvasElement | OffscreenCanvas, w: number, h: number) {
+  if (t.width !== w || t.height !== h) {
+    t.width = w;
+    t.height = h;
+  }
+}
+
+/** 依 W、H 與降級等級設定兩層畫布的實際像素;尺寸沒變就不設 width(設了會清空畫布與拖尾) */
+function sizeCanvas() {
+  pxScale = Math.min(1, Math.sqrt(MAX_CANVAS_PIXELS / (W * H))) * (DEGRADE_SCALE[degrade] ?? 1);
+  textScale = Math.min(2, Math.max(1, (typeof devicePixelRatio === 'number' && devicePixelRatio) || 1));
+  if (mainSurf) setSize(mainSurf.target, Math.max(1, Math.round(W * pxScale)), Math.max(1, Math.round(H * pxScale)));
+  if (textSurf) setSize(textSurf.target, Math.max(1, Math.round(W * textScale)), Math.max(1, Math.round(H * textScale)));
   // 降級等級寫在屬性上,方便現場用 DevTools 確認(只在版面或等級變動時更新)
-  cv.dataset.degrade = String(degrade);
+  if (canvasEl.value) canvasEl.value.dataset.degrade = String(degrade);
 }
 
 /**
@@ -350,13 +400,14 @@ function updateLayout() {
   sizeCanvas();
 
   colL = props.legendOpen ? Math.max(290, W * 0.23) : Math.max(150, W * 0.14);
-  // 窄版面(< 1150,與 AiPanel / RiskPanel 的 @container 同門檻):右欄 270px 給 AI / 高風險框,節點再往左讓出標籤寬度
-  colR = W < 1150 ? Math.max(colL + 200, W - 440) : Math.min(W - 290, W * 0.76);
+  // 窄版面(< 1400,與 AiPanel / RiskPanel 的 @container 同門檻):右欄 270px 給 AI / 高風險框,節點再往左讓出標籤寬度
+  colR = W < 1400 ? Math.max(colL + 200, W - 440) : Math.min(W - 290, W * 0.76);
   cx = (colL + colR) / 2;
   cy = H / 2;
   R = Math.min(Math.max(160, colR - colL), H) * (props.legendOpen ? 0.135 : 0.155);
 
-  emit('centerChange', cx);
+  // 取整:AI / 高風險框以此置中,小數像素會讓 DOM 文字發糊
+  emit('centerChange', Math.round(cx));
   placeNodes(true);
 }
 
@@ -594,13 +645,13 @@ function drawGauge(
   ctx.fill();
   ctx.lineCap = 'butt';
 
-  ctx.textAlign = 'center';
-  ctx.fillStyle = `rgb(${c})`;
-  ctx.font = 'bold 21px "Segoe UI", sans-serif';
-  ctx.fillText(val, lx, ly);
-  ctx.fillStyle = '#6f86a8';
-  ctx.font = '10px "Segoe UI", "Microsoft JhengHei", sans-serif';
-  ctx.fillText(label, lx, ly + 14);
+  tc.textAlign = 'center';
+  tc.fillStyle = `rgb(${c})`;
+  tc.font = 'bold 21px "Segoe UI", sans-serif';
+  tc.fillText(val, lx, ly);
+  tc.fillStyle = '#6f86a8';
+  tc.font = '10px "Segoe UI", "Microsoft JhengHei", sans-serif';
+  tc.fillText(label, lx, ly + 14);
 }
 
 function fmtThroughputMax(maxBps: number): string {
@@ -704,10 +755,10 @@ function drawCore(ctx: CanvasRenderingContext2D, ts: number) {
     ctx.beginPath();
     ctx.arc(x, y, 3.5, 0, Math.PI * 2);
     ctx.fill();
-    ctx.fillStyle = `rgba(${s[1]},.8)`;
-    ctx.font = '9px "Segoe UI", sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText(s[0], x, y - 7);
+    tc.fillStyle = `rgba(${s[1]},.8)`;
+    tc.font = '9px "Segoe UI", sans-serif';
+    tc.textAlign = 'center';
+    tc.fillText(s[0], x, y - 7);
   });
 
   // 六角盾牌核心
@@ -730,17 +781,17 @@ function drawCore(ctx: CanvasRenderingContext2D, ts: number) {
   ctx.lineWidth = 1;
   ctx.stroke();
 
-  drawIcon(ctx, 'shield', cx, cy - hr * 0.32, hr * 0.5, `rgb(${lc})`, 2.2);
-  ctx.fillStyle = '#e6f2ff';
-  ctx.textAlign = 'center';
-  ctx.font = 'bold 15px "Segoe UI", sans-serif';
-  ctx.fillText('PA-560', cx, cy + hr * 0.22);
-  ctx.font = 'bold 20px "Segoe UI", sans-serif';
-  ctx.fillStyle = `rgb(${lc})`;
-  ctx.fillText(dpCpu != null ? `${Math.round(dpCpu)}%` : '—', cx, cy + hr * 0.55);
-  ctx.font = '10px "Segoe UI", sans-serif';
-  ctx.fillStyle = '#6f86a8';
-  ctx.fillText('DATAPLANE', cx, cy + hr * 0.72);
+  drawIcon(tc, 'shield', cx, cy - hr * 0.32, hr * 0.5, `rgb(${lc})`, 2.2);
+  tc.fillStyle = '#e6f2ff';
+  tc.textAlign = 'center';
+  tc.font = 'bold 15px "Segoe UI", sans-serif';
+  tc.fillText('PA-560', cx, cy + hr * 0.22);
+  tc.font = 'bold 20px "Segoe UI", sans-serif';
+  tc.fillStyle = `rgb(${lc})`;
+  tc.fillText(dpCpu != null ? `${Math.round(dpCpu)}%` : '—', cx, cy + hr * 0.55);
+  tc.font = '10px "Segoe UI", sans-serif';
+  tc.fillStyle = '#6f86a8';
+  tc.fillText('DATAPLANE', cx, cy + hr * 0.72);
 
   // 核心額外特效與儀表弧(使用 props.gauge，不寫死)
   const rawBps = props.snapshot?.metrics?.throughput?.bps ?? 0;
@@ -800,23 +851,23 @@ function drawCore(ctx: CanvasRenderingContext2D, ts: number) {
   // 左右小指標:阻擋/分、新連線/秒
   const denyStr = props.kpis?.denyPerMin != null ? `${fmtNum(props.kpis.denyPerMin)}/分` : '—';
   const cpsStr = props.snapshot?.metrics?.throughput?.cps != null ? `${fmtNum(rawCps)}/s` : `${Math.round(props.rates.conn)}/s`;
-  ctx.textAlign = 'center';
-  ctx.font = 'bold 15px "Segoe UI", sans-serif';
-  ctx.fillStyle = '#ff4d5e';
-  ctx.fillText(denyStr, cx - gR - 6, cy - R * 1.9);
-  ctx.fillStyle = '#6f86a8';
-  ctx.font = '10px "Segoe UI", "Microsoft JhengHei", sans-serif';
-  ctx.fillText('阻擋', cx - gR - 6, cy - R * 1.9 + 13);
+  tc.textAlign = 'center';
+  tc.font = 'bold 15px "Segoe UI", sans-serif';
+  tc.fillStyle = '#ff4d5e';
+  tc.fillText(denyStr, cx - gR - 6, cy - R * 1.9);
+  tc.fillStyle = '#6f86a8';
+  tc.font = '10px "Segoe UI", "Microsoft JhengHei", sans-serif';
+  tc.fillText('阻擋', cx - gR - 6, cy - R * 1.9 + 13);
 
-  ctx.font = 'bold 15px "Segoe UI", sans-serif';
-  ctx.fillStyle = '#3ea8ff';
-  ctx.fillText(cpsStr, cx + gR + 6, cy - R * 1.9);
-  ctx.fillStyle = '#6f86a8';
-  ctx.font = '10px "Segoe UI", "Microsoft JhengHei", sans-serif';
-  ctx.fillText('新連線', cx + gR + 6, cy - R * 1.9 + 13);
+  tc.font = 'bold 15px "Segoe UI", sans-serif';
+  tc.fillStyle = '#3ea8ff';
+  tc.fillText(cpsStr, cx + gR + 6, cy - R * 1.9);
+  tc.fillStyle = '#6f86a8';
+  tc.font = '10px "Segoe UI", "Microsoft JhengHei", sans-serif';
+  tc.fillText('新連線', cx + gR + 6, cy - R * 1.9 + 13);
 
   // 環繞二進位字元流(降級時關閉)
-  if (degrade === 0) drawBinaryRing(ctx, t);
+  if (degrade === 0) drawBinaryRing(tc, t);
 
   drawArc(ctx);
 }
@@ -914,23 +965,23 @@ function drawNode(
   ctx.strokeStyle = `rgba(${c},${a})`;
   ctx.stroke();
 
-  drawIcon(ctx, iconName, x, y, r * 1.05, `rgba(${isAtk ? '255,200,200' : '230,242,255'},${a})`, 1.6);
+  drawIcon(tc, iconName, x, y, r * 1.05, `rgba(${isAtk ? '255,200,200' : '230,242,255'},${a})`, 1.6);
 
   // 文字與長條
   const tx = x + (align === 'right' ? -r - 14 : r + 14);
-  ctx.textAlign = align;
-  ctx.fillStyle = `rgba(230,242,255,${a})`;
-  ctx.font = 'bold 13px "Segoe UI", "Microsoft JhengHei", sans-serif';
-  ctx.fillText((isAtk ? '⚠ ' : '') + label, tx, y - 2);
+  tc.textAlign = align;
+  tc.fillStyle = `rgba(230,242,255,${a})`;
+  tc.font = 'bold 13px "Segoe UI", "Microsoft JhengHei", sans-serif';
+  tc.fillText((isAtk ? '⚠ ' : '') + label, tx, y - 2);
 
   const bw = Math.max(8, Math.min(90, sizeFrac * 85));
   const bx = align === 'right' ? tx - bw : tx;
-  ctx.fillStyle = `rgba(${c},${0.7 * a})`;
-  ctx.fillRect(bx, y + 5, bw, 3);
+  tc.fillStyle = `rgba(${c},${0.7 * a})`;
+  tc.fillRect(bx, y + 5, bw, 3);
 
-  ctx.font = '10px "Segoe UI", sans-serif';
-  ctx.fillStyle = `rgba(111,134,168,${a})`;
-  ctx.fillText(`${fmtShort(conn5m)} conn/5m`, align === 'right' ? tx - bw - 6 : tx + bw + 6, y + 9);
+  tc.font = '10px "Segoe UI", sans-serif';
+  tc.fillStyle = `rgba(111,134,168,${a})`;
+  tc.fillText(`${fmtShort(conn5m)} conn/5m`, align === 'right' ? tx - bw - 6 : tx + bw + 6, y + 9);
 }
 
 function drawBursts(ctx: CanvasRenderingContext2D) {
@@ -958,12 +1009,17 @@ function renderFrame(ts: number) {
     rafId = 0;
     return;
   }
-  const cv = canvasEl.value;
-  const ctx = cv?.getContext?.('2d');
-  if (!cv || !ctx) {
+  if (!ensureSurfaces() || !mainSurf) {
     // 還拿不到 context:下一幀重試,迴圈不會卡死
     rafId = requestAnimationFrame(renderFrame);
     return;
+  }
+  const ctx = mainSurf.ctx;
+  tc = textSurf?.ctx ?? ctx;
+  if (textSurf) {
+    tc.setTransform(1, 0, 0, 1, 0, 0);
+    tc.clearRect(0, 0, textSurf.target.width, textSurf.target.height);
+    tc.setTransform(textScale, 0, 0, textScale, 0, 0);
   }
 
   const workStart = performance.now();
@@ -1198,6 +1254,7 @@ const tipStyle = computed(() => {
 });
 
 onMounted(() => {
+  ensureSurfaces();
   updateLayout();
   window.addEventListener('resize', updateLayout);
   document.addEventListener('visibilitychange', onVisibilityChange);
@@ -1218,6 +1275,9 @@ onBeforeUnmount(() => {
   parts = [];
   bursts = [];
   ripples = [];
+  mainSurf = null;
+  textSurf = null;
+  textTried = false;
 });
 </script>
 
@@ -1231,6 +1291,7 @@ onBeforeUnmount(() => {
       @mouseleave="onMouseLeave"
       @click="onCanvasClick"
     />
+    <canvas ref="textEl" class="wr-canvas wr-canvas--text" aria-hidden="true" />
 
     <!-- 無障礙與測試用節點互動熱區(與 Canvas 節點同步，支援鍵盤與測試點擊) -->
     <div class="wr-canvas__a11y" aria-label="戰情室節點清單">
@@ -1305,6 +1366,12 @@ onBeforeUnmount(() => {
   width: 100%;
   height: 100%;
   cursor: pointer;
+}
+/* 文字層疊在特效層上,不攔滑鼠(點擊 / hover 由特效層處理) */
+.wr-canvas--text {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
 }
 .wr-canvas__a11y {
   position: absolute;

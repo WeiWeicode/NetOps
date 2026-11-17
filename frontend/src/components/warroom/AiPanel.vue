@@ -223,7 +223,7 @@ watch(
   }
 }
 /* 窄版面:置中會蓋住核心,改排到右欄(事件欄在此寬度隱藏,同樣資訊在 Log 表) */
-@container wrmain (max-width: 1150px) {
+@container wrmain (max-width: 1400px) {
   .wr-ov {
     left: auto !important;
     right: 12px;

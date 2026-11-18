@@ -139,7 +139,7 @@ getent passwd 1000 101                      # 記下讀得到機密的帳號(機
      netops-api 改依 netops.env 對帳(`NETOPS_RECON_TIME` 預設 08:10)、每日同步、ClickHouse 摘要。
    - `PA_RECEIVE_ENABLED=1`、`PA_ALLOWED_SOURCES=<Docker 閘道>`(`docker network inspect giganexus-netops-prod_pa-ingress -f '{{range .IPAM.Config}}{{.Gateway}}{{end}}'`,第一次以 1 部署後查;PF F.3)、需要時 `PA_POLL_ENABLED=1`。
    - C6 驗收後:`NETOPS_AI_SOURCE=clickhouse`(並從 `netops.env` 移除 `FTP_SYNC_MINUTES`;開關 1 時 deploy-prod 已固定為 0)、`NETOPS_AI_DAILY_SUMMARY=1`(或刪除該行)。
-   - E2(NAS 150 GB / 年)核准、`giga-netops/prod/pa-archive` 與標記檔建好(`GW_ENV=prod sh deploy/host2-setup-pa-archive.sh`,先讀該腳本確認主機 3 適用)後:`NETOPS_ARCHIVE_ENABLED=1`。
+   - E2(NAS 150 GB / 年)核准後開啟冷歸檔(含彙總表備份):照 **§4.2**。
 5. 重試 `main` 最新 pipeline 的 `deploy-prod`。之後只換機密或憑證檔時,`main`「Run pipeline」帶 `NETOPS_PA_RECREATE=1`(由 Maintainer 執行;會重跑 `build-prod`,再手動 `deploy-prod`)。
 6. 網通:Syslog / HTTP Server Profile 加 `10.10.130.122`(**Syslog Transport `SSL`、HTTP Protocol `HTTPS`**,§4.1 第 4 步);預設規則 `interzone-default`、`intrazone-default` 也套 `netops-forward`(PF D.1、G11);Permitted IP 加 `10.10.130.122`;**接收開好後對 Syslog Server Profile 再 Commit 一次**。
 7. 驗證:§4.1 第 5 步的連線檢查全部成功;即時監控有資料、收集器 `dropped` / `rejected` / `malformed` 為 0;`system.tables` TTL 正確;隔天 08:10 對帳誤差 < 0.5%。
@@ -215,6 +215,103 @@ sudo sha256sum /root/netops-deploy/host3-pa-pki.sh    # 和開發機 sha256sum d
 關閉第二段:`NETOPS_PA_PIPELINE=0` 後重跑 `deploy-prod` **不會停止**已在執行的三個容器(避免誤停);要停時手動
 `sudo docker stop giganexus-netops-prod-netops-pa-1 giganexus-netops-prod-netops-ingest-1 giganexus-netops-prod-netops-clickhouse-1`(停 `netops-pa` 前先告知網通)。
 
+### 4.2 開啟冷歸檔(C4)與彙總表備份(需求方;NAS 標記檔由需求方或 NAS 管理員建立)
+
+`netops-ingest` 每天 02:30 起把**前一天**匯出成 Parquet 放到 NAS `giga-netops/prod/pa-archive/<年>/`,每天 7 個檔(各附 `.sha256`):
+
+| 檔名 | 來源表 | 用途 | 大小(估) |
+| --- | --- | --- | --- |
+| `pa_traffic_YYYY-MM-DD.parquet`、`pa_threat_YYYY-MM-DD.parquet` | 原始 log(TRAFFIC 30 天、威脅 90 天) | 超過 30 天的時段明細(冷明細)讀這兩種 | 0.2–0.4 GB / 天 |
+| `pa_heat_5m_…`、`pa_heat_1h_…`、`pa_heat_1d_…` | 熱力圖彙總(1 年 / 5 年 / 5 年) | **只是備份**(主機 3 磁碟壞掉時還原,§4.3) | 數 KB~數百 KB / 天 |
+| `pa_traffic_hourly_app_…`、`pa_traffic_hourly_src_…` | 每小時彙總(13 個月 / 90 天) | 同上 | 數 MB / 天 |
+
+保留:`NETOPS_ARCHIVE_KEEP_DAYS` 不設定 = 0 = **不刪**(需求方 2026-11-18 決定維持原設計;設定時至少 366)。歸檔紀錄在 ClickHouse `netops.pa_archive_manifest`(`table_name`:`traffic`、`threat`、`heat_5m`、`heat_1h`、`heat_1d`、`hourly_app`、`hourly_src`)。
+
+前提:E2 核准;`netops.env` 已是 `NETOPS_PA_PIPELINE=1`;`/srv/giganexus/netops-secrets/ch_cold_password` 存在(§2 第 2 步產生)。
+
+1. **確認 NAS 與目錄**(主機 3 WSL,唯讀):
+   ```bash
+   mountpoint /mnt/nas-docker && df -h /mnt/nas-docker       # 剩餘空間要夠一年約 150 GB(E2);< 2 GB 時 netops-ingest 不歸檔
+   ls -la /mnt/nas-docker/giga-netops/prod/pa-archive        # 2026-11-16 已建,缺標記檔 .giga-netops-archive
+   sudo docker inspect -f '{{range .Mounts}}{{.Source}} -> {{.Destination}}{{println}}{{end}}' giganexus-netops-prod-netops-ingest-1 | grep archive
+   ```
+   最後一行要是 `/mnt/nas-docker/giga-netops/prod/pa-archive -> /archive`(`netops-clickhouse` 同一個目錄唯讀掛在 `user_files/archive`)。
+   `/mnt/nas-docker` 在主機 3 是 `docker-backup` 分享(§2 第 4 步;工作區 AGENT.md §5)。若 NAS 管理員是在 `docker-folder` 建的 `pa-archive`,兩者不是同一個目錄,先確認要用哪一個再繼續。
+2. **建標記檔**:`deploy/host2-setup-pa-archive.sh` **主機 3 可直接用**(和 §2 第 4 步的 `host2-setup-kb-backup.sh` 一樣不分主機:只用 `/mnt/nas-docker`、uid 1000,不碰 NAS 帳密與掛載;
+   目錄已存在時只補標記檔、做 uid 1000 寫入測試、檢查群組權限)。照 §2 的方式複製:
+   ```powershell
+   scp deploy/host2-setup-pa-archive.sh host3:C:/Users/user/netops-deploy/
+   ```
+   ```bash
+   sudo install -d -m 700 -o root /root/netops-deploy
+   sudo install -m 700 -o root /mnt/c/Users/user/netops-deploy/host2-setup-pa-archive.sh /root/netops-deploy/
+   sudo sha256sum /root/netops-deploy/host2-setup-pa-archive.sh   # 和開發機 sha256sum deploy/host2-setup-pa-archive.sh 比對
+   sudo GW_ENV=prod sh /root/netops-deploy/host2-setup-pa-archive.sh
+   ```
+   預期輸出 `uid 1000 可寫入 …/pa-archive` 與 `群組 1000 可讀取目錄(1000 d???r?x…)`。
+   **出現 `WARN 目錄群組或權限不是 1000 / r-x` 時停下來**:`netops-clickhouse`(uid 101、群組 1000)讀不到 NAS 上的檔,每個檔的列數核對都會失敗(心跳 `archiveState=failing`);
+   請 NAS 管理員確認掛載參數(`gid=1000`、目錄權限含群組 r-x)後再跑一次。腳本最後印的 `docker compose … --force-recreate` 是測試區用的,正式區改做第 4 步。
+   用完刪除 `C:\Users\user\netops-deploy\` 與 `/root/netops-deploy/`。
+3. **開關**:`/srv/giganexus/deploy/netops.env` 改 `NETOPS_ARCHIVE_ENABLED=1`(只留一行;`NETOPS_ARCHIVE_KEEP_DAYS` 不要設定)。
+4. **部署**:由 Maintainer 重試 `main` 最新 pipeline 的 `deploy-prod`(會重建 `netops-clickhouse`、`netops-ingest`)。job 日誌 `INFO 冷歸檔:` 那一行是心跳的 `archiveState archiveLastOk:traffic archiveLateCount archiveError`。
+5. **自動補歸檔**(`backend/src/ingest/archive.ts` `tick`,不用手動補):容器一啟動就跑第一輪,之後每 10 分鐘一輪。每一輪把「原始表裡還完整、manifest 不是 ok」的日子都排進來:
+   TRAFFIC 與 5 種彙總表是「今天往前 29 天到昨天」(02:30 前到前天),威脅是「往前 89 天」;舊的日子先做,同一天原始表先、彙總表後;一輪最多原始表 6 個檔、彙總表 15 個檔。
+   - 2026-11-14 起 ClickHouse 已有的日子會自動補上;更早(ClickHouse 還沒有資料)的日子會產生 **0 列的檔**(cold 查詢需要每一天都有歸檔紀錄),以 11-20 開啟為例,TRAFFIC 與 5 種彙總表各約 23 天、威脅約 83 天,每個只有幾 KB。
+   - 以 11-20 開啟估計:原始表約 118 個檔 ÷ 6 ≈ 20 輪(約 3.5 小時),有資料的 11-14 起約在第 2 小時開始;期間冷查詢與歸檔共用冷查詢鎖,冷明細可能要等。
+   - 補完前 `archiveState` 可能短暫是 `failing`(單一檔失敗 1 小時後重試);**D+25 還沒成功**才會變 `late`(心跳告警),11-14 的告警日是 12-09。
+   - 原始表之後列數有變(FTP 補漏、去重)會重新歸檔;彙總表不比對列數,跟著原始表重新歸檔後重做(TRAFFIC 影響 5 種、威脅影響 heat 3 種)。
+6. **驗證**(唯讀):
+   ```bash
+   sudo docker exec giganexus-netops-prod-netops-redis-1 redis-cli hgetall netops:ingest:heartbeat | paste - - | grep -i archive
+   ls /mnt/nas-docker/giga-netops/prod/pa-archive/2026/ | tail
+   sudo docker exec giganexus-netops-prod-netops-clickhouse-1 clickhouse-client --query "SELECT table_name, status, count(), min(day), max(day), sum(rows) FROM netops.pa_archive_manifest FINAL GROUP BY ALL ORDER BY ALL"
+   ```
+   預期 `archiveState` 為 `ok`(補檔中可能是 `failing` 且 `archiveError` 是冷查詢鎖或單一檔的錯誤)、7 種 `table_name` 都有 `ok`、檔案旁都有 `.sha256`。
+   核對任一檔:`cd /mnt/nas-docker/giga-netops/prod/pa-archive/2026 && sha256sum -c pa_heat_1h_2026-11-14.parquet.sha256`。
+
+關閉:`NETOPS_ARCHIVE_ENABLED=0` 後重試 `deploy-prod`;NAS 上的檔不會被刪,冷明細路由回 409。
+
+### 4.3 從 Parquet 還原彙總表(主機 3 磁碟或 ClickHouse volume 遺失時)
+
+彙總表的 Parquet 和原始表**欄位順序相同**;`AggregateFunction` 欄位(熱力圖的 `top_*_src`)存成 hex 字串、IP 欄位存成文字,還原時轉回。
+在 `netops-clickhouse` 容器用 `default` 帳號(只允許容器內連線)執行;`user_files/archive` 是 NAS 目錄的唯讀掛載。
+
+1. 先核對雜湊:`cd /mnt/nas-docker/giga-netops/prod/pa-archive/2026 && sha256sum -c pa_heat_5m_*.parquet.sha256`(不一致的檔不要還原)。
+2. **確認目標日子是空的**(Summing / AggregatingMergeTree 會把重複插入的數字加總):
+   ```sql
+   SELECT toDate(bucket) d, count() FROM netops.pa_heat_5m WHERE bucket >= '2026-11-01' GROUP BY d ORDER BY d;
+   ```
+   每小時彙總(`pa_traffic_hourly_app`、`pa_traffic_hourly_src`,SummingMergeTree)時間欄位是 `hour`:`SELECT toDate(hour) d, count() FROM netops.pa_traffic_hourly_app WHERE hour >= '2026-11-01' GROUP BY d ORDER BY d`。
+   已有部分資料的日子先刪掉再還原(例:`ALTER TABLE netops.pa_heat_5m DELETE WHERE toDate(bucket) = '2026-11-14' SETTINGS mutations_sync = 1`;每小時彙總用 `toDate(hour)`)。
+   正式還原前建議先在測試區照本節完整做一次(整合測試只驗證了還原運算式)。
+3. 還原(`sudo docker exec -it giganexus-netops-prod-netops-clickhouse-1 clickhouse-client`;路徑可用萬用字元一次還原多天,例 `2026/pa_heat_5m_2026-11-*.parquet`):
+   ```sql
+   -- 熱力圖(heat_5m / heat_1h / heat_1d 同一個寫法,換表名與檔名)
+   INSERT INTO netops.pa_heat_5m
+   SELECT * REPLACE (
+       CAST(unhex(top_bytes_src) AS AggregateFunction(topKWeighted(3), IPv6, UInt64)) AS top_bytes_src,
+       CAST(unhex(top_deny_src) AS AggregateFunction(topKIf(3), IPv6, UInt8)) AS top_deny_src,
+       CAST(unhex(top_thr_src) AS AggregateFunction(topKIf(3), IPv6, UInt8)) AS top_thr_src)
+   FROM file('archive/2026/pa_heat_5m_2026-11-14.parquet', 'Parquet')
+   SETTINGS insert_deduplicate = 0, use_structure_from_insertion_table_in_table_functions = 0;
+
+   -- 每小時彙總(App)
+   INSERT INTO netops.pa_traffic_hourly_app
+   SELECT * FROM file('archive/2026/pa_traffic_hourly_app_2026-11-14.parquet', 'Parquet')
+   SETTINGS insert_deduplicate = 0, use_structure_from_insertion_table_in_table_functions = 0;
+
+   -- 每小時彙總(來源 IP)
+   INSERT INTO netops.pa_traffic_hourly_src
+   SELECT * REPLACE (toIPv6(src) AS src) FROM file('archive/2026/pa_traffic_hourly_src_2026-11-14.parquet', 'Parquet')
+   SETTINGS insert_deduplicate = 0, use_structure_from_insertion_table_in_table_functions = 0;
+   ```
+   `use_structure_from_insertion_table_in_table_functions = 0` 不能省:沒有它 ClickHouse 會用目標表的型別讀 Parquet,hex 字串無法轉成聚合狀態。
+   時間欄位在 Parquet 是 UTC 時間戳,插入 `DateTime('Asia/Taipei')` 欄位時自動換算(同一個時間點)。
+4. 核對:`SELECT toDate(bucket) d, sum(sessions), sum(bytes) FROM netops.pa_heat_5m WHERE toDate(bucket) = '2026-11-14' GROUP BY d` 和還原前的畫面 / 舊值一致。
+   熱力圖 Top IP(`topK`,近似值)票數相同時排序可能和原本不同,屬正常。
+5. 注意:還原的資料仍受各表 TTL 限制(例如來源彙總 90 天),超過 TTL 的日子還原後會在背景合併時被刪掉;要長期查詢舊資料時改用 `clickhouse-local` 直接讀 Parquet。
+   原始 log(`pa_traffic_*`、`pa_threat_*`)不需要還原就能查:超過 30 天的時段明細直接讀 Parquet(冷明細)。
+
 ## 5. 官方映像拉不到時
 
 `deploy-prod` 對 `redis:7.4-alpine`(第二段另有 `clickhouse/clickhouse-server:26.3.62.3`)用 `pull --policy missing`。主機 3 連不到 Docker Hub 時(2026-10-29 曾發生),在主機 2:
@@ -236,10 +333,30 @@ sudo sha256sum /root/netops-deploy/host3-pa-pki.sh    # 和開發機 sha256sum d
 | --- | --- | --- |
 | `knowledge/` | 知識庫筆記與匯整檔 | 不可重建 |
 | `warroom/` | 網段設定 `warroom.json`(SG,D46)與 `history/` | 不可重建;**排除** `warroom/ai-hourly.json`(每小時重算)與 `*.tmp`。`warroom/` 還沒建立(沒存過網段設定)時只打包 `knowledge` |
+| `palogs/`(另一個檔,見下) | FTP 分析結果(`index.json`、`summaries/`、`flows/`、`events/`)、外部 IP 學習、ClickHouse 每小時摘要與**對帳結果** `ch/recon/`、AI 每日摘要 `ai-daily/` | FTP 只留約 1 個月,超過就無法重算(2026-11-18 需求方決定併入備份,#5);排除 `*.tmp`。`ai-daily/` 含 IP 與姓名 |
+| `adlogs/`、`ipnames/`(同上) | AD 事件、IP 對照表(含姓名、部門,個資) | 同上 |
 
 `warroom/history/warroom-<時間>-v<版本>.json` 是**每次儲存前的舊設定**(保留最近 20 份,檔名的 `v<版本>` 是被取代的那一版),用途是誤改後回到舊版;NAS 每日備份再多一層保護(`warroom.json` 被刪或壞掉時)。
 
-備份位置:NAS `/mnt/nas-docker/giga-netops/<區>/netops-kb-<區>-YYYYMMDD.tar.gz`(附 `.sha256`,保留 `KB_BACKUP_KEEP` 份,預設 30;最近結果在 `LAST_RESULT`)。標記檔 `.giga-netops-backup` 不存在時整輪跳過(NAS 沒掛上)。
+備份位置:NAS `/mnt/nas-docker/giga-netops/<區>/`,每天兩個檔(各附 `.sha256`):
+- `netops-kb-<區>-YYYYMMDD.tar.gz`:`knowledge/`、`warroom/`,保留 `KB_BACKUP_KEEP` 份(預設 30)。
+- `netops-data-<區>-YYYYMMDD.tar.gz`:`palogs/`、`adlogs/`、`ipnames/`,保留 `KB_BACKUP_DATA_KEEP` 份(預設 7)。資料目錄不自動清除(ARCHITECTURE D16),每天成長約 26 MB,
+  一份會越來越大(測試區 2026-11-18 約 1.1 GB 未壓縮,`flows/` 已是 gzip),份數和知識庫分開設定;改份數在 `netops.env` 加 `KB_BACKUP_DATA_KEEP=<份數>` 後重試 `deploy-prod`。
+
+兩個都成功才寫 `LAST_RESULT` 的 `OK …`(容器健康檢查看這一行);打包期間清單內的檔被刪除(例如 FTP 分析覆寫)時這次失敗,`KB_BACKUP_HOUR` 那一小時內每 5 分鐘重試,已完成的檔不重做。
+標記檔 `.giga-netops-backup` 不存在時整輪跳過(NAS 沒掛上)。
+NAS 上的備份含個資(`ipnames/`、`palogs/ai-daily/`):`giga-netops/` 目錄的存取權限照附件服務備份的規則由 NAS 管理員控管。
+
+**還原資料目錄**(主機 3 磁碟遺失時):停 `netops-api` → `sha256sum -c` 核對 → 以 uid 1000 解到暫存目錄、確認只有 `palogs/`、`adlogs/`、`ipnames/` 底下的一般檔案,再搬回資料目錄 → 重試 `deploy-prod`:
+```bash
+sudo install -d -o 1000 -g 1000 -m 700 /srv/giga-netops/restore
+sudo -u '#1000' tar -xzf netops-data-prod-YYYYMMDD.tar.gz -C /srv/giga-netops/restore --no-same-owner --no-same-permissions
+sudo find /srv/giga-netops/restore ! -type f ! -type d          # 應該沒有輸出(沒有 symlink 等特殊檔)
+ls /srv/giga-netops/restore                                     # 只有 palogs adlogs ipnames
+sudo mv /srv/giga-netops/restore/palogs /srv/giga-netops/restore/adlogs /srv/giga-netops/restore/ipnames /srv/giga-netops/prod/   # 目的目錄已存在時先改名保留
+```
+`.sha256` 和備份放在同一個 NAS 目錄,只能發現傳輸損壞、不能防竄改;要防竄改時另外保存雜湊(例如每月把 `LAST_RESULT` 與 `.sha256` 複製到 NAS 以外)。
+備份日之後到 FTP 仍保留的檔案,netops-api 啟動後的同步會再分析補上。
 
 **還原網段設定到舊版**(擇一;`warroom.json` 的 `version` 以當下為準,PUT 比對的是檔案內的 `version`):
 

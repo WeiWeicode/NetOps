@@ -110,6 +110,8 @@ const statusError = ref<Error | null>(null);
 const anyBusy = computed(() => !!(status.value?.traffic.busy || status.value?.events.busy || status.value?.traffic.syncing || status.value?.events.syncing));
 const showProgress = computed(() => !!status.value && (anyBusy.value || status.value.traffic.total > 0 || status.value.events.total > 0));
 const syncError = computed(() => [status.value?.traffic.lastSyncError, status.value?.events.lastSyncError].filter(Boolean).join(';'));
+/** TRAFFIC 佇列放不下、部分加入(#4):提示,不是錯誤 */
+const syncNote = computed(() => status.value?.traffic.lastSyncNote ?? '');
 /** 上次查詢時是否在分析中(只在輪詢更新;操作回應改了 status 也不影響「剛結束」的判斷) */
 let polledBusy = false;
 
@@ -258,6 +260,7 @@ const columns = computed(() => [
 
     <GAlert v-if="statusError" tone="danger" title="無法取得分析進度">{{ describeError(statusError) }}</GAlert>
     <GAlert v-if="syncError" tone="warning" title="上次同步失敗,清單與分析結果可能不完整">{{ syncError }}</GAlert>
+    <GAlert v-else-if="syncNote" tone="info" title="部分檔案留待下次同步">{{ syncNote }}</GAlert>
 
     <!-- 對帳後每日同步(AC1):解密 / GlobalProtect / User-ID / AD 在保留期限內每天的匯入狀態 -->
     <DailySyncCard :status="status?.daily" />

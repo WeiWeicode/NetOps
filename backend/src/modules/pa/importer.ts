@@ -4,6 +4,8 @@
  *   檔案大小、修改時間或 SUMMARY_VERSION 變了會重新分析
  * 與舊版不同:同時分析的檔案數 = FTP_MAX_CONNECTIONS(與明細查詢共用連線上限);自動同步由 start() / stop() 控制;
  *   讀取失敗時立即中斷 FTP 傳輸(舊版會留著連線);佇列有上限 MAX_QUEUE;寫檔失敗的訊息不帶本機路徑。
+ * 同步範圍(需求方 2026-11-18 決定,#4):只排 FTP 保留期限內(檔名資料日期在最近 NETOPS_FTP_RETENTION_DAYS 天內)的檔,新的先排
+ *   (對帳只看前 3 天);佇列放不下時加到上限為止、回報略過的檔數,不整批拒絕(FTP 上累積 5,000 多個檔時同步曾每輪失敗)。
  */
 import crypto from 'node:crypto';
 import path from 'node:path';
@@ -105,9 +107,43 @@ export const errorText = (err: unknown) => {
 /** 佇列已滿 */
 export const queueFull = () => new AppError(409, 'NETOPS_IMPORT_QUEUE_FULL', `分析佇列已滿(上限 ${MAX_QUEUE} 個檔案),請等候目前的分析完成`);
 
+const DAY_MS = 86_400_000;
+const TZ_MS = 8 * 3600_000;
+/** 台灣時間 days 天前的日期 'yyyy/MM/dd' */
+const taipeiDayAgo = (nowMs: number, days: number) => new Date(nowMs + TZ_MS - days * DAY_MS).toISOString().slice(0, 10).replace(/-/g, '/');
+
+/**
+ * 同步要排的 TRAFFIC 檔(#4):檔名資料日期在保留期限內(今天往前 retentionDays − 1 天到今天),新的先排;
+ * 檔名沒有日期的無法判斷,排在最後(不丟掉)。回傳排好的清單與超出期限的檔數
+ */
+export function syncWindow<T extends { name: string }>(files: readonly T[], retentionDays: number, nowMs: number): { items: T[]; outOfWindow: number } {
+  const oldest = taipeiDayAgo(nowMs, Math.max(1, retentionDays) - 1);
+  const dated = files.map((f) => ({ f, day: fileDataDay(f.name) }));
+  const items = dated
+    .filter((x) => !x.day || x.day >= oldest)
+    .sort((a, b) => (b.day ?? '').localeCompare(a.day ?? '') || a.f.name.localeCompare(b.f.name, 'en', { numeric: true }))
+    .map((x) => x.f);
+  return { items, outOfWindow: files.length - items.length };
+}
+
 export type TrafficImporter = ReturnType<typeof createTrafficImporter>;
 
-export function createTrafficImporter({ ftp, store, ftpConfig, log }: { ftp: Ftp; store: PaStore; ftpConfig: FtpConfig | null; log: Log }) {
+export function createTrafficImporter({
+  ftp,
+  store,
+  ftpConfig,
+  log,
+  retentionDays = 10,
+  now = Date.now,
+}: {
+  ftp: Ftp;
+  store: PaStore;
+  ftpConfig: FtpConfig | null;
+  log: Log;
+  /** FTP 保留天數(NETOPS_FTP_RETENTION_DAYS);同步只排這幾天內的檔 */
+  retentionDays?: number;
+  now?: () => number;
+}) {
   const index = store.loadIndex<FileState>();
   const parallel = ftpConfig?.maxConnections ?? 1;
 
@@ -136,6 +172,9 @@ export function createTrafficImporter({ ftp, store, ftpConfig, log }: { ftp: Ftp
     finishedAt: null as string | null,
     lastSyncAt: null as string | null,
     lastSyncError: '',
+    /** 上次同步的結果:加入幾個、佇列放不下略過幾個、超出保留期限沒排幾個;部分加入的提示(不是錯誤) */
+    lastSync: null as { added: number; skipped: number; outOfWindow: number } | null,
+    lastSyncNote: '',
     /** 正在列出 FTP 目錄(同步在背景執行,畫面依此顯示「同步中」) */
     syncing: false,
   };
@@ -151,6 +190,9 @@ export function createTrafficImporter({ ftp, store, ftpConfig, log }: { ftp: Ftp
       finishedAt: job.finishedAt,
       lastSyncAt: job.lastSyncAt,
       lastSyncError: job.lastSyncError,
+      lastSync: job.lastSync,
+      lastSyncNote: job.lastSyncNote,
+      retentionDays,
       syncing: job.syncing,
       autoSyncMinutes: ftpConfig?.syncMinutes ?? 0,
       running: [...job.running.values()].map((r) => ({ path: r.path, name: r.name, size: r.size, read: r.read, rows: r.rows, seconds: Math.round((Date.now() - r.startedAt) / 1000) })),
@@ -238,22 +280,28 @@ export function createTrafficImporter({ ftp, store, ftpConfig, log }: { ftp: Ftp
     }
   }
 
-  /** 加入分析佇列(已在佇列或分析中的會略過) */
-  function enqueue(items: QueueItem[]) {
-    const fresh = items.filter((it) => !job.running.has(it.path) && !job.queued.has(it.path));
-    if (job.queue.length + fresh.length > MAX_QUEUE) throw queueFull();
+  /**
+   * 加入分析佇列(已在佇列或分析中的會略過)。佇列放不下時依順序加到上限為止,其餘算在 skipped(#4,不整批拒絕);
+   * 有要加的檔、但一個都放不下時丟 NETOPS_IMPORT_QUEUE_FULL
+   */
+  function enqueueSome(items: QueueItem[]): { added: number; skipped: number } {
+    const seen = new Set<string>();
+    const fresh = items.filter((it) => !job.running.has(it.path) && !job.queued.has(it.path) && !seen.has(it.path) && Boolean(seen.add(it.path)));
+    const room = Math.max(0, MAX_QUEUE - job.queue.length);
+    if (fresh.length && !room) throw queueFull();
+    const take = fresh.slice(0, room);
+    if (!take.length) return { added: 0, skipped: 0 };
     if (!job.running.size && !job.queue.length) Object.assign(job, { total: 0, done: 0, failed: 0, startedAt: new Date().toISOString(), finishedAt: null });
-    let added = 0;
-    for (const it of fresh) {
-      if (job.queued.has(it.path)) continue;
+    for (const it of take) {
       job.queue.push(it);
       job.queued.add(it.path);
-      added++;
     }
-    job.total += added;
+    job.total += take.length;
     pump();
-    return added;
+    return { added: take.length, skipped: fresh.length - take.length };
   }
+  /** 加入分析佇列,回傳加入的檔數(同 enqueueSome) */
+  const enqueue = (items: QueueItem[]) => enqueueSome(items).added;
 
   /** 取消:清空佇列並中斷分析中的檔案 */
   function cancel() {
@@ -317,19 +365,31 @@ export function createTrafficImporter({ ftp, store, ftpConfig, log }: { ftp: Ftp
     });
   }
 
-  /** 同步:FTP_LOG_DIR 裡符合 FTP_PATTERN、還沒分析或已變更的檔案加入佇列 */
+  /**
+   * 同步:FTP_LOG_DIR 裡符合 FTP_PATTERN、還沒分析或已變更、且在保留期限內的檔案,新的先加入佇列。
+   * lastSyncError 只在 FTP 失敗或一個都加不進去時設定;部分加入只記 lastSyncNote(#4)
+   */
   async function sync() {
-    if (job.syncing) return { found: 0, added: 0, busy: true };
+    if (job.syncing) return { found: 0, added: 0, skipped: 0, outOfWindow: 0, busy: true };
     job.syncing = true;
     try {
       const list = await listRemote();
-      const items = list.filter((f) => f.isLog && ['new', 'changed', 'error'].includes(f.state));
+      const { items, outOfWindow } = syncWindow(
+        list.filter((f) => f.isLog && ['new', 'changed', 'error'].includes(f.state)),
+        retentionDays,
+        now(),
+      );
+      const r = enqueueSome(items);
       job.lastSyncAt = new Date().toISOString();
       job.lastSyncError = '';
-      return { found: list.filter((f) => f.isLog).length, added: enqueue(items) };
+      job.lastSync = { ...r, outOfWindow };
+      job.lastSyncNote = r.skipped ? `分析佇列已滿(上限 ${MAX_QUEUE} 個檔案):這次加入 ${r.added} 個,略過 ${r.skipped} 個,下次同步再加入` : '';
+      if (r.skipped) log.info({ added: r.added, skipped: r.skipped }, '[匯入] 佇列已滿,部分檔案留待下次同步');
+      return { found: list.filter((f) => f.isLog).length, ...r, outOfWindow };
     } catch (err) {
       job.lastSyncAt = new Date().toISOString();
       job.lastSyncError = errorText(err);
+      job.lastSyncNote = '';
       log.error({ err, cause: (err as { cause?: unknown }).cause }, '[匯入] 同步失敗');
       throw err;
     } finally {
@@ -423,5 +483,5 @@ export function createTrafficImporter({ ftp, store, ftpConfig, log }: { ftp: Ftp
     return n;
   }
 
-  return { status, enqueue, cancel, listRemote, sync, start, stop, isTrafficLog, analyzedFiles, availableDays, filesInRange, readSummary, forget };
+  return { status, enqueue, enqueueSome, cancel, listRemote, sync, start, stop, isTrafficLog, analyzedFiles, availableDays, filesInRange, readSummary, forget };
 }

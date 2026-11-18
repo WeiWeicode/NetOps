@@ -1,7 +1,7 @@
 """netops-pa 進入點:python -m netops_pa
 
 單一程序(PA-LIVE-PLAN §2):寫入執行緒(Redis)、輪詢執行緒(PA_POLL_ENABLED)、HTTP 與 Syslog 接收(PA_RECEIVE_ENABLED)、
-PA 精準查詢執行者(PA_QUERY_ENABLED,C5;一次一個,pa_query.py)。
+PA 精準查詢執行者(PA_QUERY_ENABLED,C5;一次一個,pa_query.py)、安全規則收集(PA_POLICY_ENABLED,PR-1;policies.py)。
 `python -m netops_pa health`:容器健康檢查(主迴圈 30 秒內有更新存活檔)。
 `python -m netops_pa check`:第一次接 PA-560 時的連線檢查(check.py)。
 """
@@ -20,6 +20,7 @@ from .config import ConfigError, load_config
 from .control import Control
 from .pa_query import QueryWorker, XmlApi
 from .pipeline import Pipeline
+from .policies import PolicyApi, PolicyWorker
 from .poller import Poller, SdkClient
 from .receiver_http import HttpReceiver
 from .receiver_syslog import SyslogReceiver
@@ -55,7 +56,7 @@ def main() -> int:
         log.error("設定錯誤:%s", e)
         return 2
     logging.getLogger().setLevel(cfg.log_level)
-    if cfg.gw_env == "prod" and any(c and c.tls_insecure for c in (cfg.poll, cfg.query)):
+    if cfg.gw_env == "prod" and any(c and c.tls_insecure for c in (cfg.poll, cfg.query, cfg.policy)):
         log.warning("正式區不驗證 PA-560 管理介面憑證(PA_TLS_INSECURE=1)")
     quiet_sdk_logs()
 
@@ -66,10 +67,12 @@ def main() -> int:
         register_secret(cfg.receive.token)
     if cfg.query:
         register_secret(cfg.query.api_key)
+    if cfg.policy:
+        register_secret(cfg.policy.api_key)
     tls_on = bool(cfg.receive and cfg.receive.tls_cert)
     # queryEnabled:netops-api 依這個欄位決定 PA 精準查詢能不能送出(沒有執行者時回 409,不讓工作卡在佇列)
     status = Status(__version__, cfg.gw_env, cfg.poll is not None, cfg.receive is not None, receiveTls="1" if tls_on else "0",
-                    queryEnabled="1" if cfg.query else "0")
+                    queryEnabled="1" if cfg.query else "0", policyEnabled="1" if cfg.policy else "0")
     store = RedisStore(connect(cfg.redis_url), cfg.top_n)
     # 測試區手動開關:只有 test(與本機 dev)讀,正式區不讀(control.py;allowlist)
     control = Control(store.read_control, enabled=cfg.gw_env in ("dev", "test"))
@@ -94,6 +97,14 @@ def main() -> int:
     else:
         log.info("PA 精準查詢未啟用(PA_QUERY_ENABLED)")
 
+    policy = None
+    if cfg.policy:
+        policy = PolicyWorker(store.r, PolicyApi(cfg.policy), status, cfg.policy.interval, cfg.policy.max_mgmt_cpu, paused=control.poll_paused)
+        policy.start()
+        log.info("安全規則收集已啟用:每 %d 分鐘 + 手動重新整理、管理平面 CPU 超過 %d%% 不讀", cfg.policy.interval // 60, cfg.policy.max_mgmt_cpu)
+    else:
+        log.info("安全規則收集未啟用(PA_POLICY_ENABLED)")
+
     servers = []
     if cfg.receive:
         rc = cfg.receive
@@ -112,7 +123,7 @@ def main() -> int:
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, lambda *_: stop.set())
     exit_code = 0
-    workers = [pipeline.alive, *(x.alive for x in servers), *([poller.alive] if poller else []), *([query.alive] if query else [])]
+    workers = [pipeline.alive, *(x.alive for x in servers), *(w.alive for w in (poller, query, policy) if w)]
     while not stop.is_set():
         # 任一工作執行緒結束就結束程序(結束碼 1),由 Compose restart: unless-stopped 重啟
         # (Docker Engine 不會自動重啟 unhealthy 的容器,所以不能只靠健康檢查)
@@ -137,6 +148,8 @@ def main() -> int:
         poller.stop()
     if query:
         query.stop()
+    if policy:
+        policy.stop()
     pipeline.stop()
     return exit_code
 

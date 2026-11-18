@@ -114,6 +114,22 @@ class QueryConfig:
 
 
 @dataclass(frozen=True)
+class PolicyConfig:
+    """PA 安全規則收集(PR-1;WARROOM-DIRECTION-POLICY-PLAN §3):連線設定同輪詢,另加間隔與管理平面 CPU 門檻。"""
+
+    host: str
+    port: int
+    # PA_POLICY_API_KEY_FILE(專用帳號,計畫 §3.2 建議);沒設定時用 PA_API_KEY_FILE
+    api_key: str
+    ca_file: str
+    tls_insecure: bool
+    timeout: int
+    # 定期讀取間隔(秒;PA_POLICY_MINUTES,預設 30 分鐘)
+    interval: int
+    max_mgmt_cpu: int
+
+
+@dataclass(frozen=True)
 class ReceiveConfig:
     bind: str
     http_port: int
@@ -143,6 +159,8 @@ class Config:
     receive: ReceiveConfig | None
     # PA 精準查詢執行者(PA_QUERY_ENABLED;測試區預設關閉,需求方手動開,D31)
     query: QueryConfig | None
+    # PA 安全規則收集(PA_POLICY_ENABLED;預設關閉)
+    policy: PolicyConfig | None
     # 每分鐘排行每個維度保留前幾名(PA-LIVE-PLAN §4)
     top_n: int
     queue_size: int
@@ -199,6 +217,26 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
             max_mgmt_cpu=_int(env, "PA_QUERY_MAX_MGMT_CPU", 50, 10, 50),
         )
 
+    policy = None
+    if _bool(env, "PA_POLICY_ENABLED"):
+        host = _str(env, "PA_HOST")
+        # 專用 Key 優先(計畫 §3.2 緩解 ①);沒設定時沿用輪詢的 Key
+        api_key = read_secret(env, "PA_POLICY_API_KEY", gw_env) or read_secret(env, "PA_API_KEY", gw_env)
+        missing = [k for k, v in (("PA_HOST", host), ("PA_POLICY_API_KEY_FILE 或 PA_API_KEY_FILE", api_key)) if not v]
+        if missing:
+            raise ConfigError(f"PA_POLICY_ENABLED=1 缺少必要設定:{'、'.join(missing)}")
+        policy = PolicyConfig(
+            host=host,
+            port=_int(env, "PA_PORT", 443, 1, 65535),
+            api_key=api_key,
+            ca_file=_file(env, "PA_CA_FILE"),
+            tls_insecure=_bool(env, "PA_TLS_INSECURE"),
+            timeout=_int(env, "PA_POLICY_HTTP_TIMEOUT_SECONDS", 15, 2, 30),
+            # 低頻(計畫 §3.2 緩解 ③):最短 10 分鐘
+            interval=_int(env, "PA_POLICY_MINUTES", 30, 10, 1440) * 60,
+            max_mgmt_cpu=_int(env, "PA_POLICY_MAX_MGMT_CPU", 50, 10, 50),
+        )
+
     receive = None
     if _bool(env, "PA_RECEIVE_ENABLED"):
         token = read_secret(env, "PA_HTTP_TOKEN", gw_env)
@@ -244,6 +282,7 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
         poll=poll,
         receive=receive,
         query=query,
+        policy=policy,
         top_n=_int(env, "PA_TOP_N", 200, 10, 1000),
         queue_size=_int(env, "PA_QUEUE_SIZE", 50_000, 1000, 500_000),
     )

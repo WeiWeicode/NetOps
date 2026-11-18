@@ -114,10 +114,11 @@ const taipeiDayAgo = (nowMs: number, days: number) => new Date(nowMs + TZ_MS - d
 
 /**
  * 同步要排的 TRAFFIC 檔(#4):檔名資料日期在保留期限內(今天往前 retentionDays − 1 天到今天),新的先排;
- * 檔名沒有日期的無法判斷,排在最後(不丟掉)。回傳排好的清單與超出期限的檔數
+ * 檔名沒有日期的無法判斷,排在最後(不丟掉)。回傳排好的清單與超出期限的檔數。
+ * 至少涵蓋 4 天(今天與對帳需要的前 3 天;NETOPS_FTP_RETENTION_DAYS 可設到 1,code review)
  */
 export function syncWindow<T extends { name: string }>(files: readonly T[], retentionDays: number, nowMs: number): { items: T[]; outOfWindow: number } {
-  const oldest = taipeiDayAgo(nowMs, Math.max(1, retentionDays) - 1);
+  const oldest = taipeiDayAgo(nowMs, Math.max(4, retentionDays) - 1);
   const dated = files.map((f) => ({ f, day: fileDataDay(f.name) }));
   const items = dated
     .filter((x) => !x.day || x.day >= oldest)
@@ -390,6 +391,7 @@ export function createTrafficImporter({
       job.lastSyncAt = new Date().toISOString();
       job.lastSyncError = errorText(err);
       job.lastSyncNote = '';
+      job.lastSync = null;
       log.error({ err, cause: (err as { cause?: unknown }).cause }, '[匯入] 同步失敗');
       throw err;
     } finally {

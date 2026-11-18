@@ -51,6 +51,11 @@ describe('TRAFFIC 同步範圍(syncWindow)', () => {
       r.items.map((x) => x.name),
       [fileName('2026-11-18', 2), fileName('2026-11-15', 2), fileName('2026-11-15', 10), fileName('2026-11-10', 1), 'no-date.csv'],
     );
+    // 保留天數設得很小時仍涵蓋對帳需要的前 3 天(資料日期 11-15 = 檔名 11-16)
+    assert.deepEqual(
+      syncWindow([fileName('2026-11-16', 0), fileName('2026-11-15', 0)].map((name) => ({ name })), 1, NOW).items.map((x) => x.name),
+      [fileName('2026-11-16', 0)],
+    );
   });
 });
 
@@ -72,6 +77,7 @@ describe('TRAFFIC 同步與佇列上限', () => {
     assert.deepEqual([again.added, again.skipped], [parallel, 529 - parallel]);
     await assert.rejects(traffic.sync(), (e: { code?: string }) => e.code === 'NETOPS_IMPORT_QUEUE_FULL');
     assert.match(traffic.status().lastSyncError, /分析佇列已滿/);
+    assert.equal(traffic.status().lastSync, null);
     assert.equal(traffic.status().lastSyncNote, '');
     await traffic.stop();
   });

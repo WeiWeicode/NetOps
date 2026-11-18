@@ -2,7 +2,48 @@
 
 > 接手時先讀 `AGENT.md`,再讀 `docs/ARCHITECTURE.md`、`docs/IMPL-PLAN.md`。
 
-## 2026-11-18 收工:網段設定(SG)測試區完成並驗收
+## 2026-11-18 收工(晚):戰情室進出方向(WD)完成、PA 安全規則(PR)做到 PR-1
+
+**接手方式**:新討論串說「從 `NetOps/docs/HANDOFF.md`「2026-11-18 收工(晚)」接手,繼續 PR-2」。計畫書:`docs/WARROOM-DIRECTION-POLICY-PLAN.md`(§4 是需求方決定,照做)。
+
+### 已完成
+
+- !139 計畫書、!140 WD(戰情室依連入 / 連出分方向:反向粒子、顏色、節點入 / 出數字、全部 / 連入 / 連出篩選)已合併 `develop`,部署 pipeline 1139 成功,已在測試區。需求方決定 WD **不做驗收**(原話「做好先推MR,不用測」)。
+- **PR-0 唯讀實測通過**(需求方 2026-11-18 在測試區 netops-pa 容器執行 `pr0_probe.py`):PAN-OS 12.1.7-h3;op `show config running xpath` 讀到安全規則 166 條(242 KB、0.12 秒)、位址 302、位址群組 51、服務 59、服務群組 3、應用群組 1、標籤 20;`show rule-hit-count` 168 筆(多 2 筆推測是預設規則);設定稽核、Config log 可讀;管理平面 CPU 3–7%。**結論:不需要 Configuration 權限,D22 不改**。
+- **PR-1 收集器** MR !141(`feature/pa-policy-collector`,commit `07cf933`,開啟中未合併):`pa-collector/netops_pa/policies.py`,每 30 分鐘 + 手動;保留 PA 順序寫 Redis;指令白名單;CPU > 50% 或輪詢暫停時不讀;空規則 / 解析失敗標失敗並保留上一份。pytest 115 過、ruff 過;code-reviewer、security-auditor 無 Critical / High。
+
+### 需求方 2026-11-18 決定(照做)
+
+1. **規則收集不另開 PA 帳號 / Key**,沿用輪詢的 Key(`PA_POLICY_API_KEY_FILE` 未設時用 `PA_API_KEY_FILE`)。原話:「不用,這個帳號到時候會降級,只會套入角色只能傳Log,再轉換之前,請你帶我確定角色需要開哪些權限」。
+2. **`PA_POLICY_ENABLED` 開發完再打開**(PR-2 ~ PR-5 與頁面完成後),compose / `.env` 目前不動。
+
+### 下一步(依序)
+
+1. 子任務 [netops-wd-pr] 繼續 **PR-2 + PR-3**(API、版本歷史 `infra/store`、物件展開、權限 `netops.pa-policy.read` / `.refresh`、`deploy/gateway-rbac.yaml`、`api/paPolicy.ts`、`composables/usePaPolicy.ts`),分支疊在 `feature/pa-policy-collector` 之後。子任務 context 已長(600+ 則),建議封存後開新子任務,brief 帶本段與計畫書 §3.3。
+2. **PR-5** 排序檢查(程式)+ AI 判讀 API。
+3. Gemini 交接文件 `docs/GEMINI-PROMPT-PR.md`(仿 `GEMINI-PROMPT-SG.md`),頁面「防火牆 › 安全規則」交 Gemini。
+4. 文件 docs MR(Sonnet 子任務統一寫):API.md WR-1 新欄位(links `outConn` / `outDeny` / `outThreat`、sources / segments `outConn`)與 PR API;PA-LIVE-PLAN §4 新 Redis 鍵;ARCHITECTURE D22 補 PR-0 結論與「op Key 可讀整份 running config」;`PA_POLICY_*` 設定說明;PROJECT-MAP、IMPL-PLAN、DevelopmentProcess 三份紀錄。
+5. 開發完:測試區打開 `PA_POLICY_ENABLED` 並驗收。
+
+### PA API 帳號降級前要做(需求方要求 Claude 帶著確認)
+
+需求方之後要把 NetOps 用的 PA API 帳號改套「只能傳 Log」的角色。**改之前**由 Claude 帶需求方逐項確認角色權限,否則下列功能會停:
+
+| 功能 | 送的請求 | 需要的 XML API 權限 |
+| --- | --- | --- |
+| 即時監控輪詢(`poller.py`) | op `show session info`、`show system resources`、`show running resource-monitor`、`show counter interface` | Operational Requests |
+| PA 精準查詢(`pa_query.py`,C5) | `type=log` 查詢 / get / finish;op `show session all filter`、`show system resources` | Log、Operational Requests |
+| 規則收集(`policies.py`,PR-1) | op `show config running xpath …`、`show rule-hit-count`、`show system resources`(之後版本差異可能用 `show config audit`、Config log) | Operational Requests(Config log 需 Log) |
+| Log 轉送(Syslog / HTTP) | PA 主動送出,不經 API Key | 不需要 |
+
+注意:PA 的 Operational Requests 權限無法限制指令,op Key 能讀整份 running config(含密碼雜湊、PSK);程式端靠白名單限制。若角色只留 Log,上表前三項要改設計或停用。
+
+### 已知 / 未處理
+
+- WD 的 backend `test:int` 子任務本機未跑(沒有一次性 ClickHouse / Redis);frontend vitest 有 `ECONNREFUSED :3000` 雜訊(測試全過,來源未查)。
+- 子任務 worktree `fervent-panini-1402b9/scripts/` 有未提交的 `pr0_probe.py`、`wd-pr-subtask-progress.md`(後者內容已過時,以本段為準)。
+
+## 〔前一輪〕2026-11-18 收工:網段設定(SG)測試區完成並驗收
 
 **接手方式**:新討論串說「從 `NetOps/docs/HANDOFF.md`「2026-11-18 收工」接手,做 SG-5 正式區」。
 

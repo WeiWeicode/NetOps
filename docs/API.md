@@ -80,6 +80,8 @@ PA 匯入在背景佇列執行;同步、分析只是送進佇列,畫面輪詢狀
 | `netops.ftp.write` | FTP Log 檔案:同步與管理 | §5 寫入 |
 | `netops.ad.read` | AD 事件:查詢 | §6.1 |
 | `netops.ad-log.read` | AD Log 明細:查詢 | §6.2 |
+| `netops.segment.read` | 網段設定:查詢、預覽 | §12(畫面節點 `netops.segment-page.read`,**只給 `netops-admin`**) |
+| `netops.segment.write` | 網段設定:儲存 | §12 `PUT`(按鈕 `netops.segment-page.write`,只給 `netops-admin`) |
 | `netops.kb.read` | 知識庫:查詢 | §7 讀取、§10.2 讀取(語意搜尋、向量庫與外部 IP 學習狀態) |
 | `netops.kb.write` | 知識庫:編輯 | §7 寫入、§10.2 立即同步 / 學習 |
 | `netops.ai.use` | AI 分析與問答:使用 | §10.1(分析、問答、狀態)。不是 `.read`:選單不能綁定,由按鈕 `netops.pa-ask.use`、`netops.ad-ask.use`、`netops.pa-dashboard.ai` 綁定(`gateway-rbac.yaml`);給 `netops-admin`、`netops-viewer`(2026-11-05 決定) |
@@ -747,6 +749,8 @@ AI 相關(語意搜尋、向量同步、外部 IP 自動學習)見 §10.2(A1)。
 | 403 | `NETOPS_JOB_OWNER_UNKNOWN` | 身分沒有工號也沒有 sub,不能建立工作(正常經 Gateway 不會發生) |
 | 404 | `NETOPS_NOT_FOUND` | 找不到此 API |
 | 400 | `NETOPS_IP_NAME_IMPORT_INVALID` | IP 對照表匯入檔格式不符(欄名列、空檔、Excel 損壞;§11) |
+| 409 | `NETOPS_SEGMENTS_VERSION_CONFLICT` | 網段設定版本不符(§12) |
+| 403 | `NETOPS_SEGMENTS_AUTHOR_UNKNOWN` | 身分沒有工號與姓名,不能修改網段設定(§12) |
 | 403 | `NETOPS_IP_NAME_AUTHOR_UNKNOWN` | 身分沒有工號與姓名,不能修改 IP 對照表 |
 | 404 | `NETOPS_IP_NAME_NOT_FOUND` / `NETOPS_IP_NAME_IMPORT_NOT_FOUND` | 找不到這筆對照 / 匯入預覽不存在或逾期 |
 | 409 | `NETOPS_IP_NAME_DUPLICATE` / `NETOPS_IP_NAME_LIMIT` / `NETOPS_IP_NAME_IMPORT_STALE` | IP 重複 / 超過 20,000 筆 / 預覽後對照表被改過 |
@@ -978,7 +982,35 @@ IP / 網段 → 使用者姓名、部門、設備名稱、設備類型、備註�
 **PA 各 API 附名稱**(沿用各 API 原本的權限,看得到 PA 的人就看得到名稱,不需要對照表權限):
 
 - 回應(物件)附 `names: { "<IPv4>": { name, department, device, deviceType } }`,只含本回應中「整個值就是 IPv4」的字串查得到的 IP;網段重疊時範圍最小的優先;不含備註與修改人。對照表讀取失敗時不附(原本的回應照常)。
+- **例外**:`/pa-live/warroom`、`/pa-live/risk` **不附** `names`(SG,2026-11-18,§12);`/pa-live/stream` 照舊。
 - 套用:`GET /pa/overview`、`/pa-events/overview`、`/pa/log-searches/{id}/rows`、`/pa/heatmap`、`/pa/slice`、`/pa/slices/{id}`、`/pa/insight/traffic`、`/pa/insight/threat`、`/pa-live/snapshot`、`/pa-live/top`、`/pa-live/logs`、`/pa-query/jobs/{id}`;即時監控串流的 `snapshot`、`logs` 事件有名稱時附 `names`。
 - Log 明細匯出(`/pa/log-searches/{id}/export`)最後多兩欄「來源名稱」「目的名稱」(姓名或設備名稱 / 部門,以匯出當下的對照表為準)。
 - Log 明細查詢 `name`(§4.3):比對對照表的姓名、部門、設備名稱(包含),API 端換成 IPv4 範圍(符合的對照扣掉包在裡面、更小且不符合的對照;相鄰合併)後查 ClickHouse,比對來源、目的與 NAT(同 `ip` 條件),結果和用 IP 查相同。對照表沒有符合的回 400(`details` 指出 `name`);範圍超過 1,000 個回 400(AQ3:實測一天 > 10 秒或常超過再改 ClickHouse `ip_trie` 字典)。
 - AI 分析 / 問答(§10.1):提示詞中出現、查得到名稱的 IP(最多 200 個)附「IP 對照表」段落,含姓名、部門、設備(AQ2 不遮罩;只送公司內部 AI 主機,不寫日誌)。
+
+---
+
+## 12. 網段設定與戰情室名稱 — SG-0~SG-4(SEGMENT-SETTINGS-PLAN,ARCHITECTURE D46–D48)
+
+戰情室右側「內部網段」(名稱、類型 vlan / service、icon、CIDR、儀表滿格值)改在畫面維護,存 `warroom/warroom.json`(`infra/store`,不進資料庫,D46)。內容只有網段名稱與 CIDR,不含個資。
+
+| 方法 | 路徑 | 權限 | 說明 |
+| --- | --- | --- | --- |
+| GET | `/api/netops/warroom-segments` | `netops.segment.read` | `{ version, source, updatedAt, updatedBy, gauge, segments, overlaps, errors? }`。`source`:`file`(已設定)、`example`(尚未設定,回內建範例,`version` 0)、`invalid`(設定檔被人工改壞,回範例並附 `errors`;仍可整份覆寫)。`overlaps`:不同網段之間重疊的 CIDR(允許重疊,對照時最精確的網段優先) |
+| PUT | `/api/netops/warroom-segments` | `netops.segment.write` | 整份取代;body `{ version, gauge?, segments }`(匯入檔的 `source`、`updatedAt` 等其他欄位略過)。`version` 必須等於目前版本,成功後 +1 並回新內容。`x-audit-level: meta`。寫入前舊檔存進 `warroom/history/`(保留 20 份,D47);戰情室下一次更新(約 5 秒)套用 |
+| POST | `/api/netops/warroom-segment-previews` | `netops.segment.read` | 用**尚未儲存**的設定(格式同 PUT,`version` 可省略)試算近 5 分鐘 TRAFFIC 明細的內部 IP 分到各網段:`{ generatedAt, minutes, partial, segments[{ id, label, conn }], unmatched{ conn, top[{ ip, count }](前 20) }, overlaps, sample, message? }`。一次最多讀 20,000 筆;讀不到 5 分鐘開頭時依涵蓋秒數換算(`sample.complete` false,數字為推估)。不寫入;`x-audit-level: meta`。Redis 不可用時回 200、`partial` true、`conn` null 並附 `message`,不回假資料 |
+| POST | `/api/netops/ip-name-lookups` | `netops.ip-name.read` | `{ ips: string[](最多 200 個 IPv4) }` → `{ names: { "<ip>": { name, department, device, deviceType } } }`,只含查得到的(單一 IP 或所在網段,範圍小的優先)。給網段設定頁(未分類 IP 協助分類)與戰情室提示設備名稱使用;沒有 `netops.ip-name.read` 的人 BFF 回 403,畫面只顯示 IP。不改變資料;`x-audit-level: meta` |
+
+**錯誤**:
+
+| 狀態 | 代碼 | 說明 |
+| --- | --- | --- |
+| 400 | `VALIDATION_FAILED` | PUT / 預覽驗證失敗,`details` 為欄位錯誤清單 `[{ field, message }]`,例如 `segments[0].cidrs[0]`。規則:CIDR 為 IPv4/0–32、id 小寫英數與 `-` 且不可重複也不可為保留字 `unmatched`、label 1–40 字、kind 為 `vlan` / `service`、最多 100 個網段、每網段最多 50 個 CIDR、`gauge` 為正數 |
+| 409 | `NETOPS_SEGMENTS_VERSION_CONFLICT` | `version` 與目前不符(別人剛改過);`details.currentVersion` 為目前版本,請重新載入 |
+| 403 | `NETOPS_SEGMENTS_AUTHOR_UNKNOWN` | 身分沒有工號與姓名,不能修改網段設定 |
+
+**戰情室 API 的變更**(`/pa-live/warroom`、`/pa-live/risk`,權限 `netops.pa-realtime.read`):
+
+- 每個網段節點(含 `unmatched`「未分類」)有 `topIps`:該網段近期連線數最多的內部 IP(最多 5 筆,`{ key, count }`),畫面滑過節點時顯示。
+- **不再回傳 `names`**(Q10,需求方 2026-11-18;D45 範圍變更):設備名稱一律由前端對 `topIps` 的 IP 呼叫 `POST /ip-name-lookups`,只有 `netops.ip-name.read` 的人拿得到。
+- `/pa-live/stream`(即時 Log 表)**照舊附 `names`**,沿用 `netops.pa-realtime.read`(已知行為:沒有 ip-name.read 的帳號在 Log 表也看得到名稱,見驗收報告 §5 #3)。

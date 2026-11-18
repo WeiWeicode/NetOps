@@ -129,6 +129,42 @@ const ipNameRoutes: FastifyPluginAsync<{ svc: IpNameService }> = async (app, { s
     async (req) => svc.list(req.body.q, req.body.page ?? 1, req.body.pageSize ?? 50),
   );
 
+  app.post<{ Body: { ips: string[] } }>(
+    '/v1/ip-name-lookups',
+    {
+      schema: {
+        operationId: 'netops.ip-name.lookup',
+        summary: '依 IP 查 IP 對照表名稱',
+        description:
+          '一次查最多 200 個 IPv4 的名稱(單一 IP 或所在網段的對照,範圍小的優先),回 { names: { [ip]: { name, department, device, deviceType } } },只含查得到的。' +
+          '給網段設定(未分類 IP 協助分類,SEGMENT-SETTINGS-PLAN §3 A)與戰情室提示設備名稱(§3 D)使用;只有 netops.ip-name.read 的人拿得到名稱(BFF 檢查),其他人只看 IP。不改變資料。',
+        tags: ['IP 對照表'],
+        'x-permission': 'netops.ip-name.read',
+        'x-audit-level': 'meta',
+        'x-gherkin': [
+          '場景: 查未分類 IP 的設備名稱',
+          '  假如 使用者擁有 netops.ip-name.read 且對照表有 10.10.1.5',
+          '  當 呼叫 POST /api/netops/ip-name-lookups 帶 ips ["10.10.1.5", "10.10.1.6"]',
+          '  那麼 回應 200',
+          '  而且 names 只有 10.10.1.5',
+          '',
+          '場景: 沒有對照表權限',
+          '  假如 使用者只有 netops-viewer 角色',
+          '  當 呼叫 POST /api/netops/ip-name-lookups',
+          '  那麼 回應 403',
+        ].join('\n'),
+        body: {
+          type: 'object',
+          required: ['ips'],
+          additionalProperties: false,
+          properties: { ips: { type: 'array', maxItems: 200, items: { type: 'string', maxLength: 15, pattern: '^\\d{1,3}(\\.\\d{1,3}){3}$' } } },
+        },
+        response: { 200: looseObject('{ names }') },
+      },
+    },
+    async (req) => ({ names: svc.labels(req.body.ips) }),
+  );
+
   app.get<{ Querystring: { format?: 'csv' | 'xlsx' } }>(
     '/v1/ip-name-template',
     {

@@ -269,6 +269,8 @@ export interface WarroomSegment {
   conn: number;
   bytes: number;
   threat: number;
+  /** 連線數最多的內部 IP 前 5(SG-4 D:戰情室提示;名稱另經 /ip-name-lookups 取得,只給 netops.ip-name.read) */
+  topIps: TopItem[];
 }
 
 export interface WarroomLink {
@@ -425,11 +427,11 @@ export function aggregateWarroom(
 
   const segments: WarroomSegment[] = cfg.segments.map((s) => {
     const a = bySeg.get(s.id) ?? newAcc();
-    return { id: s.id, kind: s.kind, label: s.label, icon: s.icon, conn: S(a.conn), bytes: S(a.bytes), threat: T(a.threat) };
+    return { id: s.id, kind: s.kind, label: s.label, icon: s.icon, conn: S(a.conn), bytes: S(a.bytes), threat: T(a.threat), topIps: topOf(a.dst, 5, scale).filter((t) => t.count > 0) };
   });
   const um = bySeg.get(UNMATCHED_SEGMENT);
   if (um && um.conn + um.threat > 0)
-    segments.push({ id: UNMATCHED_SEGMENT, kind: 'other', label: '未分類', icon: 'network', conn: S(um.conn), bytes: S(um.bytes), threat: T(um.threat) });
+    segments.push({ id: UNMATCHED_SEGMENT, kind: 'other', label: '未分類', icon: 'network', conn: S(um.conn), bytes: S(um.bytes), threat: T(um.threat), topIps: topOf(um.dst, 5, scale).filter((t) => t.count > 0) });
 
   const linkMap = new Map<string, WarroomLink>();
   const sec = Math.max(1, windowSec);

@@ -27,6 +27,12 @@ export interface IpNameList {
   pageSize: number;
   version: number;
 }
+export interface IpNameLabel {
+  name: string;
+  department: string;
+  device: string;
+  deviceType: string;
+}
 export type IpNameBody = Pick<IpNameEntry, 'ip' | 'name' | 'department' | 'device' | 'deviceType' | 'note'>;
 
 export interface ImportPreview {
@@ -62,6 +68,8 @@ export const ipNames = {
     q.trim()
       ? http.post<IpNameList>('/api/netops/ip-name-searches', { q: q.trim(), page, pageSize })
       : http.get<IpNameList>('/api/netops/ip-names', { query: { page, pageSize } }),
+  /** SG-4:依 IP 查名稱(最多 200 個;netops.ip-name.read,沒有權限 403)。只回查得到的 */
+  lookup: (ips: string[]) => http.post<{ names: Record<string, IpNameLabel> }>('/api/netops/ip-name-lookups', { ips }),
   create: (body: IpNameBody) => http.post<IpNameEntry>('/api/netops/ip-names', body),
   update: (id: string, body: IpNameBody) => http.put<IpNameEntry>(path(id), body),
   remove: (id: string) => http.delete(path(id)),

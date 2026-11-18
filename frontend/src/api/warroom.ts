@@ -48,6 +48,8 @@ export interface WarroomSegment {
   conn: number;
   bytes: number;
   threat: number;
+  /** 連線數最多的內部 IP 前 5(SG-4 D);舊版後端沒有 */
+  topIps?: { key: string; count: number }[];
 }
 
 /** 來源 → 防火牆 → 網段;數值都是「每秒」(3 位小數) */

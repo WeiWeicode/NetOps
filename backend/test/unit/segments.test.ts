@@ -152,6 +152,9 @@ describe('網段設定 API', () => {
     assert.equal(b.partial, false);
     assert.equal(b.segments[0].conn, 3);
     assert.deepEqual(b.unmatched.top, [{ ip: '10.77.0.1', count: 1 }]);
+    // SG-4 D:戰情室網段帶 Top 內部 IP(不含名稱以外的個資;名稱經 /ip-name-lookups)
+    const w = (await t.call({ url: '/v1/pa-live/warroom' })).json();
+    assert.deepEqual(w.segments.find((x: { id: string }) => x.id === 'server').topIps, [{ key: '10.10.130.5', count: 3 }]);
     assert.equal((await t.call({ url: '/v1/warroom-segments' })).json().version, before);
     redis.fail = true;
     const d = (await t.call({ method: 'POST', url: '/v1/warroom-segment-previews', payload: { segments: SEGS } })).json();

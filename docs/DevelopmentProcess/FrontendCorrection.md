@@ -2,6 +2,12 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。範圍:`frontend/`。
 
+## 2026-11-18 網段設定 × IP 對照表搭配前端邏輯(SG-4)
+- 工作項目:SG-4(`docs/SEGMENT-SETTINGS-PLAN.md` §3、§6 Q3、Q4)
+- 內容:`composables/useSegmentPairing.ts`:名稱快取(只有 `netops.ip-name.read` 才查,只放記憶體)、A `useUnmatchedAssist`(未分類 IP 名稱、加入網段、建 /24)、B `useIpNameCidrImport`(對照表 CIDR 列匯入,同名稱併成一個網段、標出已涵蓋)、C `useSegmentLookup`(IP 對照表所屬網段,範例設定不顯示)、D `useSegmentDeviceNames`(戰情室 Top 內部 IP 設備名稱);`api/ipNames.ts` 加 `lookup`、`api/warroom.ts` 加 `topIps`。畫面交 Gemini。
+- 檔案:上列與 `frontend/test/segmentPairing.test.ts`
+- 驗證:`test/segmentPairing.test.ts` 7 項;全套見 MR
+
 ## 2026-11-18 網段設定前端邏輯層(SG-2)
 - 工作項目:SG-2(`docs/SEGMENT-SETTINGS-PLAN.md` §2、§4)
 - 內容:`api/segments.ts`(GET/PUT/預覽);`composables/segmentRules.ts`(CIDR / id / 重疊驗證,欄位路徑同後端;匯入匯出 JSON;最長前綴對照);`composables/useSegmentSettings.ts`(載入、草稿、即時驗證、預覽、儲存、版本衝突、匯入匯出);`composables/segmentsMock.ts`(記憶體假後端,可模擬衝突);權限代碼 `NETOPS.segmentPage`、`UI.segmentWrite`、`API.segmentRead/Write`;路由 `/netops/settings/segments`(暫時頁,畫面 SG-3 交 Gemini)。

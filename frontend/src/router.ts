@@ -218,6 +218,20 @@ const PAGES: PageDef[] = [
   },
   // 網通設定群組(SEGMENT-SETTINGS-PLAN §6 Q5):網段設定 → IP 對照表 → 知識庫;BFF 有 sort 時以 BFF 為準
   {
+    // SG-2:選單只給網管;畫面由 Gemini 在 SG-3 組裝(composables/useSegmentSettings.ts)
+    path: 'settings/segments',
+    meta: {
+      permission: NETOPS.segmentPage,
+      requires: [API.segmentRead],
+      title: '網段設定',
+      subtitle: 'Network Segments',
+      icon: 'gateway',
+      group: 'knowledge',
+      description: '戰情室右側內部網段:名稱、類型、CIDR 與儀表滿格值;儲存前可預覽近 5 分鐘的分類結果',
+    },
+    view: page(() => import('./pages/settings/Segments.vue')),
+  },
+  {
     // AC3:選單節點只給網管(netops-admin);PA 畫面的名稱看得到 PA 就看得到
     path: 'knowledge/ip-names',
     meta: {

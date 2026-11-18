@@ -8,6 +8,7 @@ import { SEGMENT_LIMITS, type FieldError, type SegmentConfig, type SegmentDef, t
 const ID_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
 const ICON_RE = /^[a-z0-9-]{1,30}$/;
 export const UNMATCHED_SEGMENT = 'unmatched';
+export const DEFAULT_GAUGE = { throughputMaxBps: 1_000_000_000, sessionMax: 64_000 } as const;
 
 /** IPv4 → 32 位元無號整數;不是 IPv4 回 null */
 export function ipv4ToInt(ip: string): number | null {
@@ -23,7 +24,8 @@ export function ipv4ToInt(ip: string): number | null {
 }
 
 export function parseCidr(c: string): { base: number; mask: number; bits: number } | null {
-  const [ip, bitsRaw, extra] = c.trim().split('/');
+  // 不 trim(與後端相同,前後空白算格式錯誤);a/b/c 前端直接拒絕(比後端嚴格)
+  const [ip, bitsRaw, extra] = c.split('/');
   if (extra !== undefined) return null;
   const base = ipv4ToInt(ip ?? '');
   const bits = bitsRaw === undefined ? 32 : /^\d{1,2}$/.test(bitsRaw) ? Number(bitsRaw) : NaN;
@@ -122,7 +124,7 @@ export function suggestId(label: string, taken: Iterable<string>): string {
 
 /**
  * 匯入 JSON(與 warroom.json 同格式;匯出檔多出的 version 等欄位略過)。
- * 回傳正規化後的設定(只保留已知欄位、icon 補預設)或錯誤訊息;欄位內容的驗證交給 validateConfig(匯入後畫面標出)。
+ * 回傳只保留已知欄位的設定(gauge 欄位、icon 省略時補預設,同後端);型別不對的值原樣保留(轉成字串 / NaN),交給 validateConfig 標出,不靜默改成預設值。
  */
 export function parseImport(text: string): { cfg: SegmentConfig } | { error: string } {
   let raw: unknown;
@@ -136,30 +138,30 @@ export function parseImport(text: string): { cfg: SegmentConfig } | { error: str
   if (!Array.isArray(o.segments)) return { error: '缺少 segments 陣列' };
   if (o.segments.length > SEGMENT_LIMITS.segments) return { error: `最多 ${SEGMENT_LIMITS.segments} 個網段` };
   const g = (o.gauge && typeof o.gauge === 'object' ? o.gauge : {}) as Record<string, unknown>;
-  const str = (v: unknown) => (typeof v === 'string' ? v : '');
+  const str = (v: unknown) => (typeof v === 'string' ? v : v === undefined || v === null ? '' : String(v));
+  const num = (v: unknown, def: number) => (v === undefined ? def : typeof v === 'number' ? v : NaN);
   const segments = o.segments.map((s): SegmentDef => {
     const e = (s && typeof s === 'object' ? s : {}) as Record<string, unknown>;
-    const kind = e.kind === 'service' ? 'service' : e.kind === 'vlan' ? 'vlan' : (str(e.kind) as SegmentDef['kind']);
+    const kind = str(e.kind) as SegmentDef['kind'];
     return {
       id: str(e.id),
       label: str(e.label),
       kind,
-      icon: typeof e.icon === 'string' ? e.icon : kind === 'service' ? 'server' : 'network',
+      icon: e.icon === undefined ? (kind === 'service' ? 'server' : 'network') : typeof e.icon === 'string' ? e.icon : '',
       cidrs: Array.isArray(e.cidrs) ? e.cidrs.map((c) => String(c)) : [],
     };
   });
   return {
     cfg: {
       gauge: {
-        throughputMaxBps: typeof g.throughputMaxBps === 'number' ? g.throughputMaxBps : DEFAULT_GAUGE.throughputMaxBps,
-        sessionMax: typeof g.sessionMax === 'number' ? g.sessionMax : DEFAULT_GAUGE.sessionMax,
+        throughputMaxBps: num(g.throughputMaxBps, DEFAULT_GAUGE.throughputMaxBps),
+        sessionMax: num(g.sessionMax, DEFAULT_GAUGE.sessionMax),
       },
       segments,
     },
   };
 }
 
-export const DEFAULT_GAUGE = { throughputMaxBps: 1_000_000_000, sessionMax: 64_000 } as const;
 
 /** 匯出內容(同 warroom.json 格式,可在另一區匯入) */
 export function exportJson(cfg: SegmentConfig): string {

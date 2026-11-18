@@ -55,6 +55,9 @@ describe('segmentRules', () => {
     expect('cfg' in r && r.cfg.segments[0]).toEqual({ id: 'x', label: 'X', kind: 'service', icon: 'server', cidrs: ['10.0.0.0/8'] });
     expect(parseImport('{')).toEqual({ error: '不是合法的 JSON 檔' });
     expect(parseImport('[]')).toHaveProperty('error');
+    // 型別不對不靜默改預設:交給驗證標出
+    const bad = parseImport(JSON.stringify({ gauge: { sessionMax: '1' }, segments: [{ id: 'x', label: 'X', kind: 'zone', icon: 5, cidrs: [' 10.0.0.0/8'] }] }));
+    expect('cfg' in bad && validateConfig(bad.cfg).map((e) => e.field)).toEqual(['gauge.sessionMax', 'segments[0].kind', 'segments[0].icon', 'segments[0].cidrs[0]']);
     const again = parseImport(exportJson(CFG));
     expect('cfg' in again && again.cfg).toEqual(CFG);
   });
@@ -70,20 +73,20 @@ describe('useSegmentSettings(mock 後端)', () => {
   it('載入 → 編輯 → 驗證 → 儲存 version + 1', async () => {
     const { s } = setup();
     await s.load();
-    expect(s.meta.value?.source).toBe('example');
-    expect(s.dirty.value).toBe(false);
+    expect(s.meta?.source).toBe('example');
+    expect(s.dirty).toBe(false);
     const i = s.addSegment({ label: 'Lab' });
     expect(s.draft.segments[i]!.id).toBe('lab');
-    expect(s.canSave.value).toBe(false); // CIDR 空白
+    expect(s.canSave).toBe(false); // CIDR 空白
     expect(s.issuesOf(`segments[${i}]`).length).toBeGreaterThan(0);
     s.draft.segments[i]!.cidrs[0] = '10.30.1.9/24';
     s.normalizeCidrAt(i, 0);
     expect(s.draft.segments[i]!.cidrs[0]).toBe('10.30.1.0/24');
-    expect(s.canSave.value).toBe(true);
+    expect(s.canSave).toBe(true);
     expect(await s.save()).toBe(true);
-    expect(s.meta.value?.version).toBe(1);
-    expect(s.meta.value?.source).toBe('file');
-    expect(s.dirty.value).toBe(false);
+    expect(s.meta?.version).toBe(1);
+    expect(s.meta?.source).toBe('file');
+    expect(s.dirty).toBe(false);
   });
 
   it('版本衝突:保留草稿、標示 conflict;重新載入後清除', async () => {
@@ -92,12 +95,22 @@ describe('useSegmentSettings(mock 後端)', () => {
     s.draft.segments[0]!.label = '改名';
     backend.bumpVersion();
     expect(await s.save()).toBe(false);
-    expect(s.conflict.value).toEqual({ currentVersion: 1 });
+    expect(s.conflict).toEqual({ currentVersion: 1 });
     expect(s.draft.segments[0]!.label).toBe('改名');
-    expect(s.canSave.value).toBe(false);
+    expect(s.canSave).toBe(false);
+    // 保留草稿、改用最新版本後可再存
+    expect(await s.rebase()).toBe(true);
+    expect(s.conflict).toBeNull();
+    expect(s.draft.segments[0]!.label).toBe('改名');
+    expect(await s.save()).toBe(true);
+    expect(s.meta?.version).toBe(2);
+    // 重新載入放棄草稿
+    backend.bumpVersion();
+    s.draft.segments[0]!.label = '再改';
+    expect(await s.save()).toBe(false);
     await s.load();
-    expect(s.conflict.value).toBeNull();
-    expect(s.meta.value?.version).toBe(1);
+    expect(s.conflict).toBeNull();
+    expect(s.draft.segments[0]!.label).toBe('改名');
   });
 
   it('排序、刪除、重設', async () => {
@@ -116,12 +129,13 @@ describe('useSegmentSettings(mock 後端)', () => {
     const { s } = setup();
     await s.load();
     await s.runPreview();
-    expect(s.preview.value?.partial).toBe(false);
-    expect(s.preview.value?.unmatched.top[0]).toEqual({ ip: '10.30.1.10', count: 260 });
+    expect(s.preview?.partial).toBe(false);
+    expect(s.preview?.unmatched.top[0]).toEqual({ ip: '10.30.1.10', count: 260 });
+    expect(s.previewStale).toBe(false);
     s.draft.segments[0]!.cidrs[0] = 'bad';
-    s.preview.value = null;
-    await s.runPreview();
-    expect(s.preview.value).toBeNull();
+    expect(s.previewStale).toBe(true);
+    expect(await s.runPreview()).toBe(false);
+    expect(s.issuesOf('segments[0].cidrs[0]')).toHaveLength(1);
   });
 
   it('匯入改草稿、匯出檔名', async () => {
@@ -130,7 +144,7 @@ describe('useSegmentSettings(mock 後端)', () => {
     expect(s.importText(JSON.stringify(CFG))).toBeNull();
     expect(s.draft.segments.map((x) => x.id)).toEqual(['server', 'office']);
     expect(s.overlapIdsOf('server')).toEqual(['office']);
-    expect(s.dirty.value).toBe(true);
+    expect(s.dirty).toBe(true);
     expect(s.importText('x')).toBe('不是合法的 JSON 檔');
     expect(s.exportFile().fileName).toMatch(/^網段設定_\d{8}\.json$/);
   });

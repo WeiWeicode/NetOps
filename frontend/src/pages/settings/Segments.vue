@@ -10,6 +10,6 @@ const s = useSegmentSettings();
 </script>
 
 <template>
-  <GEmpty v-if="s.error.value" tone="danger" icon="alert" title="無法載入網段設定" :description="s.error.value.message" />
-  <GEmpty v-else icon="gateway" title="網段設定(畫面製作中)" :description="s.meta.value ? `目前 ${s.draft.segments.length} 個網段,版本 ${s.meta.value.version}` : '載入中…'" />
+  <GEmpty v-if="s.error" tone="danger" icon="alert" title="無法載入網段設定" :description="s.error.message" />
+  <GEmpty v-else icon="gateway" title="網段設定(畫面製作中)" :description="s.meta ? `目前 ${s.draft.segments.length} 個網段,版本 ${s.meta.version}` : '載入中…'" />
 </template>

@@ -1,5 +1,7 @@
 /**
  * 冷資料 Parquet 歸檔排程(C4;ARCHITECTURE D30、手冊 docs/PA-LOG-CLICKHOUSE-GUIDE.md §8.3)。只在 netops-ingest(單一容器)執行。
+ * 原始表(traffic、threat)之外,彙總表(heat_5m / 1h / 1d、hourly_app / src)也每天備份一個檔(2026-11-18 #5;冷明細不讀):
+ *   範圍同 TRAFFIC 原始表(彙總表的資料由原始表寫入時產生);不比對來源列數,改成「依賴的原始表重新歸檔後」跟著重做。
  *
  * 每 10 分鐘檢查一次(tick):
  *   1. 台灣時間 02:30 起處理「前一天」;更早還沒歸檔成功的日子(原始表裡還完整的範圍:今天 −(保留天數 − 1)天起)一起補,
@@ -22,16 +24,19 @@ import { pipeline } from 'node:stream/promises';
 import type { ReadableStream as WebReadableStream } from 'node:stream/web';
 import {
   addDays,
+  ARCHIVE_FILE_PREFIXES,
   ARCHIVE_KIND_LIST,
   archiveFileName,
   archiveRelPath,
   isDay,
+  kindDef,
   parseArchiveName,
   taipeiDay,
   type ArchiveKind,
   type ArchiveWriterClient,
   type ColdFileClient,
   type ManifestEntry,
+  type RawKind,
 } from '../infra/clickhouse/archive.js';
 import type { ColdLock } from '../infra/redis/cold-lock.js';
 
@@ -52,6 +57,10 @@ const LOCK_LOST_MS = 90_000;
 const RESERVE_MS = 20 * 60_000;
 /** 一輪最多歸檔幾個檔、檔與檔之間讓出鎖幾秒(補檔期間冷明細還有機會執行;code review #4) */
 const MAX_FILES_PER_TICK = 6;
+/** 彙總表的檔很小(一天幾 KB~幾 MB):另外計數,和原始表同樣涵蓋 3 天(每天 5 個) */
+const MAX_DERIVED_FILES_PER_TICK = 15;
+/** 暫存目錄裡本系統的檔名(啟動時清掉) */
+const STAGING_RE = new RegExp(`^(${ARCHIVE_FILE_PREFIXES})_[\\d-]+\\.parquet(\\.part)?$`);
 const PAUSE_MS = 5_000;
 /** 來源列數比對只看最近幾天(FTP 補漏在對帳後幾天內;每小時全範圍 GROUP BY 太重,code review #7) */
 const RECHECK_DAYS = 7;
@@ -69,8 +78,8 @@ export interface ArchiveOptions {
   keepDays: number;
   /** 前一天起算第幾天還沒歸檔成功就告警(正式區 25) */
   alertDays: number;
-  /** 原始表保留天數(重試範圍) */
-  ttlDays: Record<ArchiveKind, number>;
+  /** 原始表保留天數(重試範圍;彙總表跟著 TRAFFIC) */
+  ttlDays: Record<RawKind, number>;
   /** 單一檔案上限(位元組;超過就中止,資安審查 M2) */
   maxBytes: number;
 }
@@ -192,7 +201,7 @@ export class Archiver {
   /** 啟動時清掉上次中斷留下的暫存檔(只刪本系統檔名) */
   async cleanStaging(): Promise<void> {
     await mkdir(this.o.staging, { recursive: true });
-    for (const name of await readdir(this.o.staging)) if (/^pa_(traffic|threat)_[\d-]+\.parquet(\.part)?$/.test(name)) await rm(path.join(this.o.staging, name), { force: true });
+    for (const name of await readdir(this.o.staging)) if (STAGING_RE.test(name)) await rm(path.join(this.o.staging, name), { force: true });
   }
 
   /** 一輪:規劃要歸檔的日子 → 逐一歸檔 → 保留期限 → 更新狀態 */
@@ -207,10 +216,13 @@ export class Archiver {
     const pending: { kind: ArchiveKind; day: string; stale: boolean }[] = [];
     const late: string[] = [];
     const recheck = now - this.lastRecheck >= RECHECK_MS;
+    // 原始表 ok 紀錄的 updated_at(彙總表比它舊 = 原始表重新歸檔過,彙總表跟著重做);ARCHIVE_KIND_LIST 原始表在前
+    const rawOk = new Map<string, number>();
     try {
       for (const kind of ARCHIVE_KIND_LIST) {
-        // 原始表裡還完整的最早一天(同 netops-api 的熱 / 冷分界)
-        const oldest = addDays(today, -(this.o.ttlDays[kind] - 1));
+        const def = kindDef(kind);
+        // 原始表裡還完整的最早一天(同 netops-api 的熱 / 冷分界);彙總表跟著 TRAFFIC
+        const oldest = addDays(today, -(this.o.ttlDays[def.derived?.window ?? (kind as RawKind)] - 1));
         if (oldest > newest) continue;
         const days: string[] = [];
         for (let d = oldest; d <= newest; d = addDays(d, 1)) days.push(d);
@@ -218,14 +230,17 @@ export class Archiver {
         this.seen(rows);
         const manifest = new Map(rows.map((e) => [e.day, e]));
         const recheckFrom = [oldest, addDays(newest, -(RECHECK_DAYS - 1))].sort().at(-1)!;
-        const counts = recheck ? await this.d.ch.countDays(kind, recheckFrom, newest) : null;
+        // 彙總表不比對列數(補漏多半只改數值、不改列數),改看依賴的原始表
+        const counts = recheck && !def.derived ? await this.d.ch.countDays(kind, recheckFrom, newest) : null;
         for (const day of days) {
           const e = manifest.get(day);
           if (e?.status === 'expired') continue;
           if (e?.status === 'ok') {
+            if (!def.derived) rawOk.set(key(kind, day), e.updatedAt);
             this.status.lastOk[kind] = !this.status.lastOk[kind] || day > this.status.lastOk[kind]! ? day : this.status.lastOk[kind];
-            // 歸檔後來源列數變了(補漏、去重),或上次改名後沒寫完:重新歸檔
-            if (this.redo.has(key(kind, day)) || (counts && day >= recheckFrom && (counts.get(day) ?? 0) !== e.rows)) pending.push({ kind, day, stale: true });
+            // 歸檔後來源列數變了(補漏、去重)、依賴的原始表重新歸檔過,或上次改名後沒寫完:重新歸檔
+            const rawNewer = def.derived?.deps.some((dep) => (rawOk.get(key(dep, day)) ?? 0) > e.updatedAt) ?? false;
+            if (this.redo.has(key(kind, day)) || rawNewer || (counts && day >= recheckFrom && (counts.get(day) ?? 0) !== e.rows)) pending.push({ kind, day, stale: true });
             continue;
           }
           pending.push({ kind, day, stale: false });
@@ -251,9 +266,18 @@ export class Archiver {
       return;
     }
 
-    // 舊的先做(離 TTL 刪除最近);重新歸檔排在最後
-    pending.sort((a, b) => Number(a.stale) - Number(b.stale) || a.day.localeCompare(b.day) || a.kind.localeCompare(b.kind));
-    const todo = pending.filter((p) => (this.nextTry.get(key(p.kind, p.day)) ?? 0) <= now).slice(0, MAX_FILES_PER_TICK);
+    // 舊的先做(離 TTL 刪除最近);同一天原始表先、彙總表後;重新歸檔排在最後
+    const derived = (k: ArchiveKind) => Number(kindDef(k).derived !== null);
+    pending.sort((a, b) => Number(a.stale) - Number(b.stale) || a.day.localeCompare(b.day) || derived(a.kind) - derived(b.kind) || a.kind.localeCompare(b.kind));
+    // 原始表、彙總表各自的上限
+    const left = [MAX_FILES_PER_TICK, MAX_DERIVED_FILES_PER_TICK];
+    const todo: typeof pending = [];
+    for (const p of pending) {
+      const i = derived(p.kind);
+      if ((this.nextTry.get(key(p.kind, p.day)) ?? 0) > now || left[i]! <= 0) continue;
+      left[i]!--;
+      todo.push(p);
+    }
     let diskLow = false;
     try {
       for (const [i, p] of todo.entries()) {

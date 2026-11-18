@@ -183,7 +183,10 @@ describe('FTP Log 檔案 API(PA)', () => {
   });
 
   it('同步只加入新的檔案,回 202', async () => {
-    ftp.put('/PA-560_traffic_2026_11_04_last_calendar_day_0.csv', trafficCsv('2026/11/03', 300, 9));
+    // 同步只排 FTP 保留期限內的檔(#4,依檔名日期):檔名用今天的匯出日;前面的種子檔(2026-11 初)已分析過
+    const exportDay = new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 10).replace(/-/g, '_');
+    const fresh = `/PA-560_traffic_${exportDay}_last_calendar_day_0.csv`;
+    ftp.put(fresh, trafficCsv('2026/11/03', 300, 9));
     const res = await t.call({ method: 'POST', url: '/v1/ftp/pa/syncs' });
     assert.equal(res.statusCode, 202);
     await waitFor(async () => {
@@ -193,7 +196,7 @@ describe('FTP Log 檔案 API(PA)', () => {
     const s = (await t.call({ url: '/v1/ftp/pa/status' })).json();
     assert.equal(s.traffic.total, 1, '已分析的檔案不重複分析');
     assert.equal(s.traffic.lastSyncError, '');
-    assert.equal(index()['/PA-560_traffic_2026_11_04_last_calendar_day_0.csv'].status, 'done');
+    assert.equal(index()[fresh].status, 'done');
   });
 
   it('傳輸不完整時標成 error,不當成已分析', async () => {

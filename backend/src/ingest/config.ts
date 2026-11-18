@@ -21,7 +21,7 @@
  */
 import type { GwEnv } from '@giganexus/backend-sdk';
 import { archiveEnabled, loadFtp, loadPaTtlDays, readSecret, type FtpConfig } from '../config.js';
-import type { ArchiveKind } from '../infra/clickhouse/archive.js';
+import type { RawKind } from '../infra/clickhouse/archive.js';
 import { defaultAlertDays } from './archive.js';
 
 export interface IngestConfig {
@@ -42,7 +42,7 @@ export interface ArchiveConfig {
   staging: string;
   keepDays: number;
   alertDays: number;
-  ttlDays: Record<ArchiveKind, number>;
+  ttlDays: Record<RawKind, number>;
   maxBytes: number;
   cold: { url: string; user: string; password: string };
 }
@@ -95,7 +95,7 @@ const absDir = (env: NodeJS.ProcessEnv, k: string, fallback: string) => {
 
 function loadArchive(env: NodeJS.ProcessEnv, gwEnv: GwEnv, chUrl: string): ArchiveConfig | null {
   let enabled: boolean;
-  let ttlDays: Record<ArchiveKind, number>;
+  let ttlDays: Record<RawKind, number>;
   try {
     enabled = archiveEnabled(env);
     ttlDays = loadPaTtlDays(env, gwEnv);

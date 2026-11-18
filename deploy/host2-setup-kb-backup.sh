@@ -19,4 +19,4 @@ su -s /bin/sh -c "touch '$ROOT/.write-test' && rm '$ROOT/.write-test'" "$(getent
   && echo "uid 1000 可寫入 $ROOT" || { echo "uid 1000 無法寫入 $ROOT(檢查 NAS 帳號權限)" >&2; exit 1; }
 ls -la "$ROOT"
 echo "完成。備份容器已在運作時,重新啟動即先備份一次:docker restart giganexus-netops-$ENV_NAME-netops-kb-backup-1"
-echo "(容器尚未部署時,等 develop 合併由 CI 部署)。之後在 $ROOT 看得到 netops-kb-$ENV_NAME-<日期>.tar.gz 與 LAST_RESULT。"
+echo "(容器尚未部署時,等 develop 合併由 CI 部署)。之後在 $ROOT 看得到 netops-kb-$ENV_NAME-<日期>.tar.gz、netops-data-$ENV_NAME-<日期>.tar.gz 與 LAST_RESULT。"

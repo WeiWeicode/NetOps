@@ -4,7 +4,8 @@
  *   INT_CLICKHOUSE_COLD_PASSWORD_FILE(netops_cold)、INT_REDIS_URL、
  *   INT_ARCHIVE_DIR(主機目錄;ClickHouse 容器唯讀掛在 user_files/archive,同 Compose)
  * 驗證:匯出 Parquet → 暫存 → 「NAS」→ file() 讀回列數 → manifest;冷明細和熱明細結果相同(IP、時區還原);
- *       netops_reader 不能用 file();排程一輪補完原始表還完整的日子;沒有歸檔的日子回 404。
+ *       netops_reader 不能用 file();排程一輪補完原始表還完整的日子;沒有歸檔的日子回 404;
+ *       彙總表備份(#5)的欄位順序同原始表、用 RUNBOOK 的還原運算式讀回和來源相同。
  */
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
@@ -14,7 +15,7 @@ import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { Redis } from 'ioredis';
 import { AppError } from '../../src/errors.js';
-import { addDays, createArchiveWriterClient, createColdFileClient, taipeiDay } from '../../src/infra/clickhouse/archive.js';
+import { addDays, archiveRelPath, ARCHIVE_KIND_LIST, createArchiveWriterClient, createColdFileClient, kindDef, taipeiDay, type ArchiveKind } from '../../src/infra/clickhouse/archive.js';
 import { createHeatReader } from '../../src/infra/clickhouse/heat.js';
 import { createClickHouseWriter } from '../../src/infra/clickhouse/index.js';
 import { createColdLock, type ColdLockClient } from '../../src/infra/redis/cold-lock.js';
@@ -123,6 +124,28 @@ describe('C4 歸檔(真 ClickHouse)', () => {
     assert.equal(await cold.parquetCount('threat', empty), 0);
   });
 
+  it('彙總表備份:列數 = FINAL 列數;欄位順序同原始表;還原運算式(RUNBOOK §4.3)讀回的總數和來源相同', async () => {
+    const range = { from: Math.floor(Date.parse(`${D}T00:00:00+08:00`) / 1000), to: Math.floor(Date.parse(`${D}T00:00:00+08:00`) / 1000) + 86400 };
+    for (const kind of ['heat_5m', 'heat_1h', 'heat_1d', 'hourly_app', 'hourly_src'] as const satisfies readonly ArchiveKind[]) {
+      const def = kindDef(kind);
+      const e = await archiver().archiveOne(kind, D, signal);
+      assert.ok(e.rows >= 1, kind);
+      assert.equal(await cold.parquetCount(kind, D), e.rows);
+      const file = `file('archive/${archiveRelPath(kind, D)}', 'Parquet')`;
+      const table = def.source.split('.')[1]!;
+      const cols = await cold.rows<{ name: string }>(`SELECT name FROM system.columns WHERE database = 'netops' AND table = {t:String} ORDER BY position`, { t: table }, 50);
+      const desc = await cold.rows<{ name: string }>(`DESCRIBE ${file}`, {}, 50);
+      assert.deepEqual(desc.map((c) => c.name), cols.map((c) => c.name), `${kind} 欄位順序`);
+      // 還原運算式(同 RUNBOOK):IP 轉回、聚合狀態 CAST(unhex)
+      const repl = [...def.ips.map((c) => `toIPv6(${c}) AS ${c}`), ...Object.entries(def.states).map(([c, t]) => `CAST(unhex(${c}) AS ${t}) AS ${c}`)];
+      const restored = `(SELECT *${repl.length ? ` REPLACE (${repl.join(', ')})` : ''} FROM ${file})`;
+      const agg = def.time === 'bucket' ? `sum(sessions) AS s, sum(bytes) AS b, sum(thr_critical + thr_high) AS t, has(topKWeightedMerge(3)(top_bytes_src), toIPv6('${IP}')) AS top` : `sum(sessions) AS s, sum(bytes) AS b, 0 AS t, toString(arraySort(groupUniqArray(${def.ips.length ? 'src' : 'app'}))) AS top`;
+      const src = await cold.rows(`SELECT ${agg} FROM ${def.source} FINAL WHERE ${def.time} >= toDateTime({from:UInt32}) AND ${def.time} < toDateTime({to:UInt32})`, range, 50);
+      const back = await cold.rows(`SELECT ${agg} FROM ${restored}`, {}, 50);
+      assert.deepEqual(back, src, kind);
+    }
+  });
+
   it('netops_reader 不能用 file() 讀歸檔', async () => {
     const reader = createColdFileClient(readerCfg);
     await assert.rejects(reader.parquetCount('traffic', D));
@@ -142,7 +165,8 @@ describe('C4 歸檔(真 ClickHouse)', () => {
     await a.tick(signal);
     assert.equal(a.status.state, 'ok', JSON.stringify(a.status));
     const m = await cold.manifest([addDays(TODAY, -2), D]);
-    assert.equal(m.filter((x) => x.status === 'ok').length, 4);
+    // 原始表 2 種 + 彙總表 5 種,各 2 天
+    assert.equal(m.filter((x) => x.status === 'ok').length, ARCHIVE_KIND_LIST.length * 2);
     assert.equal(await redis.get('netops:cold:lock'), null);
   });
 

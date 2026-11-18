@@ -14,6 +14,7 @@ import {
   archiveRelPath,
   coldSource,
   daysCovering,
+  exportSql,
   isDay,
   parseArchiveName,
   taipeiDay,
@@ -102,10 +103,15 @@ const opts = (d: { dir: string; staging: string }, extra: Partial<{ keepDays: nu
   ...d,
   keepDays: extra.keepDays ?? 14,
   alertDays: extra.alertDays ?? 2,
-  ttlDays: { traffic: 3, threat: 3 } as Record<ArchiveKind, number>,
+  ttlDays: { traffic: 3, threat: 3 },
   maxBytes: extra.maxBytes ?? 1024 * 1024,
 });
 const signal = new AbortController().signal;
+/** 只看原始表(traffic / threat)的項目;彙總表另外驗證 */
+const RAW = /^(traffic|threat):/;
+const raw = (xs: readonly string[]) => xs.filter((x) => RAW.test(x));
+const derivedOnly = (xs: readonly string[]) => xs.filter((x) => !RAW.test(x));
+const AGG = ['heat_5m', 'heat_1h', 'heat_1d', 'hourly_app', 'hourly_src'];
 
 describe('歸檔檔名與日期', () => {
   it('日期驗證、台灣日、涵蓋的日子', () => {
@@ -123,6 +129,29 @@ describe('歸檔檔名與日期', () => {
     assert.deepEqual(parseArchiveName('pa_threat_2026-11-01.parquet.sha256'), { kind: 'threat', day: '2026-11-01', ext: '.sha256' });
     assert.equal(parseArchiveName('netops-kb-test-20261104.tar.gz'), null);
     assert.equal(parseArchiveName('pa_traffic_2026-13-01.parquet'), null);
+  });
+
+  it('彙總表檔名:pa_traffic 與 pa_traffic_hourly_app 不會混淆', () => {
+    assert.equal(archiveRelPath('heat_1d', '2026-11-14'), '2026/pa_heat_1d_2026-11-14.parquet');
+    assert.equal(archiveRelPath('hourly_app', '2026-11-14'), '2026/pa_traffic_hourly_app_2026-11-14.parquet');
+    assert.deepEqual(parseArchiveName('pa_traffic_hourly_app_2026-11-14.parquet'), { kind: 'hourly_app', day: '2026-11-14', ext: '' });
+    assert.deepEqual(parseArchiveName('pa_traffic_hourly_src_2026-11-14.parquet.tmp'), { kind: 'hourly_src', day: '2026-11-14', ext: '.tmp' });
+    assert.deepEqual(parseArchiveName('pa_heat_5m_2026-11-14.parquet.sha256'), { kind: 'heat_5m', day: '2026-11-14', ext: '.sha256' });
+    assert.equal(parseArchiveName('pa_heat_2m_2026-11-14.parquet'), null);
+    assert.equal(parseArchiveName('pa_traffic_hourly_2026-11-14.parquet'), null);
+  });
+
+  it('匯出 SQL:原始表格式不變;彙總表 FINAL、欄位順序不變(REPLACE)、聚合狀態轉 hex、IP 轉文字', () => {
+    const t = exportSql('traffic');
+    assert.match(t, /^SELECT \* EXCEPT \(src, dst, nat_src, nat_dst\), replaceRegexpOne\(toString\(src\)/);
+    assert.match(t, /FROM netops\.pa_traffic_logs\s+WHERE event_time >= toDateTime\(\{from:UInt32\}\) AND event_time < toDateTime\(\{to:UInt32\}\)/);
+    assert.doesNotMatch(t, /FINAL/);
+    const h = exportSql('heat_5m');
+    assert.match(h, /^SELECT \* REPLACE \(hex\(CAST\(top_bytes_src AS String\)\) AS top_bytes_src, hex\(CAST\(top_deny_src AS String\)\) AS top_deny_src, hex\(CAST\(top_thr_src AS String\)\) AS top_thr_src\)/);
+    assert.match(h, /FROM netops\.pa_heat_5m FINAL\s+WHERE bucket >= toDateTime\(\{from:UInt32\}\) AND bucket < toDateTime\(\{to:UInt32\}\)/);
+    assert.match(exportSql('heat_1d'), /FROM netops\.pa_heat_1d FINAL/);
+    assert.match(exportSql('hourly_src'), /^SELECT \* REPLACE \(replaceRegexpOne\(toString\(src\), '\^::ffff:', ''\) AS src\) FROM netops\.pa_traffic_hourly_src FINAL\s+WHERE hour >= /);
+    assert.match(exportSql('hourly_app'), /^SELECT \* FROM netops\.pa_traffic_hourly_app FINAL\s+WHERE hour >= /);
   });
 
   it('冷資料來源:IP 轉回 IPv6、時間轉回台灣時區、跨日 UNION ALL;日期不合法丟錯', () => {
@@ -186,15 +215,21 @@ describe('Archiver.tick', () => {
     const f = fakeCh({ 'traffic:2026-11-10': 1, 'traffic:2026-11-11': 2, 'threat:2026-11-11': 3 });
     const a = new Archiver({ ch: f.ch, cold: f.cold, lock: memLock(), log, pauseMs: 0, freeBytes: async () => Infinity, now: () => T0 }, opts(d));
     await a.tick(signal);
-    assert.deepEqual(f.exports, ['threat:2026-11-10', 'traffic:2026-11-10', 'threat:2026-11-11', 'traffic:2026-11-11']);
+    assert.deepEqual(raw(f.exports), ['threat:2026-11-10', 'traffic:2026-11-10', 'threat:2026-11-11', 'traffic:2026-11-11']);
+    // 彙總表同樣兩天,同一天排在原始表後面
+    assert.deepEqual(f.exports.slice(0, 7), ['threat:2026-11-10', 'traffic:2026-11-10', 'heat_1d:2026-11-10', 'heat_1h:2026-11-10', 'heat_5m:2026-11-10', 'hourly_app:2026-11-10', 'hourly_src:2026-11-10']);
+    assert.equal(derivedOnly(f.exports).length, 10);
     assert.equal(a.status.state, 'ok');
-    assert.equal(a.status.archived, 4);
-    assert.deepEqual(a.status.lastOk, { threat: '2026-11-11', traffic: '2026-11-11' });
+    assert.equal(a.status.archived, 14);
+    assert.deepEqual(a.status.lastOk, { threat: '2026-11-11', traffic: '2026-11-11', heat_5m: '2026-11-11', heat_1h: '2026-11-11', heat_1d: '2026-11-11', hourly_app: '2026-11-11', hourly_src: '2026-11-11' });
+    assert.equal(f.manifest.get('heat_1d:2026-11-11')?.path, '2026/pa_heat_1d_2026-11-11.parquet');
+    assert.ok(existsSync(path.join(d.dir, '2026', 'pa_traffic_hourly_src_2026-11-10.parquet.sha256')));
     await a.tick(signal);
-    assert.equal(f.exports.length, 4);
+    assert.equal(f.exports.length, 14);
     const hb = archiveHeartbeatFields(a);
     assert.equal(hb.archiveState, 'ok');
     assert.equal(hb['archiveLastOk:traffic'], '2026-11-11');
+    assert.equal(hb['archiveLastOk:heat_5m'], '2026-11-11');
   });
 
   it('02:30 前不處理前一天', async () => {
@@ -202,7 +237,8 @@ describe('Archiver.tick', () => {
     const f = fakeCh();
     const a = new Archiver({ ch: f.ch, cold: f.cold, lock: memLock(), log, pauseMs: 0, freeBytes: async () => Infinity, now: () => Date.parse('2026-11-12T02:29:00+08:00') }, opts(d));
     await a.tick(signal);
-    assert.deepEqual(f.exports, ['threat:2026-11-10', 'traffic:2026-11-10']);
+    assert.deepEqual(raw(f.exports), ['threat:2026-11-10', 'traffic:2026-11-10']);
+    assert.deepEqual(derivedOnly(f.exports), AGG.map((k) => `${k}:2026-11-10`).sort());
   });
 
   it('失敗記 failed、1 小時後才重試;D+alertDays 還沒成功 → late(心跳告警)', async () => {
@@ -216,7 +252,9 @@ describe('Archiver.tick', () => {
     assert.match(f.manifest.get('traffic:2026-11-11')?.error ?? '', /ECONNREFUSED/);
     // 2026-11-10 是 D+2 → late
     assert.equal(a.status.state, 'late');
+    // 逾期告警只算原始表
     assert.deepEqual(a.status.late, ['traffic:2026-11-10', 'threat:2026-11-10']);
+    assert.equal(f.manifest.get('heat_5m:2026-11-11')?.status, 'failed');
     assert.ok(logs.some((l) => l.level === 'error' && /逾期/.test(l.msg)));
     f.setFailExport(false);
     now = T0 + 30 * 60_000;
@@ -224,7 +262,7 @@ describe('Archiver.tick', () => {
     assert.deepEqual(f.exports, []);
     now = T0 + 61 * 60_000;
     await a.tick(signal);
-    assert.equal(f.exports.length, 4);
+    assert.equal(f.exports.length, 14);
     assert.equal(a.status.state, 'ok');
     assert.deepEqual(a.status.late, []);
   });
@@ -239,7 +277,7 @@ describe('Archiver.tick', () => {
     assert.deepEqual(f.exports, []);
     lock.hold(null);
     await a.tick(signal);
-    assert.equal(f.exports.length, 4);
+    assert.equal(f.exports.length, 14);
     assert.equal(lock.held(), null);
   });
 
@@ -256,19 +294,43 @@ describe('Archiver.tick', () => {
     assert.equal(f.manifest.get('traffic:2026-11-11')?.rows, 7);
   });
 
+  it('原始表重新歸檔後,依賴它的彙總表下一輪跟著重做;之後不再重做', async () => {
+    const d = dirs();
+    const f = fakeCh({ 'traffic:2026-11-11': 5, 'threat:2026-11-11': 2 });
+    let now = T0;
+    const a = new Archiver({ ch: f.ch, cold: f.cold, lock: memLock(), log, pauseMs: 0, freeBytes: async () => Infinity, now: () => now }, opts(d));
+    await a.tick(signal);
+    assert.equal(f.exports.length, 14);
+    // 彙總表的來源列數變了(補漏只改數值)不會觸發;原始表 THREAT 列數變了才會
+    f.rows['heat_5m:2026-11-11'] = 99;
+    f.rows['threat:2026-11-11'] = 3;
+    now = T0 + 61 * 60_000;
+    await a.tick(signal);
+    assert.deepEqual(f.exports.slice(14), ['threat:2026-11-11']);
+    now = T0 + 71 * 60_000;
+    await a.tick(signal);
+    // heat 依賴 TRAFFIC + 威脅;hourly 只依賴 TRAFFIC
+    assert.deepEqual(f.exports.slice(15), ['heat_1d:2026-11-11', 'heat_1h:2026-11-11', 'heat_5m:2026-11-11']);
+    assert.equal(f.manifest.get('heat_5m:2026-11-11')?.rows, 99);
+    now = T0 + 81 * 60_000;
+    await a.tick(signal);
+    assert.equal(f.exports.length, 18);
+  });
+
   it('保留期限:刪除超過天數的本系統檔案、manifest 記 expired;其他檔不動;0 = 不刪', async () => {
     const d = dirs();
     mkdirSync(path.join(d.dir, '2026'));
-    for (const n of ['pa_traffic_2026-10-28.parquet', 'pa_traffic_2026-10-28.parquet.sha256', 'pa_threat_2026-10-29.parquet', 'other.txt']) writeFileSync(path.join(d.dir, '2026', n), 'x');
+    for (const n of ['pa_traffic_2026-10-28.parquet', 'pa_traffic_2026-10-28.parquet.sha256', 'pa_threat_2026-10-29.parquet', 'pa_heat_1d_2026-10-28.parquet', 'other.txt']) writeFileSync(path.join(d.dir, '2026', n), 'x');
     const f = fakeCh();
     const keep0 = new Archiver({ ch: f.ch, cold: f.cold, lock: memLock(), log, pauseMs: 0, freeBytes: async () => Infinity, now: () => T0 }, opts(d, { keepDays: 0 }));
     await keep0.retention('2026-11-12');
-    assert.equal(readdirSync(path.join(d.dir, '2026')).length, 4);
+    assert.equal(readdirSync(path.join(d.dir, '2026')).length, 5);
     const a = new Archiver({ ch: f.ch, cold: f.cold, lock: memLock(), log, pauseMs: 0, freeBytes: async () => Infinity, now: () => T0 }, opts(d, { keepDays: 14 }));
     await a.retention('2026-11-12');
     // 2026-11-12 − 14 天 = 10-29:10-28 刪除、10-29 保留
     assert.deepEqual(readdirSync(path.join(d.dir, '2026')).sort(), ['other.txt', 'pa_threat_2026-10-29.parquet']);
     assert.equal(f.manifest.get('traffic:2026-10-28')?.status, 'expired');
+    assert.equal(f.manifest.get('heat_1d:2026-10-28')?.status, 'expired');
     assert.equal(f.manifest.has('threat:2026-10-29'), false);
   });
 
@@ -276,6 +338,7 @@ describe('Archiver.tick', () => {
     const d = dirs();
     mkdirSync(d.staging, { recursive: true });
     writeFileSync(path.join(d.staging, 'pa_traffic_2026-11-11.parquet.part'), 'x');
+    writeFileSync(path.join(d.staging, 'pa_traffic_hourly_src_2026-11-11.parquet.part'), 'x');
     writeFileSync(path.join(d.staging, 'keep.txt'), 'x');
     const f = fakeCh();
     await new Archiver({ ch: f.ch, cold: f.cold, lock: memLock(), log, pauseMs: 0, freeBytes: async () => Infinity }, opts(d)).cleanStaging();
@@ -389,13 +452,16 @@ describe('審查修正(C4)', () => {
     assert.equal(existsSync(path.join(d.dir, '2026', 'pa_traffic_2026-11-11.parquet')), false);
   });
 
-  it('一輪最多 6 個檔;歸檔時預約,結束後清掉;預約期間 netops-api 拿不到鎖', async () => {
+  it('一輪最多原始表 6 個檔、彙總表 15 個檔;歸檔時預約,結束後清掉;預約期間 netops-api 拿不到鎖', async () => {
     const d = dirs();
     const f = fakeCh();
     const lock = memLock();
     const a = new Archiver({ ch: f.ch, cold: f.cold, lock, log, pauseMs: 0, freeBytes: async () => Infinity, now: () => T0 }, { ...opts(d), ttlDays: { traffic: 10, threat: 10 } });
     await a.tick(signal);
-    assert.equal(f.exports.length, 6);
+    assert.equal(raw(f.exports).length, 6);
+    assert.equal(derivedOnly(f.exports).length, 15);
+    // 兩種上限涵蓋同樣 3 天(原始表先歸檔,彙總表不會因原始表後到而多做一次)
+    assert.deepEqual([...new Set(f.exports.map((x) => x.split(':')[1]))], ['2026-11-03', '2026-11-04', '2026-11-05']);
     assert.equal(lock.reserved(), false);
     await lock.reserve(60_000);
     assert.equal(await lock.acquire('api'), false);

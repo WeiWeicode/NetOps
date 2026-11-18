@@ -247,6 +247,7 @@ services:
       FTP_ROOT: ${FTP_ROOT:-}
       FTP_LOG_DIR: ${FTP_LOG_DIR:-}
       # 冷歸檔(C4,手冊 §8):每天 02:30 匯出前一天的 TRAFFIC 與威脅類 Parquet → 本機暫存 → NAS(/archive),SHA-256、manifest、
+      #   彙總表(熱力圖 5m / 1h / 1d、每小時 App / 來源)同時每天備份一個 Parquet(#5;只是備份,還原見 RUNBOOK-prod.md §4.3)、
       #   失敗每小時重試到資料被 TTL 刪除前(D+25 心跳告警 archiveState=late);讀回核對列數用 netops_cold;和冷明細共用冷查詢鎖
       #   保留天數 NETOPS_ARCHIVE_KEEP_DAYS:測試區預設 14(NAS docker-folder 只剩約 18 GB);正式區 0 = 不刪(至少 1 年,CQ12)
       NETOPS_ARCHIVE_ENABLED: ${NETOPS_ARCHIVE_ENABLED:-1}
@@ -338,21 +339,27 @@ services:
     init: true
     # 只寫 /backup;不需要任何 capability
     read_only: true
+    # 打包用的檔案清單(資料目錄約 1 萬多個檔名,約 1 MB);不放在 NAS 上
+    tmpfs: ["/tmp:size=32m,uid=1000,gid=1000,mode=0700"]
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     # 健康檢查:/backup/LAST_RESULT 26 小時內更新過(每天備份一次 + 緩衝)且結果是 OK。
     #   備份 FAIL、NAS 未掛載(沒有標記檔就不寫結果)、超過一天沒備份都會 unhealthy
-    #   CI 的 up --wait 會等到 healthy:正常部署第一次檢查(約 30 秒)就通過;啟動時的備份最多等 5 分鐘;備份失敗時 deploy-api-test 失敗
+    #   CI 的 up --wait 會等到 healthy:正常部署第一次檢查(約 30 秒)就通過;啟動時的備份最多等 10 分鐘(資料目錄 1 GB 以上);備份失敗時 deploy-api-test 失敗
     healthcheck:
       test: ["CMD-SHELL", "find /backup/LAST_RESULT -mmin -1560 | grep -q . && grep -q '^[^ ]* OK ' /backup/LAST_RESULT"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 5m
+      start_period: 10m
     environment:
       GW_ENV: ${GW_ENV}
       KB_BACKUP_HOUR: ${KB_BACKUP_HOUR:-2}
       KB_BACKUP_KEEP: ${KB_BACKUP_KEEP:-30}
+      # 資料目錄(palogs、adlogs、ipnames;netops-data-<區>-YYYYMMDD.tar.gz)的保留份數:一份會隨資料目錄成長,和知識庫分開設定
+      KB_BACKUP_DATA_KEEP: ${KB_BACKUP_DATA_KEEP:-7}
+      # NAS 剩餘空間下限(MB),不足時不寫(共用分享)
+      KB_BACKUP_MIN_FREE_MB: ${KB_BACKUP_MIN_FREE_MB:-2048}
     volumes:
       - ${NETOPS_DATA_HOST_DIR}:/data:ro
       # 主機 cifs 掛載點下的區域目錄(附件服務同一個 NAS 分享 docker-folder);沒有標記檔 .giga-netops-backup 時不寫入

@@ -12,10 +12,12 @@ import { fmtNum, fmtTime } from '@/api/format';
 import { DEVICE_TYPES, IMPORT_MAX_BYTES, IP_NAME_LIMITS, importFormatOf, ipNames, toBase64, type ImportPreview, type IpNameBody, type IpNameEntry } from '@/api/ipNames';
 import { UI } from '@/api/perms';
 import { ipFieldError } from '@/composables/ipNameForm';
+import { useSegmentLookup } from '@/composables/useSegmentPairing';
 import { confirm, toast } from '@/ui';
 
 const PAGE_SIZE = 50;
 const canWrite = computed(() => can(UI.ipNameWrite));
+const segLookup = useSegmentLookup();
 
 // ---------- 清單 ----------
 const q = ref('');
@@ -51,6 +53,7 @@ onMounted(() => void load(1));
 
 const COLUMNS = [
   { key: 'ip', label: 'IP / 網段', mono: true, width: '170px' },
+  { key: 'segment', label: '網段' },
   { key: 'name', label: '使用者姓名' },
   { key: 'department', label: '部門' },
   { key: 'device', label: '設備' },
@@ -58,7 +61,9 @@ const COLUMNS = [
   { key: 'updatedAt', label: '最後修改', hideSm: true, width: '170px' },
   { key: 'actions', label: '', align: 'right' as const, width: '96px' },
 ];
-const columns = computed(() => (canWrite.value ? COLUMNS : COLUMNS.filter((c) => c.key !== 'actions')));
+const columns = computed(() =>
+  COLUMNS.filter((c) => (c.key !== 'actions' || canWrite.value) && (c.key !== 'segment' || segLookup.available)),
+);
 const asEntry = (r: unknown) => r as IpNameEntry;
 const typeTone: Record<string, string> = { 筆電: 'info', 桌機: 'primary', 伺服器: 'warning', 印表機: 'neutral', 網路設備: 'success', 其他: 'neutral' };
 
@@ -236,6 +241,10 @@ const who = (e: IpNameEntry) => [e.name, e.department, [e.device, e.deviceType].
         :empty-description="q ? '換個關鍵字試試' : canWrite ? '可以單筆新增,或下載範本填好後匯入' : ''"
         @update:page="(p) => load(p)"
       >
+        <template #cell-segment="{ row }">
+          <GBadge v-if="segLookup.segmentOf(asEntry(row).ip)" tone="info">{{ segLookup.segmentOf(asEntry(row).ip)!.label }}</GBadge>
+          <span v-else class="faint">—</span>
+        </template>
         <template #cell-name="{ row }">
           <span>{{ asEntry(row).name || '—' }}</span>
         </template>

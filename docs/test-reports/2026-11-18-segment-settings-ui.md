@@ -6,7 +6,7 @@
 
 | 項目 | 內容 |
 | --- | --- |
-| 分支 / 基底 Commit | `feature/segment-settings-ui`(基於 `origin/develop` `c89a517`,含已合併之 MR !131 `feature/segment-pairing-logic`) |
+| 分支 / 基底 Commit | `feature/segment-settings-ui` (`b19d596`,基於 `origin/develop` `c89a517`,含已合併之 MR !131 `feature/segment-pairing-logic`) |
 | 部署區 / 模式 | 本機開發與單元測試環境(`dev`,支援 `?mock=1` 記憶體假後端 `segmentsMock`) |
 | 測試框架 | Vitest 5.0.2(`happy-dom`)+ `@vue/test-utils` 2.5.1 + Vite 8.3.1 + `vue-tsc` |
 | 執行指令 | `cd frontend && npm run typecheck && npm test && npm run build` |

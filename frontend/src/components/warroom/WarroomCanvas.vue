@@ -708,8 +708,9 @@ function fmtSessionMax(maxSess: number): string {
 
 function drawCore(ctx: CanvasRenderingContext2D, ts: number) {
   const t = ts / 1000;
-  const dpCpu = props.snapshot?.metrics?.cpu?.dataplane;
-  const targetLoad = dpCpu != null ? Math.max(0.05, Math.min(1, dpCpu / 100)) : 0.45;
+  // 中央顯示管理平面 CPU(需求方 2026-11-18;右側抽屜同時列管理 / 資料平面)
+  const mgmtCpu = props.snapshot?.metrics?.cpu?.mgmt;
+  const targetLoad = mgmtCpu != null ? Math.max(0.05, Math.min(1, mgmtCpu / 100)) : 0.45;
   dLoad += (targetLoad - dLoad) * 0.08;
 
   const lc = ratioRgb(dLoad * 0.7).join(',');
@@ -823,10 +824,10 @@ function drawCore(ctx: CanvasRenderingContext2D, ts: number) {
   tc.fillText('PA-560', cx, cy + hr * 0.22);
   tc.font = `bold ${fs(20)}px "Segoe UI", sans-serif`;
   tc.fillStyle = `rgb(${lc})`;
-  tc.fillText(dpCpu != null ? `${Math.round(dpCpu)}%` : '—', cx, cy + hr * 0.55);
+  tc.fillText(mgmtCpu != null ? `${Math.round(mgmtCpu)}%` : '—', cx, cy + hr * 0.55);
   tc.font = `${fs(10)}px "Segoe UI", sans-serif`;
   tc.fillStyle = '#6f86a8';
-  tc.fillText('DATAPLANE', cx, cy + hr * 0.72);
+  tc.fillText('MGMT CPU', cx, cy + hr * 0.72);
 
   // 核心額外特效與儀表弧(使用 props.gauge，不寫死)
   const rawBps = props.snapshot?.metrics?.throughput?.bps ?? 0;

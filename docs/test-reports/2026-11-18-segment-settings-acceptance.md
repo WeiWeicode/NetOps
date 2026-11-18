@@ -34,7 +34,7 @@
 
 | # | 操作 | 預期 | 結果 |
 | --- | --- | --- | --- |
-| 2 | 選單:網通設定 → 網段設定,順序 網段設定 → IP 對照表 → 知識庫 | 順序正確;載入顯示來源(例如「範例」) | ❌ 見 §5 問題 1:群組名仍是「資訊網通管理設定」、順序為 網段設定 → 知識庫 → IP 對照表(P2 未生效)。頁面本身可載入,顯示「正式設定 · v1」 |
+| 2 | 選單:網通設定 → 網段設定,順序 網段設定 → IP 對照表 → 知識庫 | 順序正確;載入顯示來源(例如「範例」) | ⚠️ 偏離規劃但需求方接受(§5 問題 1):群組名仍是「資訊網通管理設定」、順序為 網段設定 → 知識庫 → IP 對照表(P2 未生效)。頁面本身可載入,顯示「正式設定 · v1」 |
 | 3 | 新增網段「ZZ測試-A」(類型 VLAN、CIDR `10.250.1.0/24`)、修改名稱、刪除 | 清單即時更新;未按儲存前不影響戰情室 | ✅ 新增、改名、刪除(刪除 `seg-1`、`ZZ測試-B2` 後存成 v4)都正常;刪除無確認對話框(直接移除草稿,未儲存前可「重新載入」放棄) |
 | 4 | 拖曳排序 | 順序改變,儲存後戰情室節點順序跟著變 | ✅ 以「上移 / 下移」按鈕驗證:ZZ測試-B2 上移後排到 seg-1 前。滑鼠拖曳本次未用腳本模擬,未驗 |
 | 5 | 儀表滿格值(吞吐量、連線數)改值 | 可輸入、非數字 / 負值被擋 | ✅ 吞吐量輸入 `-5`、`abc` 顯示「吞吐量滿格值必須是正數」且儲存鈕停用;還原後錯誤消失 |
@@ -42,7 +42,7 @@
 | 7 | 流量預覽(按預覽) | 顯示近 5 分鐘各網段連線數與「未分類內部 IP Top 20」;不寫入設定 | ✅ 顯示各網段連線數(辦公 4,946、伺服器區 24,194、廠區 0、無線 496、DMZ 2,665、未分類 17,014)與 Top 20;提示「只讀到最近 122 秒(20,000 筆),數字為推估」。A 的設備名稱欄全為「—」(測試區 IP 對照表無對應資料)與「加入某網段 / 依此 IP 建 /24」按鈕都有 |
 | 8 | 儲存 → 開戰情室 | 約 5 秒內套用;`segmentsSource` 由 example 變 file,「範例網段」提示消失 | ✅ 儲存後 v1→v2;戰情室 API `segmentsSource` = `file`(範例提示條件消失,畫面提示未逐一目視) |
 | 9 | **版本衝突**:開兩個分頁 A、B 都載入;A 改名並儲存;B 再改並儲存 | B 被拒(409 `NETOPS_SEGMENTS_VERSION_CONFLICT`),提示重新載入;重新載入後看到 A 的內容 | ✅ 兩分頁同載 v2;A 存成 v3;B 儲存被拒,顯示「版本衝突:伺服器目前已是版本 3」並提供「重新載入」/「保留草稿重套」。(以內建瀏覽器腳本改欄位;直接 PUT 因 CSRF 被擋 403 `CSRF_INVALID`,屬預期) |
-| 10 | 匯出 JSON → 刪一個網段並儲存 → 匯入剛才的 JSON → 儲存 | 匯出格式與原設定檔相同;匯入後清單回復;壞 JSON 有明確錯誤 | ☐ |
+| 10 | 匯出 JSON → 刪一個網段並儲存 → 匯入剛才的 JSON → 儲存 | 匯出格式與原設定檔相同;匯入後清單回復;壞 JSON 有明確錯誤 | ✅ 需求方實測匯出 / 匯入成功(測試區設定因此已存到 v5,內容為需求方匯入的版本) |
 
 ### 3.3 搭配 A–D(SG-4)
 
@@ -57,15 +57,15 @@
 
 | # | 操作 | 預期 | 結果 |
 | --- | --- | --- | --- |
-| 15 | viewer 登入看選單 | 看不到「網段設定」(`netops.segment-page.read` 只給 netops-admin) | ☐ |
-| 16 | viewer 在瀏覽器 Console 執行 `fetch('/api/netops/ip-name-lookups',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ips:['10.0.0.1']})}).then(r=>r.status)`(請依 `docs/API.md` 實際請求格式調整) | 回 **403** | ☐ |
-| 17 | viewer 滑過戰情室網段節點 | 提示**只有 IP**,無設備名稱 | ☐ |
+| 15 | viewer 登入看選單 | 看不到「網段設定」(`netops.segment-page.read` 只給 netops-admin) | ✅ viewer(V112001)側欄只有 防火牆 / AD / 知識庫 等,**沒有「網段設定」,也沒有「IP 對照表」** |
+| 16 | viewer 在瀏覽器 Console 執行 `fetch('/api/netops/ip-name-lookups',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ips:['10.0.0.1']})}).then(r=>r.status)`(請依 `docs/API.md` 實際請求格式調整) | 回 **403** | ✅ viewer 帶正確 CSRF 呼叫 `POST /ip-name-lookups` → **403 `PERMISSION_DENIED`**;`GET /warroom-segments`、`POST /warroom-segment-previews`、`GET /ip-names` 同為 403(第一次呼叫的 403 是 CSRF 缺 token,已排除) |
+| 17 | viewer 滑過戰情室網段節點 | 提示**只有 IP**,無設備名稱 | ✅ viewer 滑過「伺服器區」節點:Top 內部 IP 只有 IP,沒有設備名稱 |
 
 ### 3.5 Q10:戰情室不含 `names`
 
 | # | 操作 | 預期 | 結果 |
 | --- | --- | --- | --- |
-| 18 | 瀏覽器 F12 Network 看 `/api/netops/pa-live/warroom`、`/api/netops/pa-live/risk` 回應 | 回應 JSON 沒有 `names` 欄位(程式對照見 §4.2) | ✅ 以 netops-admin 實測:`/pa-live/warroom`(200)、`/pa-live/risk`(200)回應皆無 `names`。(viewer 未測) |
+| 18 | 瀏覽器 F12 Network 看 `/api/netops/pa-live/warroom`、`/api/netops/pa-live/risk` 回應 | 回應 JSON 沒有 `names` 欄位(程式對照見 §4.2) | ✅ netops-admin 與 viewer 都測:`/pa-live/warroom`、`/pa-live/risk` 回應無 `names` |
 | 19 | 即時監控 Log 表(stream) | 維持顯示姓名(有 `netops.ip-name.read` 的帳號) | ✅ Log 表 10.10.130.3 欄顯示「伺服器網段 (機房 · 伺服器網段(伺服器))」姓名 / 設備名稱 |
 
 ### 3.6 備份(主機唯讀查證,見 §4)
@@ -97,7 +97,8 @@
 
 | # | 現象與重現步驟 | 回應 / 截圖 | 推測原因與檔案 | 歸屬(Gemini 畫面 / Claude 邏輯) |
 | --- | --- | --- | --- | --- |
-| 1 | 左側選單群組顯示「資訊網通管理設定」,不是「網通設定」;子項順序為 網段設定 → 知識庫 → IP 對照表,與規劃(網段設定 10 → IP 對照表 20 → 知識庫 30)不符 | 截圖:側欄 | `deploy/gateway-rbac.yaml` 已是「網通設定」、sort 10/20/30,但 Gateway 選單資料庫是在 GigaItApp「選單管理」維護的,尚未依 P2 改(非程式問題) | 設定(需求方 GigaItApp 操作),非 Claude / Gemini |
+| 1 | **需求方 2026-11-18 決定:群組名就維持現狀,不改**(順序 網段設定 → 知識庫 → IP 對照表亦照現況,同為 GigaItApp 設定,不算失敗)。現象:左側選單群組顯示「資訊網通管理設定」,不是「網通設定」;子項順序為 網段設定 → 知識庫 → IP 對照表,與規劃(網段設定 10 → IP 對照表 20 → 知識庫 30)不符 | 截圖:側欄 | `deploy/gateway-rbac.yaml` 已是「網通設定」、sort 10/20/30,但 Gateway 選單資料庫是在 GigaItApp「選單管理」維護的,尚未依 P2 改(非程式問題) | 設定(需求方 GigaItApp 操作),非 Claude / Gemini |
+| 3 | **觀察(非本次變更,需求方確認是否接受)**:viewer(只有即時監控權限、無 `netops.ip-name.read`)的 Log 表(stream)仍顯示姓名 / 設備名稱(例如 10.10.130.3「伺服器網段 (機房 · …)」)。`live-routes.ts:393` 的 stream 名稱「沿用串流的權限」,即 `netops.pa-realtime.read` 就看得到。Q10 決定「Log 表維持顯示姓名」,此為已知行為;若個資只要給 ip-name.read,需另案調整 | viewer 即時監控 Log 表 | `backend/src/modules/pa-live/live-routes.ts:393`(`app.ipNames.namesFor`) | Claude 邏輯(需求方決定) |
 | 2 | 備註:網段設定頁載入時已是「正式設定 · v1」(09:41:28 S112009 儲存,主機有 `warroom.json`,尚無 `history/`:首次儲存無舊檔,符合預期);但第一次儲存前的「範例」來源提示畫面未能觀察到 | — | 需求方先前已按過儲存 | 非問題,僅 #8 的「範例網段提示消失」需改以戰情室現況確認 |
 
 ## 6. 收尾

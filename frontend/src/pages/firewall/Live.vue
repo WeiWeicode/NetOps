@@ -53,6 +53,12 @@ onBeforeUnmount(() => panelObs?.disconnect());
 /** Log 表佔用的高度:Canvas、高風險框、事件欄的底邊跟著它(收摺時 Canvas 往下放大);58 = 收摺高 46 + 底距 12,見 TrafficLogTable .mini */
 const mainStyle = computed(() => ({ '--wr-log-h': logOpen.value ? '242px' : '58px' }));
 const statusDrawerOpen = ref(false);
+/** 進出方向篩選(WD-2;狀態在 useWarroom,記在 localStorage) */
+const DIRECTION_OPTIONS = [
+  { label: '全部', value: 'all' },
+  { label: '↘ 連入', value: 'in' },
+  { label: '↗ 連出', value: 'out' },
+];
 /** 即時排行抽屜:開啟時才輪詢(useLiveTop) */
 const rankingOpen = ref(false);
 const rk = useLiveTop({ active: rankingOpen, mock: w.mock });
@@ -128,6 +134,8 @@ const kpiCpu = computed(() => {
         ⚙ 系統狀態
       </button>
 
+      <GSegmented v-model="w.direction.value" class="wr-dir" size="sm" :options="DIRECTION_OPTIONS" aria-label="進出方向篩選" />
+
       <div class="kpis">
         <div class="kpi">
           <b id="kBps">{{ kpiBps }}</b>
@@ -177,6 +185,7 @@ const kpiCpu = computed(() => {
         :snapshot="w.snapshot.value"
         :gauge="w.gauge.value"
         :focus="w.focus.value"
+        :direction="w.direction.value"
         :legend-open="legendOpen"
         :feed-open="feedOpen"
         :top-reserve="aiReserve"
@@ -330,6 +339,9 @@ const kpiCpu = computed(() => {
   cursor: pointer;
   white-space: nowrap;
   transition: border-color 0.2s;
+}
+.wr-dir {
+  flex: none;
 }
 .wr-sys-btn:hover {
   border-color: var(--acc);

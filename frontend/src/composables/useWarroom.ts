@@ -147,16 +147,113 @@ export function particleRate(link: WarroomLink, totalConn: number, opts: { scale
   return Math.min(maxPerLink, capped);
 }
 
+// ---------- 進出方向(WD-2,docs/WARROOM-DIRECTION-POLICY-PLAN.md §2) ----------
+
+/**
+ * 方向篩選:all 全部 / in 連入 / out 連出。
+ * 「連入」= 總數 − 連出(計畫 §2.2),所以內部互連與外部對外部的轉送歸在連入這一邊(粒子同樣左 → 右)。
+ */
+export type Direction = 'all' | 'in' | 'out';
+export const DIRECTIONS: readonly Direction[] = ['all', 'in', 'out'];
+/** 偏好設定(只存方向,不存資料;AGENT.md §7.1 偏好可存 localStorage) */
+export const DIRECTION_STORAGE_KEY = 'wr-direction';
+
+export function readDirection(): Direction {
+  try {
+    const v = localStorage.getItem(DIRECTION_STORAGE_KEY);
+    return (DIRECTIONS as readonly string[]).includes(v ?? '') ? (v as Direction) : 'all';
+  } catch {
+    return 'all';
+  }
+}
+
+/** 粒子的方向與顏色機率:out = 連出的機率;其餘為「該方向內」的阻擋 / 威脅機率 */
+export interface DirectionProbs {
+  out: number;
+  inDeny: number;
+  outDeny: number;
+  inThreat: number;
+  outThreat: number;
+}
+
+/** 連出部分夾在 0 ~ 總數之間(欄位缺少 = 舊版後端 → 全部連入) */
+const outPart = (v: number | undefined, total: number) => Math.min(Math.max(0, v ?? 0), Math.max(0, total));
+const frac = (a: number, b: number) => (b > 0 ? Math.min(1, Math.max(0, a / b)) : 0);
+const r3 = (v: number) => Math.round(v * 1000) / 1000;
+
+export function linkDirectionProbs(l: WarroomLink): DirectionProbs {
+  const outConn = outPart(l.outConn, l.conn);
+  const outDeny = outPart(l.outDeny, l.deny);
+  const outThreat = outPart(l.outThreat, l.threat);
+  const inConn = l.conn - outConn;
+  return {
+    out: frac(outConn, l.conn),
+    inDeny: frac(l.deny - outDeny, inConn),
+    outDeny: frac(outDeny, outConn),
+    inThreat: frac(l.threat - outThreat, inConn),
+    outThreat: frac(outThreat, outConn),
+  };
+}
+
+/** 只留某個方向的速率(all 原樣);out* 跟著改成該方向的值,粒子方向機率因此是 0 或 1 */
+export function linkOfDirection(l: WarroomLink, dir: Direction): WarroomLink {
+  if (dir === 'all') return l;
+  const outConn = outPart(l.outConn, l.conn);
+  const outDeny = outPart(l.outDeny, l.deny);
+  const outThreat = outPart(l.outThreat, l.threat);
+  if (dir === 'out') return { ...l, conn: outConn, deny: outDeny, allow: r3(Math.max(0, outConn - outDeny)), threat: outThreat, outConn, outDeny, outThreat };
+  const conn = r3(l.conn - outConn);
+  const deny = r3(l.deny - outDeny);
+  return { ...l, conn, deny, allow: r3(Math.max(0, conn - deny)), threat: r3(l.threat - outThreat), outConn: 0, outDeny: 0, outThreat: 0 };
+}
+
+/**
+ * 依方向篩選整份 WR-1(不重新呼叫 API):
+ *   - links:只留該方向的速率,兩者皆 0 的連線拿掉
+ *   - 節點 conn:in = conn − outConn、out = outConn;deny / threat 依該節點連線速率的方向比例換算、bytes 依 conn 比例換算
+ *     (後端只給節點的 outConn,這三個是推估)
+ *   - 節點排序:國家依該方向的 conn + threat 重排(攻擊 IP、其他、內部互連維持原位置);網段維持設定檔順序
+ * 節點不刪除(版面位置穩定),該方向沒有流量的節點由 buildNodes 標 dimmed。
+ */
+export function directionView(w: Warroom | null, dir: Direction): Warroom | null {
+  if (!w || dir === 'all') return w;
+  const links = w.links.map((l) => linkOfDirection(l, dir)).filter((l) => l.conn > 0 || l.threat > 0);
+  const pick = <T extends WarroomSource | WarroomSegment>(n: T, match: (l: WarroomLink) => boolean): T => {
+    const outConn = outPart(n.outConn, n.conn);
+    const conn = dir === 'out' ? outConn : n.conn - outConn;
+    const all = sumRates(w.links, match);
+    const d = sumRates(links, match);
+    const next = { ...n, conn, threat: Math.round(n.threat * frac(d.threat, all.threat)), outConn: dir === 'out' ? conn : 0 };
+    if ('deny' in n) (next as WarroomSource).deny = Math.min(conn, Math.round(n.deny * frac(d.deny, all.deny)));
+    if ('bytes' in n) (next as WarroomSegment).bytes = Math.round(n.bytes * frac(conn, n.conn));
+    return next;
+  };
+  const sources = w.sources.map((s) => pick(s, (l) => l.source === s.id));
+  // 國家依該方向重排,放回原本國家所在的位置
+  const slots = sources.flatMap((s, i) => (s.kind === 'country' ? [i] : []));
+  const countries = slots.map((i) => sources[i]!).sort((a, b) => b.conn + b.threat - (a.conn + a.threat) || a.id.localeCompare(b.id));
+  slots.forEach((i, k) => (sources[i] = countries[k]!));
+  return { ...w, sources, segments: w.segments.map((g) => pick(g, (l) => l.segment === g.id)), links };
+}
+
 export interface SourceNode extends WarroomSource {
   denyRatio: number;
   tone: Tone;
   /** 0~1,依 conn 相對最大值(畫面決定實際半徑) */
   size: number;
   rates: Rates;
+  /** 期間內連入 / 連出筆數(節點下方「入 x / 出 y」;攻擊 IP 只有連入) */
+  inConn: number;
+  outConn: number;
+  /** 方向篩選後這個節點沒有流量(畫面淡化,例如選「連出」時的攻擊 IP) */
+  dimmed: boolean;
 }
 export interface SegmentNode extends WarroomSegment {
   size: number;
   rates: Rates;
+  inConn: number;
+  outConn: number;
+  dimmed: boolean;
 }
 export interface LinkView extends WarroomLink {
   denyRatio: number;
@@ -165,14 +262,19 @@ export interface LinkView extends WarroomLink {
   dimmed: boolean;
 }
 
-export function buildNodes(w: Warroom | null, focus: Focus | null): { sources: SourceNode[]; segments: SegmentNode[]; links: LinkView[] } {
+/** dir:資料經 directionView 篩選時的方向(只影響 dimmed) */
+export function buildNodes(w: Warroom | null, focus: Focus | null, dir: Direction = 'all'): { sources: SourceNode[]; segments: SegmentNode[]; links: LinkView[] } {
   if (!w) return { sources: [], segments: [], links: [] };
+  const io = (n: { conn: number; threat: number; outConn?: number }) => {
+    const outConn = outPart(n.outConn, n.conn);
+    return { inConn: n.conn - outConn, outConn, dimmed: dir !== 'all' && n.conn + n.threat <= 0 };
+  };
   const maxS = Math.max(1, ...w.sources.map((s) => s.conn));
   const maxG = Math.max(1, ...w.segments.map((s) => s.conn));
   const ratio = (deny: number, conn: number) => (conn > 0 ? deny / conn : 0);
   return {
-    sources: w.sources.map((s) => ({ ...s, denyRatio: ratio(s.deny, s.conn), tone: denyTone(ratio(s.deny, s.conn)), size: s.conn / maxS, rates: sumRates(w.links, (l) => l.source === s.id) })),
-    segments: w.segments.map((g) => ({ ...g, size: g.conn / maxG, rates: sumRates(w.links, (l) => l.segment === g.id) })),
+    sources: w.sources.map((s) => ({ ...s, denyRatio: ratio(s.deny, s.conn), tone: denyTone(ratio(s.deny, s.conn)), size: s.conn / maxS, rates: sumRates(w.links, (l) => l.source === s.id), ...io(s) })),
+    segments: w.segments.map((g) => ({ ...g, size: g.conn / maxG, rates: sumRates(w.links, (l) => l.segment === g.id), ...io(g) })),
     links: w.links.map((l) => ({
       ...l,
       denyRatio: ratio(l.deny, l.conn),
@@ -224,6 +326,15 @@ export function useWarroom(options: UseWarroomOptions = {}) {
 
   const filter = ref<LogFilterKind>('all');
   const focus = ref<Focus | null>(null);
+  /** 進出方向篩選(WD-2):只影響畫面(粒子、節點數字與排序),不重新呼叫 API;記在 localStorage */
+  const direction = ref<Direction>(readDirection());
+  watch(direction, (d) => {
+    try {
+      localStorage.setItem(DIRECTION_STORAGE_KEY, d);
+    } catch {
+      /* 無法寫入時只影響重整後的記憶 */
+    }
+  });
   const paused = ref(false);
   /** 暫停當下的畫面 log(串流照收,恢復後顯示最新) */
   const frozen = shallowRef<LiveLog[] | null>(null);
@@ -340,7 +451,7 @@ export function useWarroom(options: UseWarroomOptions = {}) {
 
   watch(paused, (p) => (frozen.value = p ? allLogs.value : null));
 
-  const view = computed(() => buildNodes(data.value, focus.value));
+  const view = computed(() => buildNodes(directionView(data.value, direction.value), focus.value, direction.value));
   const sources = computed(() => data.value?.sources ?? []);
   const logs = computed(() => filterLogs(frozen.value ?? shownLogs.value, filter.value, focus.value, sources.value));
   /** 右欄即時事件:不受篩選、暫停影響 */
@@ -413,6 +524,7 @@ export function useWarroom(options: UseWarroomOptions = {}) {
     logs,
     filter,
     focus,
+    direction,
     paused,
     toggleFocus,
     setControl,

@@ -257,6 +257,8 @@ export interface WarroomSource {
   conn: number;
   deny: number;
   threat: number;
+  /** conn 裡「連出」(內部 → 外部)的筆數(WD-1,WARROOM-DIRECTION-POLICY-PLAN §2.2);連入 = conn − outConn */
+  outConn: number;
   topDst: TopItem[];
   topApp: TopItem[];
 }
@@ -269,6 +271,8 @@ export interface WarroomSegment {
   conn: number;
   bytes: number;
   threat: number;
+  /** conn 裡「連出」的筆數(WD-1) */
+  outConn: number;
   /** 連線數最多的內部 IP 前 5(SG-4 D:戰情室提示;名稱另經 /ip-name-lookups 取得,只給 netops.ip-name.read) */
   topIps: TopItem[];
 }
@@ -281,6 +285,10 @@ export interface WarroomLink {
   allow: number;
   deny: number;
   threat: number;
+  /** conn / deny / threat 裡「連出」(內部 → 外部)的每秒速率(WD-1);連入 = 總數 − 連出。內部互連、轉送不算連出 */
+  outConn: number;
+  outDeny: number;
+  outThreat: number;
 }
 
 export interface AggregateOptions {
@@ -298,13 +306,15 @@ export const DEFAULT_AGG: AggregateOptions = { topCountries: 8, topIps: 3, ipDen
 
 interface Acc {
   conn: number;
+  /** 連出的 conn */
+  out: number;
   deny: number;
   threat: number;
   bytes: number;
   dst: Map<string, number>;
   app: Map<string, number>;
 }
-const newAcc = (): Acc => ({ conn: 0, deny: 0, threat: 0, bytes: 0, dst: new Map(), app: new Map() });
+const newAcc = (): Acc => ({ conn: 0, out: 0, deny: 0, threat: 0, bytes: 0, dst: new Map(), app: new Map() });
 const inc = (m: Map<string, number>, k: unknown, by = 1) => {
   if (typeof k === 'string' && k) m.set(k, (m.get(k) ?? 0) + by);
 };
@@ -336,7 +346,8 @@ export function aggregateWarroom(
   const byIp = new Map<string, Acc & { country: string | null }>();
   const bySeg = new Map<string, Acc>();
   // 原始配對:來源先以「國家 / lan / 未知」記,最後依 Top IP 拆出
-  type Pair = { conn: number; allow: number; deny: number; threat: number };
+  // out*:連出的部分(WD-1);連出的 pair 來源一律是國家(ip 為空),不會拆成 Top 攻擊 IP
+  type Pair = { conn: number; allow: number; deny: number; threat: number; outConn: number; outDeny: number; outThreat: number };
   const pairs = new Map<string, Pair>(); // key: `${ipOrNull}|${countryKey}|${segment}`
   const LAN = 'lan';
   const UNKNOWN = '??';
@@ -349,12 +360,15 @@ export function aggregateWarroom(
     const seg = bySeg.get(c.segment) ?? bySeg.set(c.segment, newAcc()).get(c.segment)!;
     const ipAcc = c.externalIp && c.inbound ? (byIp.get(c.externalIp) ?? byIp.set(c.externalIp, { ...newAcc(), country: c.country }).get(c.externalIp)!) : null;
     const pk = JSON.stringify([c.inbound ? (c.externalIp ?? '') : '', countryKey, c.segment]);
-    const pair = pairs.get(pk) ?? pairs.set(pk, { conn: 0, allow: 0, deny: 0, threat: 0 }).get(pk)!;
+    const pair = pairs.get(pk) ?? pairs.set(pk, { conn: 0, allow: 0, deny: 0, threat: 0, outConn: 0, outDeny: 0, outThreat: 0 }).get(pk)!;
+    // 連出:來源是內部、目的是外部(內部互連、外部對外部的轉送都不算)
+    const outbound = !c.inbound && c.externalIp !== null;
     if (isThreat) {
       country.threat++;
       seg.threat++;
       if (ipAcc) ipAcc.threat++;
       pair.threat++;
+      if (outbound) pair.outThreat++;
       return;
     }
     const deny = isDenyAction(d.action);
@@ -362,6 +376,7 @@ export function aggregateWarroom(
     for (const a of [country, seg, ipAcc]) {
       if (!a) continue;
       a.conn++;
+      if (outbound) a.out++;
       if (deny) a.deny++;
       a.bytes += bytes;
       inc(a.dst, c.internalIp);
@@ -370,6 +385,10 @@ export function aggregateWarroom(
     pair.conn++;
     if (deny) pair.deny++;
     else pair.allow++;
+    if (outbound) {
+      pair.outConn++;
+      if (deny) pair.outDeny++;
+    }
   };
   for (const d of traffic) touch(d, false);
   for (const d of threats) touch(d, true);
@@ -383,6 +402,7 @@ export function aggregateWarroom(
   // 從國家扣掉拆出的 IP
   const sub = (from: Acc, a: Acc) => {
     from.conn -= a.conn;
+    from.out -= a.out;
     from.deny -= a.deny;
     from.threat -= a.threat;
     from.bytes -= a.bytes;
@@ -406,6 +426,7 @@ export function aggregateWarroom(
     conn: S(a.conn),
     deny: S(a.deny),
     threat: T(a.threat),
+    outConn: S(a.out),
     topDst: topOf(a.dst, 3, scale).filter((t) => t.count > 0),
     topApp: topOf(a.app, 3, scale).filter((t) => t.count > 0),
   });
@@ -416,6 +437,7 @@ export function aggregateWarroom(
   for (const [k, a] of byCountry) {
     if (k === LAN || shownCountries.has(k)) continue;
     other.conn += a.conn;
+    other.out += a.out;
     other.deny += a.deny;
     other.threat += a.threat;
     for (const [x, v] of a.dst) inc(other.dst, x, v);
@@ -427,11 +449,11 @@ export function aggregateWarroom(
 
   const segments: WarroomSegment[] = cfg.segments.map((s) => {
     const a = bySeg.get(s.id) ?? newAcc();
-    return { id: s.id, kind: s.kind, label: s.label, icon: s.icon, conn: S(a.conn), bytes: S(a.bytes), threat: T(a.threat), topIps: topOf(a.dst, 5, scale).filter((t) => t.count > 0) };
+    return { id: s.id, kind: s.kind, label: s.label, icon: s.icon, conn: S(a.conn), bytes: S(a.bytes), threat: T(a.threat), outConn: S(a.out), topIps: topOf(a.dst, 5, scale).filter((t) => t.count > 0) };
   });
   const um = bySeg.get(UNMATCHED_SEGMENT);
   if (um && um.conn + um.threat > 0)
-    segments.push({ id: UNMATCHED_SEGMENT, kind: 'other', label: '未分類', icon: 'network', conn: S(um.conn), bytes: S(um.bytes), threat: T(um.threat), topIps: topOf(um.dst, 5, scale).filter((t) => t.count > 0) });
+    segments.push({ id: UNMATCHED_SEGMENT, kind: 'other', label: '未分類', icon: 'network', conn: S(um.conn), bytes: S(um.bytes), threat: T(um.threat), outConn: S(um.out), topIps: topOf(um.dst, 5, scale).filter((t) => t.count > 0) });
 
   const linkMap = new Map<string, WarroomLink>();
   const sec = Math.max(1, windowSec);
@@ -439,11 +461,14 @@ export function aggregateWarroom(
     const [ip, countryKey, segment] = JSON.parse(pk) as [string, string, string];
     const source = sourceIdOf(ip, countryKey);
     const key = `${source}|${segment}`;
-    const l = linkMap.get(key) ?? linkMap.set(key, { source, segment, conn: 0, allow: 0, deny: 0, threat: 0 }).get(key)!;
+    const l = linkMap.get(key) ?? linkMap.set(key, { source, segment, conn: 0, allow: 0, deny: 0, threat: 0, outConn: 0, outDeny: 0, outThreat: 0 }).get(key)!;
     l.conn += p.conn;
     l.allow += p.allow;
     l.deny += p.deny;
     l.threat += p.threat;
+    l.outConn += p.outConn;
+    l.outDeny += p.outDeny;
+    l.outThreat += p.outThreat;
   }
   const r3 = (v: number) => Math.round(v * 1000) / 1000;
   const links = [...linkMap.values()]
@@ -454,6 +479,9 @@ export function aggregateWarroom(
       allow: r3((l.allow * scale) / sec),
       deny: r3((l.deny * scale) / sec),
       threat: r3((l.threat * threatScale) / sec),
+      outConn: r3((l.outConn * scale) / sec),
+      outDeny: r3((l.outDeny * scale) / sec),
+      outThreat: r3((l.outThreat * threatScale) / sec),
     }))
     .sort((a, b) => b.conn - a.conn || a.source.localeCompare(b.source) || a.segment.localeCompare(b.segment));
 

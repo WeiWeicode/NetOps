@@ -45,20 +45,22 @@ interface MockSrc {
   v: number;
   /** 阻擋比例 */
   d: number;
+  /** 連出比例(WD;攻擊 IP、內部互連為 0) */
+  o: number;
   ipPrefix: string;
 }
 
 const SOURCES: MockSrc[] = [
-  { id: 'cc:TW', country: 'TW', kind: 'country', label: '台灣', v: 9, d: 0.02, ipPrefix: '114.32' },
-  { id: 'cc:US', country: 'US', kind: 'country', label: '美國', v: 5.2, d: 0.06, ipPrefix: '52.14' },
-  { id: 'cc:JP', country: 'JP', kind: 'country', label: '日本', v: 3, d: 0.03, ipPrefix: '126.77' },
-  { id: 'cc:CN', country: 'CN', kind: 'country', label: '中國', v: 2.6, d: 0.55, ipPrefix: '223.104' },
-  { id: 'cc:RU', country: 'RU', kind: 'country', label: '俄羅斯', v: 1.4, d: 0.8, ipPrefix: '91.240' },
-  { id: 'cc:NL', country: 'NL', kind: 'country', label: '荷蘭', v: 1.1, d: 0.35, ipPrefix: '89.248' },
-  { id: 'ip:45.155.205.12', country: 'NL', kind: 'ip', label: '45.155.205.12', v: 0.9, d: 0.97, ipPrefix: '' },
-  { id: 'ip:185.220.101.7', country: 'DE', kind: 'ip', label: '185.220.101.7', v: 0.7, d: 0.95, ipPrefix: '' },
-  { id: 'other', country: null, kind: 'other', label: '其他', v: 1.8, d: 0.2, ipPrefix: '102.88' },
-  { id: 'lan', country: null, kind: 'other', label: '內部互連', v: 1.5, d: 0.01, ipPrefix: '10.10.112' },
+  { id: 'cc:TW', country: 'TW', kind: 'country', label: '台灣', v: 9, d: 0.02, o: 0.6, ipPrefix: '114.32' },
+  { id: 'cc:US', country: 'US', kind: 'country', label: '美國', v: 5.2, d: 0.06, o: 0.55, ipPrefix: '52.14' },
+  { id: 'cc:JP', country: 'JP', kind: 'country', label: '日本', v: 3, d: 0.03, o: 0.5, ipPrefix: '126.77' },
+  { id: 'cc:CN', country: 'CN', kind: 'country', label: '中國', v: 2.6, d: 0.55, o: 0.15, ipPrefix: '223.104' },
+  { id: 'cc:RU', country: 'RU', kind: 'country', label: '俄羅斯', v: 1.4, d: 0.8, o: 0.05, ipPrefix: '91.240' },
+  { id: 'cc:NL', country: 'NL', kind: 'country', label: '荷蘭', v: 1.1, d: 0.35, o: 0.2, ipPrefix: '89.248' },
+  { id: 'ip:45.155.205.12', country: 'NL', kind: 'ip', label: '45.155.205.12', v: 0.9, d: 0.97, o: 0, ipPrefix: '' },
+  { id: 'ip:185.220.101.7', country: 'DE', kind: 'ip', label: '185.220.101.7', v: 0.7, d: 0.95, o: 0, ipPrefix: '' },
+  { id: 'other', country: null, kind: 'other', label: '其他', v: 1.8, d: 0.2, o: 0.3, ipPrefix: '102.88' },
+  { id: 'lan', country: null, kind: 'other', label: '內部互連', v: 1.5, d: 0.01, o: 0, ipPrefix: '10.10.112' },
 ];
 
 const SEGMENTS: (Omit<WarroomSegment, 'conn' | 'bytes' | 'threat'> & { w: number; net: string })[] = [
@@ -112,12 +114,15 @@ export function createWarroomMock(rand: () => number = Math.random, opts: { load
     const links = SOURCES.flatMap((s, i) =>
       SEGMENTS.map((g) => {
         const conn = (load[i]! * g.w) / segTotal;
-        const deny = conn * s.d;
+        const outConn = conn * s.o;
+        const outDeny = outConn * Math.min(s.d, 0.1);
+        const deny = (conn - outConn) * s.d + outDeny;
         const threat = (conn - deny) * 0.03;
-        return { source: s.id, segment: g.id, conn, deny, threat, allow: conn - deny - threat };
+        const outThreat = (outConn - outDeny) * 0.03;
+        return { source: s.id, segment: g.id, conn, deny, threat, allow: conn - deny - threat, outConn, outDeny, outThreat };
       }),
     );
-    const sum = (f: (l: (typeof links)[number]) => boolean, k: 'conn' | 'deny' | 'threat') => links.filter(f).reduce((n, l) => n + l[k], 0) * 300;
+    const sum = (f: (l: (typeof links)[number]) => boolean, k: 'conn' | 'deny' | 'threat' | 'outConn') => links.filter(f).reduce((n, l) => n + l[k], 0) * 300;
     return {
       generatedAt: new Date().toISOString(),
       minutes: 5,
@@ -134,6 +139,7 @@ export function createWarroomMock(rand: () => number = Math.random, opts: { load
         conn: Math.round(sum((l) => l.source === s.id, 'conn')),
         deny: Math.round(sum((l) => l.source === s.id, 'deny')),
         threat: Math.round(sum((l) => l.source === s.id, 'threat')),
+        outConn: Math.round(sum((l) => l.source === s.id, 'outConn')),
         topDst: SEGMENTS.slice(0, 2).map((g, k) => ({ key: `${g.net}.${10 + k}`, count: 120 - k * 40 })),
         topApp: [
           { key: 'ssl', count: 300 },
@@ -148,6 +154,7 @@ export function createWarroomMock(rand: () => number = Math.random, opts: { load
         conn: Math.round(sum((l) => l.segment === g.id, 'conn')),
         bytes: Math.round(sum((l) => l.segment === g.id, 'conn') * 12_000),
         threat: Math.round(sum((l) => l.segment === g.id, 'threat')),
+        outConn: Math.round(sum((l) => l.segment === g.id, 'outConn')),
       })),
       links,
       kpis: { denyPerMin: Math.round(links.reduce((n, l) => n + l.deny, 0) * 60), threat5m: Math.round(links.reduce((n, l) => n + l.threat, 0) * 300) },

@@ -4,6 +4,8 @@
  *   - 左側節點:外部來源(國家 / Top 攻擊 IP / 其他 / 內部互連)，線條圖示、旋轉光弧、阻擋比例 > 60% 的紅色脈衝
  *   - 右側節點:內部網段(VLAN / 核心服務六角形 / 未分類)，線條圖示、旋轉光弧
  *   - 連線與粒子:貝茲曲線、粒子數由匯出的 particleRate(link, rates.conn) 決定(畫面上限 400,每秒產生量另有總預算)、拖尾、阻擋火花(bursts)與盾牌閃紅
+ *   - 進出方向(WD-3,WARROOM-DIRECTION-POLICY-PLAN §2.4):連入粒子 左 → 核心 → 右(青綠)、連出粒子 右 → 核心 → 左(藍紫,
+ *     方向機率 linkDirectionProbs);連出被阻擋時在核心右側爆火花;節點下方小字「↘ 入 x · ↗ 出 y」(direction 為 all 時)
  *   - 中央核心:六角盾、分段負載環(DP CPU)、刻度環、雷達掃描、log 類型衛星、擴散波(頻率隨新連線/秒)、二進位環繞資料流、能量電弧
  *   - 儀表弧:吞吐量 / 連線數滿格值使用傳入的 gauge({ throughputMaxBps, sessionMax })，絕不寫死
  *   - 互動:滑過節點顯示明細 tooltip、點擊節點切換聚焦(toggleFocus)、點空白處取消聚焦(toggleFocus(null))
@@ -15,7 +17,9 @@ import type { PaLiveSnapshot } from '@/api/paLive';
 import { fmtBps } from '@/composables/paLive';
 import { useSegmentDeviceNames } from '@/composables/useSegmentPairing';
 import {
+  linkDirectionProbs,
   particleRate,
+  type Direction,
   type Focus,
   type LinkView,
   type Rates,
@@ -33,6 +37,8 @@ const props = defineProps<{
   snapshot: PaLiveSnapshot | null;
   gauge: { throughputMaxBps: number; sessionMax: number };
   focus: Focus | null;
+  /** 進出方向篩選(資料已由 useWarroom 篩選;這裡只決定節點下方是否顯示入 / 出數字,預設 all) */
+  direction?: Direction;
   legendOpen: boolean;
   /** 右側即時事件欄是否展開;收摺時右側節點往右移、Canvas 可用寬度變大(預設展開) */
   feedOpen?: boolean;
@@ -131,6 +137,8 @@ interface Particle {
   sp: number;
   deny: boolean;
   threat: boolean;
+  /** 連出:路徑反向(網段 → ext → 核心 → ent → 來源) */
+  out: boolean;
   seg: 0 | 1 | 2;
   px?: number;
   py?: number;
@@ -148,6 +156,11 @@ interface Ripple {
 
 /** 畫面粒子上限:真實流量下原本 ≈1100 顆、每幀 25ms;粒子是視覺示意,多出的流量由連線粗細表現 */
 const MAX_PARTICLES = 400;
+/** 粒子顏色(WD-3):連入青綠、連出藍紫;阻擋紅、威脅橘兩個方向相同 */
+const IN_RGB = '34,211,166';
+const OUT_RGB = '139,124,255';
+const DENY_RGB = '255,77,94';
+const THREAT_RGB = '245,176,58';
 /**
  * 高解析省效能(需求方 2026-11-17):不跟 devicePixelRatio 放大;畫布實際像素超過約 1080p 面積時
  * 以較低解析度繪製再由 CSS 放大(4K 約 0.55 倍),座標仍以 CSS px 計算。
@@ -576,8 +589,10 @@ function spawnParticles(dtSec: number) {
     const rate = particleRate(l, totalConn) * budgetScale;
     const prob = rate * dtSec;
     if (Math.random() < prob) {
-      const denyProb = l.conn > 0 ? l.deny / l.conn : 0;
-      const threatProb = l.conn > 0 ? l.threat / l.conn : 0;
+      const pr = linkDirectionProbs(l);
+      const out = Math.random() < pr.out;
+      const denyProb = out ? pr.outDeny : pr.inDeny;
+      const threatProb = out ? pr.outThreat : pr.inThreat;
       const r = Math.random();
       const deny = r < denyProb;
       const threat = !deny && r < denyProb + threatProb;
@@ -588,6 +603,7 @@ function spawnParticles(dtSec: number) {
         sp: 0.006 + Math.random() * 0.006,
         deny,
         threat,
+        out,
         seg: 0,
       });
     }
@@ -958,9 +974,12 @@ function drawNode(
   sizeFrac: number,
   conn5m: number,
   now: number,
+  dimmed = false,
+  io: { inConn: number; outConn: number; showOut: boolean } | null = null,
 ) {
   const c = rgb.join(',');
-  const a = props.focus === null || isFocused ? 1 : 0.22;
+  // 方向篩選後沒有流量的節點淡化(例如選「連出」時的攻擊 IP)
+  const a = (props.focus === null || isFocused ? 1 : 0.22) * (dimmed ? 0.3 : 1);
 
   // 阻擋比例高的紅色危險脈衝
   if (isDangerPulse) {
@@ -1018,6 +1037,22 @@ function drawNode(
   tc.font = '10px "Segoe UI", sans-serif';
   tc.fillStyle = `rgba(111,134,168,${a})`;
   tc.fillText(`${fmtShort(conn5m)} conn/5m`, align === 'right' ? tx - bw - 6 : tx + bw + 6, y + 9);
+
+  // 進出數字(WD-3):只在「全部」時顯示;攻擊 IP 只有連入,不顯示出
+  if (io) {
+    tc.font = '10px "Segoe UI", "Microsoft JhengHei", sans-serif';
+    // 依序畫「入 · 出」:左對齊從 tx 往右排;右對齊(右側網段)從 tx 往左排,所以先畫最右邊的「出」
+    const parts: [string, string][] = [[`↘ 入 ${fmtShort(io.inConn)}`, `rgba(${IN_RGB},${0.85 * a})`]];
+    if (io.showOut) parts.push([' · ', `rgba(111,134,168,${a})`], [`↗ 出 ${fmtShort(io.outConn)}`, `rgba(${OUT_RGB},${0.9 * a})`]);
+    if (align === 'right') parts.reverse();
+    let px = tx;
+    for (const [text, color] of parts) {
+      tc.fillStyle = color;
+      tc.fillText(text, px, y + 22);
+      const w = tc.measureText(text).width;
+      px += align === 'right' ? -w : w;
+    }
+  }
 }
 
 function drawBursts(ctx: CanvasRenderingContext2D) {
@@ -1079,14 +1114,14 @@ function renderFrame(ts: number) {
   left.forEach((s, i) => {
     const isFocused = !f || (f.side === 'source' && f.id === s.node.id);
     const w = 1 + s.node.size * 3.5;
-    drawLink(ctx, s, ent(i), toneRgb(s.node.tone).join(','), w, 0.25 * (isFocused ? 1 : 0.12));
+    drawLink(ctx, s, ent(i), toneRgb(s.node.tone).join(','), w, 0.25 * (isFocused ? 1 : 0.12) * (s.node.dimmed ? 0.3 : 1));
   });
 
   // 右側連線(核心出口 → 網段)
   right.forEach((d, j) => {
     const isFocused = !f || (f.side === 'segment' && f.id === d.node.id);
     const w = 1 + d.node.size * 3.5;
-    drawLink(ctx, ext(j), d, '62,168,255', w, 0.25 * (isFocused ? 1 : 0.12));
+    drawLink(ctx, ext(j), d, '62,168,255', w, 0.25 * (isFocused ? 1 : 0.12) * (d.node.dimmed ? 0.3 : 1));
   });
 
   // 粒子產生與移動
@@ -1101,24 +1136,28 @@ function renderFrame(ts: number) {
     let pos: { x: number; y: number };
     let segAlpha = 1;
 
+    // 被阻擋的粒子到不了終點那一端:聚焦終點節點時不顯示(連入看網段、連出看來源)
     const fo =
       !f ||
-      (f.side === 'source' && f.id === srcP.node.id) ||
-      (f.side === 'segment' && f.id === dstP.node.id && !p.deny);
+      (f.side === 'source' && f.id === srcP.node.id && (!p.out || !p.deny)) ||
+      (f.side === 'segment' && f.id === dstP.node.id && (p.out || !p.deny));
 
+    // 連入:來源 → ent → ext → 網段;連出反向:網段 → ext → ent → 來源(bez 的控制點對稱,反向傳入即反向路徑)
+    // 閘口只在用到的分支才算(seg 0 / 2 各算一個,同改版前的配置量)
     if (p.seg === 0) {
-      pos = bez(srcP, ent(p.si), p.t);
+      const g = p.out ? ext(p.di) : ent(p.si);
+      pos = bez(p.out ? dstP : srcP, g, p.t);
       if (p.t >= 1) {
         if (p.deny) {
-          burst(ent(p.si));
+          burst(g);
           return false;
         }
         p.seg = 1;
         p.t = 0;
       }
     } else if (p.seg === 1) {
-      const a1 = ent(p.si);
-      const b1 = ext(p.di);
+      const a1 = p.out ? ext(p.di) : ent(p.si);
+      const b1 = p.out ? ent(p.si) : ext(p.di);
       pos = { x: a1.x + (b1.x - a1.x) * p.t, y: a1.y + (b1.y - a1.y) * p.t };
       segAlpha = 0.5;
       if (p.t >= 1) {
@@ -1126,11 +1165,11 @@ function renderFrame(ts: number) {
         p.t = 0;
       }
     } else {
-      pos = bez(ext(p.di), dstP, p.t);
+      pos = bez(p.out ? ent(p.si) : ext(p.di), p.out ? srcP : dstP, p.t);
       if (p.t >= 1) return false;
     }
 
-    const c = p.deny ? '255,77,94' : p.threat ? '245,176,58' : p.seg === 2 ? '62,168,255' : '34,211,166';
+    const c = p.deny ? DENY_RGB : p.threat ? THREAT_RGB : p.out ? OUT_RGB : IN_RGB;
     const al = segAlpha * (fo ? 1 : 0.08);
     if (degrade < 2 && p.px !== undefined && p.py !== undefined) {
       ctx.strokeStyle = `rgba(${c},${al * 0.45})`;
@@ -1157,6 +1196,7 @@ function renderFrame(ts: number) {
   drawCore(ctx, ts);
 
   // 繪製左右節點
+  const allDir = (props.direction ?? 'all') === 'all';
   left.forEach((s, i) => {
     const isFocused = !!f && f.side === 'source' && f.id === s.node.id;
     const isHovered = hoverTarget.value?.side === 'source' && hoverTarget.value.index === i;
@@ -1177,6 +1217,8 @@ function renderFrame(ts: number) {
       s.node.size,
       s.node.conn,
       ts,
+      s.node.dimmed,
+      allDir ? { inConn: s.node.inConn, outConn: s.node.outConn, showOut: s.node.kind !== 'ip' } : null,
     );
   });
 
@@ -1201,6 +1243,8 @@ function renderFrame(ts: number) {
       d.node.size,
       d.node.conn,
       ts,
+      d.node.dimmed,
+      allDir ? { inConn: d.node.inConn, outConn: d.node.outConn, showOut: true } : null,
     );
   });
 
@@ -1376,6 +1420,7 @@ onBeforeUnmount(() => {
         </span>
         <br />
         5 分鐘連線：{{ fmtNum(hoveredSource.conn) }}<br />
+        <template v-if="hoveredSource.kind !== 'ip'">連入 / 連出：{{ fmtNum(hoveredSource.inConn) }} / {{ fmtNum(hoveredSource.outConn) }}<br /></template>
         阻擋比例：
         <span :class="hoveredSource.tone === 'deny' ? 'deny' : hoveredSource.tone === 'warn' ? 'threat' : 'allow'">
           {{ Math.round(hoveredSource.denyRatio * 100) }}%
@@ -1387,7 +1432,7 @@ onBeforeUnmount(() => {
       <template v-else-if="hoveredSegment">
         <b>{{ hoveredSegment.label }}</b><br />
         5 分鐘流量：{{ fmtSize(hoveredSegment.bytes) }}（{{ fmtBps((hoveredSegment.bytes * 8) / 300) }}）<br />
-        連線數：{{ fmtNum(hoveredSegment.conn) }}<br />
+        連線數：{{ fmtNum(hoveredSegment.conn) }}(連入 {{ fmtNum(hoveredSegment.inConn) }} / 連出 {{ fmtNum(hoveredSegment.outConn) }})<br />
         威脅命中：{{ fmtNum(hoveredSegment.threat) }}
         <template v-if="hoveredSegment.topIps?.length">
           <br />

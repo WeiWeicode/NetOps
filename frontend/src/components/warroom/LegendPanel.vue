@@ -58,10 +58,12 @@ export function readLegendOpen(): boolean {
 
     <div class="wr-legend__body">
       <h3>圖例</h3>
-      <div class="lg"><span class="dot is-ok" />允許流量</div>
+      <div class="lg"><span class="dot is-ok" />連入允許(左 → 右)</div>
+      <div class="lg"><span class="dot is-out" />連出允許(右 → 左)</div>
       <div class="lg"><span class="dot is-bad" />阻擋 (deny/drop)</div>
       <div class="lg"><span class="dot is-warn" />威脅事件</div>
       <div class="lg wr-legend__desc">
+        左邊是外部端:連入的來源、連出的目的地都在左邊<br />
         粒子密度 = 每秒連線量<br />
         節點大小 = 5 分鐘流量<br />
         連線顏色 = 阻擋比例<br />
@@ -123,6 +125,9 @@ export function readLegendOpen(): boolean {
 }
 .dot.is-ok {
   background: #22d3a6;
+}
+.dot.is-out {
+  background: #8b7cff;
 }
 .dot.is-bad {
   background: #ff4d5e;

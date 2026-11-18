@@ -34,6 +34,8 @@ export interface WarroomSource {
   conn: number;
   deny: number;
   threat: number;
+  /** conn 裡「連出」(內部 → 外部)的筆數;舊版後端沒有(視為全部連入)。WARROOM-DIRECTION-POLICY-PLAN §2.2 */
+  outConn?: number;
   topDst: TopItem[];
   topApp: TopItem[];
 }
@@ -48,6 +50,8 @@ export interface WarroomSegment {
   conn: number;
   bytes: number;
   threat: number;
+  /** conn 裡「連出」的筆數;舊版後端沒有 */
+  outConn?: number;
   /** 連線數最多的內部 IP 前 5(SG-4 D);舊版後端沒有 */
   topIps?: { key: string; count: number }[];
 }
@@ -60,6 +64,10 @@ export interface WarroomLink {
   allow: number;
   deny: number;
   threat: number;
+  /** conn / deny / threat 裡「連出」(內部 → 外部)的每秒速率;連入 = 總數 − 連出。舊版後端沒有(視為全部連入) */
+  outConn?: number;
+  outDeny?: number;
+  outThreat?: number;
 }
 
 /**

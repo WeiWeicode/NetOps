@@ -22,7 +22,7 @@
 # 冷資料 Parquet 歸檔(C4):netops-ingest 每天 02:30 匯出前一天到 NAS(NETOPS_ARCHIVE_HOST_DIR,預設 /mnt/nas-docker/giga-netops/<GW_ENV>/pa-archive;
 #   目錄與標記檔由 deploy/host2-setup-pa-archive.sh 建立),netops-clickhouse 唯讀掛載同一目錄給冷明細查詢(file(),帳號 netops_cold)。
 #   NETOPS_ARCHIVE_ENABLED=0 時不歸檔、冷明細回 409。NAS 晚於容器掛上時,netops-ingest 與 netops-clickhouse 要重建(CI 部署每次都會)
-# 知識庫 NAS 備份(ARCHITECTURE Q3):netops-kb-backup 每天打包資料目錄的 knowledge/ 到 NAS(deploy/kb-backup/backup.sh;目錄與標記檔由 deploy/host2-setup-kb-backup.sh 建立)
+# 知識庫 NAS 備份(ARCHITECTURE Q3):netops-kb-backup 每天打包資料目錄的 knowledge/ 與 warroom/(網段設定與歷史,排除 ai-hourly.json;SEGMENT-SETTINGS-PLAN §7 Q7)到 NAS(deploy/kb-backup/backup.sh;目錄與標記檔由 deploy/host2-setup-kb-backup.sh 建立)
 name: giganexus-netops-${GW_ENV:?GW_ENV 必須設定(test / prod)}
 
 services:
@@ -327,7 +327,7 @@ services:
       - "127.0.0.1:51294:51294"
     networks: [pa-ingress, netops-internal]
 
-  # 知識庫每日備份到 NAS(唯讀掛載資料目錄;不連網路)。NAS 晚於容器掛載時需重建容器(--force-recreate,CI 部署每次都會)
+  # 知識庫與網段設定每日備份到 NAS(唯讀掛載資料目錄;不連網路)。NAS 晚於容器掛載時需重建容器(--force-recreate,CI 部署每次都會)
   netops-kb-backup:
     image: ${NETOPS_IMAGE_PREFIX:-giganexus}/netops-kb-backup:${IMAGE_TAG:-dev}
     build:

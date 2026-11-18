@@ -11,19 +11,10 @@ import type { SegmentSettingsService } from './segments.js';
 /** 請求本體上限:100 個網段 × 50 個 CIDR 約 100 KB */
 const BODY_LIMIT = 256 * 1024;
 
-const SEGMENT = {
-  type: 'object',
-  properties: {
-    id: { type: 'string', maxLength: 40 },
-    label: { type: 'string', maxLength: 40 },
-    kind: { type: 'string', enum: ['vlan', 'service'] },
-    icon: { type: 'string', maxLength: 30 },
-    cidrs: { type: 'array', maxItems: 50, items: { type: 'string', maxLength: 18 } },
-  },
-} as const;
+// schema 只檢查型別;內容(長度、格式、數量上限)全由 checkWarroomConfig 回報,欄位錯誤統一為 [{ field, message }]
 const CONFIG_PROPS = {
-  gauge: { type: 'object', properties: { throughputMaxBps: { type: 'number' }, sessionMax: { type: 'number' } } },
-  segments: { type: 'array', maxItems: 100, items: SEGMENT },
+  gauge: { type: 'object' },
+  segments: { type: 'array' },
 } as const;
 const SETTINGS = looseObject('{ version, source, updatedAt, updatedBy, gauge, segments, overlaps, errors? }(SEGMENT-SETTINGS-PLAN §4)');
 
@@ -115,6 +106,8 @@ const segmentRoutes: FastifyPluginAsync<{ svc: SegmentSettingsService }> = async
           '不寫入。驗證失敗回 400 VALIDATION_FAILED(同 PUT);Redis 不可用時回 200、partial true、conn 為 null 並附 message,不回假資料。',
         tags: ['網段設定'],
         'x-permission': 'netops.segment.read',
+        // 回應含未分類內部 IP 與連線數(流量統計),比照 Log 明細記稽核
+        'x-audit-level': 'meta',
         'x-gherkin': [
           '場景: 儲存前預覽',
           '  假如 近 5 分鐘有連到 10.10.130.5 的連線',

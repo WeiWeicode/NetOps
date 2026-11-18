@@ -585,6 +585,8 @@ export function createWarroomService(
   /** 網段設定頁存檔後呼叫:下一次請求就重讀設定檔(不必等 CONFIG_CHECK_MS) */
   const invalidateConfig = () => {
     checkedAt = -Infinity;
+    // 同一個 mtime(檔案系統精度不足)也要重讀
+    cfgCache = null;
   };
   const classifier = (): Classifier => {
     config();

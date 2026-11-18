@@ -541,7 +541,8 @@ function ent(i: number) {
 function ext(j: number) {
   const d = placedRight.value[j];
   const dy = d ? d.y : cy;
-  return { x: cx + R, y: cy + (dy - dy * 0 + (dy - cy) * 0.25) };
+  // 和 ent 對稱:出口聚在核心右緣,只依節點位置微幅上下錯開(原式多加了 dy,線會往畫面下方延伸)
+  return { x: cx + R, y: cy + (dy - cy) * 0.25 };
 }
 
 function burst(p: { x: number; y: number }) {

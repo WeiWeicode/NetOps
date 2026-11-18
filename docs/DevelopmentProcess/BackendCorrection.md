@@ -2,6 +2,16 @@
 
 > `backend/`、`deploy/` 的修改;新紀錄加在最上方,格式見 `AGENT.md` §11。
 
+## 2026-11-18 網段設定 API、warroom.json 歷史與 NAS 備份(SG-1)
+- 工作項目:SG-1(`docs/SEGMENT-SETTINGS-PLAN.md` §4、§6、§7 Q7)
+- 內容:
+  - 新增 `GET/PUT /v1/warroom-segments`、`POST /v1/warroom-segment-previews`(`modules/pa-live/segments*.ts`);整份寫入帶 version,不符回 409 `NETOPS_SEGMENTS_VERSION_CONFLICT`;驗證失敗 400 附欄位清單(`checkWarroomConfig`,`parseWarroomConfig` 改呼叫它,行為不變);`findOverlaps` 列出不同網段重疊的 CIDR;預覽 `previewSegments` 近 5 分鐘各網段連線數與未分類 Top 20(只讀 Redis)。
+  - 權限 `netops.segment.read/.write`(OpenAPI x-permissions);`deploy/gateway-rbac.yaml` 新增選單 `netops.segment-page.read/.write`(只給 netops-admin)、群組 `netops.group.knowledge` 名稱改「網通設定」(代碼不改)、排序 網段設定 10 → IP 對照表 20 → 知識庫 30。
+  - `infra/store/warroom.ts` `saveConfig`:寫入前舊檔存 `warroom/history/warroom-<時間>-v<版本>.json`,保留 20 份。
+  - `deploy/kb-backup/backup.sh`:打包 `knowledge` + `warroom`(排除 `ai-hourly.json` 與 `*.tmp`),沿用保留份數、sha256、檔數核對、健康檢查;NAS 掛載不變。
+- 檔案:`backend/src/modules/pa-live/{segments,segments-routes,warroom}.ts`、`backend/src/infra/store/warroom.ts`、`backend/src/app.ts`、`backend/src/openapi.ts`、`deploy/gateway-rbac.yaml`、`deploy/kb-backup/backup.sh`、`frontend/src/router.ts`
+- 驗證:`test/unit/segments.test.ts` 9 項;全套見 MR
+
 ## 2026-11-14 IP 對照表(AC3)
 - 工作項目:AC3(ARCHITECTURE D45)
 - 內容:

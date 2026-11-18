@@ -40,7 +40,7 @@ declare module 'vue-router' {
 export const MENU_GROUPS: readonly MenuGroupDef[] = [
   { key: 'firewall', code: 'netops.group.firewall', title: '防火牆 PA-560', icon: 'shield' },
   { key: 'ad', code: 'netops.group.ad', title: 'AD 網域', icon: 'gateway' },
-  { key: 'knowledge', code: 'netops.group.knowledge', title: '網通知識', icon: 'book-open' },
+  { key: 'knowledge', code: 'netops.group.knowledge', title: '網通設定', icon: 'book-open' },
   // 只放一般連結,不在 BFF 登記(沒有可授予的節點;有應用權限即可看到)
   { key: 'other', code: 'netops.group.other', title: '其他系統', icon: 'external' },
 ];
@@ -216,19 +216,7 @@ const PAGES: PageDef[] = [
     },
     view: page(() => import('./pages/ai/AdAsk.vue')),
   },
-  {
-    path: 'knowledge',
-    meta: {
-      permission: NETOPS.kbPage,
-      requires: [API.kbRead],
-      title: '知識庫',
-      subtitle: 'Network Knowledge',
-      icon: 'book-open',
-      group: 'knowledge',
-      description: '網通環境筆記;AI 問答與分析會自動參考;可語意搜尋、自動學習外部 IP 的擁有者'
-    },
-    view: page(() => import('./pages/knowledge/Knowledge.vue')),
-  },
+  // 網通設定群組(SEGMENT-SETTINGS-PLAN §6 Q5):網段設定 → IP 對照表 → 知識庫;BFF 有 sort 時以 BFF 為準
   {
     // AC3:選單節點只給網管(netops-admin);PA 畫面的名稱看得到 PA 就看得到
     path: 'knowledge/ip-names',
@@ -242,6 +230,19 @@ const PAGES: PageDef[] = [
       description: 'IP / 網段對應的使用者、部門與設備;PA 各畫面 IP 旁會顯示名稱,Log 明細可用名稱查詢',
     },
     view: page(() => import('./pages/knowledge/IpNames.vue')),
+  },
+  {
+    path: 'knowledge',
+    meta: {
+      permission: NETOPS.kbPage,
+      requires: [API.kbRead],
+      title: '知識庫',
+      subtitle: 'Network Knowledge',
+      icon: 'book-open',
+      group: 'knowledge',
+      description: '網通環境筆記;AI 問答與分析會自動參考;可語意搜尋、自動學習外部 IP 的擁有者'
+    },
+    view: page(() => import('./pages/knowledge/Knowledge.vue')),
   },
 ];
 

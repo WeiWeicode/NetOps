@@ -33,6 +33,8 @@ import paLiveLiveRoutes, { type LiveStreamOptions } from './modules/pa-live/live
 import { createPaLiveService } from './modules/pa-live/service.js';
 import warroomRoutes from './modules/pa-live/warroom-routes.js';
 import { createWarroomService } from './modules/pa-live/warroom.js';
+import segmentRoutes from './modules/pa-live/segments-routes.js';
+import { createSegmentSettingsService } from './modules/pa-live/segments.js';
 import { loadGeoIp, type GeoIp } from './infra/geoip/index.js';
 import pingRoutes from './modules/ping/routes.js';
 import { registerAi } from './modules/ai/index.js';
@@ -210,6 +212,8 @@ export async function buildApp(
     enrich: warroom.enrich,
   });
   await app.register(warroomRoutes, { warroom });
+  // 網段設定(SG-1):畫面維護 warroom/warroom.json,存檔後戰情室下一次請求就套用
+  await app.register(segmentRoutes, { svc: createSegmentSettingsService({ store: app.store.warroom, warroom, now: deps.warroomNow }) });
 
   // PA 匯入(背景同步在程序內執行,單一容器,D9)
   const ftp = deps.ftp ?? createFtp(config.ftp);

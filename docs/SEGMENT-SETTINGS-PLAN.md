@@ -69,3 +69,13 @@ IP 對照表記錄「IP / 網段 → 使用者、部門、設備名稱、設備�
 | Q6 | 正式區與測試區的網段 | 用匯出 / 匯入搬移,不自動同步(未另外詢問,照建議) |
 
 搭配方式 A、B、C、D **全做**;SG-4 範圍改為 A + B + C + D。
+
+## 7. 補充決定(需求方 2026-11-18)
+
+| # | 項目 | 決定 |
+| --- | --- | --- |
+| Q7 | `warroom.json` 備份 | 照建議兩項都做,放進 SG-1:(1) NAS 每日備份 `netops-kb-backup` 從只打包 `knowledge` 改為 `knowledge` + `warroom`(排除可重建的 `ai-hourly.json`),沿用保留份數、sha256 與健康檢查;(2) `saveWarroomConfig` 寫入前把舊檔存到 `warroom/history/warroom-<時間>-v<版本>.json`,保留最近 20 份 |
+| Q8 | 備份位置 | NAS `\\10.10.130.31\docker-folder\giga-netops`(即現有掛載 `/mnt/nas-docker/giga-netops/<區>`,不另開分享) |
+| Q9 | 戰情室右側連線 | 右側網段節點的線目前會延伸到畫面下方;改成和左側一樣**聚集到中央核心**。與 SG 一起做(SG-0) |
+
+批次順序:SG-0 → SG-1 → SG-2 → SG-4 邏輯,由一個 Claude 子任務依序完成;SG-3 與 SG-4 畫面交 Gemini。

@@ -13,6 +13,7 @@ import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vu
 import { fmtNum, fmtShort, fmtSize } from '@/api/format';
 import type { PaLiveSnapshot } from '@/api/paLive';
 import { fmtBps } from '@/composables/paLive';
+import { useSegmentDeviceNames } from '@/composables/useSegmentPairing';
 import {
   particleRate,
   type Focus,
@@ -541,7 +542,8 @@ function ent(i: number) {
 function ext(j: number) {
   const d = placedRight.value[j];
   const dy = d ? d.y : cy;
-  return { x: cx + R, y: cy + (dy - dy * 0 + (dy - cy) * 0.25) };
+  // 和 ent 對稱:出口聚在核心右緣,只依節點位置微幅上下錯開(原式多加了 dy,線會往畫面下方延伸)
+  return { x: cx + R, y: cy + (dy - cy) * 0.25 };
 }
 
 function burst(p: { x: number; y: number }) {
@@ -1273,12 +1275,18 @@ function clickNodeButton(side: 'source' | 'segment', id: string) {
   emit('toggleFocus', { side, id });
 }
 
+const segDevices = useSegmentDeviceNames();
 const hoveredSource = computed(() =>
   hoverTarget.value?.side === 'source' ? (placedLeft.value[hoverTarget.value.index]?.node ?? null) : null,
 );
 const hoveredSegment = computed(() =>
   hoverTarget.value?.side === 'segment' ? (placedRight.value[hoverTarget.value.index]?.node ?? null) : null,
 );
+watch(hoveredSegment, (seg) => {
+  if (seg?.topIps?.length) {
+    void segDevices.ensure(seg.topIps.map((t) => t.key));
+  }
+});
 const tipStyle = computed(() => {
   if (!hoverTarget.value) return { display: 'none' };
   const left = Math.min(W - 220, Math.max(12, hoverTarget.value.clientX + 14));
@@ -1380,6 +1388,17 @@ onBeforeUnmount(() => {
         5 分鐘流量：{{ fmtSize(hoveredSegment.bytes) }}（{{ fmtBps((hoveredSegment.bytes * 8) / 300) }}）<br />
         連線數：{{ fmtNum(hoveredSegment.conn) }}<br />
         威脅命中：{{ fmtNum(hoveredSegment.threat) }}
+        <template v-if="hoveredSegment.topIps?.length">
+          <br />
+          Top 內部 IP：{{
+            hoveredSegment.topIps
+              .map((t) => {
+                const dev = segDevices.deviceOf(t.key);
+                return dev ? `${t.key}(${dev})` : t.key;
+              })
+              .join(', ')
+          }}
+        </template>
       </template>
     </div>
   </div>

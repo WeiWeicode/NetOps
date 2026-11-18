@@ -20,7 +20,9 @@ permissions:
   # 選單目錄(kind group:側欄大項,只分組命名、不可授予;名稱 / 排序 / 圖示可在「選單管理」修改;圖示須是 frontend/src/ui/icons.ts 登記的名稱)
   - { code: netops.group.firewall, name: 防火牆 PA-560, kind: group, parent: netops.app.access, sort: 10, icon: shield }
   - { code: netops.group.ad, name: AD 網域, kind: group, parent: netops.app.access, sort: 20, icon: gateway }
-  - { code: netops.group.knowledge, name: 網通知識, kind: group, parent: netops.app.access, sort: 30, icon: book-open }
+  # SG-1:群組改名「網通設定」(權限代碼不改,既有角色授權不失效;SEGMENT-SETTINGS-PLAN §6 Q2)。
+  #   本檔只負責首次登記、不覆寫既有名稱與排序:已存在的環境要在 GigaItApp「選單管理」手動改名與調整排序
+  - { code: netops.group.knowledge, name: 網通設定, kind: group, parent: netops.app.access, sort: 30, icon: book-open }
 
   # 防火牆 PA-560
   # 即時監控(R1;PA-LIVE-PLAN §8):群組最上方,API 權限 netops.pa-realtime.read
@@ -51,8 +53,11 @@ permissions:
   - { code: netops.ad-files.read, name: FTP Log 檔案, kind: menu, parent: netops.group.ad, sort: 30, includes: [netops.ftp.read] }
   - { code: netops.ad-files.manage, name: 同步 / 匯入 / 刪除匯入結果, kind: button, parent: netops.ad-files.read, sort: 10, includes: [netops.ftp.write] }
 
-  # 網通知識
-  - { code: netops.kb-page.read, name: 知識庫, kind: menu, parent: netops.group.knowledge, sort: 10, includes: [netops.kb.read] }
+  # 網通設定(順序 網段設定 → IP 對照表 → 知識庫,§6 Q5)
+  # SG-1 網段設定:戰情室內部網段,只給 netops-admin(§6 Q1);預覽讀即時流量統計,同在讀取權限
+  - { code: netops.segment-page.read, name: 網段設定, kind: menu, parent: netops.group.knowledge, sort: 10, includes: [netops.segment.read] }
+  - { code: netops.segment-page.write, name: 新增 / 修改 / 刪除 / 匯入網段, kind: button, parent: netops.segment-page.read, sort: 10, includes: [netops.segment.write] }
+  - { code: netops.kb-page.read, name: 知識庫, kind: menu, parent: netops.group.knowledge, sort: 30, includes: [netops.kb.read] }
   - { code: netops.kb-page.write, name: 新增 / 修改 / 刪除筆記, kind: button, parent: netops.kb-page.read, sort: 10, includes: [netops.kb.write] }
   # IP 對照表(AC3;姓名、部門屬個資):選單與按鈕只給 netops-admin(網管),netops-viewer 不列(例外同 D31)。
   #   PA 各畫面的名稱沿用各 PA API 的權限(看得到 PA 的人就看得到名稱),不需要這兩個節點
@@ -105,6 +110,9 @@ roles:
       # AC3:IP 對照表只給網管
       - netops.ip-name-page.read
       - netops.ip-name-page.write
+      # SG-1:網段設定只給網管
+      - netops.segment-page.read
+      - netops.segment-page.write
       # AI(A1;netops.ai.use 給 admin 與 viewer,2026-11-05 決定)
       - netops.pa-ask.read
       - netops.pa-ask.use

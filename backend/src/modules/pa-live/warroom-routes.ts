@@ -1,6 +1,7 @@
 /**
  * 戰情室 API(WR-1、WR-2,docs/WARROOM-PLAN.md §3):/v1/pa-live/warroom、/v1/pa-live/risk,權限 netops.pa-realtime.read。
  * 只做驗證、權限宣告與格式轉換;聚合在 warroom.ts。回應只有統計與 IP(與 /pa-live/top 同等級),不含原始明細。
+ * 不附 IP 對照表 names(SEGMENT-SETTINGS-PLAN §3 D,需求方 2026-11-18 決定,D45 範圍變更):名稱只給 netops.ip-name.read,經 POST /ip-name-lookups 取得。
  */
 import type { FastifyPluginAsync } from 'fastify';
 import { looseObject } from '../../shared/schemas.js';
@@ -12,7 +13,6 @@ const warroomRoutes: FastifyPluginAsync<{ warroom: WarroomService }> = async (ap
   app.get<{ Querystring: { minutes?: number } }>(
     '/v1/pa-live/warroom',
     {
-      config: { ipNames: true },
       schema: {
         operationId: 'netops.pa-live.warroom',
         summary: '即時監控戰情室:外部來源 → 防火牆 → 內部網段聚合',
@@ -65,7 +65,6 @@ const warroomRoutes: FastifyPluginAsync<{ warroom: WarroomService }> = async (ap
   app.get<{ Querystring: { minutes?: number } }>(
     '/v1/pa-live/risk',
     {
-      config: { ipNames: true },
       schema: {
         operationId: 'netops.pa-live.risk',
         summary: '即時監控戰情室:近一小時高風險統計',

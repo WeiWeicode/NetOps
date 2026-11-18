@@ -19,7 +19,8 @@
 | C0–C6 | PA log 高吞吐架構(ClickHouse + Parquet 冷歸檔 + PA 精準查詢) | **C1–C5 測試區完成(2026-11-13)**,觀察與驗收項目見 HANDOFF「2026-11-13」;C0 剩 E1、E2、E5(IT);C6 第一段完成(2026-11-16,見 C6 段);PA log 管線(第二段)未開始(D27–D33、D43,[PA-LOG-CLICKHOUSE-GUIDE.md](PA-LOG-CLICKHOUSE-GUIDE.md)) |
 | V-a | 熱力圖資料層:長期彙總(5 分鐘 / 每小時 / 每天)、熱力圖 API、時段明細熱 / 冷路由 | **測試區完成(2026-11-13)**:!75、冷路由 !80、部署修正 !81;11-11、11-12 已回填(D34、D35) |
 | V-b | 儀表板與熱力圖畫面:V-b1 Claude 元件介面與 API,V-b2 Gemini 頁面與動畫 | **測試區上線(2026-11-13)**:V-b1 + V-b2 第一版 !78、部署建置修正 !82;**畫面驗收與調整待做**(新討論串,HANDOFF-GEMINI-VIZ §8)(D40、D41) |
-| V-c | 偵測規則引擎:PA 規則 1–7、冷卻、白名單、網段設定頁、告警頁 | **規劃已合併(2026-11-11,!70)**;前置 C3;**需求方提供網段清單與初始白名單**(X11)(D37、D38、D39) |
+| V-c | 偵測規則引擎:PA 規則 1–7、冷卻、白名單、網段設定頁、告警頁 | **規劃已合併(2026-11-11,!70)**;前置 C3;**需求方提供網段清單與初始白名單**(X11;網段改在網段設定頁維護,V-c 與 insight 的內網 / 伺服器共用同一份,見 SG、D46)(D37、D38、D39) |
+| SG-0~SG-4 | 網段設定:戰情室右側連線聚集(SG-0)、後端 API + 版本號 + 備份(SG-1)、前端邏輯(SG-2)、畫面(SG-3)、搭配 A–D(SG-4) | **測試區完成並驗收通過(2026-11-18)**:!127 計畫、!128 SG-0、!129 SG-1、!130 SG-2、!131 SG-4 邏輯、!132 畫面(Gemini);驗收報告 `docs/test-reports/2026-11-18-segment-settings-acceptance.md`(!133)。**SG-5 正式區待辦**(D46–D48) |
 | V-d | AD:AD 事件進 ClickHouse、AD 指標與圖表、規則 8–9 | **延後**(V4,D36) |
 | AC1–AC7 | AI 改用 ClickHouse、PA 頁面新增 AI 功能、IP 對照表(IP 自動帶出名稱) | **規劃(2026-11-13,需求方已決定範圍)**;AC1 可先開工(D44、D45) |
 | ~~後續~~ | ~~服務寫入資料庫~~ | 取消(D20;PA log 改寫 ClickHouse 見 C0–C6,D27) |
@@ -349,6 +350,8 @@ D13:骨架直接留用;AI 不在這次範圍,不做串流驗證(D7、D17)。
 
 ## V-c 偵測規則引擎
 
+> **網段**:規則的「IT 網段排除」與內網 / 伺服器判斷讀網段設定(SG,`warroom/warroom.json`,D46),不另建清單。
+
 1. DDL `detect_alerts`(TTL 正式區 1 年、測試區 3 天,X3);`netops_writer` 加 `INSERT ON netops.detect_alerts`;`netops-ingest` 掛 reader 密碼檔與資料目錄(唯讀)(機密腳本由需求方執行)。
 2. `netops-ingest` `modules/detect`:排程(每分鐘一輪)、水位與回補、資料新鮮度、規則 1–7、冷卻與抑制計數、IP / App 白名單、IT 網段排除、規則狀態(VIZ-RULES-DESIGN §5)。
 3. `netops-api`:`infra/store` 的偵測設定(版本、歷史、`If-Match`)與告警處理狀態;API `/alerts*`、`/detect/*`;權限 `netops.alert.read|write`、`netops.detect.read|write`;`gateway-rbac.yaml` 新目錄 `netops.group.detect` 與節點(§4.8)。
@@ -365,6 +368,23 @@ D13:骨架直接留用;AI 不在這次範圍,不做串流驗證(D7、D17)。
 4. 規則 8 `AD_BRUTE_FORCE_SPRAY`、規則 9 `AD_ACCOUNT_LOCKOUT_OR_PRIV`。
 
 **前置**:V-a–V-c 完成;需求方核准 AD 進 ClickHouse。**負責人**:Claude、Gemini;需求方核准與驗收。**完成條件**:另開規劃時定義。
+
+## SG 網段設定(2026-11-17 規劃、2026-11-18 測試區完成)
+
+規劃見 [SEGMENT-SETTINGS-PLAN.md](SEGMENT-SETTINGS-PLAN.md),決策 ARCHITECTURE D46–D48,API.md §12。
+
+| 批 | 內容 | 狀態 |
+| --- | --- | --- |
+| SG-0 | 戰情室右側網段節點的連線聚集到中央核心(與左側對稱) | 完成(!128) |
+| SG-1 | 後端:`GET/PUT /warroom-segments`(版本號、409)、`POST /warroom-segment-previews`、權限 `netops.segment.read|write`、`warroom/history/` 保留 20 份、`netops-kb-backup` 加備份 `warroom/` | 完成(!129) |
+| SG-2 | 前端邏輯:`api/segments.ts`、`useSegmentSettings`、`segmentRules`、mock | 完成(!130) |
+| SG-3 | 網段設定頁畫面 `pages/settings/Segments.vue`(清單、編輯、預覽、匯入匯出) | 完成(!132,Gemini) |
+| SG-4 | 搭配 A(未分類 IP 協助分類)、B(從 IP 對照表匯入)、C(IP 對照表顯示網段)、D(戰情室滑過節點帶設備名稱,含 D45 範圍變更:戰情室兩支 API 不再回 `names`)、`POST /ip-name-lookups` | 完成(!131 邏輯 + !132 畫面) |
+| SG-5 | 正式區上線:網通提供正式網段清單 → 部署 → GigaItApp 發佈 4 條路由與選單 → 匯入網段 | **待辦**(見 HANDOFF「2026-11-18 收工」) |
+
+**與其他工作項目的關係**:V-c 偵測規則的「IT 網段排除」與 `/pa/insight/*` 的「內網 / 伺服器」判斷,**改用同一份網段設定**(`warroom.json`),不另建網段清單;X11「網段清單」因此由網通在網段設定頁填入,不再另外提供檔案。
+
+**測試區驗收(2026-11-18)**:21 項通過(#2 群組名稱 / 順序為 GigaItApp 選單設定,需求方決定維持現狀);未覆蓋:滑鼠拖曳排序(以上移 / 下移驗證)、`history/` 20 份上限、#11(A 的設備名稱內容,測試區對照表無資料)、#12(B 實際匯入)、#22(NAS 備份內容,隔天排程後複查)。
 
 ## AC AI 改用 ClickHouse、PA 頁面 AI 功能、IP 對照表(規劃 2026-11-13)
 

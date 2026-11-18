@@ -2,6 +2,13 @@
 
 > Bug 修改;新紀錄加在最上方,格式見 `AGENT.md` §11。
 
+## 2026-11-18 戰情室右側網段連線延伸到畫面下方(SG-0)
+
+- 工作項目:SG-0(`docs/SEGMENT-SETTINGS-PLAN.md` §7 Q9)
+- 內容:`WarroomCanvas.vue` 的 `ext()`(核心右側出口)算式多加了節點的絕對 y(`cy + dy + 0.25(dy-cy)`),右側連線與粒子往畫面下方延伸;改成和左側 `ent()` 對稱的 `cy + (dy-cy)*0.25`,聚集到中央核心右緣。
+- 檔案:`frontend/src/components/warroom/WarroomCanvas.vue`
+- 驗證:frontend `npm run typecheck`、`npm test`、`npm run build`(見 MR)
+
 ## 2026-11-13 V-b2 C7 重驗不通過:Top 10 來源 IP 帶成任一方 IP、Log 明細頁的未套用提示消失、時段明細逾時卡住
 
 - 內容:

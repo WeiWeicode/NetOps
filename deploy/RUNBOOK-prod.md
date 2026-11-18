@@ -227,3 +227,24 @@ sudo sha256sum /root/netops-deploy/host3-pa-pki.sh    # 和開發機 sha256sum d
   或從 GitLab Environments › production 的 Rollback 按鈕執行。
 - 映像清理:每次部署在主機 3 留一組完整 SHA 標籤的映像;磁碟吃緊時保留目前與上一版,其餘 `docker image rm`(E5 預留 20 GB 是給 ClickHouse 的)。
 - 整個停用:`/netops/` 是新網址,使用者改回舊版 IIS 即可;舊版 IIS 上架期間持續運作(`legacy-iis` 標籤)。
+
+## 7. 知識庫與網段設定備份、還原(`netops-kb-backup`)
+
+**備份範圍**(每天 `KB_BACKUP_HOUR` 點,預設 02:00;容器啟動時當天還沒有備份才補一次,所以部署當天不會產生含新內容的備份):
+
+| 目錄(`/data`) | 內容 | 備註 |
+| --- | --- | --- |
+| `knowledge/` | 知識庫筆記與匯整檔 | 不可重建 |
+| `warroom/` | 網段設定 `warroom.json`(SG,D46)與 `history/` | 不可重建;**排除** `warroom/ai-hourly.json`(每小時重算)與 `*.tmp`。`warroom/` 還沒建立(沒存過網段設定)時只打包 `knowledge` |
+
+`warroom/history/warroom-<時間>-v<版本>.json` 是**每次儲存前的舊設定**(保留最近 20 份,檔名的 `v<版本>` 是被取代的那一版),用途是誤改後回到舊版;NAS 每日備份再多一層保護(`warroom.json` 被刪或壞掉時)。
+
+備份位置:NAS `/mnt/nas-docker/giga-netops/<區>/netops-kb-<區>-YYYYMMDD.tar.gz`(附 `.sha256`,保留 `KB_BACKUP_KEEP` 份,預設 30;最近結果在 `LAST_RESULT`)。標記檔 `.giga-netops-backup` 不存在時整輪跳過(NAS 沒掛上)。
+
+**還原網段設定到舊版**(擇一;`warroom.json` 的 `version` 以當下為準,PUT 比對的是檔案內的 `version`):
+
+1. **最近 20 次內的舊版**:在 `netops-api` 的資料目錄找 `warroom/history/warroom-<時間>-v<版本>.json`(每份是該次儲存前的完整設定)。最簡單的做法:把該檔內容在網段設定頁「匯入」後儲存(匯入只改草稿,儲存會產生新版本、並把目前版本存進 history),不必動主機檔案。
+2. **`warroom.json` 遺失或損壞,或需要超過 20 次前的版本**:先 `sha256sum -c` 核對,再從備份解出 `warroom/warroom.json`(`tar -xzf netops-kb-<區>-YYYYMMDD.tar.gz warroom/warroom.json -C <暫存目錄>`),內容貼到網段設定頁「匯入」後儲存。**不要直接覆蓋主機上的資料目錄**(操作人需要 root,且戰情室以檔案修改時間偵測變更,直接覆蓋後版本號可能倒退);設定檔被改壞時頁面顯示 `source: invalid` 並載入範例,仍可整份覆寫。
+3. 還原知識庫筆記:解出 `knowledge/` 後依知識庫還原流程處理(見 HANDOFF 的備份可還原驗證項)。
+
+核對備份內容(唯讀):`tar -tzf <檔案> | grep -E "warroom/"` 應有 `warroom/warroom.json` 與 `warroom/history/*`,不應有 `warroom/ai-hourly.json`。

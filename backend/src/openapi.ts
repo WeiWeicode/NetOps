@@ -48,6 +48,9 @@ export const PERMISSIONS = [
   // AC3:IP 對照表(姓名、部門屬個資;兩個都只給 netops-admin,例外同 D31)。PA 各 API 附帶的名稱沿用各 API 原本的權限
   { code: 'netops.ip-name.read', name: 'NetOps IP 對照表:查詢與匯出' },
   { code: 'netops.ip-name.write', name: 'NetOps IP 對照表:編輯與匯入' },
+  // SG-1:網段設定(戰情室內部網段;只給 netops-admin,SEGMENT-SETTINGS-PLAN §6 Q1)
+  { code: 'netops.segment.read', name: 'NetOps 網段設定:查詢與預覽' },
+  { code: 'netops.segment.write', name: 'NetOps 網段設定:編輯' },
 ];
 
 /** project:開發專案(package.json gateway.project,由 SDK loadGatewayEnv 讀取) */

@@ -58,35 +58,89 @@ const ICON_RE = /^[a-z0-9-]{1,30}$/;
 /** 保留 id:未對照到設定的內部 IP / 外部對外部 */
 export const UNMATCHED_SEGMENT = 'unmatched';
 
-/** 設定檔 → WarroomConfig;格式錯誤丟 Error(訊息指出哪個欄位,不含檔案路徑) */
-export function parseWarroomConfig(raw: unknown): WarroomConfig {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('設定檔必須是 JSON 物件');
+export interface ConfigError {
+  /** 欄位路徑,例如 segments[2].cidrs[0] */
+  field: string;
+  message: string;
+}
+
+/**
+ * 設定檔驗證(SG-1):收集全部欄位錯誤(網段設定頁一次標出);沒有錯誤時 cfg 為正規化後的設定。
+ * 未知欄位(version、updatedAt 等)略過,不算錯誤。
+ */
+export function checkWarroomConfig(raw: unknown): { cfg: WarroomConfig | null; errors: ConfigError[] } {
+  const errors: ConfigError[] = [];
+  const err = (field: string, message: string) => errors.push({ field, message });
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { cfg: null, errors: [{ field: '', message: '設定檔必須是 JSON 物件' }] };
   const o = raw as Record<string, unknown>;
   const g = (o.gauge ?? {}) as Record<string, unknown>;
+  if (o.gauge !== undefined && (typeof o.gauge !== 'object' || o.gauge === null || Array.isArray(o.gauge))) err('gauge', 'gauge 必須是物件');
   const num = (v: unknown, def: number, name: string) => {
     if (v === undefined) return def;
-    if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0) throw new Error(`gauge.${name} 必須是正數`);
+    if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0) {
+      err(`gauge.${name}`, `gauge.${name} 必須是正數`);
+      return def;
+    }
     return v;
   };
   const gauge = { throughputMaxBps: num(g.throughputMaxBps, DEFAULT_GAUGE.throughputMaxBps, 'throughputMaxBps'), sessionMax: num(g.sessionMax, DEFAULT_GAUGE.sessionMax, 'sessionMax') };
-  if (!Array.isArray(o.segments)) throw new Error('segments 必須是陣列');
-  if (o.segments.length > 100) throw new Error('segments 最多 100 個');
+  if (!Array.isArray(o.segments)) {
+    err('segments', 'segments 必須是陣列');
+    return { cfg: null, errors };
+  }
+  if (o.segments.length > 100) {
+    err('segments', 'segments 最多 100 個');
+    return { cfg: null, errors };
+  }
   const ids = new Set<string>();
-  const segments = o.segments.map((s, i): SegmentDef => {
-    const e = (s ?? {}) as Record<string, unknown>;
+  const segments: SegmentDef[] = [];
+  o.segments.forEach((s, i) => {
+    const e = (s && typeof s === 'object' ? s : {}) as Record<string, unknown>;
     const at = `segments[${i}]`;
-    if (typeof e.id !== 'string' || !ID_RE.test(e.id) || e.id === UNMATCHED_SEGMENT) throw new Error(`${at}.id 格式錯誤(小寫英數與 -,不可為 ${UNMATCHED_SEGMENT})`);
-    if (ids.has(e.id)) throw new Error(`${at}.id 重複:${e.id}`);
-    ids.add(e.id);
-    if (typeof e.label !== 'string' || !e.label.trim() || e.label.length > 40) throw new Error(`${at}.label 必須是 1–40 字`);
-    if (e.kind !== 'vlan' && e.kind !== 'service') throw new Error(`${at}.kind 只能是 vlan 或 service`);
+    const before = errors.length;
+    if (typeof e.id !== 'string' || !ID_RE.test(e.id) || e.id === UNMATCHED_SEGMENT) err(`${at}.id`, `${at}.id 格式錯誤(小寫英數與 -,不可為 ${UNMATCHED_SEGMENT})`);
+    else if (ids.has(e.id)) err(`${at}.id`, `${at}.id 重複:${e.id}`);
+    else ids.add(e.id);
+    if (typeof e.label !== 'string' || !e.label.trim() || e.label.length > 40) err(`${at}.label`, `${at}.label 必須是 1–40 字`);
+    if (e.kind !== 'vlan' && e.kind !== 'service') err(`${at}.kind`, `${at}.kind 只能是 vlan 或 service`);
     const icon = e.icon === undefined ? (e.kind === 'service' ? 'server' : 'network') : e.icon;
-    if (typeof icon !== 'string' || !ICON_RE.test(icon)) throw new Error(`${at}.icon 格式錯誤`);
-    if (!Array.isArray(e.cidrs) || !e.cidrs.length || e.cidrs.length > 50) throw new Error(`${at}.cidrs 必須是 1–50 個 IPv4 CIDR`);
-    for (const c of e.cidrs) if (typeof c !== 'string' || !parseCidr(c)) throw new Error(`${at}.cidrs 格式錯誤:${String(c).slice(0, 50)}`);
-    return { id: e.id, label: e.label.trim(), kind: e.kind, icon, cidrs: e.cidrs as string[] };
+    if (typeof icon !== 'string' || !ICON_RE.test(icon)) err(`${at}.icon`, `${at}.icon 格式錯誤`);
+    if (!Array.isArray(e.cidrs) || !e.cidrs.length || e.cidrs.length > 50) err(`${at}.cidrs`, `${at}.cidrs 必須是 1–50 個 IPv4 CIDR`);
+    else
+      e.cidrs.forEach((c, k) => {
+        if (typeof c !== 'string' || !parseCidr(c)) err(`${at}.cidrs[${k}]`, `${at}.cidrs 格式錯誤:${String(c).slice(0, 50)}`);
+      });
+    if (errors.length === before) segments.push({ id: e.id as string, label: (e.label as string).trim(), kind: e.kind as SegmentKind, icon: icon as string, cidrs: e.cidrs as string[] });
   });
-  return { gauge, segments };
+  return errors.length ? { cfg: null, errors } : { cfg: { gauge, segments }, errors };
+}
+
+/** 設定檔 → WarroomConfig;格式錯誤丟 Error(訊息為第一個錯誤,指出哪個欄位,不含檔案路徑) */
+export function parseWarroomConfig(raw: unknown): WarroomConfig {
+  const r = checkWarroomConfig(raw);
+  if (!r.cfg) throw new Error(r.errors[0]?.message ?? '設定檔格式錯誤');
+  return r.cfg;
+}
+
+export interface SegmentOverlap {
+  a: { id: string; cidr: string };
+  b: { id: string; cidr: string };
+}
+
+/** 不同網段之間重疊的 CIDR(允許重疊,對照時最長前綴優先;網段設定頁標出來讓網通確認) */
+export function findOverlaps(segments: SegmentDef[]): SegmentOverlap[] {
+  const rules = segments.flatMap((s) => s.cidrs.map((cidr) => ({ id: s.id, cidr, ...parseCidr(cidr)! })));
+  const out: SegmentOverlap[] = [];
+  for (let i = 0; i < rules.length; i++)
+    for (let j = i + 1; j < rules.length; j++) {
+      const x = rules[i]!;
+      const y = rules[j]!;
+      if (x.id === y.id) continue;
+      const m = (x.mask & y.mask) >>> 0;
+      if (((x.base & m) >>> 0) === ((y.base & m) >>> 0)) out.push({ a: { id: x.id, cidr: x.cidr }, b: { id: y.id, cidr: y.cidr } });
+      if (out.length >= 200) return out;
+    }
+  return out;
 }
 
 // ---------- IP 工具(純函式) ----------
@@ -404,6 +458,45 @@ export function aggregateWarroom(
   return { sources, segments, links };
 }
 
+// ---------- 網段設定預覽(SG-1,純函式) ----------
+
+/** 預覽:未分類內部 IP 列出幾個(SEGMENT-SETTINGS-PLAN §2.4) */
+export const PREVIEW_TOP = 20;
+export const PREVIEW_MINUTES = 5;
+
+export interface SegmentPreview {
+  segments: { id: string; label: string; conn: number }[];
+  unmatched: { conn: number; top: { ip: string; count: number }[] };
+}
+
+/**
+ * 用(未儲存的)設定把 TRAFFIC 明細的內部端 IP 分到網段:各網段連線數、未分類內部 IP Top N。
+ * 內部端判斷同 createClassifier(目的是內部取目的,否則取來源);兩端都是外部的不算。scale:抽樣放大倍數。
+ */
+export function previewSegments(traffic: Record<string, unknown>[], cfg: WarroomConfig, scale = 1, topN = PREVIEW_TOP): SegmentPreview {
+  const match = createSegmentMatcher(cfg.segments);
+  const bySeg = new Map<string, number>();
+  const um = new Map<string, number>();
+  let umConn = 0;
+  for (const d of traffic) {
+    const src = typeof d.src === 'string' && isIP(d.src) ? d.src : '';
+    const dst = typeof d.dst === 'string' && isIP(d.dst) ? d.dst : '';
+    const ip = dst && isPrivateIp(dst) ? dst : src && isPrivateIp(src) ? src : '';
+    if (!ip) continue;
+    const id = match(ip);
+    if (id) bySeg.set(id, (bySeg.get(id) ?? 0) + 1);
+    else {
+      umConn++;
+      um.set(ip, (um.get(ip) ?? 0) + 1);
+    }
+  }
+  const S = (n: number) => Math.round(n * scale);
+  return {
+    segments: cfg.segments.map((s) => ({ id: s.id, label: s.label, conn: S(bySeg.get(s.id) ?? 0) })),
+    unmatched: { conn: S(umConn), top: topOf(um, topN, scale).map((t) => ({ ip: t.key, count: t.count })) },
+  };
+}
+
 // ---------- 服務 ----------
 
 /** 每次最多讀幾筆 TRAFFIC 明細(約 120 筆/秒時 ≈ 2.8 分鐘;超過以涵蓋秒數換算) */
@@ -489,6 +582,12 @@ export function createWarroomService(
     return cfgCache;
   };
   let classifierCache: Classifier | null = null;
+  /** 網段設定頁存檔後呼叫:下一次請求就重讀設定檔(不必等 CONFIG_CHECK_MS) */
+  const invalidateConfig = () => {
+    checkedAt = -Infinity;
+    // 同一個 mtime(檔案系統精度不足)也要重讀
+    cfgCache = null;
+  };
   const classifier = (): Classifier => {
     config();
     return classifierCache!;
@@ -551,6 +650,33 @@ export function createWarroomService(
         return { ...empty, message: REDIS_DOWN };
       }
     });
+  }
+
+  /** SG-1 網段設定預覽:近 PREVIEW_MINUTES 分鐘 TRAFFIC 明細依未儲存的設定分類(只讀 Redis,不寫入、不快取) */
+  async function previewConfig(cfg: WarroomConfig) {
+    const base = { generatedAt: new Date(now()).toISOString(), minutes: PREVIEW_MINUTES };
+    const empty = { ...base, partial: true, segments: cfg.segments.map((s) => ({ id: s.id, label: s.label, conn: null })), unmatched: { conn: null, top: [] }, sample: null };
+    if (!redis) return { ...empty, message: '即時監控未設定(REDIS_URL)' };
+    try {
+      const t = now();
+      const windowSec = PREVIEW_MINUTES * 60;
+      const tr = await scanWindow(redis, 'traffic', t - windowSec * 1000, TRAFFIC_SCAN_MAX);
+      const sec = tr.reachedStart ? windowSec : Math.max(1, Math.min(windowSec, (t - tr.entries[tr.entries.length - 1]!.ms) / 1000));
+      return {
+        ...base,
+        partial: false,
+        ...previewSegments(
+          tr.entries.map((e) => e.data),
+          cfg,
+          windowSec / sec,
+        ),
+        sample: { traffic: tr.entries.length, trafficSec: Math.round(sec), complete: tr.reachedStart },
+      };
+    } catch (err) {
+      if (!isRedisError(err)) throw err;
+      deps.log?.warn({ code: (err as Error).name }, '網段設定預覽:無法讀取 netops-redis');
+      return { ...empty, message: REDIS_DOWN };
+    }
   }
 
   /** WR-2 */
@@ -629,7 +755,7 @@ export function createWarroomService(
     return { ...item, country: c.country, segment: c.segment };
   }
 
-  return { warroom, risk, enrich, config };
+  return { warroom, risk, enrich, config, invalidateConfig, previewConfig };
 }
 
 export type WarroomService = ReturnType<typeof createWarroomService>;

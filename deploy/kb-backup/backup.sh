@@ -1,13 +1,16 @@
 #!/bin/sh
 # 知識庫每日備份到 NAS(ARCHITECTURE Q3;比照附件服務備份到 NAS docker-folder,giga-file-service STORAGE.md §2)
-#   來源 /data/knowledge(netops-api 的資料目錄,唯讀掛載):筆記 *.md 與匯整檔;知識庫不可重建,其他資料可從 FTP 重新分析,不備份
+#   來源(netops-api 的資料目錄 /data,唯讀掛載):knowledge(筆記 *.md 與匯整檔)+ warroom(網段設定 warroom.json 與 history/;SEGMENT-SETTINGS-PLAN §7 Q7)
+#     兩者都不可重建;warroom/ai-hourly.json 每小時重算、寫入暫存檔 *.tmp 不備份。其他資料可從 FTP 重新分析,不備份
+#     warroom 目錄不存在(還沒存過網段設定)時只打包 knowledge
 #   目的 /backup(主機 /mnt/nas-docker/giga-netops/<區>,cifs 由 giga-file-service 的 host2-mount-nas.sh 掛載)
 #   - 目的根目錄沒有標記檔 .giga-netops-backup 時視為 NAS 未掛載,整輪跳過(Docker 會在掛載點不存在時建立本機空目錄,不可寫進去)
 #   - 先寫 .part,解壓列表核對檔數後才改名;同時寫 .sha256;保留最近 KB_BACKUP_KEEP 份
 #   - 容器啟動時若今天還沒有備份就先備份一次(部署後即可確認),之後每天 KB_BACKUP_HOUR 點
 #   - 結果只寫容器日誌與 /backup/LAST_RESULT(第一版不回報 giga-observe)
 set -u
-SRC=/data/knowledge
+DATA=/data
+SRC="$DATA/knowledge"
 DEST=/backup
 MARK="$DEST/.giga-netops-backup"
 ENV_NAME="${GW_ENV:?GW_ENV 必須設定}"
@@ -26,10 +29,14 @@ run_backup() {
   stamp="$(date +%Y%m%d)"
   target="$DEST/$PREFIX-$stamp.tar.gz"
   part="$target.part"
-  # 只算一般檔案(筆記與匯整檔);tar 列表同樣只比對一般檔案
-  want="$(find "$SRC" -type f | wc -l | tr -d ' ')"
+  dirs=knowledge
+  [ -d "$DATA/warroom" ] && dirs="knowledge warroom"
+  # 只算一般檔案;排除條件與 tar --exclude 相同,tar 列表同樣只比對一般檔案
+  # shellcheck disable=SC2086
+  want="$(cd "$DATA" && find $dirs -type f ! -path 'warroom/ai-hourly.json' ! -name '*.tmp' | wc -l | tr -d ' ')"
   rm -f "$part"
-  if ! tar -czf "$part" -C /data knowledge; then
+  # shellcheck disable=SC2086
+  if ! tar -czf "$part" -C "$DATA" --exclude='warroom/ai-hourly.json' --exclude='*.tmp' $dirs; then
     rm -f "$part"; log "失敗:tar 打包錯誤"; result "FAIL tar"; return 1
   fi
   got="$(tar -tzvf "$part" | grep -c '^-')" || got=0
@@ -43,13 +50,13 @@ run_backup() {
     rm -f "$DEST/$old" "$DEST/$old.sha256"
   done
   size="$(du -h "$target" | cut -f1)"
-  log "完成:$(basename "$target"),$want 個檔案,$size"
+  log "完成:$(basename "$target")($dirs),$want 個檔案,$size"
   result "OK $(basename "$target") files=$want size=$size"
 }
 
 done_today() { [ -f "$DEST/$PREFIX-$(date +%Y%m%d).tar.gz" ]; }
 
-log "啟動:每天 $HOUR 點備份 $SRC → $DEST(保留 $KEEP 份)"
+log "啟動:每天 $HOUR 點備份 $DATA 的 knowledge、warroom → $DEST(保留 $KEEP 份)"
 # 前次被中止(容器重建)留下的暫存檔
 [ -f "$MARK" ] && rm -f "$DEST"/"$PREFIX"-*.tar.gz.part
 done_today || run_backup || true

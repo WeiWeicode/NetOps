@@ -108,7 +108,7 @@ const ftpRoutes: FastifyPluginAsync<{
       schema: {
         operationId: 'netops.ftp.pa-sync',
         summary: '同步 PA 的 FTP 檔案',
-        description: '在背景列出 TRAFFIC 與各類型目錄,把新的、已變更與上次失敗的檔案加入分析佇列;立即回 202,結果看匯入進度的 lastSyncAt 與 lastSyncError。',
+        description: '在背景列出 TRAFFIC 與各類型目錄,把新的、已變更與上次失敗的檔案加入分析佇列(TRAFFIC 只排 FTP 保留期限內的檔、新的先排);立即回 202,結果看匯入進度的 lastSyncAt、lastSyncError 與 traffic.lastSync(added / skipped / outOfWindow)、lastSyncNote。',
         tags: ['FTP Log 檔案'],
         'x-permission': 'netops.ftp.write',
         'x-gherkin': [
@@ -135,7 +135,7 @@ const ftpRoutes: FastifyPluginAsync<{
       schema: {
         operationId: 'netops.ftp.pa-analyze',
         summary: '分析選取的 PA log 檔',
-        description: '把選取的 FTP 檔案加入分析佇列(重新分析也用這個);已在佇列或分析中的會略過。只接受 TRAFFIC 目錄與各類型目錄下的 log 檔,大小與修改時間以 FTP 上的實際值為準;不在 FTP 上或不是 log 的檔案算在 skipped。',
+        description: '把選取的 FTP 檔案加入分析佇列(重新分析也用這個);已在佇列或分析中的會略過。只接受 TRAFFIC 目錄與各類型目錄下的 log 檔,大小與修改時間以 FTP 上的實際值為準;不在 FTP 上或不是 log 的檔案、TRAFFIC 佇列放不下的檔案算在 skipped(一個都放不下時回 409)。',
         tags: ['FTP Log 檔案'],
         'x-permission': 'netops.ftp.write',
         'x-gherkin': [
@@ -185,8 +185,10 @@ const ftpRoutes: FastifyPluginAsync<{
         if (type) eventItems.push({ ...item, type });
         else if (traffic.isTrafficLog(p)) trafficItems.push(item);
       }
-      const added = traffic.enqueue(trafficItems) + events.enqueue(eventItems);
-      return { added, skipped: paths.length - trafficItems.length - eventItems.length };
+      // TRAFFIC 佇列放不下時加到上限為止,略過的算在 skipped(#4);一個都放不下才回 409
+      const t = traffic.enqueueSome(trafficItems);
+      const added = t.added + events.enqueue(eventItems);
+      return { added, skipped: paths.length - trafficItems.length - eventItems.length + t.skipped };
     },
   );
 

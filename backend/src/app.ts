@@ -218,7 +218,8 @@ export async function buildApp(
   // PA 匯入(背景同步在程序內執行,單一容器,D9)
   const ftp = deps.ftp ?? createFtp(config.ftp);
   const paDeps = { ftp, store: app.store.pa, ftpConfig: config.ftp, log: app.log };
-  const traffic = createTrafficImporter(paDeps);
+  // TRAFFIC 同步只排 FTP 保留期限內的檔(#4)
+  const traffic = createTrafficImporter({ ...paDeps, retentionDays: config.ftpRetentionDays });
   const events = createEventImporter(paDeps);
   const ad = createAdImporter({ ftp, store: app.store.ad, ftpConfig: config.ftp, log: app.log });
   app.addHook('onReady', async () => {

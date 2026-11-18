@@ -55,6 +55,11 @@ export interface ImportStatus {
   finishedAt: string | null;
   lastSyncAt: string | null;
   lastSyncError: string;
+  /** TRAFFIC(#4):上次同步加入 / 佇列放不下略過 / 超出 FTP 保留期限沒排的檔數;部分加入的提示(不是錯誤) */
+  lastSync?: { added: number; skipped: number; outOfWindow: number } | null;
+  lastSyncNote?: string;
+  /** TRAFFIC:同步只排這幾天內的檔(NETOPS_FTP_RETENTION_DAYS) */
+  retentionDays?: number;
   syncing: boolean;
   autoSyncMinutes: number;
   running: { path: string; name: string; size: number; read: number; rows: number; seconds: number }[];

@@ -215,12 +215,23 @@ describe('API', () => {
     const doc = (await t.app.inject('/openapi.json')).json();
     const ops = Object.entries(doc.paths as Record<string, Record<string, Record<string, unknown>>>).flatMap(([p, m]) => Object.entries(m).map(([verb, op]) => ({ p, verb, op })));
     const mine = ops.filter((o) => o.p.startsWith('/v1/ip-name'));
-    assert.equal(mine.length, 9);
+    assert.equal(mine.length, 10);
     for (const { p, verb, op } of mine) {
-      assert.equal(op['x-permission'], verb === 'get' || p === '/v1/ip-name-searches' ? 'netops.ip-name.read' : 'netops.ip-name.write', `${verb} ${p}`);
+      assert.equal(op['x-permission'], verb === 'get' || p === '/v1/ip-name-searches' || p === '/v1/ip-name-lookups' ? 'netops.ip-name.read' : 'netops.ip-name.write', `${verb} ${p}`);
       assert.notEqual(op['x-audit-level'], 'body', `${verb} ${p} 不可記錄內容`);
     }
     assert.equal(doc.paths['/v1/pa/log-searches/{id}/rows'].get['x-permission'], 'netops.pa-log.read');
+  });
+
+  it('SG-4:依 IP 查名稱只回查得到的;格式不對 400', async () => {
+    const c = await t.call({ method: 'POST', url: '/v1/ip-names', payload: { ip: '10.20.0.0/16', department: '廠區', device: 'SW-01' } });
+    assert.equal(c.statusCode, 201, c.body);
+    const r = await t.call({ method: 'POST', url: '/v1/ip-name-lookups', payload: { ips: ['10.20.3.7', '10.99.0.1'] } });
+    assert.equal(r.statusCode, 200, r.body);
+    assert.deepEqual(Object.keys(r.json().names), ['10.20.3.7']);
+    assert.equal(r.json().names['10.20.3.7'].device, 'SW-01');
+    assert.equal((await t.call({ method: 'POST', url: '/v1/ip-name-lookups', payload: { ips: ['x'] } })).statusCode, 400);
+    await t.call({ method: 'DELETE', url: `/v1/ip-names/${c.json().id}` });
   });
 
   let id = '';

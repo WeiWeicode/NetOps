@@ -11,7 +11,6 @@ import { can } from '@/api/gateway';
 import { UI } from '@/api/perms';
 import { paLive, type CollectorControl, type LiveLog, type PaLiveSnapshot } from '@/api/paLive';
 import { LAN_SOURCE, OTHER_SOURCE, warroom as api, type Warroom, type WarroomLink, type WarroomRisk, type WarroomSegment, type WarroomSource } from '@/api/warroom';
-import { absorbNames } from './ipNames';
 import { MAX_LOGS, useLiveStream } from './paLive';
 import { usePolling } from './usePolling';
 import { createWarroomMock, resolveMock, warroomMockLoadScale, type WarroomMock } from './warroomMock';
@@ -241,7 +240,6 @@ export function useWarroom(options: UseWarroomOptions = {}) {
     (r) => {
       if (r instanceof Error) warroomError.value = r;
       else {
-        absorbNames(r);
         data.value = r;
         warroomError.value = null;
         lastOkAt.value = Date.now();
@@ -255,7 +253,6 @@ export function useWarroom(options: UseWarroomOptions = {}) {
     (r) => {
       if (r instanceof Error) riskError.value = r;
       else {
-        absorbNames(r);
         risk.value = r;
         riskError.value = null;
       }

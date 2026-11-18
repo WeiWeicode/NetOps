@@ -281,7 +281,9 @@ sudo sha256sum /root/netops-deploy/host3-pa-pki.sh    # 和開發機 sha256sum d
    ```sql
    SELECT toDate(bucket) d, count() FROM netops.pa_heat_5m WHERE bucket >= '2026-11-01' GROUP BY d ORDER BY d;
    ```
-   已有部分資料的日子先刪掉再還原(例:`ALTER TABLE netops.pa_heat_5m DELETE WHERE toDate(bucket) = '2026-11-14' SETTINGS mutations_sync = 1`)。
+   每小時彙總(`pa_traffic_hourly_app`、`pa_traffic_hourly_src`,SummingMergeTree)時間欄位是 `hour`:`SELECT toDate(hour) d, count() FROM netops.pa_traffic_hourly_app WHERE hour >= '2026-11-01' GROUP BY d ORDER BY d`。
+   已有部分資料的日子先刪掉再還原(例:`ALTER TABLE netops.pa_heat_5m DELETE WHERE toDate(bucket) = '2026-11-14' SETTINGS mutations_sync = 1`;每小時彙總用 `toDate(hour)`)。
+   正式還原前建議先在測試區照本節完整做一次(整合測試只驗證了還原運算式)。
 3. 還原(`sudo docker exec -it giganexus-netops-prod-netops-clickhouse-1 clickhouse-client`;路徑可用萬用字元一次還原多天,例 `2026/pa_heat_5m_2026-11-*.parquet`):
    ```sql
    -- 熱力圖(heat_5m / heat_1h / heat_1d 同一個寫法,換表名與檔名)
@@ -345,7 +347,15 @@ sudo sha256sum /root/netops-deploy/host3-pa-pki.sh    # 和開發機 sha256sum d
 標記檔 `.giga-netops-backup` 不存在時整輪跳過(NAS 沒掛上)。
 NAS 上的備份含個資(`ipnames/`、`palogs/ai-daily/`):`giga-netops/` 目錄的存取權限照附件服務備份的規則由 NAS 管理員控管。
 
-**還原資料目錄**(主機 3 磁碟遺失時):停 `netops-api` → `sha256sum -c` 核對 → 以 root 解到資料目錄(`tar -xzf netops-data-prod-YYYYMMDD.tar.gz -C /srv/giga-netops/prod`,擁有者改回 uid 1000:`chown -R 1000:1000 /srv/giga-netops/prod/palogs /srv/giga-netops/prod/adlogs /srv/giga-netops/prod/ipnames`)→ 重試 `deploy-prod`。
+**還原資料目錄**(主機 3 磁碟遺失時):停 `netops-api` → `sha256sum -c` 核對 → 以 uid 1000 解到暫存目錄、確認只有 `palogs/`、`adlogs/`、`ipnames/` 底下的一般檔案,再搬回資料目錄 → 重試 `deploy-prod`:
+```bash
+sudo install -d -o 1000 -g 1000 -m 700 /srv/giga-netops/restore
+sudo -u '#1000' tar -xzf netops-data-prod-YYYYMMDD.tar.gz -C /srv/giga-netops/restore --no-same-owner --no-same-permissions
+sudo find /srv/giga-netops/restore ! -type f ! -type d          # 應該沒有輸出(沒有 symlink 等特殊檔)
+ls /srv/giga-netops/restore                                     # 只有 palogs adlogs ipnames
+sudo mv /srv/giga-netops/restore/palogs /srv/giga-netops/restore/adlogs /srv/giga-netops/restore/ipnames /srv/giga-netops/prod/   # 目的目錄已存在時先改名保留
+```
+`.sha256` 和備份放在同一個 NAS 目錄,只能發現傳輸損壞、不能防竄改;要防竄改時另外保存雜湊(例如每月把 `LAST_RESULT` 與 `.sha256` 複製到 NAS 以外)。
 備份日之後到 FTP 仍保留的檔案,netops-api 啟動後的同步會再分析補上。
 
 **還原網段設定到舊版**(擇一;`warroom.json` 的 `version` 以當下為準,PUT 比對的是檔案內的 `version`):

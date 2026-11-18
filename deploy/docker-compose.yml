@@ -339,6 +339,8 @@ services:
     init: true
     # 只寫 /backup;不需要任何 capability
     read_only: true
+    # 打包用的檔案清單(資料目錄約 1 萬多個檔名,約 1 MB);不放在 NAS 上
+    tmpfs: ["/tmp:size=32m,uid=1000,gid=1000,mode=0700"]
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     # 健康檢查:/backup/LAST_RESULT 26 小時內更新過(每天備份一次 + 緩衝)且結果是 OK。
@@ -356,6 +358,8 @@ services:
       KB_BACKUP_KEEP: ${KB_BACKUP_KEEP:-30}
       # 資料目錄(palogs、adlogs、ipnames;netops-data-<區>-YYYYMMDD.tar.gz)的保留份數:一份會隨資料目錄成長,和知識庫分開設定
       KB_BACKUP_DATA_KEEP: ${KB_BACKUP_DATA_KEEP:-7}
+      # NAS 剩餘空間下限(MB),不足時不寫(共用分享)
+      KB_BACKUP_MIN_FREE_MB: ${KB_BACKUP_MIN_FREE_MB:-2048}
     volumes:
       - ${NETOPS_DATA_HOST_DIR}:/data:ro
       # 主機 cifs 掛載點下的區域目錄(附件服務同一個 NAS 分享 docker-folder);沒有標記檔 .giga-netops-backup 時不寫入

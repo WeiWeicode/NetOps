@@ -9,7 +9,8 @@
 #   兩者都排除寫入中的暫存檔 *.tmp(infra/store 原子寫入)
 #   目的 /backup(主機 /mnt/nas-docker/giga-netops/<區>,cifs 由 giga-file-service 的 host2-mount-nas.sh 掛載)
 #   - 目的根目錄沒有標記檔 .giga-netops-backup 時視為 NAS 未掛載,整輪跳過(Docker 會在掛載點不存在時建立本機空目錄,不可寫進去)
-#   - 先列出檔案清單,依清單打包(netops-api 持續寫入資料目錄:打包期間新增的檔不影響核對,清單內的檔被刪除則這次失敗、稍後重試)
+#   - NAS 剩餘空間低於 KB_BACKUP_MIN_FREE_MB(預設 2048)時不寫
+#   - 先列出檔案清單(容器內 tmpfs /tmp),依清單打包(netops-api 持續寫入資料目錄:打包期間新增的檔不影響核對,清單內的檔被刪除則這次失敗、稍後重試)
 #   - 先寫 .part,解壓列表核對檔數後才改名;同時寫 .sha256
 #   - 容器啟動時若今天還沒有備份就先備份一次(部署後即可確認),之後每天 KB_BACKUP_HOUR 點(那一小時內失敗每 5 分鐘重試;已完成的檔不重做)
 #   - 結果只寫容器日誌與 /backup/LAST_RESULT(第一版不回報 giga-observe;兩個檔都成功才是 OK)
@@ -21,9 +22,14 @@ ENV_NAME="${GW_ENV:?GW_ENV 必須設定}"
 HOUR="${KB_BACKUP_HOUR:-2}"
 KEEP="${KB_BACKUP_KEEP:-30}"
 DATA_KEEP="${KB_BACKUP_DATA_KEEP:-7}"
+# NAS 剩餘空間下限(MB):不足時不寫(和附件服務等共用分享,不能把它塞滿;資安審查 M2)
+MIN_FREE_MB="${KB_BACKUP_MIN_FREE_MB:-2048}"
+# 檔案清單放容器內的 tmpfs(不留在 NAS 上;資安審查 L1)
+TMP="${TMPDIR:-/tmp}"
 case "$HOUR" in [0-9] | 1[0-9] | 2[0-3]) ;; *) echo "[kb-backup] KB_BACKUP_HOUR 須為 0–23:$HOUR" >&2; exit 1 ;; esac
 case "$KEEP" in '' | *[!0-9]* | 0) echo "[kb-backup] KB_BACKUP_KEEP 須為正整數:$KEEP" >&2; exit 1 ;; esac
 case "$DATA_KEEP" in '' | *[!0-9]* | 0) echo "[kb-backup] KB_BACKUP_DATA_KEEP 須為正整數:$DATA_KEEP" >&2; exit 1 ;; esac
+case "$MIN_FREE_MB" in '' | *[!0-9]*) echo "[kb-backup] KB_BACKUP_MIN_FREE_MB 須為非負整數:$MIN_FREE_MB" >&2; exit 1 ;; esac
 KB_PREFIX="netops-kb-$ENV_NAME"
 DATA_PREFIX="netops-data-$ENV_NAME"
 # 資料目錄要備份的子目錄(固定清單;不存在的略過)
@@ -44,13 +50,21 @@ kb_dirs() { existing knowledge warroom; }
 # pack <前綴> <保留份數> <子目錄...>:打包成 <前綴>-<日期>.tar.gz;今天的檔已存在就略過。成功時印出「檔名 files=N size=S」
 pack() {
   prefix="$1"; keep="$2"; shift 2
+  # 沒有目錄時 find 會掃整個 /data(code review):直接失敗
+  [ $# -gt 0 ] || { log "失敗:$prefix 沒有可備份的目錄"; return 1; }
   target="$DEST/$prefix-$(today).tar.gz"
   part="$target.part"
-  list="$part.list"
+  list="$TMP/$prefix.list"
   if [ -f "$target" ]; then echo "$(basename "$target") 已存在"; return 0; fi
+  free="$(df -Pk "$DEST" | awk 'NR == 2 { print int($4 / 1024) }')"
+  if [ -z "$free" ] || [ "$free" -lt "$MIN_FREE_MB" ]; then
+    log "失敗:$DEST 剩餘空間 ${free:-?} MB,低於 $MIN_FREE_MB MB,不備份 $prefix"; return 1
+  fi
   rm -f "$part" "$list"
-  # 只列一般檔案(不跟隨 symlink);排除每小時重算的 ai-hourly.json 與原子寫入的暫存檔 *.tmp
-  if ! (cd "$DATA" && find "$@" -type f ! -path 'warroom/ai-hourly.json' ! -name '*.tmp') > "$list"; then
+  # 只列一般檔案(不跟隨 symlink);排除每小時重算的 ai-hourly.json、原子寫入的暫存檔 *.tmp,
+  # 以及檔名含換行的檔(清單一行一個檔名;資安審查 L2)
+  nl="$(printf '*\n*')"
+  if ! (cd "$DATA" && find "$@" -type f ! -path 'warroom/ai-hourly.json' ! -name '*.tmp' ! -name "$nl") > "$list"; then
     rm -f "$list"; log "失敗:$prefix 列出檔案錯誤"; return 1
   fi
   want="$(wc -l < "$list" | tr -d ' ')"
@@ -99,7 +113,7 @@ done_today() {
 
 log "啟動:每天 $HOUR 點備份 $DATA 的 knowledge、warroom(保留 $KEEP 份)與 $DATA_DIRS(保留 $DATA_KEEP 份)→ $DEST"
 # 前次被中止(容器重建)留下的暫存檔與清單
-[ -f "$MARK" ] && rm -f "$DEST"/"$KB_PREFIX"-*.tar.gz.part "$DEST"/"$KB_PREFIX"-*.tar.gz.part.list "$DEST"/"$DATA_PREFIX"-*.tar.gz.part "$DEST"/"$DATA_PREFIX"-*.tar.gz.part.list
+[ -f "$MARK" ] && rm -f "$DEST"/"$KB_PREFIX"-*.tar.gz.part "$DEST"/"$DATA_PREFIX"-*.tar.gz.part
 done_today || run_backup || true
 while :; do
   sleep 300

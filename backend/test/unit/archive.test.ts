@@ -252,7 +252,8 @@ describe('Archiver.tick', () => {
     assert.match(f.manifest.get('traffic:2026-11-11')?.error ?? '', /ECONNREFUSED/);
     // 2026-11-10 是 D+2 → late
     assert.equal(a.status.state, 'late');
-    assert.deepEqual(a.status.late, ['traffic:2026-11-10', 'threat:2026-11-10', ...AGG.map((k) => `${k}:2026-11-10`)]);
+    // 逾期告警只算原始表
+    assert.deepEqual(a.status.late, ['traffic:2026-11-10', 'threat:2026-11-10']);
     assert.equal(f.manifest.get('heat_5m:2026-11-11')?.status, 'failed');
     assert.ok(logs.some((l) => l.level === 'error' && /逾期/.test(l.msg)));
     f.setFailExport(false);

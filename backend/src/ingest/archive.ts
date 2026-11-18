@@ -244,7 +244,8 @@ export class Archiver {
             continue;
           }
           pending.push({ kind, day, stale: false });
-          if (ageDays(day, today) >= this.o.alertDays) late.push(key(kind, day));
+          // 逾期告警只看原始表(資料會被 TTL 刪除);彙總表的 TTL 較長,失敗時狀態是 failing(code review #3)
+          if (!def.derived && ageDays(day, today) >= this.o.alertDays) late.push(key(kind, day));
         }
       }
       if (recheck) this.lastRecheck = now;

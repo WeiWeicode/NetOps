@@ -2,7 +2,35 @@
 
 > 接手時先讀 `AGENT.md`,再讀 `docs/ARCHITECTURE.md`、`docs/IMPL-PLAN.md`。
 
-## 2026-11-17 收工:正式區 PA 轉送完成,明天對帳
+## 2026-11-18 收工:網段設定(SG)測試區完成並驗收
+
+**接手方式**:新討論串說「從 `NetOps/docs/HANDOFF.md`「2026-11-18 收工」接手,做 SG-5 正式區」。
+
+### 已完成
+
+- SG-0 ~ SG-4 全部合併 `develop` 並在測試區驗收通過(需求方 2026-11-18):!127 計畫、!128 SG-0(戰情室右側連線聚集到核心)、!129 SG-1(後端 API、版本號、`warroom/history/`、NAS 備份加 `warroom/`)、!130 SG-2(前端邏輯)、!131 SG-4 邏輯(搭配 A–D、D45 範圍變更)、!132 畫面(Gemini)。文件:API.md §12、ARCHITECTURE D46–D48、IMPL-PLAN「SG」、`deploy/RUNBOOK-prod.md` §7。
+- 驗收報告:`docs/test-reports/2026-11-18-segment-settings-acceptance.md`(!133)。21 項通過;群組名稱 / 選單順序是 GigaItApp 選單設定(需求方決定維持現狀)。
+- 需求方 2026-11-18 決定:戰情室兩支 API 不回 `names`,設備名稱只經 `POST /ip-name-lookups`;Log 表(stream)維持顯示名稱(已知行為:只有 `netops.pa-realtime.read` 也看得到,若要限制需另案)。
+
+### 下一步(依序)
+
+1. 2026-11-19 02:02 之後查測試區 NAS 備份(驗收 #22):`ssh host2` 唯讀看 `netops-kb-test-20261119.tar.gz` 含 `warroom/warroom.json`、`warroom/history/*`、不含 `warroom/ai-hourly.json`,`LAST_RESULT` 為 `OK`。(部署當天已有 02:02 備份,`done_today` 不會補備份,不是 bug。)
+2. SG-5 正式區:網通提供正式網段清單 → 正式區部署(`develop` → `main` 經 MR 由 Maintainer 合併)→ GigaItApp 發佈路由 → 網段設定頁匯入網段並儲存。
+
+### 上線前待辦(需求方 / 維運)
+
+- 正式區 GigaItApp「服務與路由」發佈 4 條路由草稿:`GET/PUT /api/netops/warroom-segments`、`POST /api/netops/warroom-segment-previews`、`POST /api/netops/ip-name-lookups`(未發佈時 API 回 404,是路由問題)。
+- 正式區 GigaItApp「選單管理」:群組顯示名稱「網通設定」、順序 網段設定 10 → IP 對照表 20 → 知識庫 30(測試區目前仍是「資訊網通管理設定」且順序不同,需求方決定維持,正式區是否調整由需求方決定);`deploy/gateway-rbac.yaml` 已含節點。
+- netops-admin 帳號重新登入;正式區 `warroom/` 一開始不存在,首次儲存才產生(此時備份只打包 `knowledge`,有 `warroom/` 後才含)。
+
+### 驗收未覆蓋項
+
+- 滑鼠拖曳排序(只驗上移 / 下移按鈕)。
+- `warroom/history/` 上限 20 份(測試區只存到 v5,未存滿)。
+- 驗收 #11(搭配 A 的設備名稱內容)、#12(搭配 B 實際匯入):測試區 IP 對照表無對應資料,只驗到欄位與按鈕 / 已涵蓋判定。
+- #22 NAS 備份內容(見下一步 1)。
+
+## 〔前一輪〕2026-11-17 收工:正式區 PA 轉送完成,明天對帳
 
 **接手方式**:新討論串說「從 `NetOps/docs/HANDOFF.md`「2026-11-17 收工」接手,做正式區對帳」。
 

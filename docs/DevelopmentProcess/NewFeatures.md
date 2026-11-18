@@ -2,6 +2,12 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。
 
+## 2026-11-18 網段設定(SG-0~SG-4)文件統一
+- 工作項目:SG-0~SG-4(ARCHITECTURE D46–D48;需求方 2026-11-17 Q1–Q6、2026-11-18 Q7–Q10)
+- 內容:戰情室右側內部網段改在畫面維護(網通設定 › 網段設定):清單與驗證、版本號與 409 衝突、儲存前預覽近 5 分鐘、JSON 匯入 / 匯出;搭配 IP 對照表 A(未分類 IP 協助分類)、B(從對照表網段列匯入)、C(對照表顯示網段)、D(戰情室滑過節點帶設備名稱);`warroom.json` 寫入前存 `history/`(20 份),NAS 每日備份加 `warroom/`;戰情室右側連線聚集到核心;D45 範圍變更:`/pa-live/warroom`、`/pa-live/risk` 不再回 `names`,名稱只經 `POST /ip-name-lookups`。本筆統一補文件(功能分支依規定未改文件)。
+- 檔案:`docs/API.md` §12、`docs/ARCHITECTURE.md` D45 / D46–D48、`docs/IMPL-PLAN.md`、`docs/PROJECT-MAP.md`、`docs/HANDOFF.md`、`deploy/RUNBOOK-prod.md` §7;程式見 BackendCorrection、FrontendCorrection 同批 MR(!128–!132)
+- 驗證:測試區驗收 2026-11-18(`docs/test-reports/2026-11-18-segment-settings-acceptance.md`):21 項通過;未覆蓋:滑鼠拖曳、history 20 份上限、#11 #12、#22 NAS 備份
+
 ## 2026-11-14 IP 對照表(AC3)
 - 工作項目:AC3(ARCHITECTURE D45;需求方 AQ1–AQ3;前端頁面需求方 2026-11-13 改交 Claude)
 - 內容:網通知識 › IP 對照表(只給網管):單筆新增 / 修改 / 刪除、Excel / CSV 範本下載、匯入先預覽差異(整份取代)再確認、匯出。PA 各畫面 IP 旁顯示名稱(看得到 PA 就看得到)、Log 明細匯出多來源 / 目的名稱欄、Log 明細可用使用者 / 部門查(API 端換成 IP 範圍)、AI 提示詞附名稱(不遮罩)。

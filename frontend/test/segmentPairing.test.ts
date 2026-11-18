@@ -36,6 +36,17 @@ describe('名稱快取', () => {
     expect(c.label('10.0.0.1')?.device).toBe('NB-01');
     expect(c.label('10.0.0.2')).toBeNull();
   });
+  it('403 後停止查詢', async () => {
+    const { ApiError } = await import('@/api/gateway');
+    const lookup = vi.fn(async () => {
+      throw new ApiError(403, 'FORBIDDEN', 'x', null);
+    });
+    const c = createNameCache(lookup, () => true);
+    await c.ensure(['10.0.0.1']);
+    await c.ensure(['10.0.0.9']);
+    expect(lookup).toHaveBeenCalledTimes(1);
+    expect(c.label('10.0.0.1')).toBeNull();
+  });
 });
 
 describe('A 未分類 IP 協助分類', () => {
@@ -77,6 +88,7 @@ describe('B 從 IP 對照表網段列建立', () => {
     ]);
     b.toggle('1');
     b.toggle('2');
+    b.toggle('3'); // 已涵蓋,略過
     expect(b.importSelected()).toBe(1);
     expect(s.draft.segments.at(-1)).toMatchObject({ label: '生管', cidrs: ['10.30.1.0/24', '10.30.2.0/24'] });
     expect(s.issues).toEqual([]);
@@ -102,6 +114,7 @@ describe('C IP 對照表顯示所屬網段', () => {
     const ex = useSegmentLookup({ get: async () => settings('example'), allowed: () => true, immediate: false });
     await ex.load();
     expect(ex.segmentOf('10.10.130.9')).toBeNull();
+    expect(ex.available).toBe(false);
     const get = vi.fn();
     const no = useSegmentLookup({ get, allowed: () => false, immediate: false });
     await no.load();

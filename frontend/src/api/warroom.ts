@@ -93,8 +93,6 @@ export interface Warroom {
   links: WarroomLink[];
   kpis: { denyPerMin: number | null; threat5m: number | null };
   sample: WarroomSample | null;
-  /** IP 名稱對照(absorbNames 用) */
-  names?: Record<string, string>;
 }
 
 export interface WarroomRisk {
@@ -113,7 +111,6 @@ export interface WarroomRisk {
   topSources: { key: string; label: string; country: string | null; count: number; denyRatio: number | null }[];
   /** partial 時沒有這個欄位 */
   sample?: { threat: number; complete: boolean } | null;
-  names?: Record<string, string>;
 }
 
 /** WR-3(!116)實際狀態;執行中看 running 布林,不是 status */

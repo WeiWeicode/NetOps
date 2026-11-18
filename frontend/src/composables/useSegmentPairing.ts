@@ -10,9 +10,9 @@
  *     a.createSlash24(ip, label?)                // 依此 IP 建 /24 網段(草稿);回新網段索引,已被涵蓋回 -1
  *   B 從 IP 對照表的網段列建立(網段設定頁的對話框):
  *     const b = useIpNameCidrImport(settings)
- *     await b.load()                             // 讀對照表中 CIDR(/0–/31)的列
+ *     await b.load()                             // 讀對照表中 CIDR(/8–/31)的列
  *     b.candidates                               // [{ key, cidr, label, coveredBy, entry }];coveredBy = 已被哪個網段涵蓋
- *     b.selected(Set)/b.toggle(key)/b.importSelected()   // 加進草稿(名稱:部門 > 備註 > 設備 > 姓名 > CIDR);回新增數
+ *     b.selected(Set)/b.toggle(key)/b.importSelected()   // 加進草稿(名稱:部門 > 備註 > 設備 > 姓名 > CIDR;已涵蓋的略過,畫面請停用其勾選);回新增數
  *   C IP 對照表顯示所屬網段(IP 對照表頁加一欄,唯讀):
  *     const c = useSegmentLookup()               // 掛載時讀網段設定(沒有 netops.segment.read 時 available false,不顯示欄)
  *     c.available / c.segmentOf(ipOrCidr)        // → { id, label } | null
@@ -22,7 +22,7 @@
  *     d.deviceOf(ip)                             // → 設備名稱(沒有則名稱 / 部門),沒有權限或查不到 → null(只顯示 IP)
  */
 import { computed, onMounted, reactive, ref, shallowReactive, shallowRef, watch } from 'vue';
-import { can } from '@/api/gateway';
+import { ApiError, can } from '@/api/gateway';
 import { ipNames, type IpNameEntry, type IpNameLabel } from '@/api/ipNames';
 import { API } from '@/api/perms';
 import { segmentsApi, SEGMENT_LIMITS, type SegmentDef } from '@/api/segments';
@@ -41,8 +41,10 @@ export function createNameCache(lookup: IpNameLookup = ipNames.lookup, allowed: 
   const names = shallowReactive(new Map<string, IpNameLabel | null>());
   const pending = new Set<string>();
   const error = ref<Error | null>(null);
+  /** 收到 403(沒有或被收回對照表權限)後不再查詢,只顯示 IP */
+  let denied = false;
   async function ensure(ips: Iterable<string>): Promise<void> {
-    if (!allowed()) return;
+    if (!allowed() || denied) return;
     const want = [...new Set(ips)].filter((ip) => !names.has(ip) && !pending.has(ip) && parseCidr(ip)?.bits === 32);
     if (!want.length) return;
     if (names.size + want.length > CACHE_MAX) names.clear();
@@ -55,8 +57,10 @@ export function createNameCache(lookup: IpNameLookup = ipNames.lookup, allowed: 
       }
       error.value = null;
     } catch (e) {
-      // 403(權限被收回)等:不顯示名稱,畫面照常只看 IP
+      // 403:停止查詢;其他錯誤:這批記成查不到(不在每次滑過時重送),畫面照常只看 IP
       error.value = e as Error;
+      if (e instanceof ApiError && e.status === 403) denied = true;
+      for (const ip of want) if (!names.has(ip)) names.set(ip, null);
     } finally {
       for (const ip of want) pending.delete(ip);
     }
@@ -68,8 +72,8 @@ export function createNameCache(lookup: IpNameLookup = ipNames.lookup, allowed: 
 export function useUnmatchedAssist(settings: SegmentSettingsState, cache = createNameCache()) {
   // 預覽結果換了就查名稱(有權限才查)
   watch(
-    () => settings.preview,
-    (p) => void cache.ensure((p?.unmatched.top ?? []).map((t) => t.ip)),
+    () => [settings.preview, cache.allowed()] as const,
+    ([p]) => void cache.ensure((p?.unmatched.top ?? []).map((t) => t.ip)),
     { immediate: true },
   );
   const rows = computed(() => {
@@ -85,10 +89,11 @@ export function useUnmatchedAssist(settings: SegmentSettingsState, cache = creat
     else s.cidrs.push(cidr);
     return true;
   }
+  /** 回新網段索引;-1 = 不是 IPv4、這個 /24 已整個被某網段涵蓋,或已達網段上限 */
   function createSlash24(ip: string, label?: string): number {
     const cidr = slash24Of(ip);
     if (!cidr) return -1;
-    if (settings.draft.segments.some((s) => s.cidrs.includes(cidr))) return -1;
+    if (createSegmentMatcher(settings.draft.segments)(cidr)) return -1;
     const l = cache.label(ip);
     const name = (label ?? (l?.department || `網段 ${cidr}`)).slice(0, SEGMENT_LIMITS.label);
     return settings.addSegment({ label: name, cidrs: [cidr] });
@@ -125,7 +130,8 @@ export function useIpNameCidrImport(settings: SegmentSettingsState, list = ipNam
         const r = await list('', page, PAGE);
         for (const e of r.items) {
           const p = parseCidr(e.ip);
-          if (e.ip.includes('/') && p && p.bits < 32) out.push(e);
+          // /0–/7 太大(幾乎涵蓋全部流量),不列為候選
+          if (e.ip.includes('/') && p && p.bits >= 8 && p.bits < 32) out.push(e);
         }
         if (page * PAGE >= r.total || !r.items.length) break;
       }
@@ -152,7 +158,7 @@ export function useIpNameCidrImport(settings: SegmentSettingsState, list = ipNam
   function importSelected(kind: SegmentDef['kind'] = 'vlan'): number {
     const byLabel = new Map<string, string[]>();
     for (const c of candidates.value) {
-      if (!selected.has(c.key)) continue;
+      if (!selected.has(c.key) || c.coveredBy) continue;
       const list = byLabel.get(c.label) ?? byLabel.set(c.label, []).get(c.label)!;
       if (!list.includes(c.cidr)) list.push(c.cidr);
     }
@@ -179,7 +185,7 @@ export function useSegmentLookup(opts: { get?: typeof segmentsApi.get; allowed?:
     try {
       const s = await get();
       // 尚未設定(範例)或設定檔壞掉時不顯示,避免把範例網段當成真的
-      segments.value = s.source === 'file' ? s.segments : [];
+      segments.value = s.source === 'file' ? s.segments : null;
       error.value = null;
     } catch (e) {
       error.value = e as Error;

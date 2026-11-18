@@ -5,6 +5,7 @@
 ## 2026-11-18 網段設定 × IP 對照表搭配後端(SG-4)
 - 工作項目:SG-4(`docs/SEGMENT-SETTINGS-PLAN.md` §3、§6 Q3、Q4)
 - 內容:新增 `POST /v1/ip-name-lookups`(依 IP 查名稱,最多 200 個;x-permission `netops.ip-name.read`、稽核 meta),給搭配 A(未分類 IP 名稱)與 D(戰情室提示設備名稱);戰情室 WR-1 `segments[].topIps`(連線數前 5 的內部 IP,不含名稱)。
+  - **D45 範圍變更(需求方 2026-11-18「依建議」)**:`/pa-live/warroom`、`/pa-live/risk` 不再附 IP 對照表 `names`(移除 `config.ipNames`);名稱只經 `/ip-name-lookups`(`netops.ip-name.read`)。其他 PA API 照 D45 不變。前端 `useWarroom` 不再 `absorbNames` 這兩支回應。
 - 檔案:`backend/src/modules/ip-names/routes.ts`、`backend/src/modules/pa-live/warroom.ts`
 - 驗證:`test/unit/ip-names.test.ts`、`test/unit/segments.test.ts`;全套見 MR
 

@@ -155,6 +155,12 @@ describe('網段設定 API', () => {
     // SG-4 D:戰情室網段帶 Top 內部 IP(不含名稱以外的個資;名稱經 /ip-name-lookups)
     const w = (await t.call({ url: '/v1/pa-live/warroom' })).json();
     assert.deepEqual(w.segments.find((x: { id: string }) => x.id === 'server').topIps, [{ key: '10.10.130.5', count: 3 }]);
+    // D45 範圍變更(2026-11-18):戰情室兩支 API 不附 names,即使對照表有這個 IP
+    const c = await t.call({ method: 'POST', url: '/v1/ip-names', payload: { ip: '10.10.130.5', device: 'DB-01' } });
+    assert.equal(c.statusCode, 201, c.body);
+    clock += 120_000;
+    assert.equal('names' in (await t.call({ url: '/v1/pa-live/warroom' })).json(), false);
+    assert.equal('names' in (await t.call({ url: '/v1/pa-live/risk' })).json(), false);
     assert.equal((await t.call({ url: '/v1/warroom-segments' })).json().version, before);
     redis.fail = true;
     const d = (await t.call({ method: 'POST', url: '/v1/warroom-segment-previews', payload: { segments: SEGS } })).json();

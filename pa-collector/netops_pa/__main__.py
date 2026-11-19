@@ -1,7 +1,8 @@
 """netops-pa 進入點:python -m netops_pa
 
 單一程序(PA-LIVE-PLAN §2):寫入執行緒(Redis)、輪詢執行緒(PA_POLL_ENABLED)、HTTP 與 Syslog 接收(PA_RECEIVE_ENABLED)、
-PA 精準查詢執行者(PA_QUERY_ENABLED,C5;一次一個,pa_query.py)、安全規則收集(PA_POLICY_ENABLED,PR-1;policies.py)。
+PA 精準查詢執行者(PA_QUERY_ENABLED,C5;一次一個,pa_query.py)、安全規則收集(PA_POLICY_ENABLED,PR-1;policies.py)、
+威脅特徵碼收集(PA_SIGNATURE_ENABLED,TS-1;signatures.py)。
 `python -m netops_pa health`:容器健康檢查(主迴圈 30 秒內有更新存活檔)。
 `python -m netops_pa check`:第一次接 PA-560 時的連線檢查(check.py)。
 """
@@ -25,6 +26,7 @@ from .poller import Poller, SdkClient
 from .receiver_http import HttpReceiver
 from .receiver_syslog import SyslogReceiver
 from .servers import tls_context
+from .signatures import SignatureApi, SignatureWorker
 from .status import Status, register_secret
 from .store import RedisStore, connect
 
@@ -56,7 +58,7 @@ def main() -> int:
         log.error("設定錯誤:%s", e)
         return 2
     logging.getLogger().setLevel(cfg.log_level)
-    if cfg.gw_env == "prod" and any(c and c.tls_insecure for c in (cfg.poll, cfg.query, cfg.policy)):
+    if cfg.gw_env == "prod" and any(c and c.tls_insecure for c in (cfg.poll, cfg.query, cfg.policy, cfg.signature)):
         log.warning("正式區不驗證 PA-560 管理介面憑證(PA_TLS_INSECURE=1)")
     quiet_sdk_logs()
 
@@ -69,10 +71,20 @@ def main() -> int:
         register_secret(cfg.query.api_key)
     if cfg.policy:
         register_secret(cfg.policy.api_key)
+    if cfg.signature:
+        register_secret(cfg.signature.api_key)
     tls_on = bool(cfg.receive and cfg.receive.tls_cert)
     # queryEnabled:netops-api 依這個欄位決定 PA 精準查詢能不能送出(沒有執行者時回 409,不讓工作卡在佇列)
-    status = Status(__version__, cfg.gw_env, cfg.poll is not None, cfg.receive is not None, receiveTls="1" if tls_on else "0",
-                    queryEnabled="1" if cfg.query else "0", policyEnabled="1" if cfg.policy else "0")
+    status = Status(
+        __version__,
+        cfg.gw_env,
+        cfg.poll is not None,
+        cfg.receive is not None,
+        receiveTls="1" if tls_on else "0",
+        queryEnabled="1" if cfg.query else "0",
+        policyEnabled="1" if cfg.policy else "0",
+        signatureEnabled="1" if cfg.signature else "0",
+    )
     store = RedisStore(connect(cfg.redis_url), cfg.top_n)
     # 測試區手動開關:只有 test(與本機 dev)讀,正式區不讀(control.py;allowlist)
     control = Control(store.read_control, enabled=cfg.gw_env in ("dev", "test"))
@@ -105,6 +117,25 @@ def main() -> int:
     else:
         log.info("安全規則收集未啟用(PA_POLICY_ENABLED)")
 
+    signature = None
+    if cfg.signature:
+        signature = SignatureWorker(
+            store.r,
+            SignatureApi(cfg.signature),
+            status,
+            cfg.signature.interval,
+            cfg.signature.max_mgmt_cpu,
+            paused=control.poll_paused,
+        )
+        signature.start()
+        log.info(
+            "威脅特徵碼收集已啟用:每 %d 分鐘檢查版本 + 手動重新整理 / 按需查詢、管理平面 CPU 超過 %d%% 不讀",
+            cfg.signature.interval // 60,
+            cfg.signature.max_mgmt_cpu,
+        )
+    else:
+        log.info("威脅特徵碼收集未啟用(PA_SIGNATURE_ENABLED)")
+
     servers = []
     if cfg.receive:
         rc = cfg.receive
@@ -123,7 +154,7 @@ def main() -> int:
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, lambda *_: stop.set())
     exit_code = 0
-    workers = [pipeline.alive, *(x.alive for x in servers), *(w.alive for w in (poller, query, policy) if w)]
+    workers = [pipeline.alive, *(x.alive for x in servers), *(w.alive for w in (poller, query, policy, signature) if w)]
     while not stop.is_set():
         # 任一工作執行緒結束就結束程序(結束碼 1),由 Compose restart: unless-stopped 重啟
         # (Docker Engine 不會自動重啟 unhealthy 的容器,所以不能只靠健康檢查)
@@ -150,6 +181,8 @@ def main() -> int:
         query.stop()
     if policy:
         policy.stop()
+    if signature:
+        signature.stop()
     pipeline.stop()
     return exit_code
 

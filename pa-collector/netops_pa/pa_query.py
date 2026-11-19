@@ -36,7 +36,7 @@ from typing import Any
 import redis
 
 from . import keys
-from .config import PolicyConfig, QueryConfig
+from .config import PolicyConfig, QueryConfig, SignatureConfig
 from .poller import parse_system
 from .status import Status, iso, mask
 
@@ -85,6 +85,11 @@ def release_slot(r: redis.Redis, job_id: str) -> None:
 
 class PaApiError(Exception):
     """PA XML API 失敗;message 已遮罩、只有分類過的內容。"""
+
+    def __init__(self, message: str, *, code: str = "", not_found: bool = False) -> None:
+        super().__init__(message)
+        self.code = code
+        self.not_found = not_found
 
 
 class JobError(Exception):
@@ -190,14 +195,26 @@ def parse_sessions(root: ET.Element, limit: int = MAX_SESSIONS) -> tuple[list[di
 
 
 # ---------- PA XML API(最小用戶端) ----------
+DEFAULT_MAX_RESPONSE_BYTES = 8 * 1024 * 1024
+_READ_CHUNK_BYTES = 1024 * 1024
+_NOT_FOUND_HINTS = ("no such node", "not found", "does not exist")
+
+
 class XmlApi:
     """POST https://host:port/api/,API Key 放 X-PAN-KEY 標頭;HTTPS 憑證預設驗證(同 poller.SdkClient)。"""
 
-    def __init__(self, cfg: QueryConfig | PolicyConfig, *, use_http: bool = False) -> None:
+    def __init__(
+        self,
+        cfg: QueryConfig | PolicyConfig | SignatureConfig,
+        *,
+        use_http: bool = False,
+        max_bytes: int = DEFAULT_MAX_RESPONSE_BYTES,
+    ) -> None:
         scheme = "http" if use_http else "https"  # use_http 只給測試的假 PA
         self.url = f"{scheme}://{cfg.host}:{cfg.port}/api/"
         self.key = cfg.api_key
         self.timeout = cfg.timeout
+        self.max_bytes = max_bytes
         if use_http:
             self.ctx = None
         elif cfg.tls_insecure:
@@ -217,18 +234,23 @@ class XmlApi:
         body = urllib.parse.urlencode(params).encode()
         headers = {"X-PAN-KEY": self.key, "Content-Type": "application/x-www-form-urlencoded"}
         req = urllib.request.Request(self.url, data=body, method="POST", headers=headers)  # noqa: S310 — 位址只從設定讀
+        buf = bytearray()
         try:
             with self._open(req, timeout=timeout or self.timeout) as res:
-                raw = res.read(8 * 1024 * 1024 + 1)
+                while True:
+                    chunk = res.read(min(_READ_CHUNK_BYTES, self.max_bytes + 1 - len(buf)))
+                    if not chunk:
+                        break
+                    buf += chunk
+                    if len(buf) > self.max_bytes:
+                        raise PaApiError("PA 回應過大")
         except urllib.error.HTTPError as e:
             # 3xx 也在這裡(不跟隨轉址)
             raise PaApiError(f"PA 回應 HTTP {e.code}") from None
         except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException) as e:
             raise PaApiError(f"連不到 PA-560:{type(getattr(e, 'reason', e)).__name__}") from None
-        if len(raw) > 8 * 1024 * 1024:
-            raise PaApiError("PA 回應過大")
         try:
-            root = ET.fromstring(raw)  # noqa: S314 — PA-560 管理介面(設定的主機)的回應
+            root = ET.fromstring(bytes(buf))  # noqa: S314 — PA-560 管理介面(設定的主機)的回應
         except ET.ParseError:
             raise PaApiError("PA 回應不是 XML") from None
         if root.get("status") != "success":
@@ -236,7 +258,9 @@ class XmlApi:
             code = root.get("code", "")
             detail = " ".join(t.strip() for t in root.itertext() if t.strip())[:200]
             log.warning("PA 回應錯誤 code=%s:%s", code or "-", mask(detail))
-            raise PaApiError(f"PA-560 回應錯誤{f'(code {code})' if code.isdigit() else ''}")
+            low = detail.lower()
+            not_found = code == "7" or any(hint in low for hint in _NOT_FOUND_HINTS)
+            raise PaApiError(f"PA-560 回應錯誤{f'(code {code})' if code.isdigit() else ''}", code=code, not_found=not_found)
         return root
 
     def op(self, cmd: str, timeout: float | None = None) -> ET.Element:

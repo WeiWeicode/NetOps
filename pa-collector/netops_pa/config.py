@@ -130,6 +130,22 @@ class PolicyConfig:
 
 
 @dataclass(frozen=True)
+class SignatureConfig:
+    """PA 威脅特徵碼收集(TS-1;THREAT-SIGNATURE-PLAN §4.1):連線設定同輪詢,另加間隔與管理平面 CPU 門檻。"""
+
+    host: str
+    port: int
+    # PA_SIGNATURE_API_KEY_FILE 優先;沒設定時沿用 PA_POLICY_API_KEY_FILE / PA_API_KEY_FILE
+    api_key: str
+    ca_file: str
+    tls_insecure: bool
+    timeout: int
+    # 定期檢查版本間隔(秒;PA_SIGNATURE_MINUTES,預設 30 分鐘)
+    interval: int
+    max_mgmt_cpu: int
+
+
+@dataclass(frozen=True)
 class ReceiveConfig:
     bind: str
     http_port: int
@@ -161,6 +177,8 @@ class Config:
     query: QueryConfig | None
     # PA 安全規則收集(PA_POLICY_ENABLED;預設關閉)
     policy: PolicyConfig | None
+    # PA 威脅特徵碼收集(PA_SIGNATURE_ENABLED;預設關閉,TS-1)
+    signature: SignatureConfig | None
     # 每分鐘排行每個維度保留前幾名(PA-LIVE-PLAN §4)
     top_n: int
     queue_size: int
@@ -237,6 +255,35 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
             max_mgmt_cpu=_int(env, "PA_POLICY_MAX_MGMT_CPU", 50, 10, 50),
         )
 
+    signature = None
+    if _bool(env, "PA_SIGNATURE_ENABLED"):
+        host = _str(env, "PA_HOST")
+        api_key = (
+            read_secret(env, "PA_SIGNATURE_API_KEY", gw_env)
+            or read_secret(env, "PA_POLICY_API_KEY", gw_env)
+            or read_secret(env, "PA_API_KEY", gw_env)
+        )
+        missing = [
+            k
+            for k, v in (("PA_HOST", host), ("PA_SIGNATURE_API_KEY_FILE / PA_POLICY_API_KEY_FILE / PA_API_KEY_FILE", api_key))
+            if not v
+        ]
+        if missing:
+            raise ConfigError(f"PA_SIGNATURE_ENABLED=1 缺少必要設定:{'、'.join(missing)}")
+        signature = SignatureConfig(
+            host=host,
+            port=_int(env, "PA_PORT", 443, 1, 65535),
+            api_key=api_key,
+            ca_file=_file(env, "PA_CA_FILE"),
+            tls_insecure=_bool(env, "PA_TLS_INSECURE"),
+            # TS-0 實測弱點清單約 11.6 MB / 2.44 秒;預設 30 秒,上限 120 秒(同 scripts/ts0_probe.py)
+            timeout=_int(env, "PA_SIGNATURE_HTTP_TIMEOUT_SECONDS", 30, 5, 120),
+            # 低頻(計畫 §3):每 30 分鐘檢查版本,最短 10 分鐘
+            interval=_int(env, "PA_SIGNATURE_MINUTES", 30, 10, 1440) * 60,
+            # E4 門檻:管理平面 CPU 超過 50% 不送(只能調低)
+            max_mgmt_cpu=_int(env, "PA_SIGNATURE_MAX_MGMT_CPU", 50, 10, 50),
+        )
+
     receive = None
     if _bool(env, "PA_RECEIVE_ENABLED"):
         token = read_secret(env, "PA_HTTP_TOKEN", gw_env)
@@ -283,6 +330,7 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
         receive=receive,
         query=query,
         policy=policy,
+        signature=signature,
         top_n=_int(env, "PA_TOP_N", 200, 10, 1000),
         queue_size=_int(env, "PA_QUEUE_SIZE", 50_000, 1000, 500_000),
     )

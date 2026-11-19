@@ -1,9 +1,10 @@
 """TS-0 唯讀實測:PA-560 本機特徵庫能不能用 op 指令讀(docs/THREAT-SIGNATURE-PLAN.md §2)。
 
 在測試區(主機 2)netops-pa 容器執行(需求方同意後);容器 rootfs 唯讀,不能 docker cp,用標準輸入送進容器。
-在開發機 NetOps 目錄(完整說明見 docs/THREAT-SIGNATURE-PLAN.md §2.2;部署 pipeline 執行中 WSL 會逾時,等部署完再跑):
-    ssh host2 "wsl -u root -e docker exec -i giganexus-netops-test-netops-pa-1 python -" < scripts/ts0_probe.py > ts0-result.json
-    ssh host2 "wsl -u root -e docker exec -i giganexus-netops-test-netops-pa-1 python - --only application" < scripts/ts0_probe.py > ts0-app.json
+在開發機 NetOps 目錄的 PowerShell 執行(PowerShell 不支援 <,交給 cmd /c;部署 pipeline 執行中 WSL 會逾時,等部署完再跑;
+完整說明見 docs/THREAT-SIGNATURE-PLAN.md §2.2):
+    cmd /c "ssh host2 ""wsl -u root -e docker exec -i giganexus-netops-test-netops-pa-1 python -"" < scripts\\ts0_probe.py > ts0-result.json"
+    App 清單:把 python - 改成 python - --only application,輸出改 ts0-app.json
 步驟名稱:system-info、vulnerability、phone-home、profile-group-vsys、profile-group-shared、vp-profiles-vsys、
 as-profiles-vsys、vp-profiles-shared、as-profiles-shared、application、single(單筆查詢,需同時列 vulnerability)
 

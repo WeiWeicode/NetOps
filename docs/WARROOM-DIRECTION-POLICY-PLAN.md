@@ -1,6 +1,6 @@
 # 戰情室進出方向(WD)與 PA 安全規則檢視(PR)計畫
 
-> 狀態:計畫,需求方 2026-11-18 已決定 §4(Q1–Q4),2026-11-19 加 Q5(規則圖分頁,§3.5)。時程以 NexusPlan 甘特圖為準。
+> 狀態:計畫,需求方 2026-11-18 已決定 §4(Q1–Q4),2026-11-19 加 Q5(規則圖分頁,§3.5)、Q6(規則搭配 IP 對照表,§3.6)。時程以 NexusPlan 甘特圖為準。
 > 相關:`docs/WARROOM-PLAN.md`(戰情室)、`docs/SEGMENT-SETTINGS-PLAN.md`(網段設定)、`docs/ARCHITECTURE.md` D19 / D22 / D31、`pa-collector/netops_pa/poller.py`、`pa_query.py`。
 
 ## 1. 背景
@@ -136,6 +136,24 @@ netops-pa(pan-os-python,唯讀) ──► netops-redis(快照 JSON + 版本) ─
 
 **不採用**:網路圖 / 力導向圖(規則 166 條、位址物件 302 個,畫面會糊成一團且看不出順序)。
 
+### 3.6 規則搭配 IP 對照表(Q6,需求方 2026-11-19)
+
+規則的位址物件展開後,對照 IP 對照表(AC3,API.md §11)顯示姓名 / 部門 / 設備。
+
+| 情況 | 做法 | 負責 |
+| --- | --- | --- |
+| 單一 IP(`/32`) | 前端呼叫既有 `POST /ip-name-lookups`(每次最多 200 個,超過分批);顯示「IP(姓名 / 部門 / 設備)」 | PR-3 |
+| 網段 / 範圍 | 新增反查 API `POST /v1/ip-name-range-lookups`:`{ ranges: string[] }`(IPv4 網段或 `a-b` 範圍,上限同 lookups 200 個)→ 每個範圍回「對照表中落在範圍內的項目」(依 IP 排序,每個範圍最多 50 筆並回 `total`、`truncated`);權限 `netops.ip-name.read`、`x-audit-level: meta`、POST(不把查詢放網址)。經 `infra/store` 的 `listIpNames` 比對,不改資料 | PR-2(API)、PR-3(`api/` + composable) |
+| 用名稱找規則(選配) | 規則清單篩選加 `name`:同 Log 明細的做法,姓名 / 部門 / 設備 → 對照表 IP / 網段 → 找展開後位址涵蓋它的規則;POST 或前端轉 IP 後再篩,姓名不進網址 | PR-2 / PR-3 |
+
+規則:
+
+- 姓名、部門屬個資,只給 `netops.ip-name.read`(網管);沒有此權限時只顯示 IP,不呼叫上述 API(畫面不顯示錯誤)。
+- 名稱只在前端即時查,**不寫進規則快照、版本歷史、NAS 備份**,也不送 AI 判讀(PR-5 只送規則內容)。
+- 顯示位置:清單分頁的物件展開、規則詳細;規則圖(§3.5)以 zone 為單位,不放名稱,點開規則詳細才顯示。
+- 動態位址群組、FQDN 物件不比對,標「無法對照」。
+- 第一版只支援 IPv4(同 AC3)。
+
 ## 4. 決定事項(需求方 2026-11-18)
 
 | # | 問題 | 決定 |
@@ -145,6 +163,7 @@ netops-pa(pan-os-python,唯讀) ──► netops-redis(快照 JSON + 版本) ─
 | Q3 | 規則讀取的權限做法 | **先做 PR-0 唯讀實測**;op 能讀就不加權限,不行再請網通開專用帳號的 Configuration 權限並修改 D22 |
 | Q4 | 規則功能範圍 | 原話:「清單+物件展開+命中數+版本差異 是否可以依照PA的排序?並且讓AI判斷security排序是否符合邏輯」→ 第一版含清單、物件展開、命中數、**版本差異**;**依 PA 排序**(§3.3 排序);加 **PR-5 排序檢查與 AI 判讀** |
 | Q5 | 規則圖像化(2026-11-19) | 原話:「前端再幫我規劃新增一個tab,把規則圖像化」、「寫入並併入 PR-3」→ 加「規則圖」分頁(§3.5):Zone 矩陣熱力圖、規則順序條、Sankey;資料邏輯併入 PR-3,畫面歸 PR-4 |
+| Q6 | 規則可看到已匯入的 IP 清單(2026-11-19) | 原話:「規則可以看到已匯入的IP清單嗎」、「寫進 !143」→ 規則位址對照 IP 對照表(§3.6):單一 IP 用既有 lookups,網段新增 `ip-name-range-lookups`(PR-2),選配用名稱找規則;只給 `netops.ip-name.read` |
 
 ## 5. 分批與負責人
 
@@ -153,7 +172,7 @@ netops-pa(pan-os-python,唯讀) ──► netops-redis(快照 JSON + 版本) ─
 | WD-1+2+3 | 後端方向欄位、composable、Canvas、圖例 | Claude Opus 子任務 | `feature/warroom-direction` |
 | WD 驗收 | 測試區真實流量、效能回歸、報告 | Claude Sonnet 子任務 + 網通 | — |
 | PR-0 | 權限實測(唯讀) | Claude(主串或 Sonnet),需求方同意對 PA 送查詢 | — |
-| PR-1~3 | 收集器、API、composable(含規則圖資料 `usePaPolicyViz.ts`) | Claude Opus 子任務 | `feature/pa-policy-collector`(堆疊 `feature/pa-policy-api`) |
+| PR-1~3 | 收集器、API(含 `ip-name-range-lookups`,§3.6)、composable(含規則圖資料 `usePaPolicyViz.ts`、IP 對照) | Claude Opus 子任務 | `feature/pa-policy-collector`(堆疊 `feature/pa-policy-api`) |
 | PR-4 | 安全規則頁(清單、變更紀錄、排序檢查、規則圖) | Gemini | `feature/pa-policy-page` |
 | PR-5 | 排序檢查(程式)+ AI 判讀 API 與 composable | Claude Opus 子任務 | 堆疊在 `feature/pa-policy-api` 之後 |
 | 文件 | API.md、ARCHITECTURE(D22 修改或新 D49)、IMPL-PLAN、HANDOFF | Claude Sonnet 子任務(統一一個 docs MR) | `docs/…` |

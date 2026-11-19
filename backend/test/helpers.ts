@@ -51,6 +51,8 @@ export async function createTestApp({
   heat?: NonNullable<Parameters<typeof buildApp>[1]>['heat'];
   /** C5 PA 精準查詢 */
   paQuery?: NonNullable<Parameters<typeof buildApp>[1]>['paQuery'];
+  /** PR-2 PA 安全規則 */
+  paPolicy?: NonNullable<Parameters<typeof buildApp>[1]>['paPolicy'];
   /** 戰情室(WR-1、WR-2) */
   geoIp?: NonNullable<Parameters<typeof buildApp>[1]>['geoIp'];
   warroomNow?: () => number;

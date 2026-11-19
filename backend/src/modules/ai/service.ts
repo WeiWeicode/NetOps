@@ -35,6 +35,8 @@ import {
   EVENTS_TASK,
   eventsContext,
   EXPLAIN_PROMPT,
+  PA_POLICY_PROMPT,
+  PA_POLICY_TASK,
   HEATMAP_TASK,
   heatmapContext,
   INSIGHT_TASK,
@@ -55,6 +57,8 @@ import { pickHeatAnomalies, type HeatmapForAi } from './core/anomaly.js';
 import type { SliceQuery, ThreatProfileQuery } from '../pa-heat/service.js';
 import { ipsInText } from '../ip-names/core.js';
 import { dayOut, dayRange, logTimeOut } from '../../shared/time.js';
+import type { AiRef } from '../pa-policy/check.js';
+import { verifyAnswer } from '../pa-policy/verify.js';
 
 /** 語意搜尋(kb/core/vector.js searchVectors) */
 export interface VectorSearch {
@@ -107,6 +111,22 @@ export interface ExplainSources {
   threat?: (q: ThreatProfileQuery) => Promise<ThreatForAi>;
   /** AC6:四類安全事件的總覽(同 GET /pa-events/overview 的快取) */
   events?: (q: EventsParams) => Promise<EventsForAi>;
+  /** PR-5:PA 安全規則排序檢查結果 + 相關規則(不含 IP 對照表名稱,§3.6) */
+  paPolicy?: (q: PaPolicyParams) => Promise<PaPolicyForAi>;
+}
+export type PaPolicyParams = { unusedDays?: number };
+export interface PaPolicyForAi {
+  text: string;
+  clipped: boolean;
+  sent: number;
+  fetchedAt: string;
+  hash: string;
+  stale: boolean;
+  ruleCount: number;
+  summary: Record<string, number>;
+  imprecise: number;
+  /** 送出內容的索引(驗證回答用,不送 AI) */
+  ref: AiRef;
 }
 export type EventsParams = { from: string; to: string };
 export type InsightParams = { view: 'traffic' | 'threat'; from: string; to: string };
@@ -116,7 +136,8 @@ export type ExplainInput =
   | { kind: 'insight'; params: InsightParams }
   | { kind: 'threat'; params: ThreatProfileQuery }
   | { kind: 'heatmap'; params: HeatmapParams }
-  | { kind: 'events'; params: EventsParams };
+  | { kind: 'events'; params: EventsParams }
+  | { kind: 'pa-policy'; params: PaPolicyParams };
 /** 時段明細工作最多等多久(工作本身 120 秒逾時;再加排隊的餘裕) */
 export const EXPLAIN_SLICE_WAIT_MS = 180_000;
 /** 等時段明細工作時每次等多久 */
@@ -464,7 +485,8 @@ export function createAiService(deps: {
     | { kind: 'insight'; params: InsightParams; data: TrafficInsightForAi | ThreatInsightForAi; prev: TrafficPrev | null; prevError: boolean }
     | { kind: 'threat'; data: ThreatForAi }
     | { kind: 'heatmap'; data: HeatmapForAi }
-    | { kind: 'events'; data: EventsForAi };
+    | { kind: 'events'; data: EventsForAi }
+    | { kind: 'pa-policy'; unusedDays: number; data: PaPolicyForAi };
 
   const noSource = () => new AppError(503, 'NETOPS_CLICKHOUSE_UNAVAILABLE', 'PA log 資料庫(ClickHouse)暫時無法使用,請稍後再試');
 
@@ -490,6 +512,11 @@ export function createAiService(deps: {
     if (input.kind === 'heatmap') {
       if (!src?.heatmap) throw noSource();
       return { kind: 'heatmap', data: (await src.heatmap(input.params)) as HeatmapForAi };
+    }
+    if (input.kind === 'pa-policy') {
+      if (!src?.paPolicy) throw new AppError(503, 'NETOPS_PA_POLICY_UNAVAILABLE', 'PA 安全規則尚未提供');
+      const unusedDays = input.params.unusedDays ?? 90;
+      return { kind: 'pa-policy', unusedDays, data: await src.paPolicy({ unusedDays }) };
     }
     if (input.kind === 'events') {
       const q = dayRange(input.params);
@@ -536,6 +563,42 @@ export function createAiService(deps: {
     let task: string;
     let info: Record<string, unknown>;
     let clipped: boolean;
+    if (ctx.kind === 'pa-policy') {
+      // PR-5:只送檢查結果與相關規則;不附 IP 對照表名稱(§3.6)與知識庫筆記
+      const d = ctx.data;
+      const model = await llm.model();
+      s.send('meta', {
+        kind: 'pa-policy',
+        model,
+        source: 'pa-policy',
+        fetchedAt: d.fetchedAt,
+        stale: d.stale,
+        ruleCount: d.ruleCount,
+        unusedDays: ctx.unusedDays,
+        summary: d.summary,
+        imprecise: d.imprecise,
+        sent: d.sent,
+        contextChars: d.text.length,
+        clipped: d.clipped,
+        // 同其他 kind 的欄位(畫面共用):partial = 快照過期;不查知識庫
+        partial: d.stale,
+        gapsKnown: true,
+        notes: [],
+        vectorError: false,
+      });
+      if (s.signal.aborted) return;
+      // 回答結束(done 之前)驗證引用的規則編號與檢查類別,回傳標註(驗收 §3 AI 幻覺)
+      await streamAnswer(s, llm, input.think, [
+        { role: 'system', content: PA_POLICY_PROMPT },
+        { role: 'user', content: `${PA_POLICY_TASK}
+
+---
+以下是系統檢查的結果與相關規則：
+
+${d.text}` },
+      ], (answer) => s.send('verify', { flags: verifyAnswer(answer, d.ref) }));
+      return;
+    }
     if (ctx.kind === 'slice') {
       const got = await sliceResult(s, ctx);
       if (!got) return;
@@ -665,11 +728,22 @@ export function createAiService(deps: {
   }
 
   /** 模型串流 → SSE:thinking、content、done(同舊版 streamChat) */
-  async function streamAnswer(s: SseStream, llm: Llm, think: boolean, messages: ChatMessage[]) {
+  /** beforeDone:收到 done 時先以完整回答呼叫(PA 規則判讀的回答驗證);失敗略過、done 照送;中止(沒有 done)時不呼叫 */
+  async function streamAnswer(s: SseStream, llm: Llm, think: boolean, messages: ChatMessage[], beforeDone?: (answer: string) => void) {
+    let answer = '';
     for await (const e of llm.stream({ messages, think, signal: s.signal })) {
       if (e.type === 'thinking') s.send('thinking', { chars: e.chars });
-      else if (e.type === 'content') s.send('content', { text: e.text });
-      else s.send('done', { finish: e.finish, truncated: e.finish === 'length' });
+      else if (e.type === 'content') {
+        if (beforeDone) answer += e.text;
+        s.send('content', { text: e.text });
+      } else {
+        try {
+          beforeDone?.(answer);
+        } catch {
+          // 驗證是輔助:失敗略過,done 照送
+        }
+        s.send('done', { finish: e.finish, truncated: e.finish === 'length' });
+      }
     }
   }
 

@@ -60,6 +60,9 @@ import { createHeatService, type ColdSlice } from './modules/pa-heat/service.js'
 import insightRoutes from './modules/pa-insight/routes.js';
 import { createInsightService } from './modules/pa-insight/service.js';
 import ipNameRoutes from './modules/ip-names/routes.js';
+import paPolicyRoutes from './modules/pa-policy/routes.js';
+import { createPaPolicyService } from './modules/pa-policy/service.js';
+import { connectPaPolicyRedis, type PaPolicyRedis } from './infra/redis/pa-policy.js';
 import { createIpNameService, type IpNameService } from './modules/ip-names/service.js';
 
 declare module 'fastify' {
@@ -112,6 +115,8 @@ export async function buildApp(
     heat?: { reader?: HeatReader | null; cold?: ColdSlice | null; coldLock?: ColdLock | null; now?: () => number; syncMs?: number };
     /** PA 精準查詢(C5);測試注入,null = 沒有 Redis */
     paQuery?: { store?: PaQueryStore | null; now?: () => number };
+    /** PA 安全規則(PR-2);測試注入,null = 沒有 Redis */
+    paPolicy?: { redis?: PaPolicyRedis | null; now?: () => number; syncMs?: number };
     /** 服務日誌的輸出(測試檢查日誌內容用;預設 stdout) */
     logStream?: { write(msg: string): void };
   } = {},
@@ -313,6 +318,16 @@ export async function buildApp(
   const kb = createKbService(app.store.kb, app.log);
   await app.register(kbRoutes, { kb });
   await app.register(ipNameRoutes, { svc: app.ipNames });
+  // PA 安全規則(PR-2):只讀 netops-pa 寫的快照;內容雜湊變了存版本(每 5 分鐘也檢查一次,沒人開頁面時版本也不漏)
+  const paPolicyRedis = deps.paPolicy?.redis !== undefined ? deps.paPolicy.redis : config.redisUrl ? connectPaPolicyRedis(config.redisUrl) : null;
+  if (paPolicyRedis) app.addHook('onClose', async () => paPolicyRedis.close());
+  const paPolicy = createPaPolicyService({ redis: paPolicyRedis, store: app.store.paPolicy, log: app.log, now: deps.paPolicy?.now });
+  await app.register(paPolicyRoutes, { svc: paPolicy });
+  if (paPolicyRedis && deps.paPolicy?.syncMs !== 0) {
+    const t = setInterval(() => void paPolicy.sync().catch(() => undefined), deps.paPolicy?.syncMs ?? 300_000);
+    t.unref();
+    app.addHook('onClose', async () => clearInterval(t));
+  }
   // AI 分析、問答、語意搜尋、外部 IP 自動學習(IMPL-PLAN A1;deps.ai 只給測試注入假 AI 主機)
   // AC4:AI 解讀用時段明細(同一人同條件重用 pa-slice 工作)與儀表板快取;AC5:熱力圖(同 GET /pa/heatmap 快取)與威脅彙總
   // AC6:安全事件頁四類總覽(同 GET /pa-events/overview 快取)
@@ -322,6 +337,8 @@ export async function buildApp(
     heatmap: heatSvc.heatmap,
     threat: heatSvc.threatProfile,
     events: (q: { from: string; to: string }) => eventsForAi(ch, q.from, q.to),
+    // PR-5:安全規則排序檢查結果(只送檢查項目與相關規則,不附 IP 對照表名稱)
+    paPolicy: (q: { unusedDays?: number }) => paPolicy.forAi(q.unusedDays ?? 90),
   };
   // 每日同步這一輪結束(完成 / 停止重試 / 未啟用),或沒有要同步的類型(沒有啟用 PA 三類也沒有 AD)
   const syncReady = () => {

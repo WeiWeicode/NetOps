@@ -81,3 +81,21 @@ PAQ_COOL_GLOBAL_SEC = 10
 
 def paq_job(job_id: str) -> str:
     return f"{PAQ_PREFIX}:job:{job_id}"
+
+
+# PA 安全規則(PR-1;docs/WARROOM-DIRECTION-POLICY-PLAN.md §3.3)。netops-pa 寫入、netops-api 讀取;
+# 鍵格式同 backend/src/infra/redis/pa-policy.ts,兩邊一起改。
+#   snapshot  String(JSON):fetchedAt、hash(規則 + 物件內容雜湊)、vsys、rules(依 PA 順序,含 position)、objects
+#   hits      String(JSON):fetchedAt、items{規則名稱: hitCount、lastHit、firstHit、lastReset、created、modified}
+#   status    Hash:state(ok / failed / rejected / paused)、message、lastRunAt、trigger、mgmtCpu(本次;沒讀到為空字串)
+#             與最近一次成功的 lastOkAt、durationMs、ruleCount、hash(失敗時保留,快照仍是那一次的內容)
+#   refresh   String:手動重新整理請求(netops-api SET、netops-pa GETDEL);值為 JSON(requestedAt、emp)
+#   cool      String:手動重新整理冷卻(netops-api SET NX EX 300)
+# 快照 7 天過期:收集器停很久時不把很舊的規則當成現況(畫面另依 fetchedAt 標示過期)
+POLICY_PREFIX = f"{PREFIX}:policy"
+POLICY_SNAPSHOT = f"{POLICY_PREFIX}:snapshot"
+POLICY_HITS = f"{POLICY_PREFIX}:hits"
+POLICY_STATUS = f"{POLICY_PREFIX}:status"
+POLICY_REFRESH = f"{POLICY_PREFIX}:refresh"
+POLICY_COOL = f"{POLICY_PREFIX}:cool"
+POLICY_TTL = 7 * DAY

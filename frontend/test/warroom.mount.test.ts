@@ -324,7 +324,9 @@ describe('LegendPanel.vue 左側可收摺說明', () => {
       },
     });
     expect(w.classes()).not.toContain('mini');
-    expect(w.text()).toContain('允許流量');
+    expect(w.text()).toContain('連入允許');
+    expect(w.text()).toContain('連出允許');
+    expect(w.text()).toContain('左邊是外部端');
     expect(w.text()).toContain('IP Geolocation by DB-IP');
 
     await w.find('#lgBtn').trigger('click');

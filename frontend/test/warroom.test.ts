@@ -15,7 +15,7 @@ vi.mock('@/api/paLive', async (orig) => {
 });
 
 import { ApiError } from '@giganexus/web-kit';
-import { buildNodes, classifyLog, isPrivateIp, warroomNotices, denyTone, filterLogs, particleRate, perMinutes, sourceIdOf, sumRates, useWarroom, STALE_MS } from '@/composables/useWarroom';
+import { buildNodes, classifyLog, directionView, linkDirectionProbs, linkOfDirection, readDirection, DIRECTION_STORAGE_KEY, isPrivateIp, warroomNotices, denyTone, filterLogs, particleRate, perMinutes, sourceIdOf, sumRates, useWarroom, STALE_MS } from '@/composables/useWarroom';
 import { cooldownFromError, useWarroomAi, COOLDOWN_MS } from '@/composables/useWarroomAi';
 import { createWarroomMock, resolveMock, seededRandom, warroomMockEnabled } from '@/composables/warroomMock';
 
@@ -115,6 +115,100 @@ describe('純函式', () => {
     expect(v.sources[0]!.size).toBe(1);
     expect(v.links.map((l) => l.dimmed)).toEqual([false, true]);
     expect(buildNodes(null, null).sources).toEqual([]);
+  });
+});
+
+describe('進出方向(WD-2)', () => {
+  const WD: Warroom = {
+    ...WR,
+    sources: [
+      { id: 'cc:TW', kind: 'country', label: '台灣', country: 'TW', conn: 100, deny: 10, threat: 4, outConn: 80, topDst: [], topApp: [] },
+      { id: 'cc:US', kind: 'country', label: '美國', country: 'US', conn: 60, deny: 6, threat: 0, outConn: 10, topDst: [], topApp: [] },
+      { id: 'ip:45.155.205.12', kind: 'ip', label: '45.155.205.12', country: 'NL', conn: 50, deny: 49, threat: 0, outConn: 0, topDst: [], topApp: [] },
+    ],
+    segments: [{ id: 'server', kind: 'service', label: '伺服器', icon: 'server', conn: 210, bytes: 2100, threat: 4, outConn: 90 }],
+    links: [
+      { source: 'cc:TW', segment: 'server', conn: 1, allow: 0.9, deny: 0.1, threat: 0.04, outConn: 0.8, outDeny: 0.04, outThreat: 0.01 },
+      { source: 'cc:US', segment: 'server', conn: 0.6, allow: 0.54, deny: 0.06, threat: 0, outConn: 0.1, outDeny: 0, outThreat: 0 },
+      { source: 'ip:45.155.205.12', segment: 'server', conn: 0.5, allow: 0.01, deny: 0.49, threat: 0, outConn: 0, outDeny: 0, outThreat: 0 },
+    ],
+  };
+  it('linkDirectionProbs:連出機率與各方向的阻擋 / 威脅;欄位缺少視為全部連入', () => {
+    const p = linkDirectionProbs(WD.links[0]!);
+    expect(p.out).toBeCloseTo(0.8);
+    expect(p.outDeny).toBeCloseTo(0.05);
+    expect(p.inDeny).toBeCloseTo(0.3);
+    expect(p.inThreat).toBeCloseTo(0.15);
+    expect(p.outThreat).toBeCloseTo(0.0125);
+    // 舊版後端沒有 out* 欄位
+    expect(linkDirectionProbs(LINKS[1]!)).toEqual({ out: 0, inDeny: 0.9, outDeny: 0, inThreat: 0.1, outThreat: 0 });
+    // 不合理的值夾在範圍內;conn 0 不除以 0
+    expect(linkDirectionProbs({ ...LINKS[0]!, outConn: 99 }).out).toBe(1);
+    expect(linkDirectionProbs({ source: 'a', segment: 'b', conn: 0, allow: 0, deny: 0, threat: 0.1 }).out).toBe(0);
+  });
+
+  it('linkOfDirection:只留該方向;all 原樣', () => {
+    const l = WD.links[0]!;
+    expect(linkOfDirection(l, 'all')).toBe(l);
+    expect(linkOfDirection(l, 'out')).toMatchObject({ conn: 0.8, deny: 0.04, allow: 0.76, threat: 0.01, outConn: 0.8 });
+    expect(linkOfDirection(l, 'in')).toMatchObject({ conn: 0.2, deny: 0.06, allow: 0.14, threat: 0.03, outConn: 0 });
+    expect(linkDirectionProbs(linkOfDirection(l, 'out')).out).toBe(1);
+    expect(linkDirectionProbs(linkOfDirection(l, 'in')).out).toBe(0);
+  });
+
+  it('directionView + buildNodes:節點數字、國家重排、沒有流量的節點淡化', () => {
+    expect(directionView(WD, 'all')).toBe(WD);
+    const all = buildNodes(WD, null);
+    expect(all.sources.map((s) => [s.inConn, s.outConn, s.dimmed])).toEqual([
+      [20, 80, false],
+      [50, 10, false],
+      [50, 0, false],
+    ]);
+    expect(all.segments[0]).toMatchObject({ inConn: 120, outConn: 90 });
+
+    const out = buildNodes(directionView(WD, 'out'), null, 'out');
+    expect(out.sources.map((s) => [s.id, s.conn])).toEqual([
+      ['cc:TW', 80],
+      ['cc:US', 10],
+      ['ip:45.155.205.12', 0],
+    ]);
+    // 攻擊 IP 只有連入 → 選「連出」時淡化,連線拿掉
+    expect(out.sources[2]!.dimmed).toBe(true);
+    expect(out.links.map((l) => l.source)).toEqual(['cc:TW', 'cc:US']);
+    // deny 依連線速率的方向比例換算(TW:0.04 / 0.1 × 10)
+    expect(out.sources[0]!.deny).toBe(4);
+    expect(out.segments[0]).toMatchObject({ conn: 90, bytes: 900 });
+
+    const inn = buildNodes(directionView(WD, 'in'), null, 'in');
+    // 連入時 US(50)排到 TW(20)前面;攻擊 IP 維持原位置
+    expect(inn.sources.map((s) => [s.id, s.conn])).toEqual([
+      ['cc:US', 50],
+      ['cc:TW', 20],
+      ['ip:45.155.205.12', 50],
+    ]);
+    expect(inn.sources.every((s) => !s.dimmed)).toBe(true);
+    expect(inn.links.map((l) => l.conn)).toEqual([0.2, 0.5, 0.5]);
+  });
+
+  it('偏好:讀 localStorage,不認得的值用 all;讀不到也不丟例外', () => {
+    // 本檔是 node 環境:用簡單的假 localStorage
+    const store = new Map<string, string>();
+    vi.stubGlobal('localStorage', { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => store.set(k, v) });
+    expect(readDirection()).toBe('all');
+    localStorage.setItem(DIRECTION_STORAGE_KEY, 'out');
+    expect(readDirection()).toBe('out');
+    localStorage.setItem(DIRECTION_STORAGE_KEY, 'bogus');
+    expect(readDirection()).toBe('all');
+    vi.stubGlobal('localStorage', undefined);
+    expect(readDirection()).toBe('all');
+    vi.unstubAllGlobals();
+  });
+
+  it('mock 有兩個方向的資料', () => {
+    const w = createWarroomMock(seededRandom(3)).warroom();
+    expect(w.links.some((l) => (l.outConn ?? 0) > 0)).toBe(true);
+    expect(w.links.every((l) => (l.outDeny ?? 0) <= l.deny + 1e-9 && (l.outConn ?? 0) <= l.conn + 1e-9)).toBe(true);
+    expect(w.sources.find((s) => s.kind === 'ip')!.outConn).toBe(0);
   });
 });
 

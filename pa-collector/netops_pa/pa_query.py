@@ -36,7 +36,7 @@ from typing import Any
 import redis
 
 from . import keys
-from .config import QueryConfig
+from .config import PolicyConfig, QueryConfig
 from .poller import parse_system
 from .status import Status, iso, mask
 
@@ -193,7 +193,7 @@ def parse_sessions(root: ET.Element, limit: int = MAX_SESSIONS) -> tuple[list[di
 class XmlApi:
     """POST https://host:port/api/,API Key 放 X-PAN-KEY 標頭;HTTPS 憑證預設驗證(同 poller.SdkClient)。"""
 
-    def __init__(self, cfg: QueryConfig, *, use_http: bool = False) -> None:
+    def __init__(self, cfg: QueryConfig | PolicyConfig, *, use_http: bool = False) -> None:
         scheme = "http" if use_http else "https"  # use_http 只給測試的假 PA
         self.url = f"{scheme}://{cfg.host}:{cfg.port}/api/"
         self.key = cfg.api_key

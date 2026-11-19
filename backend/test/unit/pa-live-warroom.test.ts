@@ -117,7 +117,7 @@ describe('戰情室純函式', () => {
     );
     assert.deepEqual(
       r.links.find((l) => l.source === 'cc:US'),
-      { source: 'cc:US', segment: 'server', conn: 0.5, allow: 0.5, deny: 0, threat: 0 },
+      { source: 'cc:US', segment: 'server', conn: 0.5, allow: 0.5, deny: 0, threat: 0, outConn: 0, outDeny: 0, outThreat: 0 },
     );
     const atk = r.links.find((l) => l.source === 'ip:5.5.5.5')!;
     assert.equal(atk.deny, 0.2);
@@ -140,6 +140,58 @@ describe('戰情室純函式', () => {
     const r = aggregateWarroom(traffic, [], c, CFG, 300, undefined, 3);
     assert.equal(r.sources[0]!.conn, 30);
     assert.equal(r.links[0]!.conn, 0.1);
+  });
+  it('方向(WD-1):連入 / 連出 / 內部互連 / 轉送', () => {
+    const c = createClassifier(fakeGeo, createSegmentMatcher(CFG.segments));
+    const traffic = [
+      // 連入:US → 伺服器區 4 筆(1 筆阻擋)
+      ...Array.from({ length: 3 }, () => ({ src: '8.8.8.8', dst: '10.10.130.5', action: 'allow' })),
+      { src: '8.8.8.8', dst: '10.10.130.5', action: 'deny' },
+      // 連出:伺服器區 → US 6 筆(2 筆阻擋)
+      ...Array.from({ length: 4 }, () => ({ src: '10.10.130.9', dst: '8.8.8.8', action: 'allow' })),
+      ...Array.from({ length: 2 }, () => ({ src: '10.10.130.9', dst: '8.8.8.8', action: 'drop' })),
+      // 內部互連、外部對外部的轉送:都不算連出
+      { src: '10.10.1.1', dst: '10.10.130.5', action: 'allow' },
+      { src: '1.1.1.1', dst: '8.8.8.8', action: 'allow' },
+    ];
+    const threats = [
+      { src: '8.8.8.8', dst: '10.10.130.5' },
+      { src: '10.10.130.9', dst: '8.8.8.8' },
+      { src: '10.10.130.9', dst: '8.8.8.8' },
+    ];
+    const r = aggregateWarroom(traffic, threats, c, CFG, 10);
+    const us = r.links.find((l) => l.source === 'cc:US' && l.segment === 'server')!;
+    assert.deepEqual(us, { source: 'cc:US', segment: 'server', conn: 1, allow: 0.7, deny: 0.3, threat: 0.3, outConn: 0.6, outDeny: 0.2, outThreat: 0.2 });
+    assert.equal(r.sources.find((s) => s.id === 'cc:US')!.outConn, 6);
+    assert.equal(r.sources.find((s) => s.id === 'cc:US')!.conn, 10);
+    const lan = r.links.find((l) => l.source === 'lan')!;
+    assert.equal(lan.outConn, 0);
+    assert.equal(r.sources.find((s) => s.id === 'lan')!.outConn, 0);
+    // 轉送(兩端外部)來源是 AU、網段 unmatched,不算連出
+    const fwd = r.links.find((l) => l.segment === 'unmatched')!;
+    assert.equal(fwd.outConn, 0);
+    assert.equal(r.segments.find((s) => s.id === 'server')!.outConn, 6);
+    assert.equal(r.segments.find((s) => s.id === 'server')!.conn, 11);
+  });
+  it('方向(WD-1):抽樣放大套用到連出;Top 攻擊 IP 只算連入', () => {
+    const c = createClassifier(fakeGeo, createSegmentMatcher(CFG.segments));
+    const traffic = [
+      ...Array.from({ length: 12 }, () => ({ src: '5.5.5.5', dst: '10.10.130.5', action: 'deny' })),
+      // 連出到同一個外部 IP:不併進攻擊 IP 節點,留在國家來源
+      ...Array.from({ length: 5 }, () => ({ src: '10.10.1.1', dst: '5.5.5.5', action: 'allow' })),
+    ];
+    const r = aggregateWarroom(traffic, [], c, CFG, 100, undefined, 2);
+    const ip = r.sources.find((s) => s.id === 'ip:5.5.5.5')!;
+    assert.equal(ip.conn, 24);
+    assert.equal(ip.outConn, 0);
+    const ru = r.sources.find((s) => s.id === 'cc:RU')!;
+    assert.equal(ru.conn, 10);
+    assert.equal(ru.outConn, 10);
+    const ipLink = r.links.find((l) => l.source === 'ip:5.5.5.5')!;
+    assert.equal(ipLink.outConn, 0);
+    const ruLink = r.links.find((l) => l.source === 'cc:RU')!;
+    assert.equal(ruLink.conn, 0.1);
+    assert.equal(ruLink.outConn, 0.1);
   });
   it('GeoIP 檔案不存在 → 不可用', () => {
     assert.equal(loadGeoIp(null), NO_GEOIP);

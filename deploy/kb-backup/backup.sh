@@ -4,7 +4,7 @@
 #   1) netops-kb-<區>-YYYYMMDD.tar.gz:knowledge(筆記 *.md 與匯整檔)+ warroom(網段設定 warroom.json 與 history/;SEGMENT-SETTINGS-PLAN §7 Q7)
 #      兩者都不可重建;warroom/ai-hourly.json 每小時重算、不備份。warroom 目錄不存在(還沒存過網段設定)時只打包 knowledge。保留 KB_BACKUP_KEEP 份
 #   2) netops-data-<區>-YYYYMMDD.tar.gz(2026-11-18 需求方決定 #5):palogs(FTP 分析結果、ClickHouse 每小時摘要與對帳結果 ch/recon、AI 每日摘要)、
-#      adlogs(AD 事件)、ipnames(IP 對照表,含姓名、部門)、papolicy(PA 安全規則版本歷史 50 份,PR-2)。FTP 只留約 1 個月,超過就無法重算。保留 KB_BACKUP_DATA_KEEP 份
+#      adlogs(AD 事件)、ipnames(IP 對照表,含姓名、部門)、papolicy(PA 安全規則版本歷史 50 份,PR-2)、pa-signature(PA 威脅特徵碼版本歷史 90 份與精簡索引,TS-2)。FTP 只留約 1 個月,超過就無法重算。保留 KB_BACKUP_DATA_KEEP 份
 #      (資料目錄不自動清除、每天成長約 26 MB(ARCHITECTURE D16),一份會越來越大:份數另外設定,不和知識庫共用)
 #   兩者都排除寫入中的暫存檔 *.tmp(infra/store 原子寫入)
 #   目的 /backup(主機 /mnt/nas-docker/giga-netops/<區>,cifs 由 giga-file-service 的 host2-mount-nas.sh 掛載)
@@ -33,7 +33,7 @@ case "$MIN_FREE_MB" in '' | *[!0-9]*) echo "[kb-backup] KB_BACKUP_MIN_FREE_MB �
 KB_PREFIX="netops-kb-$ENV_NAME"
 DATA_PREFIX="netops-data-$ENV_NAME"
 # 資料目錄要備份的子目錄(固定清單;不存在的略過)
-DATA_DIRS="palogs adlogs ipnames papolicy"
+DATA_DIRS="palogs adlogs ipnames papolicy pa-signature"
 
 log() { echo "[kb-backup] $(date '+%Y-%m-%dT%H:%M:%S%z') $*" >&2; }
 result() { printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$*" > "$DEST/LAST_RESULT" 2>/dev/null || true; }

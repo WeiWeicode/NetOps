@@ -147,6 +147,13 @@ export function createPaPolicyService(deps: {
       await load();
     },
 
+    /** 唯讀取得目前安全規則快照與命中數(TS-2 規則覆蓋用;Redis 不可用或無快照回 null,不丟例外) */
+    async currentSnapshot(): Promise<{ snap: Snapshot; hits: Record<string, HitInfo>; fetchedAt: string } | null> {
+      const l = await load();
+      if (!('snap' in l)) return null;
+      return { snap: l.snap, hits: l.hits, fetchedAt: l.snap.fetchedAt };
+    },
+
     async list(filter: RuleFilter, page: number, pageSize: number) {
       const l = await load();
       if (!('snap' in l)) return { ...l, items: [], total: 0, page, pageSize, defaults: [] };

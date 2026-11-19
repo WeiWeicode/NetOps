@@ -14,6 +14,8 @@ export const NETOPS = {
   paSearch: 'netops.pa-search.read',
   // PR-2 / PR-4:安全規則(清單、變更紀錄、排序檢查、規則圖)
   paPolicyPage: 'netops.pa-policy-page.read',
+  // TS-2 / TS-4:威脅特徵碼(清單、版本差異、命中比對、規則覆蓋)
+  paSignaturePage: 'netops.pa-signature-page.read',
   paFiles: 'netops.pa-files.read',
   adEvents: 'netops.ad-events.read',
   adSearch: 'netops.ad-search.read',
@@ -55,6 +57,9 @@ export const UI = {
   paPolicyRefresh: 'netops.pa-policy-page.refresh',
   // PR-5:排序檢查「AI 判讀」(includes netops.ai.use)
   paPolicyAi: 'netops.pa-policy-page.ai',
+  // TS-2:威脅特徵碼手動重新整理(只給網管)與 AI 摘要(admin + viewer)
+  paSignatureRefresh: 'netops.pa-signature-page.refresh',
+  paSignatureAi: 'netops.pa-signature-page.ai',
 } as const;
 
 export const API = {
@@ -77,4 +82,6 @@ export const API = {
   aiUse: 'netops.ai.use',
   paPolicyRead: 'netops.pa-policy.read',
   paPolicyRefresh: 'netops.pa-policy.refresh',
+  paSignatureRead: 'netops.pa-signature.read',
+  paSignatureRefresh: 'netops.pa-signature.refresh',
 } as const;

@@ -54,6 +54,9 @@ export const PERMISSIONS = [
   // PR-2:PA 安全規則(讀:admin、viewer;手動重新整理只給 admin,WARROOM-DIRECTION-POLICY-PLAN §3.3)
   { code: 'netops.pa-policy.read', name: 'NetOps PA 安全規則:查詢' },
   { code: 'netops.pa-policy.refresh', name: 'NetOps PA 安全規則:手動重新整理' },
+  // TS-2:PA 威脅特徵碼(讀:admin、viewer;手動重新整理只給 admin,THREAT-SIGNATURE-PLAN §7、TS-Q9)
+  { code: 'netops.pa-signature.read', name: 'NetOps PA 威脅特徵碼:查詢' },
+  { code: 'netops.pa-signature.refresh', name: 'NetOps PA 威脅特徵碼:手動重新整理' },
 ];
 
 /** project:開發專案(package.json gateway.project,由 SDK loadGatewayEnv 讀取) */

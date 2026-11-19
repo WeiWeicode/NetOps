@@ -8,6 +8,7 @@
  *   ipnames/ip-names.json                           IP 對照表(AC3;姓名、部門是個資)
  *   warroom/warroom.json                            戰情室網段對照與儀表滿格值(WR-1;網通提供)
  *   papolicy/index.json、versions/                  PA 安全規則版本歷史(PR-2;保留 50 份)
+ *   pa-signature/index.json、history/、latest-index PA 威脅特徵碼版本歷史(TS-2;保留 90 份)
  *
  * 第一版不自動清除資料(D16)。API 回應不可帶出這裡的路徑或檔案結構(§4.2 第 3 點)。
  */
@@ -21,6 +22,7 @@ import { createPaStore, type PaStore } from './pa.js';
 import { createIpNameStore, type IpNameStore } from './ip-names.js';
 import { createWarroomStore, type WarroomStore } from './warroom.js';
 import { createPaPolicyStore, type PaPolicyStore } from './pa-policy.js';
+import { createPaSignatureStore, type PaSignatureStore } from './pa-signature.js';
 
 export type { AdStore } from './ad.js';
 export type { KbStore } from './kb.js';
@@ -28,6 +30,19 @@ export type { PaIndex, PaStore } from './pa.js';
 export type { IpNameStore, IpNamesFile } from './ip-names.js';
 export type { WarroomStore } from './warroom.js';
 export type { PaPolicyStore, PaPolicyVersionMeta } from './pa-policy.js';
+export type {
+  CompactSigEntry,
+  LatestSigIndex,
+  PaSigHistoryIndex,
+  PaSignatureStore,
+  PaSigVersionDiffFile,
+  PaSigVersionMeta,
+  SigDiffChangedItem,
+  SigDiffFieldChange,
+  SigDiffSummaryItem,
+  SigFirstSeen,
+  SigKind,
+} from './pa-signature.js';
 
 /** 各資料的子目錄(相對資料目錄;與舊版 uploads/ 相同) */
 export const LAYOUT = {
@@ -37,6 +52,7 @@ export const LAYOUT = {
   ipNames: 'ipnames',
   warroom: 'warroom',
   paPolicy: 'papolicy',
+  paSignature: 'pa-signature',
 } as const;
 
 export interface Store {
@@ -54,6 +70,8 @@ export interface Store {
   warroom: WarroomStore;
   /** PA 安全規則版本歷史(PR-2) */
   paPolicy: PaPolicyStore;
+  /** PA 威脅特徵碼版本歷史(TS-2) */
+  paSignature: PaSignatureStore;
 }
 
 export function createStore(dataDir: string): Store {
@@ -68,6 +86,7 @@ export function createStore(dataDir: string): Store {
     ipNames: createIpNameStore(root),
     warroom: createWarroomStore(root),
     paPolicy: createPaPolicyStore(root),
+    paSignature: createPaSignatureStore(root),
     async ready() {
       const probe = path.join(root, `.ready-${process.pid}`);
       try {

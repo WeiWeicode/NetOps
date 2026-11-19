@@ -249,11 +249,13 @@ def test_first_run_full_fetch_and_key_only_in_header(pa):
     assert st["state"] == "ok" and st["count"] == "4" and st["threatVersion"] == "9173-10354"
     assert st["fullFetch"] == "1" and st["mgmtCpu"] == "10.0"
 
-    # 只送白名單 op;API Key 只在標頭,不在 URL 與請求內容
+    # 只送白名單 op(含讀弱點、間諜軟體清單前各再檢查一次 CPU,審查 S1);API Key 只在標頭,不在 URL 與請求內容
     assert [p["cmd"] for p in pa.requests] == [
         CPU_CMD,
         INFO_CMD,
+        CPU_CMD,
         VULN_CMD,
+        CPU_CMD,
         SPYWARE_CMD,
         PROFILE_GROUP_CMD,
         VP_PROFILES_CMD,
@@ -261,6 +263,8 @@ def test_first_run_full_fetch_and_key_only_in_header(pa):
     ]
     assert all(p["type"] == "op" for p in pa.requests)
     assert all(KEY not in p["_url"] and KEY not in json.dumps({k: v for k, v in p.items() if k != "_header_key"}) for p in pa.requests)
+    hb = w.status.snapshot()
+    assert hb["signatureState"] == "ok" and "signatureError" not in hb and "signatureNote" not in hb
 
 
 def test_unchanged_version_skips_full_fetch_and_updates_av_wildfire(pa):
@@ -296,7 +300,7 @@ def test_version_change_triggers_full_fetch_and_keeps_baseline(pa):
     pa.vuln_xml = PREDEFINED_VULNERABILITY.replace("Legacy SMB Info Leak", "Legacy SMB Info Leak v2")
     assert w.run_once() == "ok"
 
-    assert len(pa.requests) == 7
+    assert len(pa.requests) == 9
     meta = json.loads(r.get(keys.SIG_META))
     assert meta["threatVersion"] == "9174-10355"
     assert meta["baselineAt"] == baseline_at
@@ -317,7 +321,7 @@ def test_manual_refresh_and_min_gap(pa):
     # 滿 60 秒:即使 threat-version 沒變也強制重抓全清單並消耗請求
     clock.t = 60
     assert w.tick() == "ok" and r.get(keys.SIG_REFRESH) is None
-    assert len(pa.requests) == 7
+    assert len(pa.requests) == 9
     assert status(r)["trigger"] == "manual" and status(r)["fullFetch"] == "1"
 
     # 下一次排程在 1800 秒後
@@ -335,20 +339,82 @@ def test_cpu_high_and_paused_reject_without_fetching(pa):
     assert [p["cmd"] for p in pa.requests] == [CPU_CMD]
     assert status(r)["state"] == "rejected" and "60.0%" in status(r)["message"]
     assert r.get(keys.SIG_META) is None
+    # 審查 S2:心跳反映 rejected 與原因,且不標為 signatureError
+    hb_rej = w.status.snapshot()
+    assert hb_rej["signatureState"] == "rejected" and "60.0%" in hb_rej["signatureNote"]
+    assert "signatureError" not in hb_rej
 
-    # 暫停中:完全不送 PA 請求,60 秒後重檢
+    # 暫停中:完全不送 PA 請求,60 秒後重檢;心跳反映 paused 且清除舊錯誤
     paused = [True]
     cfg = SignatureConfig(host="127.0.0.1", port=pa.port, api_key=KEY, ca_file="", tls_insecure=False, timeout=5, interval=1800, max_mgmt_cpu=50)
     r2 = fakeredis.FakeRedis()
     clock = Clock()
     w2 = SignatureWorker(r2, SignatureApi(cfg, use_http=True), Status("t", "test", False, False), 1800, 50, paused=lambda: paused[0], clock=clock)
+    w2.status.fail("signature", "old error")
     pa.requests.clear()
     pa.values["idle"] = 90.0
     assert w2.tick() == "paused"
     assert pa.requests == [] and status(r2)["state"] == "paused"
+    hb_paused = w2.status.snapshot()
+    assert hb_paused["signatureState"] == "paused" and "暫停" in hb_paused["signatureNote"]
+    assert "signatureError" not in hb_paused and "signatureErrorAt" not in hb_paused
     paused[0] = False
     clock.t = 60
     assert w2.tick() == "ok"
+    hb_ok = w2.status.snapshot()
+    assert hb_ok["signatureState"] == "ok" and "signatureNote" not in hb_ok
+
+
+def test_recheck_cpu_before_vuln_and_spyware_preserves_snapshot(pa, monkeypatch):
+    """審查 S1:開頭 CPU 正常、讀 VULN_CMD 或 SPYWARE_CMD 前 CPU 超標 → rejected,不送清單、保留上一份快照。"""
+    w, r, _ = make(pa)
+    assert w.run_once() == "ok"
+    before_meta = r.get(keys.SIG_META)
+    before_vuln = r.get(keys.SIG_ITEMS_VULN)
+    before_spy = r.get(keys.SIG_ITEMS_SPYWARE)
+
+    # 情境 1:第 1 次(開頭)CPU 10% 通過,第 2 次(讀 VULN_CMD 前)CPU 65% 超標 → 不送 VULN / SPYWARE
+    pa.requests.clear()
+    pa.values["threat_version"] = "9174-10355"
+    idles = iter([90.0, 35.0])
+    orig_respond = pa.respond
+
+    def seq_respond(p: dict[str, str]) -> str:
+        if p.get("cmd") == CPU_CMD:
+            pa.values["idle"] = next(idles, 90.0)
+        return orig_respond(p)
+
+    monkeypatch.setattr(pa, "respond", seq_respond)
+    assert w.run_once() == "rejected"
+    assert [p["cmd"] for p in pa.requests] == [CPU_CMD, INFO_CMD, CPU_CMD]
+    assert status(r)["state"] == "rejected" and "65.0%" in status(r)["message"]
+    assert w.status.snapshot()["signatureState"] == "rejected"
+    assert r.get(keys.SIG_META) == before_meta and r.get(keys.SIG_ITEMS_VULN) == before_vuln and r.get(keys.SIG_ITEMS_SPYWARE) == before_spy
+
+    # 情境 2:第 1、2 次 CPU 10% 通過(已讀 VULN_CMD),第 3 次(讀 SPYWARE_CMD 前)CPU 70% 超標 → 不送 SPYWARE、保留快照
+    pa.requests.clear()
+    idles = iter([90.0, 90.0, 30.0])
+    assert w.run_once() == "rejected"
+    assert [p["cmd"] for p in pa.requests] == [CPU_CMD, INFO_CMD, CPU_CMD, VULN_CMD, CPU_CMD]
+    assert status(r)["state"] == "rejected" and "70.0%" in status(r)["message"]
+    assert r.get(keys.SIG_META) == before_meta and r.get(keys.SIG_ITEMS_VULN) == before_vuln and r.get(keys.SIG_ITEMS_SPYWARE) == before_spy
+
+    # 情境 3:第 2 次 CPU 回應無法解析(cpu is None)→ rejected、不送 VULN / SPYWARE
+    pa.requests.clear()
+    call_count = [0]
+
+    def unreadable_second_cpu(p: dict[str, str]) -> str:
+        if p.get("cmd") == CPU_CMD:
+            call_count[0] += 1
+            if call_count[0] == 2:
+                return '<response status="success"><result>unparseable</result></response>'
+            pa.values["idle"] = 90.0
+        return orig_respond(p)
+
+    monkeypatch.setattr(pa, "respond", unreadable_second_cpu)
+    assert w.run_once() == "rejected"
+    assert [p["cmd"] for p in pa.requests] == [CPU_CMD, INFO_CMD, CPU_CMD]
+    assert r.get(keys.SIG_META) == before_meta
 
 
 def test_failures_empty_list_too_large_preserve_previous_snapshot(pa, monkeypatch):

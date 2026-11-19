@@ -431,6 +431,25 @@ class SignatureWorker:
     def _set_status(self, state: str, message: str, **extra: str) -> None:
         self.r.hset(keys.SIG_STATUS, mapping={"state": state, "message": mask(message), "lastRunAt": iso(), "mgmtCpu": "", **extra})
 
+    def _reject_cpu(self, cpu: float | None, trigger: str) -> str:
+        msg = "讀不到 PA-560 管理平面 CPU" if cpu is None else f"PA-560 管理平面 CPU {cpu}% 超過 {self.max_cpu}%"
+        full_msg = f"{msg},為保護設備本次不讀取特徵碼"
+        self._set_status("rejected", full_msg, trigger=trigger, mgmtCpu="" if cpu is None else str(cpu))
+        # CPU 保護是正常退讓而非收集器故障:在心跳標示 signatureState=rejected 與原因,不寫 signatureError(避免誤報故障)
+        self.status.set(signatureState="rejected", signatureStateAt=iso(), signatureNote=mask(full_msg))
+        self.status.clear("signatureError", "signatureErrorAt")
+        return "rejected"
+
+    def _check_cpu(self, trigger: str) -> tuple[float | None, str | None]:
+        """取樣管理平面 CPU;無法連線回 (None, 'failed'),讀不到或超標回 (cpu, 'rejected'),正常回 (cpu, None)。"""
+        try:
+            cpu = parse_system(self.api.op(CPU_CMD))["mgmt"]
+        except PaApiError as e:
+            return None, self._fail(str(e), trigger)
+        if cpu is None or cpu > self.max_cpu:
+            return cpu, self._reject_cpu(cpu, trigger)
+        return cpu, None
+
     def _load_existing_meta(self) -> dict[str, Any] | None:
         raw = self.r.get(keys.SIG_META)
         if not raw:
@@ -453,16 +472,15 @@ class SignatureWorker:
     def run_once(self, manual: bool = False) -> str:
         trigger = "manual" if manual else "schedule"
         if self.paused():
-            self._set_status("paused", "測試區已暫停輪詢 PA-560,本次沒有讀取", trigger=trigger)
+            msg = "測試區已暫停輪詢 PA-560,本次沒有讀取"
+            self._set_status("paused", msg, trigger=trigger)
+            # 測試區手動暫停不算故障(同 poller.pause):心跳標示 signatureState=paused 並清除舊錯誤
+            self.status.set(signatureState="paused", signatureStateAt=iso(), signatureNote=msg)
+            self.status.clear("signatureError", "signatureErrorAt")
             return "paused"
-        try:
-            cpu = parse_system(self.api.op(CPU_CMD))["mgmt"]
-        except PaApiError as e:
-            return self._fail(str(e), trigger)
-        if cpu is None or cpu > self.max_cpu:
-            msg = "讀不到 PA-560 管理平面 CPU" if cpu is None else f"PA-560 管理平面 CPU {cpu}% 超過 {self.max_cpu}%"
-            self._set_status("rejected", f"{msg},為保護設備本次不讀取特徵碼", trigger=trigger, mgmtCpu="" if cpu is None else str(cpu))
-            return "rejected"
+        cpu, err_state = self._check_cpu(trigger)
+        if err_state is not None:
+            return err_state
 
         t0 = time.monotonic()
         try:
@@ -527,7 +545,15 @@ class SignatureWorker:
                 )
                 p.execute()
             self.status.ok("signature")
+            self.status.set(signatureState="ok", signatureStateAt=now)
+            self.status.clear("signatureNote")
             return "ok"
+
+        # 審查 S1:讀弱點清單(11.6 MB)與間諜軟體清單(2.5 MB)之前各再檢查一次管理平面 CPU;超標即退讓並保留上一份快照
+        cpu_vuln, err_state = self._check_cpu(trigger)
+        if err_state is not None:
+            return err_state
+        cpu = cpu_vuln
 
         try:
             vuln_root = self.api.op(VULN_CMD)
@@ -535,7 +561,19 @@ class SignatureWorker:
             del vuln_root  # 立即釋放 XML 樹記憶體(弱點 XML 約 11.6 MB)
             if not vuln:
                 return self._fail("PA-560 回傳的弱點特徵清單是空的,保留上一份快照", trigger, cpu)
+        except PaApiError as e:
+            return self._fail(str(e), trigger, cpu)
+        except TooLargeError as e:
+            return self._fail(f"{e},為避免不完整的資料本次不更新", trigger, cpu)
+        except Exception as e:  # noqa: BLE001 — 解析失敗也要寫狀態,畫面才不會把舊快照當最新
+            return self._fail(f"解析 PA 特徵碼回應失敗:{type(e).__name__}", trigger, cpu)
 
+        cpu_spy, err_state = self._check_cpu(trigger)
+        if err_state is not None:
+            return err_state
+        cpu = cpu_spy
+
+        try:
             spy_root = self.api.op(SPYWARE_CMD)
             spyware = parse_signatures(spy_root, "spyware")
             del spy_root
@@ -605,6 +643,8 @@ class SignatureWorker:
             )
             p.execute()
         self.status.ok("signature")
+        self.status.set(signatureState="ok", signatureStateAt=now)
+        self.status.clear("signatureNote")
         log.info("PA 威脅特徵碼已更新:版本 %s、弱點 %d 筆、間諜軟體 %d 筆(%s)", threat_version, len(vuln), len(spyware), trigger)
         return "ok"
 
@@ -777,7 +817,9 @@ class SignatureWorker:
         return lookup_id
 
     def _fail(self, message: str, trigger: str, cpu: float | None = None) -> str:
-        self._set_status("failed", message, trigger=trigger, mgmtCpu="" if cpu is None else str(cpu))
-        self.status.fail("signature", message)
-        log.warning("讀取 PA 威脅特徵碼失敗:%s", mask(message))
+        masked = mask(message)
+        self._set_status("failed", masked, trigger=trigger, mgmtCpu="" if cpu is None else str(cpu))
+        self.status.fail("signature", masked)
+        self.status.set(signatureState="failed", signatureStateAt=iso(), signatureNote=masked)
+        log.warning("讀取 PA 威脅特徵碼失敗:%s", masked)
         return "failed"

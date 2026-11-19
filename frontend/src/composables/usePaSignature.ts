@@ -52,6 +52,11 @@ const chunks = <T>(xs: T[], n: number) => Array.from({ length: Math.ceil(xs.leng
 const cleanObj = <T extends object>(o: T): T =>
   Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined && v !== '' && v !== null)) as T;
 
+/** P2:判斷某版本(版本清單列或差異結果)是否因精簡索引重建而「差異無法計算」 */
+export function isDiffUnavailable(v: Pick<SignatureVersionMeta, 'rebuilt'> | Pick<SignatureVersionDiffs, 'rebuilt'> | null | undefined): boolean {
+  return Boolean(v?.rebuilt);
+}
+
 export function usePaSignature(options: UsePaSignatureOptions = {}) {
   const backend: PaSignatureBackend = options.backend ?? paSignatureApi;
   const allowed = options.can ?? can;
@@ -130,6 +135,14 @@ export function usePaSignature(options: UsePaSignatureOptions = {}) {
   const diffLoading = ref(false);
   const diffError = ref<Error | null>(null);
   let diffSeq = 0;
+
+  /** 目前載入版本(清單)是否因索引重建而無法計算差異(P2) */
+  const currentVersionRebuilt = computed(() => Boolean(info.value?.available && info.value.rebuilt));
+  /** 目前檢視的差異版本是否因索引重建而無法計算差異(P2) */
+  const diffUnavailable = computed(() => isDiffUnavailable(diff.value));
+  const diffUnavailableMessage = computed(() =>
+    diffUnavailable.value ? '此版本因精簡索引遺失或損壞而重建，無法計算相對於前一版的差異' : null,
+  );
 
   async function loadDiff(version: string, nextPage?: number): Promise<boolean> {
     selectedVersion.value = version;
@@ -409,6 +422,10 @@ export function usePaSignature(options: UsePaSignatureOptions = {}) {
     diff,
     diffLoading,
     diffError,
+    currentVersionRebuilt,
+    diffUnavailable,
+    diffUnavailableMessage,
+    isDiffUnavailable,
     loadDiff,
     canHitIps,
     canNames,

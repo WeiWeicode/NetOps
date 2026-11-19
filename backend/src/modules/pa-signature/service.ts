@@ -135,12 +135,30 @@ export function createPaSignatureService(deps: {
 
   /** 同版本快照的記憶體快取(避免每次分頁都重解 10 MB JSON) */
   let snapCache: { key: string; items: SigItem[]; byId: Map<string, SigItem> } | null = null;
+  /** P1:記憶體記住上次成功同步(或開機後核對過)的 threatVersion,版本未變時 sync() 直接跳過不解壓 latest-index.json.gz */
+  let syncedVersion: string | null = null;
+  /** P1:同版本精簡索引記憶體快取,供 list / get / hit-query / warroom 共用,避免每次請求都解壓 3.5 萬筆 gz */
+  let latestIndexCache: LatestSigIndex | null = null;
   /** 近 30 天 ClickHouse 命中數快取(5 分鐘) */
   let hits30dCache: { at: number; data: Record<string, number> } | null = null;
   /** 戰情室新特徵碼集合快取(5 分鐘,計畫 §5.4) */
   let newSigCache: { at: number; data: Map<string, NewSignatureEntry> } | null = null;
   /** 避免並發 sync 重複寫檔 */
   let syncing: Promise<boolean> | null = null;
+
+  /** 取得目前版本的精簡索引(優先命中記憶體快取;損壞時記 warn 並回 null,不讓查詢變 500) */
+  function getLatestIndex(headVersion: string | null): LatestSigIndex | null {
+    if (!headVersion) return null;
+    if (latestIndexCache && latestIndexCache.threatVersion === headVersion) return latestIndexCache;
+    try {
+      const idx = deps.store.readLatestIndex();
+      if (idx) latestIndexCache = idx;
+      return idx;
+    } catch (err) {
+      deps.log?.warn({ err: (err as Error).name }, 'PA 威脅特徵碼精簡索引損壞,暫時無法讀取首次出現紀錄');
+      return null;
+    }
+  }
 
   async function readStatus(): Promise<SignatureStatus> {
     const r = deps.redis!;
@@ -178,8 +196,11 @@ export function createPaSignatureService(deps: {
   }
 
   /**
-   * D1 / D2 背景同步:比較 Redis 最新 threatVersion 與 infra/store 精簡索引。
-   * 第一次存成基準版本(isBaseline=true,不算新增);後續版本更新算出 added / changed / removed 並依 D1 順序原子落地。
+   * D1 / D2 背景同步:比較 Redis 最新 threatVersion 與已同步版本(P1)及 infra/store 精簡索引。
+   *   - 版本未變時直接回 false(不解壓 latest-index.json.gz);程序重啟後首次或版本變更時才從磁碟讀取精簡索引
+   *   - 無歷史且無索引 → 基準版本(isBaseline=true、rebuilt=false,不算新增)
+   *   - 有歷史但精簡索引遺失或損壞(P2) → 重建索引(isBaseline=false、rebuilt=true、記 warn 日誌,不算新增且保留原 baselineAt)
+   *   - 正常版本更新 → 計算 added / changed / removed 並依 D1 順序原子落地
    */
   async function sync(): Promise<boolean> {
     if (!deps.redis) return false;
@@ -188,34 +209,65 @@ export function createPaSignatureService(deps: {
       try {
         const meta = parseMeta(await deps.redis!.meta());
         if (!meta) return false;
-        const latestIndex = deps.store.readLatestIndex();
-        if (latestIndex && latestIndex.threatVersion === meta.threatVersion) return false;
+        // P1:版本與上次已確認同步的版本相同,直接略過不讀 latest-index.json.gz
+        if (syncedVersion !== null && syncedVersion === meta.threatVersion) return false;
+
+        const historyIdx = deps.store.readHistoryIndex();
+        let latestIndex: LatestSigIndex | null = null;
+        let indexCorrupt = false;
+        try {
+          latestIndex = deps.store.readLatestIndex();
+        } catch (err) {
+          indexCorrupt = true;
+          deps.log?.warn(
+            { reason: 'corrupt-index', err: (err as Error).name, threatVersion: meta.threatVersion },
+            'PA 威脅特徵碼精簡索引損壞,將重建索引(本版差異無法計算)',
+          );
+        }
+        if (latestIndex && latestIndex.threatVersion === meta.threatVersion) {
+          syncedVersion = meta.threatVersion;
+          latestIndexCache = latestIndex;
+          return false;
+        }
 
         const loaded = await loadItems(meta);
         if (!loaded) return false;
 
         const savedAt = new Date(now()).toISOString();
-        const historyIdx = deps.store.readHistoryIndex();
-
-        // D2:infra/store 還沒有任何歷史與精簡索引 → 存為基準版本(不算新增)
+        // D2 / P2:區分「真的第一次基準」與「有歷史但索引遺失/損壞重建」
         const isBaseline = !latestIndex && historyIdx.versions.length === 0;
+        const isRebuilt = !latestIndex && historyIdx.versions.length > 0;
+        if (isRebuilt && !indexCorrupt) {
+          deps.log?.warn(
+            {
+              reason: 'missing-index',
+              threatVersion: meta.threatVersion,
+              previousVersion: historyIdx.versions[0]?.threatVersion ?? null,
+            },
+            'PA 威脅特徵碼精簡索引遺失,將重建索引(本版差異無法計算)',
+          );
+        }
+
         let nextIndex: LatestSigIndex;
         let versionMeta: PaSigVersionMeta;
         let diffFile: PaSigVersionDiffFile;
 
-        if (isBaseline || !latestIndex) {
+        if (isBaseline || isRebuilt) {
           const compactItems: Record<string, ReturnType<typeof toCompactEntry>> = {};
           const firstSeen: Record<string, SigFirstSeen> = {};
           for (const item of loaded.items) {
             compactItems[item.id] = toCompactEntry(item);
-            firstSeen[item.id] = { version: meta.threatVersion, seenAt: savedAt, isBaseline: true };
+            firstSeen[item.id] = isBaseline
+              ? { version: meta.threatVersion, seenAt: savedAt, isBaseline: true }
+              : { version: meta.threatVersion, seenAt: savedAt, isBaseline: false, rebuilt: true };
           }
           versionMeta = {
             threatVersion: meta.threatVersion,
             releaseDate: meta.threatReleaseDate,
             fetchedAt: meta.fetchedAt,
             savedAt,
-            isBaseline: true,
+            isBaseline,
+            rebuilt: isRebuilt,
             counts: meta.counts,
             added: 0,
             changed: 0,
@@ -228,7 +280,8 @@ export function createPaSignatureService(deps: {
             releaseDate: meta.threatReleaseDate,
             fetchedAt: meta.fetchedAt,
             savedAt,
-            isBaseline: true,
+            isBaseline,
+            rebuilt: isRebuilt,
             counts: meta.counts,
             hash: meta.hash,
             added: [],
@@ -243,10 +296,10 @@ export function createPaSignatureService(deps: {
             firstSeen,
           };
         } else {
-          const diff = diffSignatures(latestIndex.items, loaded.items);
+          const diff = diffSignatures(latestIndex!.items, loaded.items);
           const firstSeen: Record<string, SigFirstSeen> = {};
           for (const item of loaded.items) {
-            const prev = latestIndex.firstSeen[item.id];
+            const prev = latestIndex!.firstSeen[item.id];
             firstSeen[item.id] = prev ?? { version: meta.threatVersion, seenAt: savedAt, isBaseline: false };
           }
           versionMeta = {
@@ -255,6 +308,7 @@ export function createPaSignatureService(deps: {
             fetchedAt: meta.fetchedAt,
             savedAt,
             isBaseline: false,
+            rebuilt: false,
             counts: meta.counts,
             added: diff.added.length,
             changed: diff.changed.length,
@@ -263,11 +317,12 @@ export function createPaSignatureService(deps: {
           };
           diffFile = {
             threatVersion: meta.threatVersion,
-            baseVersion: latestIndex.threatVersion,
+            baseVersion: latestIndex!.threatVersion,
             releaseDate: meta.threatReleaseDate,
             fetchedAt: meta.fetchedAt,
             savedAt,
             isBaseline: false,
+            rebuilt: false,
             counts: meta.counts,
             hash: meta.hash,
             added: diff.added,
@@ -284,6 +339,8 @@ export function createPaSignatureService(deps: {
         }
 
         deps.store.commitVersion({ meta: versionMeta, diff: diffFile, nextIndex });
+        syncedVersion = meta.threatVersion;
+        latestIndexCache = nextIndex;
         newSigCache = null; // 有新版本立即刷新戰情室新特徵碼快取
         return true;
       } catch (err) {
@@ -296,15 +353,18 @@ export function createPaSignatureService(deps: {
     return syncing;
   }
 
-  /** 計算「最近 N 天新特徵碼」的基準日與 ID 集合(D2:基準日只看 infra/store,不依賴 Redis) */
+  /** 計算「最近 N 天新特徵碼」的基準日與 ID 集合(D2:基準日只看 infra/store;P2:排除 rebuilt 版本) */
   function computeNewWindow(days: SigDays): {
     baselineAt: string | null;
     since: string | null;
     newIds: Set<string>;
     firstSeen: Record<string, SigFirstSeen>;
+    latest: LatestSigIndex | null;
+    versions: PaSigVersionMeta[];
   } {
     const hist = deps.store.readHistoryIndex();
-    const latest = deps.store.readLatestIndex();
+    const headVersion = hist.versions[0]?.threatVersion ?? null;
+    const latest = getLatestIndex(headVersion);
     const baselineAt = hist.baselineAt;
     const cutoff = now() - days * DAY_MS;
     const baseMs = baselineAt ? Date.parse(baselineAt) : Number.NaN;
@@ -313,11 +373,11 @@ export function createPaSignatureService(deps: {
     const firstSeen = latest?.firstSeen ?? {};
     const newIds = new Set<string>();
     for (const [id, fs] of Object.entries(firstSeen)) {
-      if (fs.isBaseline) continue;
+      if (fs.isBaseline || fs.rebuilt) continue;
       const t = Date.parse(fs.seenAt);
       if (!Number.isNaN(t) && t >= cutoff) newIds.add(id);
     }
-    return { baselineAt, since, newIds, firstSeen };
+    return { baselineAt, since, newIds, firstSeen, latest, versions: hist.versions };
   }
 
   async function loadSnapshot(): Promise<LoadedSnapshot | Unavailable> {
@@ -375,19 +435,42 @@ export function createPaSignatureService(deps: {
     }
   }
 
-  /** 找單一特徵在歷史差異檔裡的異動紀錄(由新到舊) */
-  function changesOf(id: string): { threatVersion: string; releaseDate: string | null; savedAt: string; kind: 'added' | 'changed' | 'removed'; fields?: SigDiffFieldChange[] }[] {
+  /** 找單一特徵在歷史差異檔裡的異動紀錄(由新到舊;含 rebuilt 版本標記,P2) */
+  function changesOf(
+    id: string,
+  ): {
+    threatVersion: string;
+    releaseDate: string | null;
+    savedAt: string;
+    kind: 'added' | 'changed' | 'removed' | 'rebuilt';
+    rebuilt: boolean;
+    fields?: SigDiffFieldChange[];
+  }[] {
     const hist = deps.store.readHistoryIndex();
-    const out: { threatVersion: string; releaseDate: string | null; savedAt: string; kind: 'added' | 'changed' | 'removed'; fields?: SigDiffFieldChange[] }[] = [];
+    const out: {
+      threatVersion: string;
+      releaseDate: string | null;
+      savedAt: string;
+      kind: 'added' | 'changed' | 'removed' | 'rebuilt';
+      rebuilt: boolean;
+      fields?: SigDiffFieldChange[];
+    }[] = [];
     for (const v of hist.versions) {
       if (v.isBaseline) continue;
+      if (v.rebuilt) {
+        out.push({ threatVersion: v.threatVersion, releaseDate: v.releaseDate, savedAt: v.savedAt, kind: 'rebuilt', rebuilt: true });
+        continue;
+      }
       if (!v.added && !v.changed && !v.removed) continue;
       const d = deps.store.readVersionDiff(v.threatVersion);
       if (!d) continue;
-      if (d.added.some((x) => x.id === id)) out.push({ threatVersion: v.threatVersion, releaseDate: v.releaseDate, savedAt: v.savedAt, kind: 'added' });
+      if (d.added.some((x) => x.id === id))
+        out.push({ threatVersion: v.threatVersion, releaseDate: v.releaseDate, savedAt: v.savedAt, kind: 'added', rebuilt: false });
       const ch = d.changed.find((x) => x.id === id);
-      if (ch) out.push({ threatVersion: v.threatVersion, releaseDate: v.releaseDate, savedAt: v.savedAt, kind: 'changed', fields: ch.fields });
-      if (d.removed.some((x) => x.id === id)) out.push({ threatVersion: v.threatVersion, releaseDate: v.releaseDate, savedAt: v.savedAt, kind: 'removed' });
+      if (ch)
+        out.push({ threatVersion: v.threatVersion, releaseDate: v.releaseDate, savedAt: v.savedAt, kind: 'changed', rebuilt: false, fields: ch.fields });
+      if (d.removed.some((x) => x.id === id))
+        out.push({ threatVersion: v.threatVersion, releaseDate: v.releaseDate, savedAt: v.savedAt, kind: 'removed', rebuilt: false });
     }
     return out;
   }
@@ -431,7 +514,7 @@ export function createPaSignatureService(deps: {
     }
 
     // 補特徵名稱 / 嚴重度與規則覆蓋缺口標註(§5.2:沒有防護的規則標 unprotected)
-    const latestIdx = deps.store.readLatestIndex();
+    const latestIdx = win.latest;
     let unprotected = new Set<string>();
     try {
       const [pol, rawProfiles] = await Promise.all([
@@ -543,7 +626,7 @@ export function createPaSignatureService(deps: {
     newSignatureMap(): Map<string, NewSignatureEntry> {
       if (newSigCache && now() - newSigCache.at < SIG_CACHE_MS) return newSigCache.data;
       const win = computeNewWindow(30);
-      const latest = deps.store.readLatestIndex();
+      const latest = win.latest;
       const map = new Map<string, NewSignatureEntry>();
       for (const id of win.newIds) {
         const entry = latest?.items[id];
@@ -572,12 +655,16 @@ export function createPaSignatureService(deps: {
         };
       }
       const hits30d = await loadHits30d();
-      const rows: SigListRow[] = l.items.map((item) => ({
-        ...item,
-        firstVersion: win.firstSeen[item.id]?.version ?? null,
-        isNew: win.newIds.has(item.id),
-        ...(hits30d ? { hits30d: hits30d[item.id] ?? 0 } : {}),
-      }));
+      const curVer = win.versions.find((v) => v.threatVersion === l.meta.threatVersion);
+      const rows: SigListRow[] = l.items.map((item) => {
+        const fs = win.firstSeen[item.id];
+        return {
+          ...item,
+          firstVersion: fs && !fs.rebuilt ? fs.version : null,
+          isNew: win.newIds.has(item.id),
+          ...(hits30d ? { hits30d: hits30d[item.id] ?? 0 } : {}),
+        };
+      });
       const filtered = filterSignatures(rows, filter);
       const checkedMs = Date.parse(l.meta.checkedAt);
       return {
@@ -589,6 +676,7 @@ export function createPaSignatureService(deps: {
         stale: Number.isNaN(checkedMs) || now() - checkedMs > SIG_STALE_MS,
         baselineAt: win.baselineAt,
         since: win.since,
+        rebuilt: Boolean(curVer?.rebuilt),
         days,
         counts: l.meta.counts,
         versions: {
@@ -618,6 +706,8 @@ export function createPaSignatureService(deps: {
       if ('meta' in l) {
         const found = l.byId.get(id);
         if (found) {
+          const curVer = win.versions.find((v) => v.threatVersion === l.meta.threatVersion);
+          const fs = win.firstSeen[id];
           return {
             status: 200 as const,
             body: {
@@ -626,9 +716,10 @@ export function createPaSignatureService(deps: {
               threatVersion: l.meta.threatVersion,
               fetchedAt: l.meta.fetchedAt,
               baselineAt: win.baselineAt,
+              rebuilt: Boolean(curVer?.rebuilt),
               item: {
                 ...found,
-                firstVersion: win.firstSeen[id]?.version ?? null,
+                firstVersion: fs && !fs.rebuilt ? fs.version : null,
                 isNew: win.newIds.has(id),
                 changes: changesOf(id),
                 hits30d: hits30d ? (hits30d[id] ?? 0) : null,
@@ -784,6 +875,7 @@ export function createPaSignatureService(deps: {
         fetchedAt: d.fetchedAt,
         savedAt: d.savedAt,
         isBaseline: d.isBaseline,
+        rebuilt: Boolean(d.rebuilt),
         counts: d.counts,
         summary: { added: d.added.length, changed: d.changed.length, removed: d.removed.length },
         items: filtered.slice((opts.page - 1) * opts.pageSize, opts.page * opts.pageSize),

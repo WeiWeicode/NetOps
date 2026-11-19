@@ -74,6 +74,10 @@ export function usePaSignatureDrawer(options: UsePaSignatureDrawerOptions = {}) 
   const detail = shallowRef<SignatureDetailFound | null>(null);
   const lookupJob = shallowRef<SignatureLookupJob | null>(null);
   const notice = ref<string | null>(null);
+  /** P2:此特徵目前版本或異動紀錄中是否包含「索引重建、差異無法計算」的版本 */
+  const hasRebuiltChanges = computed(() =>
+    Boolean(detail.value?.source === 'snapshot' && (detail.value.rebuilt || detail.value.item.changes.some((c) => c.rebuilt))),
+  );
   let seq = 0;
   let timer: ReturnType<typeof setTimeout> | null = null;
 
@@ -247,6 +251,7 @@ export function usePaSignatureDrawer(options: UsePaSignatureDrawerOptions = {}) 
     polling,
     threatId,
     detail,
+    hasRebuiltChanges,
     lookupJob,
     notice,
   });

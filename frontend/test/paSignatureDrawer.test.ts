@@ -10,12 +10,13 @@ import {
 } from '@/api/paSignature';
 import { extractThreatId, usePaSignatureDrawer } from '@/composables/usePaSignatureDrawer';
 
-const snapFound = (id: string): SignatureGetResponse => ({
+const snapFound = (id: string, opts: { rebuilt?: boolean; changes?: { threatVersion: string; releaseDate: string | null; savedAt: string; kind: 'added' | 'changed' | 'removed' | 'rebuilt'; rebuilt: boolean }[] } = {}): SignatureGetResponse => ({
   found: true,
   source: 'snapshot',
   threatVersion: '9174-10355',
   fetchedAt: '2026-11-19T01:00:00Z',
   baselineAt: '2026-11-10T00:00:00Z',
+  rebuilt: opts.rebuilt ?? false,
   item: {
     id,
     kind: 'vulnerability',
@@ -31,7 +32,7 @@ const snapFound = (id: string): SignatureGetResponse => ({
     timeAttribute: null,
     firstVersion: '9174-10355',
     isNew: true,
-    changes: [],
+    changes: opts.changes ?? [],
     hits30d: 4,
     vault: null,
   },
@@ -173,5 +174,25 @@ describe('usePaSignatureDrawer', () => {
     g.release();
     expect(await p1).toBe('stale');
     expect(d.detail?.item.id).toBe('22222');
+  });
+
+  it('P2 rebuilt 版本或異動紀錄標示 hasRebuiltChanges', async () => {
+    const d = usePaSignatureDrawer({
+      backend: {
+        get: vi.fn(async (id: string) =>
+          snapFound(id, {
+            rebuilt: false,
+            changes: [{ threatVersion: '9174-10355', releaseDate: null, savedAt: '2026-11-19T01:00:00Z', kind: 'rebuilt', rebuilt: true }],
+          }),
+        ),
+        lookup: vi.fn(),
+      },
+      can: () => true,
+    });
+    expect(d.hasRebuiltChanges).toBe(false);
+    expect(await d.show('30001')).toBe('ok');
+    expect(d.hasRebuiltChanges).toBe(true);
+    d.close();
+    expect(d.hasRebuiltChanges).toBe(false);
   });
 });

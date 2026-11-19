@@ -112,7 +112,7 @@ const paSignatureRoutes: FastifyPluginAsync<{ svc: PaSignatureService }> = async
             pageSize: { type: 'integer', minimum: 1, maximum: 100, default: 50 },
           },
         },
-        response: { 200: looseObject('{ available, items, total, page, pageSize, threatVersion, fetchedAt, baselineAt, since, days, versions, counts, hitsAvailable, status, reason?, message? }') },
+        response: { 200: looseObject('{ available, items, total, page, pageSize, threatVersion, fetchedAt, baselineAt, since, rebuilt, days, versions, counts, hitsAvailable, status, reason?, message? }') },
       },
     },
     async (req) => {
@@ -145,7 +145,7 @@ const paSignatureRoutes: FastifyPluginAsync<{ svc: PaSignatureService }> = async
         ].join('\n'),
         params: { type: 'object', required: ['id'], properties: { id: SIG_ID } },
         response: {
-          200: looseObject('{ found, source, item?, message?, threatVersion?, fetchedAt?, baselineAt? }'),
+          200: looseObject('{ found, source, item?, message?, threatVersion?, fetchedAt?, baselineAt?, rebuilt? }'),
           202: looseObject('{ lookupId, id, status }'),
         },
       },
@@ -244,7 +244,7 @@ const paSignatureRoutes: FastifyPluginAsync<{ svc: PaSignatureService }> = async
             pageSize: { type: 'integer', minimum: 1, maximum: 100, default: 50 },
           },
         },
-        response: { 200: looseObject('{ threatVersion, baseVersion, releaseDate, fetchedAt, savedAt, isBaseline, counts, summary, items, total, page, pageSize }') },
+        response: { 200: looseObject('{ threatVersion, baseVersion, releaseDate, fetchedAt, savedAt, isBaseline, rebuilt, counts, summary, items, total, page, pageSize }') },
       },
     },
     async (req) => {

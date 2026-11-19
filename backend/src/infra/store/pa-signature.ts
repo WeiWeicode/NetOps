@@ -37,6 +37,8 @@ export interface SigFirstSeen {
   version: string;
   seenAt: string;
   isBaseline: boolean;
+  /** true = 因精簡索引遺失或損壞而重建,不得視為該版新增(P2) */
+  rebuilt?: boolean;
 }
 
 export interface LatestSigIndex {
@@ -79,6 +81,8 @@ export interface PaSigVersionMeta {
   fetchedAt: string;
   savedAt: string;
   isBaseline: boolean;
+  /** true = 有歷史但精簡索引遺失或損壞而重建,本版差異無法計算(P2) */
+  rebuilt: boolean;
   counts: { vulnerability: number; spyware: number; total: number };
   added: number;
   changed: number;
@@ -93,6 +97,8 @@ export interface PaSigVersionDiffFile {
   fetchedAt: string;
   savedAt: string;
   isBaseline: boolean;
+  /** true = 有歷史但精簡索引遺失或損壞而重建,本版差異無法計算(P2) */
+  rebuilt: boolean;
   counts: { vulnerability: number; spyware: number; total: number };
   hash: string;
   added: SigDiffSummaryItem[];
@@ -130,7 +136,9 @@ export function createPaSignatureStore(root: string, keep = PA_SIG_HISTORY_KEEP)
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { baselineAt: null, baselineVersion: null, versions: [] };
     const o = raw as Record<string, unknown>;
     const versions = Array.isArray(o.versions)
-      ? (o.versions as PaSigVersionMeta[]).filter((m) => m && typeof m.threatVersion === 'string' && PA_SIG_VERSION_RE.test(m.threatVersion))
+      ? (o.versions as PaSigVersionMeta[])
+          .filter((m) => m && typeof m.threatVersion === 'string' && PA_SIG_VERSION_RE.test(m.threatVersion))
+          .map((m) => ({ ...m, rebuilt: Boolean(m.rebuilt) }))
       : [];
     return {
       baselineAt: typeof o.baselineAt === 'string' && o.baselineAt ? o.baselineAt : null,
@@ -146,7 +154,7 @@ export function createPaSignatureStore(root: string, keep = PA_SIG_HISTORY_KEEP)
       const file = safeJoin(historyDir, `${threatVersion}.json`);
       const raw = readJson<PaSigVersionDiffFile>(file);
       if (!raw || raw.threatVersion !== threatVersion) return null;
-      return raw;
+      return { ...raw, rebuilt: Boolean(raw.rebuilt) };
     },
     readLatestIndex() {
       const raw = readGzipJson<unknown>(latestIndexFile);

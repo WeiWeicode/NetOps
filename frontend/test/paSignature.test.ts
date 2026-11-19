@@ -12,7 +12,7 @@ import {
   type SignatureVersionDiffs,
   type SignatureVersionList,
 } from '@/api/paSignature';
-import { usePaSignature, type PaSignatureBackend } from '@/composables/usePaSignature';
+import { isDiffUnavailable, usePaSignature, type PaSignatureBackend } from '@/composables/usePaSignature';
 
 const makeList = (overrides: Partial<SignatureList> = {}): SignatureList =>
   ({
@@ -24,6 +24,7 @@ const makeList = (overrides: Partial<SignatureList> = {}): SignatureList =>
     stale: false,
     baselineAt: '2026-11-10T00:00:00Z',
     since: '2026-11-10',
+    rebuilt: false,
     days: 30,
     counts: { vulnerability: 1, spyware: 0, total: 1 },
     versions: {
@@ -126,6 +127,7 @@ function createMockBackend(overrides: Partial<PaSignatureBackend> = {}): PaSigna
         fetchedAt: '2026-11-19T01:00:00Z',
         savedAt: '2026-11-19T01:00:05Z',
         isBaseline: false,
+        rebuilt: false,
         counts: { vulnerability: 1, spyware: 0, total: 1 },
         summary: { added: 1, changed: 0, removed: 0 },
         items: [],
@@ -244,5 +246,37 @@ describe('usePaSignature', () => {
     expect(admin.coverage?.available).toBe(true);
     expect(await admin.refresh()).toBe(false);
     expect(admin.refreshNotice).toContain('120');
+  });
+
+  it('P2 rebuilt 判斷:currentVersionRebuilt、diffUnavailable 與 isDiffUnavailable', async () => {
+    const backend = createMockBackend({
+      list: vi.fn(async () => makeList({ rebuilt: true } as Partial<SignatureList>)),
+      versionDiffs: vi.fn(
+        async (): Promise<SignatureVersionDiffs> => ({
+          threatVersion: '9174-10355',
+          baseVersion: null,
+          releaseDate: null,
+          fetchedAt: '2026-11-19T01:00:00Z',
+          savedAt: '2026-11-19T01:00:05Z',
+          isBaseline: false,
+          rebuilt: true,
+          counts: { vulnerability: 1, spyware: 0, total: 1 },
+          summary: { added: 0, changed: 0, removed: 0 },
+          items: [],
+          total: 0,
+          page: 1,
+          pageSize: 50,
+        }),
+      ),
+    });
+    const s = usePaSignature({ backend, can: () => true });
+    expect(isDiffUnavailable({ rebuilt: true })).toBe(true);
+    expect(isDiffUnavailable({ rebuilt: false })).toBe(false);
+    expect(isDiffUnavailable(null)).toBe(false);
+    await s.load();
+    expect(s.currentVersionRebuilt).toBe(true);
+    await s.loadDiff('9174-10355');
+    expect(s.diffUnavailable).toBe(true);
+    expect(s.diffUnavailableMessage).toContain('無法計算');
   });
 });

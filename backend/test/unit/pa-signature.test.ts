@@ -20,7 +20,11 @@ import {
   type PaSignatureClient,
   type PaSignatureRedis,
 } from '../../src/infra/redis/pa-signature.js';
-import { createPaSignatureStore } from '../../src/infra/store/pa-signature.js';
+import {
+  createPaSignatureStore,
+  type PaSignatureStore,
+} from '../../src/infra/store/pa-signature.js';
+import { JobRunner } from '../../src/infra/jobs/index.js';
 import { parseSnapshot } from '../../src/modules/pa-policy/core.js';
 import {
   computeCoverage,
@@ -30,6 +34,7 @@ import {
   toCompactEntry,
   type SigItem,
 } from '../../src/modules/pa-signature/core.js';
+import { createPaSignatureService } from '../../src/modules/pa-signature/service.js';
 import { createFakeReader, type FakeReader } from '../fixtures/fake-ch.js';
 import { FakeRedis } from '../fixtures/fake-redis.js';
 import { FakePolicyClient, HITS as POLICY_HITS, OBJECTS, rule as policyRule } from '../fixtures/pa-policy.js';
@@ -295,6 +300,7 @@ describe('Store(D1 / D2):寫入順序、持久基準日、保留份數清理、�
             fetchedAt: savedAt,
             savedAt,
             isBaseline: i === 1,
+            rebuilt: false,
             counts: { vulnerability: 1, spyware: 0, total: 1 },
             added: i === 1 ? 0 : 1,
             changed: 0,
@@ -308,6 +314,7 @@ describe('Store(D1 / D2):寫入順序、持久基準日、保留份數清理、�
             fetchedAt: savedAt,
             savedAt,
             isBaseline: i === 1,
+            rebuilt: false,
             counts: { vulnerability: 1, spyware: 0, total: 1 },
             hash: String(i).repeat(64),
             added: [],
@@ -330,8 +337,8 @@ describe('Store(D1 / D2):寫入順序、持久基準日、保留份數清理、�
       assert.equal(store.readVersionDiff('../index'), null);
       assert.throws(() =>
         store.commitVersion({
-          meta: { threatVersion: '../evil', releaseDate: null, fetchedAt: 'x', savedAt: 'x', isBaseline: false, counts: { vulnerability: 0, spyware: 0, total: 0 }, added: 0, changed: 0, removed: 0, hash: 'a'.repeat(64) },
-          diff: { threatVersion: '../evil', baseVersion: null, releaseDate: null, fetchedAt: 'x', savedAt: 'x', isBaseline: false, counts: { vulnerability: 0, spyware: 0, total: 0 }, hash: 'a'.repeat(64), added: [], changed: [], removed: [] },
+          meta: { threatVersion: '../evil', releaseDate: null, fetchedAt: 'x', savedAt: 'x', isBaseline: false, rebuilt: false, counts: { vulnerability: 0, spyware: 0, total: 0 }, added: 0, changed: 0, removed: 0, hash: 'a'.repeat(64) },
+          diff: { threatVersion: '../evil', baseVersion: null, releaseDate: null, fetchedAt: 'x', savedAt: 'x', isBaseline: false, rebuilt: false, counts: { vulnerability: 0, spyware: 0, total: 0 }, hash: 'a'.repeat(64), added: [], changed: [], removed: [] },
           nextIndex: { threatVersion: '../evil', savedAt: 'x', hash: 'a'.repeat(64), items: {}, firstSeen: {} },
         }),
       );
@@ -754,16 +761,282 @@ describe('D1 背景排程同步與中途失敗復原', () => {
       const d = t.app.store.paSignature.readVersionDiff('9174-10355');
       assert.equal(d?.added.length, 1);
       assert.equal(d?.added[0]?.id, '1002');
-      // 模擬中途失敗:還原舊版精簡索引(如同第 1、2 步完成但在第 3 步換精簡索引前當機),下一輪排程重跑應冪等復原
+      // 模擬中途失敗 + 程序重啟:還原舊版精簡索引(如同第 1、2 步完成但在第 3 步換精簡索引前當機),重啟後的服務重跑 sync 應冪等復原
       const origBase = t.app.store.paSignature.readHistoryIndex().baselineAt;
       fs.writeFileSync(latestIndexPath, prevLatestBytes);
-      await waitFor(() => t.app.store.paSignature.readLatestIndex()?.threatVersion === '9174-10355');
+      const restarted = createPaSignatureService({
+        redis: createPaSignatureRedis(c),
+        store: t.app.store.paSignature,
+        chReader: null,
+        jobs: new JobRunner(),
+        now: () => now,
+      });
+      assert.equal(await restarted.sync(), true);
+      assert.equal(t.app.store.paSignature.readLatestIndex()?.threatVersion, '9174-10355');
       const afterHist = t.app.store.paSignature.readHistoryIndex();
       assert.equal(afterHist.baselineAt, origBase);
       assert.equal(afterHist.versions.length, 2);
       assert.equal(t.app.store.paSignature.readVersionDiff('9174-10355')?.added.length, 1);
+      assert.equal(t.app.store.paSignature.readVersionDiff('9174-10355')?.rebuilt, false);
     } finally {
       await t.close();
+    }
+  });
+});
+
+describe('Claude 審查修正:P1(版本未變不讀精簡索引)與 P2(精簡索引遺失/損壞標示 rebuilt)', () => {
+  function spyStore(inner: PaSignatureStore) {
+    let readLatestCount = 0;
+    const store: PaSignatureStore = {
+      readHistoryIndex: () => inner.readHistoryIndex(),
+      readVersionDiff: (v) => inner.readVersionDiff(v),
+      readLatestIndex: () => {
+        readLatestCount++;
+        return inner.readLatestIndex();
+      },
+      commitVersion: (input) => inner.commitVersion(input),
+    };
+    return { store, getCount: () => readLatestCount, reset: () => (readLatestCount = 0) };
+  }
+
+  it('P1:版本未變時呼叫 list / versions 多次不會呼叫 readLatestIndex;版本變更時正確讀取並產生差異', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'netops-sig-p1-'));
+    const jobs = new JobRunner();
+    try {
+      let now = Date.parse('2026-11-18T00:00:00Z');
+      const c = new FakeSigRedisClient();
+      c.clock = () => now;
+      c.putSnapshot({
+        threatVersion: '9173-10354',
+        hash: '1'.repeat(64),
+        fetchedAt: new Date(now).toISOString(),
+        vuln: [sig('1001', 'vulnerability', { name: 'V1', severity: 'medium' })],
+        spyware: [],
+      });
+      const spied = spyStore(createPaSignatureStore(root));
+      const svc = createPaSignatureService({
+        redis: createPaSignatureRedis(c),
+        store: spied.store,
+        chReader: null,
+        jobs,
+        now: () => now,
+      });
+
+      // 首次同步寫入基準版
+      assert.equal(await svc.sync(), true);
+      spied.reset();
+
+      // 版本未變時連續呼叫 list / versions / get 多次:readLatestIndex 必須 0 次
+      for (let i = 0; i < 3; i++) {
+        const l = await svc.list({}, 30, 1, 50);
+        assert.equal(l.available, true);
+        const v = await svc.versions();
+        assert.equal(v.total, 1);
+        const g = await svc.get('1001', 'S112009');
+        assert.equal(g.status, 200);
+      }
+      assert.equal(spied.getCount(), 0, '版本未變時不應重複解壓 latest-index.json.gz');
+
+      // 版本更新至 9174-10355:sync() 讀一次 readLatestIndex 並正確算出差異
+      now = Date.parse('2026-11-19T00:00:00Z');
+      c.putSnapshot({
+        threatVersion: '9174-10355',
+        hash: '2'.repeat(64),
+        fetchedAt: new Date(now).toISOString(),
+        vuln: [
+          sig('1001', 'vulnerability', { name: 'V1', severity: 'critical' }),
+          sig('1002', 'vulnerability', { name: 'V2', severity: 'high' }),
+        ],
+        spyware: [],
+      });
+      const v2 = await svc.versions();
+      assert.equal(spied.getCount(), 1, '版本變更時應呼叫 readLatestIndex 一次比對差異');
+      assert.equal(v2.total, 2);
+      assert.equal(v2.items[0]!.threatVersion, '9174-10355');
+      assert.equal(v2.items[0]!.added, 1);
+      assert.equal(v2.items[0]!.changed, 1);
+      assert.equal(v2.items[0]!.rebuilt, false);
+
+      // 再次呼叫 list / versions 多次仍不重讀精簡索引
+      await svc.list({}, 30, 1, 50);
+      await svc.versions();
+      assert.equal(spied.getCount(), 1);
+
+      // 模擬程序重啟:新實例首次核對讀 1 次,之後不再重讀
+      spied.reset();
+      const restarted = createPaSignatureService({
+        redis: createPaSignatureRedis(c),
+        store: spied.store,
+        chReader: null,
+        jobs,
+        now: () => now,
+      });
+      await restarted.versions();
+      assert.equal(spied.getCount(), 1);
+      await restarted.list({}, 30, 1, 50);
+      await restarted.versions();
+      assert.equal(spied.getCount(), 1);
+    } finally {
+      jobs.close();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('P2:有歷史但精簡索引遺失或損壞 → 重建標示 rebuilt=true、added=0、baselineAt 不變、記 warn 日誌且不算新增;下一版恢復正常比對', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'netops-sig-p2-'));
+    const jobs = new JobRunner();
+    const warns: { obj: object; msg: string }[] = [];
+    const log = {
+      warn: (obj: object, msg: string) => warns.push({ obj, msg }),
+      error: () => undefined,
+    };
+    try {
+      let now = Date.parse('2026-11-10T00:00:00Z');
+      const c = new FakeSigRedisClient();
+      c.clock = () => now;
+      c.putSnapshot({
+        threatVersion: '9173-10354',
+        hash: '1'.repeat(64),
+        fetchedAt: new Date(now).toISOString(),
+        vuln: [sig('1001', 'vulnerability', { name: 'SecretName-V1', severity: 'high' })],
+        spyware: [],
+      });
+      const store = createPaSignatureStore(root);
+      const svc = createPaSignatureService({
+        redis: createPaSignatureRedis(c),
+        store,
+        chReader: null,
+        jobs,
+        log,
+        now: () => now,
+      });
+
+      // 1. 基準版 v1
+      assert.equal(await svc.sync(), true);
+      const origBaselineAt = store.readHistoryIndex().baselineAt;
+      assert.equal(origBaselineAt, '2026-11-10T00:00:00.000Z');
+      assert.equal(warns.length, 0);
+
+      // 2. 刪掉 latest-index.json.gz,並推進至 v2 → 必須標 rebuilt=true、isBaseline=false、added=0、baselineAt 不變、記 warn(不含路徑與特徵內容)
+      const latestPath = path.join(root, 'pa-signature', 'latest-index.json.gz');
+      fs.rmSync(latestPath);
+      now = Date.parse('2026-11-15T00:00:00Z');
+      c.putSnapshot({
+        threatVersion: '9174-10355',
+        hash: '2'.repeat(64),
+        fetchedAt: new Date(now).toISOString(),
+        vuln: [
+          sig('1001', 'vulnerability', { name: 'SecretName-V1', severity: 'high' }),
+          sig('2001', 'vulnerability', { name: 'SecretName-V2', severity: 'critical' }),
+        ],
+        spyware: [],
+      });
+      assert.equal(await svc.sync(), true);
+
+      // warn 日誌檢查:有記錄且不含檔案路徑與特徵名稱
+      assert.equal(warns.length, 1);
+      const warnDump = JSON.stringify(warns[0]);
+      assert.ok(!warnDump.includes(root), 'warn 日誌不可含資料目錄路徑');
+      assert.ok(!warnDump.includes('latest-index.json.gz'), 'warn 日誌不可含檔名路徑');
+      assert.ok(!warnDump.includes('SecretName-'), 'warn 日誌不可含特徵內容');
+
+      // versions / diffs / list / get / newSignatureMap 都正確反映 rebuilt
+      const vers2 = await svc.versions();
+      assert.equal(vers2.baselineAt, origBaselineAt);
+      assert.equal(vers2.items[0]!.threatVersion, '9174-10355');
+      assert.equal(vers2.items[0]!.rebuilt, true);
+      assert.equal(vers2.items[0]!.isBaseline, false);
+      assert.equal(vers2.items[0]!.added, 0);
+
+      const diff2 = svc.versionDiffs('9174-10355', { page: 1, pageSize: 50 });
+      assert.equal(diff2.rebuilt, true);
+      assert.equal(diff2.isBaseline, false);
+      assert.equal(diff2.baseVersion, null);
+      assert.equal(diff2.total, 0);
+
+      const list2 = await svc.list({}, 30, 1, 50);
+      assert.equal(list2.available, true);
+      if (list2.available) {
+        assert.equal(list2.rebuilt, true);
+        assert.equal(list2.baselineAt, origBaselineAt);
+        assert.equal(list2.items.every((x) => x.isNew === false && x.firstVersion === null), true);
+      }
+      const list2New = await svc.list({ isNew: true }, 30, 1, 50);
+      assert.equal(list2New.total, 0, 'rebuilt 版本的特徵不可被算成新特徵碼');
+      assert.equal(svc.newSignatureMap().size, 0, '戰情室新特徵碼不可計入 rebuilt 版本');
+
+      const get2 = await svc.get('2001', 'S112009');
+      assert.equal(get2.status, 200);
+      if (get2.status === 200 && get2.body.found && get2.body.source === 'snapshot') {
+        assert.equal(get2.body.rebuilt, true);
+        assert.equal(get2.body.item.isNew, false);
+        assert.deepEqual(
+          get2.body.item.changes.map((x) => [x.threatVersion, x.kind, x.rebuilt]),
+          [['9174-10355', 'rebuilt', true]],
+        );
+      }
+
+      // 3. 下一版 v3 恢復正常比對:v3 新增 3001、異動 2001,而 v2 的 2001 仍不算新特徵
+      now = Date.parse('2026-11-18T00:00:00Z');
+      c.putSnapshot({
+        threatVersion: '9175-10356',
+        hash: '3'.repeat(64),
+        fetchedAt: new Date(now).toISOString(),
+        vuln: [
+          sig('1001', 'vulnerability', { name: 'SecretName-V1', severity: 'high' }),
+          sig('2001', 'vulnerability', { name: 'SecretName-V2', severity: 'medium' }),
+          sig('3001', 'vulnerability', { name: 'Fresh-V3', severity: 'critical' }),
+        ],
+        spyware: [],
+      });
+      assert.equal(await svc.sync(), true);
+      const vers3 = await svc.versions();
+      assert.equal(vers3.baselineAt, origBaselineAt);
+      assert.equal(vers3.items[0]!.threatVersion, '9175-10356');
+      assert.equal(vers3.items[0]!.rebuilt, false);
+      assert.equal(vers3.items[0]!.added, 1);
+      assert.equal(vers3.items[0]!.changed, 1);
+
+      const list3New = await svc.list({ isNew: true }, 30, 1, 50);
+      assert.equal(list3New.available, true);
+      if (list3New.available) assert.equal(list3New.rebuilt, false);
+      assert.deepEqual(list3New.items.map((x) => x.id), ['3001']);
+      assert.deepEqual([...svc.newSignatureMap().keys()], ['3001']);
+
+      const get2001 = await svc.get('2001', 'S112009');
+      assert.equal(get2001.status, 200);
+      if (get2001.status === 200 && get2001.body.found && get2001.body.source === 'snapshot') {
+        assert.equal(get2001.body.rebuilt, false);
+        assert.deepEqual(
+          get2001.body.item.changes.map((x) => [x.threatVersion, x.kind, x.rebuilt]),
+          [
+            ['9175-10356', 'changed', false],
+            ['9174-10355', 'rebuilt', true],
+          ],
+        );
+      }
+
+      // 4. 精簡索引損壞(寫入非 gzip 垃圾位元組)→ v4 也能偵測並標 rebuilt=true 與記 warn
+      fs.writeFileSync(latestPath, Buffer.from('corrupt-not-gzip'));
+      now = Date.parse('2026-11-19T00:00:00Z');
+      c.putSnapshot({
+        threatVersion: '9176-10357',
+        hash: '4'.repeat(64),
+        fetchedAt: new Date(now).toISOString(),
+        vuln: [sig('1001', 'vulnerability', { name: 'SecretName-V1', severity: 'high' })],
+        spyware: [],
+      });
+      assert.equal(await svc.sync(), true);
+      assert.equal(warns.length, 2);
+      const vers4 = await svc.versions();
+      assert.equal(vers4.baselineAt, origBaselineAt);
+      assert.equal(vers4.items[0]!.threatVersion, '9176-10357');
+      assert.equal(vers4.items[0]!.rebuilt, true);
+      assert.equal(vers4.items[0]!.isBaseline, false);
+      assert.equal(vers4.items[0]!.added, 0);
+    } finally {
+      jobs.close();
+      fs.rmSync(root, { recursive: true, force: true });
     }
   });
 });

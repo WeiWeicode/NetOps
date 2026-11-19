@@ -78,6 +78,8 @@ interface SignatureListAvailable {
   baselineAt: string | null;
   /** 基準日晚於「今天 − days」時回 YYYY-MM-DD,畫面標示「自 YYYY-MM-DD 起統計」 */
   since: string | null;
+  /** true = 精簡索引曾遺失或損壞而重建,此版本差異無法計算(P2) */
+  rebuilt: boolean;
   days: SignatureDays;
   counts: SignatureCounts;
   versions: SignatureContentVersions;
@@ -124,7 +126,9 @@ export interface SignatureChangeEntry {
   threatVersion: string;
   releaseDate: string | null;
   savedAt: string;
-  kind: 'added' | 'changed' | 'removed';
+  kind: 'added' | 'changed' | 'removed' | 'rebuilt';
+  /** true = 該版本因精簡索引重建而無法計算差異(P2) */
+  rebuilt: boolean;
   fields?: SignatureDiffFieldChange[];
 }
 
@@ -154,6 +158,8 @@ export type SignatureDetailFound =
       threatVersion: string;
       fetchedAt: string;
       baselineAt: string | null;
+      /** true = 目前版本因精簡索引重建而無法計算差異(P2) */
+      rebuilt: boolean;
       item: SignatureSnapshotDetail;
     }
   | {
@@ -200,6 +206,8 @@ export interface SignatureVersionMeta {
   fetchedAt: string;
   savedAt: string;
   isBaseline: boolean;
+  /** true = 精簡索引遺失或損壞而重建,此版本差異無法計算(P2) */
+  rebuilt: boolean;
   counts: SignatureCounts;
   added: number;
   changed: number;
@@ -250,6 +258,8 @@ export interface SignatureVersionDiffs {
   fetchedAt: string;
   savedAt: string;
   isBaseline: boolean;
+  /** true = 精簡索引遺失或損壞而重建,此版本差異無法計算(P2) */
+  rebuilt: boolean;
   counts: SignatureCounts;
   summary: { added: number; changed: number; removed: number };
   items: SignatureDiffRow[];

@@ -188,7 +188,7 @@ describe('規則圖匯出(不含姓名部門)', () => {
 
 describe('AI 判讀驗證標註(verify 事件)', () => {
   it('收到 verify 存到 flags;reset 清掉;沒有 verify 時為 null', async () => {
-    const flag = { kind: 'mismatch', position: 114, code: 'no-profile', line: '- 缺少 Security Profile:#102、#114' };
+    const flag = { kind: 'mismatch', position: 114, code: 'no-profile', actual: [], reason: '#114:AI 歸為沒有 Security Profile,程式檢查沒有列出這條規則' };
     script = async (on) => {
       on({ event: 'meta', data: { kind: 'pa-policy' } });
       on({ event: 'content', data: { text: '## 整體評估' } });

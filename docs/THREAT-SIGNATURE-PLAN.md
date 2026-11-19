@@ -60,11 +60,13 @@
 - 單一回應上限 64 MB(超過中止該步)、逾時 120 秒;都可用參數調。
 - 只輸出:回應大小、耗時、解析時間、筆數、ID 範圍、子欄位名稱與出現次數、severity / default-action 分布、有 CVE 的筆數、內容版本。**不輸出特徵內容、不輸出 API Key**(Key 讀 `PA_POLICY_API_KEY_FILE` → `PA_API_KEY_FILE`,同收集器)。
 
-**執行(測試區主機 2)**:netops-pa 容器的 rootfs 是唯讀,`docker cp` 會失敗(`container rootfs is marked read-only`),所以**用標準輸入把腳本送進容器的 `python -`**,不需 scp、不在容器留檔。在開發機 NetOps repo 目錄執行:
+**執行(測試區主機 2)**:netops-pa 容器的 rootfs 是唯讀,`docker cp` 會失敗(`container rootfs is marked read-only`),所以**用標準輸入把腳本送進容器的 `python -`**,不需 scp、不在容器留檔。PowerShell 不支援 `<` 輸入導向,所以交給 `cmd /c` 做導向。先切到開發機的 NetOps repo 目錄,再執行(2026-11-19 已用這行跑成功):
 
 ```powershell
-ssh host2 "wsl -u root -e docker exec -i giganexus-netops-test-netops-pa-1 python -" < scripts/ts0_probe.py > ts0-result.json
+cmd /c "ssh host2 ""wsl -u root -e docker exec -i giganexus-netops-test-netops-pa-1 python -"" < scripts\ts0_probe.py > ts0-result.json"
 ```
+
+PowerShell 寫法(替代):`Get-Content scripts\ts0_probe.py -Raw | ssh host2 "wsl -u root -e docker exec -i giganexus-netops-test-netops-pa-1 python -" > ts0-result.json`。
 
 - 容器名稱 `giganexus-netops-test-netops-pa-1`(compose 產生;不同時用 `ssh host2 "wsl -u root -e docker ps"` 確認)。
 - **部署 pipeline 執行中不要跑**:WSL 會逾時(`0x8007274c`),等部署完成再執行。

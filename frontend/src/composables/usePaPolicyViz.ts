@@ -110,7 +110,8 @@ export function filterForViz(rules: PolicyRule[], f: VizFilter, now = Date.now()
   const zone = f.zone?.trim().toLowerCase();
   return rules.filter((r) => {
     if (f.action && toneOf(r.action) !== f.action) return false;
-    if (zone && ![...zonesOf(r.fromZones), ...zonesOf(r.toZones)].some((z) => z.toLowerCase() === zone)) return false;
+    // 同清單 API:規則 zone 為 any 也符合任何 zone
+    if (zone && ![...zonesOf(r.fromZones), ...zonesOf(r.toZones)].some((z) => z.toLowerCase() === zone || z === 'any')) return false;
     if (f.unusedDays && !isUnused(r.hits?.hitCount ?? null, r.hits?.lastHit ?? null, f.unusedDays, now)) return false;
     return true;
   });
@@ -203,8 +204,13 @@ export function buildSankey(rules: PolicyRule[], defaults: DefaultRuleHits[]): {
 /** 選取 → 要在順序條標出的規則編號 */
 export function highlightOf(sel: VizSelection, matrix: ZoneMatrix, sankey: { links: VizSankeyLink[] }): Set<number> | null {
   if (!sel) return null;
-  if (sel.kind === 'cell') return new Set(matrix.cells.find((c) => c.from === sel.from && c.to === sel.to)?.positions ?? []);
-  return new Set(sankey.links.find((l) => l.source === sel.source && l.target === sel.target)?.positions ?? []);
+  // 選取的格子 / 連線被篩選掉時當成沒有選取(不把整條順序條變成全部不標)
+  if (sel.kind === 'cell') {
+    const c = matrix.cells.find((x) => x.from === sel.from && x.to === sel.to);
+    return c ? new Set(c.positions) : null;
+  }
+  const l = sankey.links.find((x) => x.source === sel.source && x.target === sel.target);
+  return l ? new Set(l.positions) : null;
 }
 
 export function usePaPolicyViz(rules: () => PolicyRule[], defaults: () => DefaultRuleHits[], checks?: () => Map<number, OrderCheckMark[]> | null, now: () => number = Date.now) {

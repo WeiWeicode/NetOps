@@ -8,7 +8,7 @@ import path from 'node:path';
 import { after, before, beforeEach, describe, it } from 'node:test';
 import { createPaPolicyRedis, PA_POLICY_KEYS, type PaPolicyClient, type PaPolicyRedis } from '../../src/infra/redis/pa-policy.js';
 import { createPaPolicyStore, PA_POLICY_KEEP } from '../../src/infra/store/pa-policy.js';
-import { buildViews, diffRules, filterRules, parseIpFilter, parseSnapshot, toRule, type PolicyRule } from '../../src/modules/pa-policy/core.js';
+import { buildViews, diffRules, filterRules, ipMatch, parseIpFilter, parseSnapshot, toRule, type PolicyRule } from '../../src/modules/pa-policy/core.js';
 import { createTestApp, type TestApp } from '../helpers.js';
 
 export const rule = (position: number, name: string, extra: Partial<PolicyRule> = {}): Record<string, unknown> => ({
@@ -136,10 +136,16 @@ describe('核心:展開與篩選', () => {
   });
   it('IP 篩選比對展開後的位址;any 預設不算', () => {
     const hit = (ip: string, includeAny = false) => filterRules(views, { ips: parseIpFilter(ip)!, includeAny }).map((v) => v.rule.position);
-    assert.deepEqual(hit('10.10.48.5'), [1]);
-    assert.deepEqual(hit('10.20.0.5'), [1]);
-    assert.deepEqual(hit('10.30.1.1'), [3]);
+    // 第 2 條目的是 FQDN(無法展開):列為 maybe,不當成沒有
+    assert.deepEqual(hit('10.10.48.5'), [1, 2]);
+    assert.deepEqual(hit('10.20.0.5'), [1, 2]);
+    assert.deepEqual(hit('10.30.1.1'), [2, 3]);
     assert.deepEqual(hit('10.10.48.5', true), [1, 2, 3]);
+    assert.equal(ipMatch(views[1]!, parseIpFilter('10.10.48.5')!, false), 'maybe');
+    assert.equal(ipMatch(views[0]!, parseIpFilter('10.10.48.5')!, false), 'yes');
+    // negate:反向條件不能用重疊判斷
+    const neg = buildViews(parseSnapshot({ ...SNAP, rules: [rule(1, 'N', { sources: ['10.0.0.0/8'], negateSource: true })] })!, {});
+    assert.equal(ipMatch(neg[0]!, parseIpFilter('10.1.1.1')!, false), 'maybe');
     assert.equal(parseIpFilter('10.0.0.0/40'), null);
     assert.equal(parseIpFilter('fe80::1'), null);
   });
@@ -224,7 +230,8 @@ describe('PA 安全規則 API', () => {
     const res = await t.call({ url: '/v1/pa-policies?ip=10.10.48.0/25,10.30.0.1' });
     assert.equal(res.statusCode, 200);
     const b = res.json();
-    assert.deepEqual(b.items.map((r: PolicyRule) => r.position), [1, 3]);
+    assert.deepEqual(b.items.map((r: PolicyRule) => r.position), [1, 2, 3]);
+    assert.deepEqual(b.items.map((r: { ipMatch: string }) => r.ipMatch), ['yes', 'maybe', 'yes']);
     assert.equal(b.items[0].hits.hitCount, 100);
     assert.deepEqual(b.defaults.map((d: { name: string }) => d.name), ['interzone-default', 'intrazone-default']);
     assert.equal(b.stale, false);

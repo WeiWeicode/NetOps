@@ -91,11 +91,20 @@ export function usePaPolicy(options: UsePaPolicyOptions = {}) {
   const ipError = computed(() => (filters.ip ? checkIpFilter(filters.ip) : null));
 
   /** 讀完所有符合的頁(規則數少,畫面自行分頁 / 捲動) */
-  async function fetchAll(f: PolicyFilter): Promise<PolicyList> {
+  async function fetchAll(f: PolicyFilter, retry = 1): Promise<PolicyList> {
     const first = await backend.list(f, 1, PA_POLICY_LIMITS.pageSize);
     const items = [...first.items];
     const pages = Math.min(MAX_PAGES, Math.ceil(first.total / PA_POLICY_LIMITS.pageSize));
-    for (let p = 2; p <= pages; p++) items.push(...(await backend.list(f, p, PA_POLICY_LIMITS.pageSize)).items);
+    const hashOf = (r: PolicyList) => (r.available ? r.hash : null);
+    for (let p = 2; p <= pages; p++) {
+      const r = await backend.list(f, p, PA_POLICY_LIMITS.pageSize);
+      // 分頁讀取期間快照更新了:各頁會混到不同版本(重複或漏列),從第一頁重讀一次
+      if (hashOf(r) !== hashOf(first)) {
+        if (retry > 0) return fetchAll(f, retry - 1);
+        throw new Error('規則在讀取期間更新了,請重新載入');
+      }
+      items.push(...r.items);
+    }
     return { ...first, items };
   }
 
@@ -129,11 +138,14 @@ export function usePaPolicy(options: UsePaPolicyOptions = {}) {
   const allDefaults = shallowRef<DefaultRuleHits[]>([]);
   const allLoading = ref(false);
   const allError = ref<Error | null>(null);
+  let allSeq = 0;
   async function loadAll(): Promise<boolean> {
+    const my = ++allSeq;
     allLoading.value = true;
     allError.value = null;
     try {
       const r = await fetchAll({});
+      if (my !== allSeq) return false;
       allRules.value = r.items;
       allDefaults.value = r.defaults;
       if (!info.value) {
@@ -142,10 +154,10 @@ export function usePaPolicy(options: UsePaPolicyOptions = {}) {
       }
       return true;
     } catch (e) {
-      allError.value = e as Error;
+      if (my === allSeq) allError.value = e as Error;
       return false;
     } finally {
-      allLoading.value = false;
+      if (my === allSeq) allLoading.value = false;
     }
   }
 
@@ -216,6 +228,11 @@ export function usePaPolicy(options: UsePaPolicyOptions = {}) {
       if (c.kind === 'range' && !rangeLabels.has(c.range)) ranges.add(c.range);
     }
     namesError.value = null;
+    // 查詢失敗時這批標成「查不到」,不要永遠停在 pending(錯誤另看 namesError)
+    const giveUp = () => {
+      for (const ip of ips) if (!ipLabels.has(ip)) ipLabels.set(ip, null);
+      for (const r of ranges) if (!rangeLabels.has(r)) rangeLabels.set(r, { items: [], total: 0, truncated: false });
+    };
     try {
       for (const part of chunks([...ips], PA_POLICY_LIMITS.lookups)) {
         const r = await backend.lookupIps(part);
@@ -228,6 +245,7 @@ export function usePaPolicy(options: UsePaPolicyOptions = {}) {
     } catch (e) {
       // 對照失敗不影響規則顯示(只顯示 IP)
       namesError.value = e as Error;
+      giveUp();
     }
   }
   /** 查一條規則來源 / 目的的所有展開值 */
@@ -250,12 +268,18 @@ export function usePaPolicy(options: UsePaPolicyOptions = {}) {
   /** 用名稱找規則(§3.6 選配):對照表符合的 IP(最多 50 個)→ ip 篩選。回 { matched, truncated };沒有權限回 null */
   async function findByName(keyword: string): Promise<{ matched: number; truncated: boolean } | null> {
     if (!canNames.value || !keyword.trim()) return null;
+    const my = ++seq;
     const r = await backend.searchNames(keyword.trim());
+    // 等待期間有新的查詢(load / findByName)就不套用這次結果
+    if (my !== seq) return null;
     const ips = [...new Set(r.items.map((e) => e.ip))];
     const used = ips.slice(0, PA_POLICY_LIMITS.ipFilters);
     if (!used.length) {
+      // 篩選條件與清單一致:清掉 ip 篩選,清單為空(對照表沒有符合的名稱)
+      filters.ip = undefined;
       rules.value = [];
       total.value = 0;
+      error.value = null;
       return { matched: 0, truncated: false };
     }
     filters.ip = used.join(',');

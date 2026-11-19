@@ -12,6 +12,7 @@ import {
   diffObjects,
   diffRules,
   filterRules,
+  ipMatch,
   parseHits,
   parseSnapshot,
   toObjects,
@@ -143,7 +144,8 @@ export function createPaPolicyService(deps: {
       const all = filterRules(l.views, filter, now());
       return {
         ...meta(l),
-        items: all.slice((page - 1) * pageSize, page * pageSize).map((v) => v.rule),
+        // IP 篩選時每條附 ipMatch(yes / maybe:含無法展開的物件或 negate,需人工確認)
+        items: all.slice((page - 1) * pageSize, page * pageSize).map((v) => (filter.ips?.length ? { ...v.rule, ipMatch: ipMatch(v, filter.ips, filter.includeAny === true) } : v.rule)),
         total: all.length,
         page,
         pageSize,

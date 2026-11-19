@@ -67,6 +67,8 @@ export interface PolicyRule {
   disabled: boolean;
   description: string | null;
   hits: PolicyHits | null;
+  /** 有 ip 篩選時:yes 確定重疊;maybe 含無法展開的物件或 negate,需人工確認 */
+  ipMatch?: 'yes' | 'maybe';
   expanded: { sources: ExpandedAddress[]; destinations: ExpandedAddress[]; services: ExpandedService[]; applications: ExpandedApplication[] };
 }
 

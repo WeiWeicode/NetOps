@@ -1,7 +1,7 @@
 /**
  * PA 安全規則核心(PR-2;docs/WARROOM-DIRECTION-POLICY-PLAN.md §3.3):快照驗證、物件展開、篩選、版本差異。純函式,不依賴 Fastify。
  * 快照格式由 pa-collector/netops_pa/policies.py 產生(rules 依 PA 順序含 position;objects 各類物件)。
- * 物件展開只支援 IPv4(同 AC3);FQDN、動態位址群組、地區、wildcard、IPv6 標為無法展開(unresolved),IP 篩選與排序檢查都不把它當成「沒有」。
+ * 物件展開只支援 IPv4(同 AC3);FQDN、動態位址群組、地區、wildcard、IPv6 標為無法展開(unresolved):IP 篩選列為 ipMatch maybe,排序檢查標無法判定,都不把它當成「沒有」。
  */
 
 export interface PolicyRule {
@@ -411,6 +411,22 @@ export function isUnused(h: HitInfo | null, days: number, now: number): boolean 
   return Number.isNaN(t) ? null : now - t > days * 86400_000;
 }
 
+/**
+ * IP 篩選比對一條規則:yes 確定有重疊;maybe 無法確定(該側含無法展開的物件,或是 negate:反向條件不能用重疊判斷);no 確定沒有。
+ * any 只有 includeAny 時算 yes。maybe 的規則一樣列出(清單 items 帶 ipMatch: "maybe"),不當成沒有。
+ */
+export function ipMatch(v: RuleView, ips: Range[], includeAny: boolean): 'yes' | 'maybe' | 'no' {
+  const side = (s: AddressSide, negate: boolean): 'yes' | 'maybe' | 'no' => {
+    if (negate) return 'maybe';
+    if (s.any) return includeAny ? 'yes' : 'no';
+    if (ips.some((q) => s.ranges.some((r) => overlaps(q, r)))) return 'yes';
+    return s.unresolved ? 'maybe' : 'no';
+  };
+  const a = side(v.src, v.rule.negateSource);
+  const b = side(v.dst, v.rule.negateDestination);
+  return a === 'yes' || b === 'yes' ? 'yes' : a === 'maybe' || b === 'maybe' ? 'maybe' : 'no';
+}
+
 export function filterRules(views: RuleView[], f: RuleFilter, now = Date.now()): RuleView[] {
   const q = f.q?.trim().toLowerCase();
   const zone = f.zone?.trim().toLowerCase();
@@ -426,10 +442,7 @@ export function filterRules(views: RuleView[], f: RuleFilter, now = Date.now()):
       const members = r.expanded.applications.flatMap((a) => [a.name, ...a.values]);
       if (!names.includes('any') && !members.some((a) => a.toLowerCase().includes(app))) return false;
     }
-    if (f.ips?.length) {
-      const hit = (s: AddressSide) => (s.any ? f.includeAny === true : f.ips!.some((q2) => s.ranges.some((r2) => overlaps(q2, r2))));
-      if (!hit(src) && !hit(dst)) return false;
-    }
+    if (f.ips?.length && ipMatch({ rule: r, src, dst }, f.ips, f.includeAny === true) === 'no') return false;
     if (f.unusedDays !== undefined && isUnused(r.hits, f.unusedDays, now) !== true) return false;
     return true;
   });

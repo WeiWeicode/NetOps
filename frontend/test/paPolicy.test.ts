@@ -191,3 +191,42 @@ describe('usePaPolicyViz(§3.5 資料規則)', () => {
     expect(highlightOf(null, v.matrix, v.sankey)).toBeNull();
   });
 });
+
+describe('審查修正', () => {
+  it('分頁期間快照更新:從第一頁重讀', async () => {
+    const rules = Array.from({ length: 150 }, (_, i) => rule(i + 1, `R${i + 1}`));
+    const b = fakeBackend(rules);
+    const orig = b.list.getMockImplementation()!;
+    let n = 0;
+    b.list.mockImplementation(async (f, page, size) => {
+      const r = await orig(f, page, size);
+      n++;
+      return n === 2 && r.available ? { ...r, hash: 'changed' } : r;
+    });
+    const p = usePaPolicy({ backend: b, can: () => true });
+    expect(await p.load()).toBe(true);
+    expect(p.rules).toHaveLength(150);
+    expect(b.list).toHaveBeenCalledTimes(4);
+  });
+  it('名稱對照失敗:不停在 pending;findByName 查無時清 ip 篩選', async () => {
+    const b = fakeBackend([rule(1, 'A')]);
+    b.lookupIps.mockRejectedValueOnce(new Error('403'));
+    const p = usePaPolicy({ backend: b, can: () => true });
+    await p.resolveNames(rule(1, 'A', { expanded: { sources: [{ name: 'x', kind: 'literal', values: ['10.9.9.9'], unresolved: false }], destinations: [], services: [], applications: [] } }));
+    expect(p.namesError).toBeTruthy();
+    expect(p.nameOf('10.9.9.9')).toEqual({ status: 'none' });
+    b.searchNames.mockResolvedValueOnce({ items: [], total: 0 });
+    p.filters.ip = '10.1.1.1';
+    expect(await p.findByName('沒有這個人')).toEqual({ matched: 0, truncated: false });
+    expect(p.filters.ip).toBeUndefined();
+  });
+  it('規則圖:any zone 符合任何 zone(同清單 API);選取被篩掉時 highlighted 為 null', () => {
+    const rs = [rule(1, 'A', { fromZones: ['any'] }), rule(2, 'B', { fromZones: ['dmz'] })];
+    expect(filterForViz(rs, { zone: 'trust' }).map((r) => r.name)).toEqual(['A']);
+    const v = usePaPolicyViz(() => rs, () => []);
+    v.select({ kind: 'cell', from: 'dmz', to: 'untrust' });
+    expect([...v.highlighted!]).toEqual([2]);
+    v.filters.zone = 'trust';
+    expect(v.highlighted).toBeNull();
+  });
+});

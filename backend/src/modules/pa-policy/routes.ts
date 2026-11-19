@@ -47,7 +47,7 @@ const paPolicyRoutes: FastifyPluginAsync<{ svc: PaPolicyService }> = async (app,
         description:
           'PA-560 安全規則(收集器每 30 分鐘讀一次的快照),依 PA 比對順序 position(1 起算,同 PA GUI 編號)排序;篩選後仍回原編號。' +
           '每條含快照欄位、hits(命中數、最後命中;沒有資料為 null)與 expanded(來源 / 目的位址、服務、應用的物件展開;FQDN、動態群組、地區等 unresolved)。' +
-          '篩選:q(名稱 / 說明 / 標籤)、zone、ip(逗號分隔 IPv4 / CIDR / a-b,最多 50 個,比對展開後的位址;includeAny=true 才含 any)、application、action、unusedDays(長期未命中 N 天)、disabled。' +
+          '篩選:q(名稱 / 說明 / 標籤)、zone、ip(逗號分隔 IPv4 / CIDR / a-b,最多 50 個,比對展開後的位址;includeAny=true 才含 any;含無法展開物件或 negate 的規則也列出並帶 ipMatch "maybe")、application、action、unusedDays(長期未命中 N 天)、disabled。' +
           '回應另含 fetchedAt、hash、versionId、stale(超過 2 小時沒更新)、hitsFetchedAt、status(收集狀態與手動重新整理冷卻秒數)、defaults(intrazone-default / interzone-default 的命中數)。' +
           'netops-redis 不可用或還沒有快照時回 200、available false 與 reason / message(不回假資料)。',
         tags: ['PA 安全規則'],

@@ -42,6 +42,10 @@ permissions:
   - { code: netops.pa-heatmap.read, name: 活動熱力圖, kind: menu, parent: netops.group.firewall, sort: 12, includes: [netops.pa.read, netops.pa-log.read] }
   - { code: netops.pa-insight.read, name: 分析儀表板, kind: menu, parent: netops.group.firewall, sort: 15, includes: [netops.pa.read, netops.pa-log.read] }
   - { code: netops.pa-events.read, name: 安全事件, kind: menu, parent: netops.group.firewall, sort: 20, includes: [netops.pa.read] }
+  # PR-2 / PR-4 安全規則(WARROOM-DIRECTION-POLICY-PLAN §3.3):清單、變更紀錄、排序檢查、規則圖四個分頁同一個選單;手動重新整理只給 netops-admin。
+  #   規則位址的姓名 / 部門(§3.6)要另有 netops.ip-name.read(IP 對照表選單),這裡不綁,viewer 只看 IP
+  - { code: netops.pa-policy-page.read, name: 安全規則, kind: menu, parent: netops.group.firewall, sort: 25, includes: [netops.pa-policy.read] }
+  - { code: netops.pa-policy-page.refresh, name: 手動重新整理規則, kind: button, parent: netops.pa-policy-page.read, sort: 10, includes: [netops.pa-policy.refresh] }
   - { code: netops.pa-search.read, name: Log 明細查詢, kind: menu, parent: netops.group.firewall, sort: 30, includes: [netops.pa-log.read] }
   - { code: netops.pa-files.read, name: FTP Log 檔案, kind: menu, parent: netops.group.firewall, sort: 40, includes: [netops.ftp.read] }
   # 同步 / 分析 / 刪除分析結果(FTP 唯讀,只刪本系統資料;AGENT.md §7.4)
@@ -99,6 +103,9 @@ roles:
       - netops.pa-insight.read
       - netops.pa-events.read
       - netops.pa-search.read
+      # PR-2 安全規則
+      - netops.pa-policy-page.read
+      - netops.pa-policy-page.refresh
       - netops.pa-files.read
       - netops.pa-files.manage
       - netops.ad-events.read
@@ -139,6 +146,8 @@ roles:
       - netops.pa-insight.read
       - netops.pa-events.read
       - netops.pa-search.read
+      # PR-2 安全規則(唯讀)
+      - netops.pa-policy-page.read
       - netops.pa-files.read
       - netops.ad-events.read
       - netops.ad-search.read

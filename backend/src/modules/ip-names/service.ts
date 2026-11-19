@@ -11,6 +11,8 @@ import {
   buildIndex,
   collectIps,
   ipsInText,
+  labelOf,
+  parseIp,
   diffImport,
   MAX_ENTRIES,
   normalizeInput,
@@ -162,6 +164,25 @@ export function createIpNameService(store: IpNameStore, now: () => number = Date
       const c = current();
       return c.index.size ? c.index.labels(collectIps(payload)) : {};
     },
+    /**
+     * 範圍反查(§3.6,PA 規則的網段 / 範圍):每個範圍回「對照表中整個落在範圍內的項目」(依 IP 排序,最多 perRange 筆並回 total、truncated)。
+     * 範圍格式不符回 invalid(不丟錯,讓同一批其他範圍照常回)
+     */
+    rangeLookup(ranges: string[], perRange = 50) {
+      const c = current();
+      const parsed = c.entries.map((e) => ({ e, r: entryRange(e.ip) })).filter((x): x is { e: IpNameEntry; r: [number, number] } => !!x.r);
+      const out: Record<string, { items: (IpNameLabel & { ip: string })[]; total: number; truncated: boolean } | { invalid: true }> = {};
+      for (const raw of ranges) {
+        const q = queryRange(raw);
+        if (!q) {
+          out[raw] = { invalid: true };
+          continue;
+        }
+        const hit = parsed.filter((x) => q[0] <= x.r[0] && x.r[1] <= q[1]).map((x) => x.e).sort(byIp);
+        out[raw] = { items: hit.slice(0, perRange).map((e) => ({ ip: e.ip, ...labelOf(e) })), total: hit.length, truncated: hit.length > perRange };
+      }
+      return out;
+    },
     match: (keyword: string): NameMatch => current().index.match(keyword),
     lookup: (ip: string) => current().index.lookup(ip),
     size: () => current().index.size,
@@ -191,4 +212,23 @@ export function aiNamesSection(svc: Pick<IpNameService, 'labels' | 'size'>, text
     return `- ${ip}:${[who, dev && `設備 ${dev}`].filter(Boolean).join(';')}`;
   };
   return `\n\n## IP 對照表(公司內部 IP 的使用者 / 設備;回答時可直接稱呼名稱)\n${labels.map(line).join('\n')}`;
+}
+
+/** 對照表項目的範圍 [起, 迄] */
+function entryRange(ip: string): [number, number] | null {
+  const p = parseIp(ip);
+  return p ? [p.base, p.base + 2 ** (32 - p.bits) - 1] : null;
+}
+
+/** 查詢範圍:IPv4、CIDR 或 a-b(PA ip-range 格式);不合法回 null */
+function queryRange(raw: string): [number, number] | null {
+  const s = raw.trim();
+  const dash = s.indexOf('-');
+  if (dash > 0) {
+    const a = parseIp(s.slice(0, dash));
+    const b = parseIp(s.slice(dash + 1));
+    if (!a || !b || a.bits !== 32 || b.bits !== 32 || a.base > b.base) return null;
+    return [a.base, b.base];
+  }
+  return entryRange(s);
 }

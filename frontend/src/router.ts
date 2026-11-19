@@ -126,6 +126,20 @@ const PAGES: PageDef[] = [
     view: page(() => import('./pages/firewall/Events.vue')),
   },
   {
+    // PR-2 / PR-4(WARROOM-DIRECTION-POLICY-PLAN §3.3、§3.5):清單、變更紀錄、排序檢查、規則圖四個分頁在頁面內切換
+    path: 'firewall/policies',
+    meta: {
+      permission: NETOPS.paPolicyPage,
+      requires: [API.paPolicyRead],
+      title: '安全規則',
+      subtitle: 'PA-560 Security Policy',
+      icon: 'shield',
+      group: 'firewall',
+      description: 'PA-560 安全規則(依 PA 比對順序)、物件展開、命中數、變更紀錄與規則圖;收集器每 30 分鐘讀一次,只讀不改',
+    },
+    view: page(() => import('./pages/firewall/Policies.vue')),
+  },
+  {
     path: 'firewall/search',
     meta: {
       permission: NETOPS.paSearch,

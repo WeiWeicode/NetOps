@@ -12,6 +12,8 @@ export const NETOPS = {
   paInsight: 'netops.pa-insight.read',
   paEvents: 'netops.pa-events.read',
   paSearch: 'netops.pa-search.read',
+  // PR-2 / PR-4:安全規則(清單、變更紀錄、排序檢查、規則圖)
+  paPolicyPage: 'netops.pa-policy-page.read',
   paFiles: 'netops.pa-files.read',
   adEvents: 'netops.ad-events.read',
   adSearch: 'netops.ad-search.read',
@@ -49,6 +51,8 @@ export const UI = {
   paEventsAi: 'netops.pa-events.ai',
   // WR-3:戰情室 AI 每小時分析「立即分析」(includes netops.ai.use;節點由後端 WR-3 登記 deploy/gateway-rbac.yaml)
   paLiveAi: 'netops.pa-live.ai',
+  // PR-2:安全規則手動重新整理(只給網管)
+  paPolicyRefresh: 'netops.pa-policy-page.refresh',
 } as const;
 
 export const API = {
@@ -69,4 +73,6 @@ export const API = {
   segmentRead: 'netops.segment.read',
   segmentWrite: 'netops.segment.write',
   aiUse: 'netops.ai.use',
+  paPolicyRead: 'netops.pa-policy.read',
+  paPolicyRefresh: 'netops.pa-policy.refresh',
 } as const;

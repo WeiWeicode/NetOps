@@ -51,7 +51,7 @@
 - 每個場景上方以 `# 來源: 檔案:行號` 標出依據的程式(前端來源註明分支);`x-gherkin` 的場景指到場景名稱所在的行。
 - `x-gherkin` 的每個場景在這裡都有**名稱完全相同**的場景(§5 用腳本比對);這裡另補權限、輸入錯誤、狀態轉換與 `@changed` 的場景。
 - 401 / 403 由 BFF 回應(`UNAUTHENTICATED`、`PERMISSION_DENIED`,Gateway 專用代碼);netops-api 自己的錯誤一律 `NETOPS_*` 或 `VALIDATION_FAILED`。全部 API 的權限表集中在 `api/skeleton.feature`,各模組不重複。
-- 帳號一律用假工號(S112009、S094009、S999999…);不寫真實帳密。
+- 帳號一律用假工號(S000001、S000002、S999999…);不寫真實帳密。
 
 ## 4. 進度
 

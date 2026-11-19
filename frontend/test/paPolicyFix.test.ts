@@ -163,6 +163,8 @@ describe('規則圖匯出(不含姓名部門)', () => {
     expect(md).toContain('(相關 #2)(原因:FQDN)');
     expect(md).toContain('- 範圍:選取 trust → untrust');
     expect(JSON.parse(toJson(e)).rules[0].position).toBe(7);
+    expect(md).toContain('名稱可能含人名或設備使用者,外送前請自行確認');
+    expect(JSON.parse(toJson(e)).note).toContain('名稱可能含人名或設備使用者,外送前請自行確認');
   });
   it('檔名與下載;沒有規則不下載', () => {
     expect(exportFileName(e, 'md')).toBe('pa-policy-20261119-1033.md');

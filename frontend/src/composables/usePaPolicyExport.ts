@@ -72,7 +72,7 @@ export interface PolicyExport {
 }
 
 const NOTE =
-  'PA-560 安全規則(由上往下比對,# 為 PA 規則編號);排序檢查為系統程式比對結果;不含 IP 對照姓名 / 部門、說明欄、使用者名稱與動態群組 Tag。規則與物件名稱照 PA 原名匯出。';
+  'PA-560 安全規則(由上往下比對,# 為 PA 規則編號);排序檢查為系統程式比對結果;不含 IP 對照姓名 / 部門、說明欄、使用者名稱與動態群組 Tag。規則與物件名稱照 PA 原名匯出,名稱可能含人名或設備使用者,外送前請自行確認。';
 /** 動態位址群組的 Tag 運算式可能含人名 / 部門(User-ID 自動 Tag),不匯出 */
 const maskValue = (v: string) => (v.startsWith('dynamic:') ? 'dynamic:(省略)' : v);
 const isAny = (xs: string[]) => !xs.length || xs.includes('any');

@@ -2,7 +2,7 @@
 /**
  * 規則位址物件展開元件(清單表格與詳細抽屜共用):
  *   - 顯示物件名稱,可點擊展開成 expanded.values
- *   - unresolved 標「無法展開」;kind 為 dynamic-group / region / unknown 時另標
+ *   - unresolved 標「無法對應 IP」(FQDN、動態群組、地區等無法換成 IP,展開仍列出成員);kind 為 dynamic-group / region / unknown 時另標
  *   - 僅在 policy.canNames 為 true 時對展開值做 IP 對照(nameOf):
  *       ip → IP(姓名 / 部門 / 設備)
  *       range → 可展開列出 items(truncated 標註「只列前 50 筆,共 total 筆」)
@@ -86,7 +86,7 @@ function formatLabel(l: IpNameLabel): string {
         <GBadge v-if="isSpecialKind(a.kind)" tone="info" variant="outline" class="mini-badge">
           {{ ADDRESS_KIND_LABELS[a.kind] }}
         </GBadge>
-        <GBadge v-if="a.unresolved" tone="warning" variant="soft" class="mini-badge">無法展開</GBadge>
+        <GBadge v-if="a.unresolved" tone="warning" variant="soft" class="mini-badge">無法對應 IP</GBadge>
       </div>
 
       <div v-if="canToggle(a) && isOpen(a.name)" class="obj-values" @click.stop>

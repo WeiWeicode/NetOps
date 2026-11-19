@@ -1,25 +1,28 @@
 <script setup lang="ts">
 /**
- * 防火牆 › 安全規則 — 分頁 4:規則圖(PR-4;docs/WARROOM-DIRECTION-POLICY-PLAN.md §3.5,Q5)
+ * 防火牆 › 安全規則 — 分頁 4:規則圖(PR-4 / PR-FIX;docs/WARROOM-DIRECTION-POLICY-PLAN.md §3.5,Q5)
  *   - 共用篩選:動作(allow / deny)、zone(v.zones)、長期未命中 N 天
- *   - ① Zone × Zone 矩陣(CSS Grid):count 深淺、tone(allow / deny / mixed)、tooltip 列 positions;旁註「格子數字是規則出現次數,多 zone 規則會出現在多格」
- *   - ② 規則順序條(GEChart 橫條圖 + yAxis dataZoom):logHits 長條、zeroHits 記號、hitCount null 無資料、disabled 淡色、isDefault 放最後標「預設規則」;checks 為 null 不顯示任何檢查標記也不顯示「無問題」
- *   - ③ Sankey(GEChart sankey):來源 zone → 動作 → 目的 zone,p:預設規則在第 0 層;estimated 為 true 時 tooltip 標「多 zone 規則平均分攤,為估算值」
- *   - 連動:點矩陣格 / Sankey 線 → 順序條強調 v.highlighted;點順序條規則 → 開詳細抽屜;規則圖不顯示 IP 名稱
+ *   - ① Zone × Zone 矩陣(CSS Grid):維持用 v.matrix(不縮小,方便改點別格);count 深淺、tone(allow / deny / mixed)、tooltip 列 positions
+ *   - ② 規則順序條(GEChart 橫條圖 + yAxis dataZoom):使用 v.shownOrder(點選矩陣格或 Sankey 線後只顯示選取的規則)
+ *   - ③ Sankey(GEChart sankey):使用 v.shownSankey(有選取時重畫選取規則的所有 zone 組合;點預設規則線只剩該預設規則)
+ *   - 匯出規則(給外部 AI):usePaPolicyExport 匯出目前圖上規則(Markdown / JSON / 複製 Markdown),不含 IP 對照姓名 / 部門、說明欄與使用者名稱
  */
 import { computed } from 'vue';
 import { fmtNum, fmtTime } from '@/api/format';
 import { describeError } from '@/api/gateway';
 import type { CheckCode, CheckSeverity } from '@/api/paPolicy';
 import { CHECK_LABELS, SEVERITY_LABELS } from '@/composables/usePaPolicyCheck';
+import { usePaPolicyExport } from '@/composables/usePaPolicyExport';
 import type { MatrixCell, OrderCheckMark, OrderRow } from '@/composables/usePaPolicyViz';
+import { toast } from '@/ui';
 import GEChart from '@/ui/charts/GEChart.vue';
 import type { ChartPick } from '@/ui/charts/viz-types';
-import { escHtml, type PaPolicyStore, type PaPolicyVizStore } from './types';
+import { escHtml, type PaPolicyCheckStore, type PaPolicyStore, type PaPolicyVizStore } from './types';
 
 const props = defineProps<{
   policy: PaPolicyStore;
   viz: PaPolicyVizStore;
+  check: PaPolicyCheckStore;
 }>();
 const emit = defineEmits<{ (e: 'open-rule', name: string): void }>();
 
@@ -49,7 +52,72 @@ const unusedDaysModel = computed({
 });
 const zoneOptions = computed(() => props.viz.zones.map((z) => ({ label: z, value: z })));
 
-/* ───── ① Zone × Zone 矩陣 ───── */
+/* ───── 節點名稱對照(供選取說明與 Sankey tooltip 使用) ───── */
+const nodeLabelMap = computed(() => {
+  const map = new Map<string, string>();
+  for (const n of props.viz.sankey.nodes) map.set(n.id, n.name);
+  for (const n of props.viz.shownSankey.nodes) map.set(n.id, n.name);
+  return map;
+});
+
+const selectionLabel = computed(() => {
+  const s = props.viz.selection;
+  if (!s) return '';
+  if (s.kind === 'cell') return `${s.from} → ${s.to}`;
+  const map = nodeLabelMap.value;
+  return `${map.get(s.source) ?? s.source} → ${map.get(s.target) ?? s.target}`;
+});
+
+/* ───── 規則圖匯出給外部 AI(PR-FIX #4;絕不混入 IP 對照結果) ───── */
+const scopeText = computed<string | null>(() => {
+  const parts: string[] = [];
+  if (props.viz.filters.action) parts.push(`動作 ${props.viz.filters.action}`);
+  if (props.viz.filters.zone) parts.push(`zone ${props.viz.filters.zone}`);
+  if (props.viz.filters.unusedDays) parts.push(`長期未命中 ${props.viz.filters.unusedDays} 天`);
+  if (props.viz.focused && selectionLabel.value) parts.push(`選取 ${selectionLabel.value}`);
+  return parts.length ? parts.join(';') : null;
+});
+
+const fetchedAt = computed(() => {
+  const info = props.policy.info as ({ available: true; fetchedAt: string } | { available: false }) | null;
+  return info && info.available ? info.fetchedAt : null;
+});
+
+const ex = usePaPolicyExport(
+  () => props.viz.shownRules,
+  () => props.viz.shownDefaults,
+  () => (props.check.summary ? props.check.items : null),
+  () => ({
+    fetchedAt: fetchedAt.value,
+    unusedDays: props.check.unusedDays,
+    scope: scopeText.value,
+  }),
+);
+
+function onDownload(format: 'md' | 'json') {
+  const ok = ex.download(format);
+  if (!ok) {
+    toast.warning('目前沒有規則可匯出');
+    return;
+  }
+  toast.success(`已下載 ${format === 'md' ? 'Markdown' : 'JSON'} 規則檔`);
+}
+
+async function onCopyMarkdown() {
+  const data = ex.build();
+  if (!data.rules.length && !data.defaults.length) {
+    toast.warning('目前沒有規則可匯出');
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(ex.markdown());
+    toast.success('已複製 Markdown 規則內容');
+  } catch {
+    toast.error('無法複製到剪貼簿,請改用下載檔案');
+  }
+}
+
+/* ───── ① Zone × Zone 矩陣(維持完整 v.matrix,不隨點選縮小) ───── */
 const cellMap = computed(() => {
   const m = new Map<string, MatrixCell>();
   for (const c of props.viz.matrix.cells) m.set(`${c.from}\u0000${c.to}`, c);
@@ -62,11 +130,11 @@ function cellOf(from: string, to: string): MatrixCell | null {
 
 function isCellSelected(from: string, to: string): boolean {
   const s = props.viz.selection;
-  return !!s && s.kind === 'cell' && s.from === from && s.to === to;
+  return props.viz.focused && !!s && s.kind === 'cell' && s.from === from && s.to === to;
 }
 
 function onSelectCell(from: string, to: string) {
-  if (isCellSelected(from, to)) props.viz.select(null);
+  if (isCellSelected(from, to)) props.viz.clearSelection();
   else props.viz.select({ kind: 'cell', from, to });
 }
 
@@ -84,7 +152,7 @@ function cellTitle(c: MatrixCell): string {
   return `${c.from} → ${c.to}\n${toneLabel},出現 ${c.count} 次\n規則編號：${posList}${more}`;
 }
 
-/* ───── ② 規則順序條(ECharts 橫條圖 + dataZoom) ───── */
+/* ───── ② 規則順序條(使用 v.shownOrder,點選後只顯示選取的規則) ───── */
 const SEV_RANK: Record<CheckSeverity, number> = { high: 4, medium: 3, low: 2, info: 1 };
 const SEV_COLOR: Record<CheckSeverity, string> = { high: '#e0483e', medium: '#e0901a', low: '#2f7de1', info: '#64748b' };
 
@@ -96,8 +164,7 @@ function topSeverity(checks: OrderCheckMark[] | null): CheckSeverity | null {
 }
 
 const orderOption = computed<Record<string, unknown>>(() => {
-  const rows = props.viz.order;
-  const hl = props.viz.highlighted;
+  const rows = props.viz.shownOrder;
   const showZoom = rows.length > 24;
   const endPct = rows.length > 24 ? Math.min(100, Math.round((24 / rows.length) * 100)) : 100;
 
@@ -109,14 +176,13 @@ const orderOption = computed<Record<string, unknown>>(() => {
   });
 
   const barData = rows.map((r) => {
-    const dimmed = r.disabled || (hl !== null && (r.position === null || !hl.has(r.position)));
     const baseColor = r.isDefault ? '#64748b' : r.tone === 'allow' ? '#12a150' : '#e0483e';
     return {
       value: r.logHits,
       row: r,
       itemStyle: {
         color: baseColor,
-        opacity: dimmed ? 0.25 : 0.88,
+        opacity: r.disabled ? 0.25 : 0.88,
         borderRadius: [0, 4, 4, 0],
       },
     };
@@ -125,7 +191,6 @@ const orderOption = computed<Record<string, unknown>>(() => {
   const zeroScatter = rows
     .map((r, idx) => {
       if (!r.zeroHits && r.hitCount !== null) return null;
-      const dimmed = r.disabled || (hl !== null && (r.position === null || !hl.has(r.position)));
       return {
         value: [0.08, idx],
         row: r,
@@ -133,7 +198,7 @@ const orderOption = computed<Record<string, unknown>>(() => {
         symbolSize: r.zeroHits ? 9 : 7,
         itemStyle: {
           color: r.zeroHits ? '#e0901a' : '#94a3b8',
-          opacity: dimmed ? 0.3 : 0.95,
+          opacity: r.disabled ? 0.3 : 0.95,
         },
       };
     })
@@ -143,7 +208,6 @@ const orderOption = computed<Record<string, unknown>>(() => {
     .map((r, idx) => {
       const sev = topSeverity(r.checks);
       if (!sev) return null;
-      const dimmed = hl !== null && (r.position === null || !hl.has(r.position));
       return {
         value: [Math.max(r.logHits, 0.2) + 0.15, idx],
         row: r,
@@ -151,7 +215,7 @@ const orderOption = computed<Record<string, unknown>>(() => {
         symbolSize: 16,
         itemStyle: {
           color: SEV_COLOR[sev],
-          opacity: dimmed ? 0.3 : 1,
+          opacity: 1,
         },
       };
     })
@@ -235,9 +299,7 @@ function onOrderPick(p: ChartPick) {
   emit('open-rule', r.name);
 }
 
-/* ───── ③ Sankey(GEChart sankey) ───── */
-const nodeLabelMap = computed(() => new Map(props.viz.sankey.nodes.map((n) => [n.id, n.name])));
-
+/* ───── ③ Sankey(使用 v.shownSankey,點選後重畫選取規則的所有 zone 組合) ───── */
 const sankeyOption = computed<Record<string, unknown>>(() => {
   const map = nodeLabelMap.value;
   return {
@@ -278,7 +340,7 @@ const sankeyOption = computed<Record<string, unknown>>(() => {
         label: {
           formatter: (p: unknown) => (p as { data?: { displayName?: string } }).data?.displayName ?? '',
         },
-        data: props.viz.sankey.nodes.map((n) => ({
+        data: props.viz.shownSankey.nodes.map((n) => ({
           id: n.id,
           name: n.id,
           displayName: n.name,
@@ -292,7 +354,7 @@ const sankeyOption = computed<Record<string, unknown>>(() => {
                   ? { color: '#64748b' }
                   : undefined,
         })),
-        links: props.viz.sankey.links.map((l) => ({
+        links: props.viz.shownSankey.links.map((l) => ({
           source: l.source,
           target: l.target,
           value: l.value,
@@ -308,27 +370,19 @@ function onSankeyPick(p: ChartPick) {
   const d = p.data as { source?: string; target?: string } | undefined;
   if (d?.source && d?.target) {
     const s = props.viz.selection;
-    if (s && s.kind === 'link' && s.source === d.source && s.target === d.target) {
-      props.viz.select(null);
+    if (props.viz.focused && s && s.kind === 'link' && s.source === d.source && s.target === d.target) {
+      props.viz.clearSelection();
     } else {
       props.viz.select({ kind: 'link', source: d.source, target: d.target });
     }
   }
 }
 
-const selectionText = computed(() => {
-  const s = props.viz.selection;
-  if (!s) return '';
-  if (s.kind === 'cell') return `矩陣格：${s.from} → ${s.to}`;
-  const map = nodeLabelMap.value;
-  return `Sankey 連線：${map.get(s.source) ?? s.source} → ${map.get(s.target) ?? s.target}`;
-});
-
 function resetFilters() {
   props.viz.filters.action = null;
   props.viz.filters.zone = null;
   props.viz.filters.unusedDays = null;
-  props.viz.select(null);
+  props.viz.clearSelection();
 }
 </script>
 
@@ -343,15 +397,40 @@ function resetFilters() {
         <div class="spacer" />
         <div class="meta-pills">
           <GBadge tone="primary" variant="soft">符合規則 {{ fmtNum(viz.ruleCount) }} 條</GBadge>
-          <template v-if="viz.selection">
-            <GBadge tone="info" variant="outline">{{ selectionText }}</GBadge>
-            <GButton size="sm" variant="secondary" icon="x" @click="viz.select(null)">清除選取</GButton>
-          </template>
         </div>
+      </div>
+
+      <div class="export-bar">
+        <span class="export-title xs">匯出規則(給 AI)：</span>
+        <GButton size="sm" variant="secondary" icon="download" @click="onDownload('md')">
+          匯出 Markdown
+        </GButton>
+        <GButton size="sm" variant="secondary" icon="code" @click="onDownload('json')">
+          匯出 JSON
+        </GButton>
+        <GButton size="sm" variant="ghost" icon="file-text" @click="onCopyMarkdown">
+          複製 Markdown
+        </GButton>
+        <span class="export-hint xs muted">
+          匯出目前圖上的規則(含篩選與選取);不含 IP 對照姓名 / 部門、說明欄與使用者名稱
+        </span>
       </div>
 
       <GAlert v-if="policy.allError" tone="danger" class="mt-2">{{ describeError(policy.allError) }}</GAlert>
     </GCard>
+
+    <div v-if="viz.focused" class="focus-bar glass" role="status">
+      <div class="focus-text">
+        <GIcon name="filter" :size="15" />
+        <span>
+          已篩選：<strong>{{ selectionLabel }}</strong>，共 <strong class="mono">{{ fmtNum(viz.shownRules.length) }}</strong> 條
+          <template v-if="viz.shownDefaults.length">
+            （預設規則 <strong class="mono">{{ fmtNum(viz.shownDefaults.length) }}</strong> 條）
+          </template>
+        </span>
+      </div>
+      <GButton size="sm" variant="secondary" icon="x" @click="viz.clearSelection()">清除選取</GButton>
+    </div>
 
     <GSkeleton v-if="policy.allLoading && !policy.allRules.length" :rows="8" />
 
@@ -361,7 +440,7 @@ function resetFilters() {
           <div>
             <h3>1. Zone × Zone 矩陣</h3>
             <p class="xs muted">
-              列為來源 Zone、欄為目的 Zone;停用規則不計入。點擊格子可連動下方順序條強調相關規則。
+              列為來源 Zone、欄為目的 Zone;停用規則不計入。點擊格子可篩選下方順序條與 Sankey(矩陣維持不變,可改點別格)。
             </p>
           </div>
           <div class="legend xs">
@@ -426,12 +505,12 @@ function resetFilters() {
           </div>
         </header>
 
-        <GEmpty v-if="!viz.order.length" icon="list" title="目前篩選沒有可顯示的規則" />
+        <GEmpty v-if="!viz.shownOrder.length" icon="list" title="目前篩選沒有可顯示的規則" />
         <GEChart
           v-else
           chart="policy-order"
           :option="orderOption"
-          :height="`${Math.min(560, Math.max(280, viz.order.length * 24 + 60))}px`"
+          :height="`${Math.min(560, Math.max(280, viz.shownOrder.length * 24 + 60))}px`"
           ariaLabel="安全規則順序與命中數橫條圖"
           @pick="onOrderPick"
         />
@@ -442,13 +521,13 @@ function resetFilters() {
           <div>
             <h3>3. 規則命中流向 (Sankey)</h3>
             <p class="xs muted">
-              來源 Zone → 動作 → 目的 Zone(線寬為命中數,預設規則獨立於左側「預設規則」節點)。點擊連線可連動順序條。
+              來源 Zone → 動作 → 目的 Zone(線寬為命中數,預設規則獨立於左側「預設規則」節點)。點擊連線可篩選規則;Sankey 會畫出選取規則的所有 zone 組合。
             </p>
           </div>
         </header>
 
         <GEmpty
-          v-if="!viz.sankey.links.length"
+          v-if="!viz.shownSankey.links.length"
           icon="graph"
           title="沒有命中數資料可繪製 Sankey"
           description="目前篩選範圍內的啟用規則與預設規則皆無命中紀錄。"
@@ -490,6 +569,40 @@ function resetFilters() {
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
+}
+.export-bar {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--line);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.export-title {
+  font-weight: 600;
+  color: var(--text-2);
+}
+.export-hint {
+  flex: 1 1 260px;
+}
+.focus-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, var(--c-primary) 40%, var(--line));
+  background: color-mix(in srgb, var(--c-primary) 8%, var(--glass-soft));
+}
+.focus-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fs-sm);
+  color: var(--text);
 }
 .mt-2 {
   margin-top: 12px;

@@ -126,25 +126,8 @@ onMounted(() => {
 
 <template>
   <div class="policies-page">
-    <GPageHeader
-      eyebrow="防火牆 · PA-560"
-      title="安全規則"
-      icon="shield"
-      description="檢視 PA Security Rulebase 快照、物件展開、命中數、版本變更、排序檢查與規則圖"
-    >
-      <GButton
-        v-if="p.canRefresh"
-        variant="primary"
-        icon="refresh"
-        :loading="p.refreshing"
-        :disabled="localCooldown > 0"
-        @click="onRefresh"
-      >
-        {{ localCooldown > 0 ? `重新整理 (${localCooldown}s)` : '重新整理' }}
-      </GButton>
-    </GPageHeader>
-
-    <section v-if="p.info" class="status-bar glass">
+    <!-- 標題與說明由外層 TabbedPage 呈現,頁內只留快照狀態與重新整理列(PR-FIX #1) -->
+    <section v-if="p.info || p.canRefresh" class="status-bar glass">
       <div v-if="availableInfo" class="status-item">
         <GIcon name="clock" :size="15" />
         <span class="xs muted">快照時間：</span>
@@ -152,7 +135,7 @@ onMounted(() => {
         <GBadge v-if="availableInfo.stale" tone="warning" icon="alert">超過 2 小時沒更新</GBadge>
       </div>
 
-      <div v-if="p.info.status" class="status-item">
+      <div v-if="p.info?.status" class="status-item">
         <span class="xs muted">收集狀態：</span>
         <GBadge v-if="statusMeta" :tone="statusMeta.tone" dot>{{ statusMeta.label }}</GBadge>
         <span v-else class="xs muted">—</span>
@@ -161,6 +144,20 @@ onMounted(() => {
         </span>
         <span v-if="p.info.status.message" class="xs muted">{{ p.info.status.message }}</span>
       </div>
+
+      <div class="spacer" />
+
+      <GButton
+        v-if="p.canRefresh"
+        size="sm"
+        variant="primary"
+        icon="refresh"
+        :loading="p.refreshing"
+        :disabled="localCooldown > 0"
+        @click="onRefresh"
+      >
+        {{ localCooldown > 0 ? `重新整理 (${localCooldown}s)` : '重新整理' }}
+      </GButton>
     </section>
 
     <GAlert v-if="p.refreshNotice" tone="info">{{ p.refreshNotice }}</GAlert>
@@ -184,7 +181,7 @@ onMounted(() => {
       <PolicyListTab v-if="activeTab === 'list'" :policy="p" @open-rule="openRuleDrawer" />
       <PolicyVersionsTab v-else-if="activeTab === 'versions'" :policy="p" @open-rule="openRuleDrawer" />
       <PolicyChecksTab v-else-if="activeTab === 'checks'" :check="c" @open-rule="openRuleDrawer" />
-      <PolicyVizTab v-else-if="activeTab === 'viz'" :policy="p" :viz="v" @open-rule="openRuleDrawer" />
+      <PolicyVizTab v-else-if="activeTab === 'viz'" :policy="p" :viz="v" :check="c" @open-rule="openRuleDrawer" />
     </template>
 
     <PolicyRuleDrawer v-model:open="drawerOpen" :policy="p" />
@@ -210,6 +207,9 @@ onMounted(() => {
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
+}
+.spacer {
+  flex: 1;
 }
 .tabs-bar {
   display: flex;

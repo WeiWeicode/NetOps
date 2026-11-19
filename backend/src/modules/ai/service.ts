@@ -57,6 +57,8 @@ import { pickHeatAnomalies, type HeatmapForAi } from './core/anomaly.js';
 import type { SliceQuery, ThreatProfileQuery } from '../pa-heat/service.js';
 import { ipsInText } from '../ip-names/core.js';
 import { dayOut, dayRange, logTimeOut } from '../../shared/time.js';
+import type { AiRef } from '../pa-policy/check.js';
+import { verifyAnswer } from '../pa-policy/verify.js';
 
 /** 語意搜尋(kb/core/vector.js searchVectors) */
 export interface VectorSearch {
@@ -123,6 +125,8 @@ export interface PaPolicyForAi {
   ruleCount: number;
   summary: Record<string, number>;
   imprecise: number;
+  /** 送出內容的索引(驗證回答用,不送 AI) */
+  ref: AiRef;
 }
 export type EventsParams = { from: string; to: string };
 export type InsightParams = { view: 'traffic' | 'threat'; from: string; to: string };
@@ -583,6 +587,7 @@ export function createAiService(deps: {
         vectorError: false,
       });
       if (s.signal.aborted) return;
+      // 回答結束(done 之前)驗證引用的規則編號與檢查類別,回傳標註(驗收 §3 AI 幻覺)
       await streamAnswer(s, llm, input.think, [
         { role: 'system', content: PA_POLICY_PROMPT },
         { role: 'user', content: `${PA_POLICY_TASK}
@@ -591,7 +596,7 @@ export function createAiService(deps: {
 以下是系統檢查的結果與相關規則：
 
 ${d.text}` },
-      ]);
+      ], (answer) => s.send('verify', { flags: verifyAnswer(answer, d.ref) }));
       return;
     }
     if (ctx.kind === 'slice') {
@@ -723,11 +728,22 @@ ${d.text}` },
   }
 
   /** 模型串流 → SSE:thinking、content、done(同舊版 streamChat) */
-  async function streamAnswer(s: SseStream, llm: Llm, think: boolean, messages: ChatMessage[]) {
+  /** beforeDone:收到 done 時先以完整回答呼叫(PA 規則判讀的回答驗證);失敗略過、done 照送;中止(沒有 done)時不呼叫 */
+  async function streamAnswer(s: SseStream, llm: Llm, think: boolean, messages: ChatMessage[], beforeDone?: (answer: string) => void) {
+    let answer = '';
     for await (const e of llm.stream({ messages, think, signal: s.signal })) {
       if (e.type === 'thinking') s.send('thinking', { chars: e.chars });
-      else if (e.type === 'content') s.send('content', { text: e.text });
-      else s.send('done', { finish: e.finish, truncated: e.finish === 'length' });
+      else if (e.type === 'content') {
+        if (beforeDone) answer += e.text;
+        s.send('content', { text: e.text });
+      } else {
+        try {
+          beforeDone?.(answer);
+        } catch {
+          // 驗證是輔助:失敗略過,done 照送
+        }
+        s.send('done', { finish: e.finish, truncated: e.finish === 'length' });
+      }
     }
   }
 

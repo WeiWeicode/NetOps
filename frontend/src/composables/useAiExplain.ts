@@ -81,6 +81,22 @@ export function anomalyChips(m: ExplainMeta | null, text: string): AnomalyChip[]
   return [...chips.filter((c) => c.mentioned), ...chips.filter((c) => !c.mentioned)];
 }
 
+/** PA 安全規則判讀(kind pa-policy)回答後的驗證標註(後端 verify 事件;2026-11-19 驗收 AI 幻覺) */
+export interface AiFlag {
+  /** unknown:引用的 #編號 不在送出的資料內;mismatch:這條規則不在程式檢查的這一類;user:資料沒有標它有使用者條件 */
+  kind: 'unknown' | 'mismatch' | 'user';
+  position: number;
+  /** mismatch 時回答講的檢查類別(CHECK_LABELS 的 key) */
+  code?: string;
+  /** 回答中的那一行 */
+  line: string;
+}
+export const AI_FLAG_LABELS: Record<AiFlag['kind'], string> = {
+  unknown: '資料中沒有這條規則',
+  mismatch: '程式檢查沒有把這條規則列在這一類',
+  user: '資料沒有標示這條規則有使用者條件',
+};
+
 export function useAiExplain() {
   const phase = ref<ExplainPhase>('idle');
   const text = ref('');
@@ -88,6 +104,8 @@ export function useAiExplain() {
   const meta = shallowRef<ExplainMeta | null>(null);
   const thinkingChars = ref(0);
   const truncated = ref(false);
+  /** pa-policy 判讀的驗證標註;null = 沒有驗證(其他 kind,或回答未完成) */
+  const flags = shallowRef<AiFlag[] | null>(null);
   /** 正在等時段明細查完(scan waiting) */
   const waiting = ref(false);
   const elapsed = ref(0);
@@ -120,6 +138,7 @@ export function useAiExplain() {
     meta.value = null;
     thinkingChars.value = 0;
     truncated.value = false;
+    flags.value = null;
     waiting.value = false;
     elapsed.value = 0;
     answeredKey.value = '';
@@ -152,7 +171,8 @@ export function useAiExplain() {
           } else if (e.event === 'content') {
             phase.value = 'writing';
             text.value += String(p.text ?? '');
-          } else if (e.event === 'done') truncated.value = p.truncated === true;
+          } else if (e.event === 'verify') flags.value = Array.isArray(p.flags) ? (p.flags as AiFlag[]) : [];
+          else if (e.event === 'done') truncated.value = p.truncated === true;
         },
         ctl.signal,
       );
@@ -188,5 +208,5 @@ export function useAiExplain() {
       clearInterval(timer);
     });
 
-  return { phase, text, error, meta, thinkingChars, truncated, waiting, elapsed, running, statusText, notices, answeredKey, start, stop, reset };
+  return { phase, text, error, meta, thinkingChars, truncated, flags, waiting, elapsed, running, statusText, notices, answeredKey, start, stop, reset };
 }

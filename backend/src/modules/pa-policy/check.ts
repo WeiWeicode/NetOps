@@ -212,7 +212,7 @@ export function checkRules(views: RuleView[], opts: { unusedDays?: number; now?:
   return { items, summary, imprecise: [...imp.values()].filter((x) => x.length).length };
 }
 
-/** AI 判讀送出的項目(依嚴重度;info 不送,太多時只送前面的) */
+/** AI 判讀送出的項目(依嚴重度;info 只送「無法判定」(「需要人工確認」章節的依據),停用不送;太多時只送前面的) */
 export const AI_MAX_ITEMS = 40;
 export const AI_MAX_CHARS = 30_000;
 
@@ -220,12 +220,13 @@ export const AI_MAX_CHARS = 30_000;
  * AI 判讀的資料(§3.3 PR-5 第 2 層):只有檢查項目 + 相關規則的正規化內容(名稱、zone、物件名稱與展開後網段、應用、服務、動作、命中數)。
  * 不送整份規則、不送 IP 對照表的姓名 / 部門(§3.6),也不送說明欄(description 可能有人名)與使用者 / 群組名稱(AD 帳號,只送數量)。
  */
-export function checkContext(views: RuleView[], result: CheckResult, meta: { fetchedAt: string; unusedDays: number }): { text: string; clipped: boolean; sent: number } {
-  const picked = result.items.filter((i) => i.severity !== 'info').slice(0, AI_MAX_ITEMS);
+export function checkContext(views: RuleView[], result: CheckResult, meta: { fetchedAt: string; unusedDays: number }): { text: string; clipped: boolean; sent: number; ref: AiRef } {
+  const forAi = result.items.filter(sentToAi);
+  const picked = forAi.slice(0, AI_MAX_ITEMS);
   const byPos = new Map(views.map((v) => [v.rule.position, v]));
   const positions = [...new Set(picked.flatMap((i) => [i.position, ...i.related.map((r) => r.position)]))].sort((a, b) => a - b);
   const addr = (xs: RuleView['rule']['expanded']['sources']) =>
-    xs.map((x) => (x.kind === 'any' ? 'any' : `${x.name}${x.values.length ? `[${x.values.slice(0, 8).join(', ')}${x.values.length > 8 ? ` …共 ${x.values.length}` : ''}]` : ''}${x.unresolved ? '(含無法展開)' : ''}`)).join('; ');
+    xs.map((x) => (x.kind === 'any' ? 'any' : `${x.name}${x.values.length ? `[${x.values.slice(0, 8).join(', ')}${x.values.length > 8 ? ` …共 ${x.values.length}` : ''}]` : ''}${x.unresolved ? '(含無法對應 IP)' : ''}`)).join('; ');
   const ruleLine = (p: number) => {
     const v = byPos.get(p);
     if (!v) return '';
@@ -242,10 +243,39 @@ export function checkContext(views: RuleView[], result: CheckResult, meta: { fet
     `程式檢查統計:${sum || '無'}(info 類不列;含無法精準比對條件的規則 ${result.imprecise} 條)。\n\n` +
     `## 檢查項目(依嚴重度,最多 ${AI_MAX_ITEMS} 項)\n${findings.join('\n') || '(沒有需要處理的項目)'}\n\n` +
     `## 相關規則(依 PA 比對順序;# 為 PA 規則編號)\n${positions.map(ruleLine).filter(Boolean).join('\n')}`;
-  let clipped = result.items.filter((i) => i.severity !== 'info').length > picked.length;
+  let clipped = forAi.length > picked.length;
   if (text.length > AI_MAX_CHARS) {
     text = `${text.slice(0, AI_MAX_CHARS)}\n…(資料太長,後面省略)`;
     clipped = true;
   }
-  return { text, clipped, sent: picked.length };
+  // 驗證 AI 回答用:只算真的留在 text 裡的(截斷後被切掉的規則不算送出)
+  const sentLines = new Set((text.split('## 相關規則')[1] ?? '').split('\n').map((l) => /^#(\d+) /.exec(l)?.[1]).filter(Boolean).map(Number));
+  const inText = (p: number) => sentLines.has(p);
+  const codes: Record<number, CheckCode[]> = {};
+  for (const i of picked) {
+    if (!inText(i.position)) continue;
+    for (const p of [i.position, ...i.related.map((r) => r.position)]) {
+      const list = (codes[p] ??= []);
+      if (!list.includes(i.code)) list.push(i.code);
+    }
+  }
+  const ref: AiRef = {
+    positions: positions.filter(inText),
+    codes,
+    users: positions.filter((p) => inText(p) && !isAny(byPos.get(p)?.rule.sourceUsers ?? [])),
+  };
+  return { text, clipped, sent: picked.length, ref };
+}
+
+/** 送給 AI 的檢查項目:非 info,加上「無法判定」 */
+const sentToAi = (i: CheckItem) => i.severity !== 'info' || i.code === 'undeterminable';
+
+/** 送給 AI 的內容索引(回答驗證用,不送 AI) */
+export interface AiRef {
+  /** 資料內出現的規則編號 */
+  positions: number[];
+  /** 規則編號 → 它出現在哪些檢查項目(當主規則或相關規則) */
+  codes: Record<number, CheckCode[]>;
+  /** 資料標「有使用者條件」的規則編號 */
+  users: number[];
 }

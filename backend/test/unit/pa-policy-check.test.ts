@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import { createPaPolicyRedis } from '../../src/infra/redis/pa-policy.js';
 import { checkContext, checkRules, type CheckCode } from '../../src/modules/pa-policy/check.js';
+import { verifyAnswer } from '../../src/modules/pa-policy/verify.js';
 import { buildViews, parseHits, parseSnapshot } from '../../src/modules/pa-policy/core.js';
 import { fakeAiHost } from '../fixtures/fake-ai.js';
 import { createTestApp, type TestApp } from '../helpers.js';
@@ -135,5 +136,61 @@ describe('API:排序檢查與 AI 判讀', () => {
     assert.doesNotMatch(user, /王小明|資訊處/);
     assert.doesNotMatch(user, /IP 對照表|知識庫/);
     assert.match(chat.body.messages[0].content, /不會自動修改防火牆/);
+    assert.match(chat.body.messages[0].content, /只能引用「檢查項目」列出的問題/);
+    // 回答驗證在 done 之前送出(假 AI 的回答沒有規則編號 → 沒有標註)
+    assert.match(res.body, /event: verify\ndata: \{"flags":\[\]\}[\s\S]*event: done/);
+  });
+});
+
+describe('AI 回答驗證(2026-11-19 驗收 §3 幻覺)', () => {
+  const v = buildViews(parseSnapshot(SNAP)!, parseHits({ items: HIT_ITEMS }).items);
+  const ctx = checkContext(v, checkRules(v, { now: NOW }), { fetchedAt: SNAP.fetchedAt, unusedDays: 90 });
+
+  it('無法判定的項目會送給 AI(「需要人工確認」的依據),停用不送', () => {
+    assert.match(ctx.text, /\[info\] undeterminable #6 FQDN-Dst/);
+    assert.doesNotMatch(ctx.text, /disabled #7/);
+    assert.deepEqual(ctx.ref.codes[6]!.sort(), ['broad-early', 'no-log-end', 'no-profile', 'undeterminable']); // broad-early:#1 的相關規則
+    assert.ok(ctx.ref.positions.includes(1) && !ctx.ref.positions.includes(7));
+  });
+  it('資料沒有的規則編號 → unknown', () => {
+    const f = verifyAnswer('## 需要人工確認\n- #87 、#88 的 0.pool.ntp.org 無法對應 IP\n- #6 FQDN-Dst 無法判定', ctx.ref);
+    assert.deepEqual(f.map((x) => [x.kind, x.position]), [['unknown', 87], ['unknown', 88]]);
+    assert.match(f[0]!.line, /0\.pool\.ntp\.org/);
+  });
+  it('不在該類檢查的規則 → mismatch(#114 缺 Profile 的情形)', () => {
+    const f = verifyAnswer('- 缺少 Security Profile:#6 FQDN-Dst、#5 Allow-DMZ-B', ctx.ref);
+    assert.deepEqual(f.map((x) => [x.kind, x.position, x.code]), [['mismatch', 5, 'no-profile']]);
+  });
+  it('相關規則也算在該類檢查內;一行講多類時不判歸類', () => {
+    assert.deepEqual(verifyAnswer('- 衝突遮蔽:#2 Deny-48 被 #1 Allow-Office-Any 擋住', ctx.ref), []);
+    assert.deepEqual(verifyAnswer('- #5 長期未命中,另有遮蔽問題', ctx.ref), []);
+  });
+  it('稱有使用者條件但資料沒有標 → user;說「沒有使用者條件」不算', () => {
+    const f = verifyAnswer('#1 Allow-Office-Any 有使用者條件,範圍較窄', ctx.ref);
+    assert.deepEqual(f.map((x) => [x.kind, x.position]), [['user', 1]]);
+    assert.deepEqual(verifyAnswer('#1 沒有使用者條件', ctx.ref), []);
+  });
+  it('否定說法不算使用者條件;同行另一子句的真幻覺仍標出', () => {
+    for (const t of ['#1 未設定使用者條件', '#1 不限使用者條件', '#1 使用者為 any']) assert.deepEqual(verifyAnswer(t, ctx.ref), [], t);
+    assert.deepEqual(verifyAnswer('#2 沒有使用者條件,#1 有使用者條件', ctx.ref).map((x) => [x.kind, x.position]), [['user', 1]]);
+  });
+  it('「把 #X 移到 #Y 之後」只檢查 #X 的歸類;「已有 Profile」不當成缺 Profile', () => {
+    assert.deepEqual(verifyAnswer('- #4 長期未命中,建議移到 #1 之後', ctx.ref), []);
+    assert.deepEqual(verifyAnswer('- #1 已有 Security Profile', ctx.ref), []);
+  });
+  it('截斷後被切掉的規則不算送出;名稱裡的 #N 不算', () => {
+    const many = Array.from({ length: 60 }, (_, i) => rule(i + 1, `R${i + 1}-#${i + 200} x`.padEnd(400, 'x'), { sources: [`10.0.${i}.0/24`], logEnd: false }));
+    const vs = buildViews(parseSnapshot({ ...SNAP, rules: many })!, {});
+    const c = checkContext(vs, checkRules(vs, { now: NOW }), { fetchedAt: SNAP.fetchedAt, unusedDays: 90 });
+    assert.ok(c.clipped);
+    const lines = (c.text.split('## 相關規則')[1] ?? '').split('\n').filter((l) => /^#\d+ /.test(l)).map((l) => Number(/^#(\d+)/.exec(l)![1]));
+    assert.deepEqual(c.ref.positions, lines);
+    assert.ok(c.ref.positions.length < 40);
+    assert.ok(!c.ref.positions.some((x) => x >= 200));
+  });
+  it('同一規則同一類只標一次;#編號後接數字不誤判', () => {
+    const f = verifyAnswer('#99 a\n#99 b\n#1234567', ctx.ref);
+    assert.equal(f.filter((x) => x.position === 99).length, 1);
+    assert.ok(!f.some((x) => x.position === 1234));
   });
 });

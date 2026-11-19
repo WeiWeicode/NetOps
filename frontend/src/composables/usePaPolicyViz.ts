@@ -13,6 +13,11 @@
  *   const v = usePaPolicyViz(() => p.allRules, () => p.allDefaults, () => checksByPosition /* PR-5,可省略 *\/);
  *   v.filters.action / zone / unusedDays;v.matrix、v.order、v.sankey
  *   v.select({ kind: 'cell', from, to }) / v.select({ kind: 'link', source, target }) / v.select(null) → v.highlighted(順序條要標出的 position)
+ *
+ * 點選篩選(2026-11-19 需求方):選取矩陣格子或 Sankey 連線後,順序條與 Sankey「只顯示」選取的規則(不是只標記):
+ *   v.shownOrder / v.shownSankey:有選取時只含選取的規則(Sankey 以這些規則重畫,多 zone 規則的其他 zone 組合也會出現);沒選取時同 order / sankey
+ *   v.focused:有效的選取(選取的格子 / 連線被篩選掉時為 false,圖照常顯示全部);v.clearSelection()
+ *   矩陣不跟著縮小(才能改點別格);選取「預設規則」的 Sankey 連線時只顯示該預設規則
  */
 import { computed, reactive, ref, type Ref } from 'vue';
 import type { DefaultRuleHits, PolicyRule } from '@/api/paPolicy';
@@ -160,6 +165,8 @@ export function buildOrder(rules: PolicyRule[], defaults: DefaultRuleHits[], che
 }
 
 export const DEFAULT_NODE = 'p:預設規則';
+/** PA 預設規則與動作(intrazone-default 允許、interzone-default 拒絕) */
+const DEFAULT_RULE_OF_ACTION = { allow: 'intrazone-default', deny: 'interzone-default' } as const;
 
 export function buildSankey(rules: PolicyRule[], defaults: DefaultRuleHits[]): { nodes: VizSankeyNode[]; links: VizSankeyLink[] } {
   const nodes = new Map<string, VizSankeyNode>();
@@ -201,6 +208,20 @@ export function buildSankey(rules: PolicyRule[], defaults: DefaultRuleHits[]): {
   return { nodes: [...nodes.values()], links: [...links.values()].filter((l) => l.value > 0) };
 }
 
+/** 選取 → 要顯示的規則:positions 一般規則;defaults 預設規則名稱(Sankey 預設規則連線);null = 沒有有效選取 */
+export function selectionOf(sel: VizSelection, matrix: ZoneMatrix, sankey: { links: VizSankeyLink[] }): { positions: Set<number>; defaults: Set<string> } | null {
+  if (!sel) return null;
+  if (sel.kind === 'cell') {
+    const c = matrix.cells.find((x) => x.from === sel.from && x.to === sel.to);
+    return c ? { positions: new Set(c.positions), defaults: new Set() } : null;
+  }
+  const l = sankey.links.find((x) => x.source === sel.source && x.target === sel.target);
+  if (!l) return null;
+  // 預設規則的連線:預設規則 → 允許(intrazone-default)/ 拒絕(interzone-default)
+  const defaults = new Set<string>(sel.source === DEFAULT_NODE ? [DEFAULT_RULE_OF_ACTION[sel.target === 'a:allow' ? 'allow' : 'deny']] : []);
+  return { positions: new Set(l.positions), defaults };
+}
+
 /** 選取 → 要在順序條標出的規則編號 */
 export function highlightOf(sel: VizSelection, matrix: ZoneMatrix, sankey: { links: VizSankeyLink[] }): Set<number> | null {
   if (!sel) return null;
@@ -231,6 +252,11 @@ export function usePaPolicyViz(rules: () => PolicyRule[], defaults: () => Defaul
   const order = computed(() => buildOrder(filtered.value, filteredDefaults.value, checks?.() ?? null));
   const sankey = computed(() => buildSankey(filtered.value, filteredDefaults.value));
   const highlighted = computed(() => highlightOf(selection.value, matrix.value, sankey.value));
+  const picked = computed(() => selectionOf(selection.value, matrix.value, sankey.value));
+  const pickedRules = computed(() => (picked.value ? filtered.value.filter((r) => picked.value!.positions.has(r.position)) : filtered.value));
+  const pickedDefaults = computed(() => (picked.value ? filteredDefaults.value.filter((d) => picked.value!.defaults.has(d.name)) : filteredDefaults.value));
+  const shownOrder = computed(() => (picked.value ? buildOrder(pickedRules.value, pickedDefaults.value, checks?.() ?? null) : order.value));
+  const shownSankey = computed(() => (picked.value ? buildSankey(pickedRules.value, pickedDefaults.value) : sankey.value));
   /** 所有圖出現過的 zone(篩選下拉用) */
   const zones = computed(() => zoneOrder(new Set(rules().flatMap((r) => [...zonesOf(r.fromZones), ...zonesOf(r.toZones)]))));
   return reactive({
@@ -240,10 +266,19 @@ export function usePaPolicyViz(rules: () => PolicyRule[], defaults: () => Defaul
     order,
     sankey,
     highlighted,
+    focused: computed(() => picked.value !== null),
+    shownOrder,
+    shownSankey,
+    /** 目前圖上顯示的規則(篩選 + 選取後;匯出用) */
+    shownRules: pickedRules,
+    shownDefaults: pickedDefaults,
     zones,
     ruleCount: computed(() => filtered.value.length),
     select: (s: VizSelection) => {
       selection.value = s;
+    },
+    clearSelection: () => {
+      selection.value = null;
     },
   });
 }

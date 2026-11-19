@@ -2,7 +2,40 @@
 
 > 接手時先讀 `AGENT.md`,再讀 `docs/ARCHITECTURE.md`、`docs/IMPL-PLAN.md`。
 
-## 2026-11-19 收工:PA 安全規則檢視(PR)測試區完成,準備上正式區
+## 2026-11-19 收工(晚):威脅特徵碼(TS)TS-1 已上測試區、TS-2 審查通過待合併
+
+**接手方式**:新討論串說「從 `NetOps/docs/HANDOFF.md`「2026-11-19 收工(晚)」接手,繼續 TS」。計畫書 `docs/THREAT-SIGNATURE-PLAN.md`(§1.2 需求方決定、§2.4 TS-0 結果、§9 待決);Gemini 提示詞 `docs/GEMINI-PROMPT-TS.md`;審查紀錄 `docs/reviews/2026-11-19-ts-1.md`、`2026-11-19-ts-2.md`(MR !165)。
+
+### 分工(需求方 2026-11-19 決定,照做)
+
+- TS-1 ~ TS-4 **程式全部交 Gemini 撰寫**(原話「我這次全給gemini做看看」、「明天程式碼一樣交給gemini撰寫」);Claude 寫提示詞、**審查每個 MR**(紀錄寫 `docs/reviews/`,只提問題不改 Gemini 分支)、核對合併後的部署 pipeline。
+- 本機 `NetOps/` 目錄由 Gemini 開發使用;Claude 不切換分支,審查紀錄用 git 底層指令(`commit-tree`)另建分支推送,不動工作目錄。GitLab Token 沒有 MR 留言與建立 commit 權限(403),審查紀錄只能走分支 + MR。
+
+### 已完成
+
+- !161 / !162 / !163:計畫書、TS-0 實測結果、Gemini 提示詞、TS-0 執行方式(容器唯讀,用 stdin 送腳本)。
+- TS-0(測試區 PA-560):弱點 25,450 筆(11.6 MB、2.4 秒)、間諜軟體 9,566 筆;CPU 最高 13%;特徵清單沒有每筆發布日;shared 位置沒有 profile,只讀 vsys1。
+- **!164 TS-1 收集器**(`pa-collector/netops_pa/signatures.py`)已合併並部署(develop pipeline 1238 成功)。`PA_SIGNATURE_ENABLED` 仍是 0,尚未讀 PA。合併後 `netops-pa` 重建,08:49 UTC 心跳 `syslogOkAt` 仍持續更新(Syslog 看起來有恢復,明天再確認一次)。
+- **!166 TS-2**(後端 API、版本差異 D1/D2、命中比對、規則覆蓋、戰情室提示、前端 api / composable、`gateway-rbac.yaml`、kb-backup 加 `pa-signature`):Claude 審查 + P1/P2 複審通過,**開啟中、未合併**。
+
+### 下一步(依序)
+
+1. 需求方合併 !166(TS-2)→ Claude 看 develop 部署 pipeline(含 `rbac-test`)。合併後測試區會出現「威脅特徵碼」選單,頁面到 TS-4 才有(之前點進去是 NotFound,已知)。
+2. 需求方合併 !165(審查紀錄)。
+3. **測試區打開 `PA_SIGNATURE_ENABLED=1`**(需求方同意後;主機 2 `deploy/.env`,重建 `netops-pa` 又會斷 Syslog,要挑網通在的時段)→ 確認 Redis `netops:pa:sig:*` 有快照、netops-api 產生基準版本(`pa-signature/index.json`)。也可以等 TS-4 完成再一起開。
+4. **TS-3 AI 摘要**(Gemini):計畫書 §5.3;權限 `netops.ai.use` + `netops.pa-signature.read`(rbac 已登記 `netops.pa-signature-page.ai`);只送統計,不送 IP、姓名、原始 log。Claude 寫提示詞 → Gemini 開 MR → Claude 審查。
+5. **TS-4 頁面**(Gemini):「防火牆 › 威脅特徵碼」清單、版本差異、命中、規則覆蓋、AI;安全事件 / Log 明細 / 戰情室的威脅名稱開特徵碼抽屜;戰情室新特徵碼提示。注意:`firstVersion` 為 null 時顯示「未知」;`rebuilt` 版本顯示「這一版差異無法計算」;`since` 顯示「自 YYYY-MM-DD 起統計」。
+6. TS 全部完成後:Sonnet 子任務統一寫 docs MR(API.md、PA-LIVE-PLAN §4 `netops:pa:sig:*` 鍵、ARCHITECTURE D22 補充、PROJECT-MAP、HANDOFF「PA API 帳號降級前要做」補 `signatures.py`),依各 MR 描述的「要寫進文件的變更」。
+
+### 待決 / 注意
+
+- 計畫書 §9 未決:Q6(PA API 帳號降級成只傳 Log 後特徵碼功能怎麼辦,和 PR 的降級確認一起決定)、Q10(正式區何時開)。
+- 觀察:命中比對在 90 天威脅 log 上用正規式取 ID,上正式區後留意查詢時間(審查 I1)。
+- pa-collector 的 `test_pa_query.py::test_whitelist_and_no_redirect` 在 Windows 偶發 `ConnectionAbortedError`(CI Linux 正常),既有測試不穩定。
+- 本機 `NetOps/ts0-result.json` 是未追蹤檔(TS-0 數字),不要 commit,可刪。
+- 每週額度 11-19 已達 90%(週日 18:00 重置),審查以重點為主。
+
+## 〔前一輪〕2026-11-19 收工:PA 安全規則檢視(PR)測試區完成,準備上正式區
 
 **接手方式**:新討論串說「從 `NetOps/docs/HANDOFF.md`「2026-11-19 收工」接手」。計畫書 `docs/WARROOM-DIRECTION-POLICY-PLAN.md`(§3.5 規則圖、§3.6 IP 對照表、§4 Q1–Q6)。
 

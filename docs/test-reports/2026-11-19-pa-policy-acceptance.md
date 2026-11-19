@@ -12,8 +12,8 @@
 
 | # | 項目 | 結果 | 備註 |
 | --- | --- | --- | --- |
-| 1 | 規則數與順序;165 vs 166;抽 10 條逐欄對照 | 待驗 | 程式碼 `parse_rules` 沒有任何過濾,條數 = PA running config 的 `rules/entry` 數;差 1 條應是 PA 端異動(見 §4) |
-| 2 | 物件展開、命中數與最後命中 | 待驗 | |
+| 1 | 規則數與順序;165 vs 166;逐欄對照 | **通過** | 需求方匯出 PA GUI CSV(10:22,167 筆 = 165 + 2 預設),Claude 以 API 回傳的 165 條逐條比對,不只抽 10 條:順序、名稱、zone、來源 / 目的位址、應用、服務、動作、Profile Group、停用、Log at Session End、Log Forwarding Profile、Schedule、negate(來源 1 條、目的 22 條)全部一致,**0 差異**。166→165 為 PA 端異動 | 程式碼 `parse_rules` 沒有任何過濾,條數 = PA running config 的 `rules/entry` 數;差 1 條應是 PA 端異動(見 §4) |
+| 2 | 物件展開、命中數與最後命中 | 部分通過 | 命中數 / 最後命中:CSV(10:22)與快照(10:11)比,最後命中時間頁面從不比 CSV 新(0 筆異常);98 條命中數完全相同,其餘為這 11 分鐘新增的命中,合理。物件展開(位址 / 群組 / 服務)待需求方在畫面展開並與 PA Objects 對照 |
 | 3 | IP 對照(網管 / viewer) | 待驗 | |
 | 4 | 手動重新整理、5 分鐘冷卻、viewer 無按鈕 | 待驗 | |
 | 5 | 版本差異(需求方同意才在 PA 改說明欄並 Commit) | 待問 | |
@@ -27,5 +27,5 @@
 
 - 排序檢查程式結果合理:遮蔽 0、衝突遮蔽 0、過寬位置過前 2(#134、#158)、冗餘 7、長期未命中 21、停用 5(#1、#4、#13、#18、#165)、無 Profile 1(#102)、無 Log at Session End 4(#87、#88、#96、#127)、無法判定 4;各項清單數量與計數卡一致。
 - AI 判讀錯誤(畫面端或提示詞問題,交 Claude):①「缺少 Security Profile」列出 #102 與 #114,程式檢查只有 #102;②「需要人工確認」把 `0.pool.ntp.org` 掛在 #87、#88、#96、#97,實際 NTP 規則是 #21;③ 稱 #134、#158「有使用者條件」,輸入資料未提供使用者。建議 AI 只引用程式檢查給的項目,並在畫面提醒需對照規則內容。
-- 條數:PA GUI 顯示 **167 items** = 頁面 165 + 預設規則 2(intrazone / interzone),**一致**。PR-0(11-18)是 166+2=168,少的 1 條是 PA 端異動(Task Manager 顯示 weiyang 於 11-19 09:10、09:18、09:55、10:10 有 Commit),不是收集器漏讀。GUI 前 4 條(test、Lansweeper app、Lansweeper port、Lansweeper port-1)與頁面逐欄一致(zone、位址、應用、服務、動作、Profile、停用淡色)。
+- 條數:PA GUI 顯示 **167 items** = 頁面 165 + 預設規則 2(intrazone / interzone),**一致**。PR-0(11-18)是 166+2=168,少的 1 條是 PA 端異動(Task Manager 顯示 weiyang 於 11-19 09:10、09:18、09:55、10:10 有 Commit),不是收集器漏讀。test、Lansweeper app、Lansweeper port、Lansweeper port-1)與頁面逐欄一致(zone、位址、應用、服務、動作、Profile、停用淡色)。
 

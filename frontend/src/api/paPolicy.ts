@@ -21,7 +21,7 @@ export interface ExpandedAddress {
   kind: 'any' | 'address' | 'group' | 'literal' | 'dynamic-group' | 'region' | 'unknown';
   /** 展開後的值:10.1.1.0/24、10.1.1.1-10.1.1.9、fqdn:xxx、dynamic:'tag' 等 */
   values: string[];
-  /** 有無法展開成 IPv4 的成員(畫面標「無法展開 / 無法對照」) */
+  /** 有無法展開成 IPv4 的成員(畫面標「無法對應 IP」;FQDN 成員為 fqdn:xxx,動態群組為 dynamic:'tag') */
   unresolved: boolean;
 }
 export interface ExpandedService {

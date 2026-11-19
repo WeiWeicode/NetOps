@@ -28,6 +28,7 @@ import {
   type PolicyDetail,
   type PolicyDiff,
   type PolicyFilter,
+  type PolicyInfo,
   type PolicyList,
   type PolicyRule,
   type PolicyVersion,
@@ -83,7 +84,7 @@ export function usePaPolicy(options: UsePaPolicyOptions = {}) {
   const rules = shallowRef<PolicyRule[]>([]);
   const total = ref(0);
   const defaults = shallowRef<DefaultRuleHits[]>([]);
-  const info = shallowRef<Omit<PolicyList, 'items' | 'total' | 'page' | 'pageSize' | 'defaults'> | null>(null);
+  const info = shallowRef<PolicyInfo | null>(null);
   const loading = ref(false);
   const error = ref<Error | null>(null);
   let seq = 0;
@@ -123,7 +124,7 @@ export function usePaPolicy(options: UsePaPolicyOptions = {}) {
       rules.value = items;
       total.value = t;
       defaults.value = d;
-      info.value = rest;
+      info.value = rest as PolicyInfo;
       return true;
     } catch (e) {
       if (my === seq) error.value = e as Error;
@@ -150,7 +151,7 @@ export function usePaPolicy(options: UsePaPolicyOptions = {}) {
       allDefaults.value = r.defaults;
       if (!info.value) {
         const { items: _i, total: _t, page: _p, pageSize: _s, defaults: _d, ...rest } = r;
-        info.value = rest;
+        info.value = rest as PolicyInfo;
       }
       return true;
     } catch (e) {

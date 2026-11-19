@@ -111,6 +111,11 @@ interface Unavailable {
 export type PolicyList = (Available | Unavailable) & { items: PolicyRule[]; total: number; page: number; pageSize: number; defaults: DefaultRuleHits[] };
 export type PolicyDetail = Available & { rule: PolicyRule };
 
+/** 對聯集逐一 Omit(內建 Omit 會把 available: true | false 壓平,畫面無法用 available 窄化) */
+export type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
+/** 清單的狀態部分(usePaPolicy().info):available 為 true 才有 fetchedAt / stale 等,false 時看 reason / message */
+export type PolicyInfo = DistributiveOmit<PolicyList, 'items' | 'total' | 'page' | 'pageSize' | 'defaults'>;
+
 export interface PolicyFilter {
   q?: string;
   zone?: string;
@@ -166,6 +171,9 @@ export interface CheckItem {
   reasons?: string[];
 }
 export type PolicyChecks = (Available | Unavailable) & { items: CheckItem[]; summary: Record<CheckCode, number> | null; imprecise: number; unusedDays: number };
+
+/** 排序檢查的狀態部分(usePaPolicyCheck().info) */
+export type PolicyCheckInfo = DistributiveOmit<PolicyChecks, 'items' | 'summary' | 'imprecise'>;
 
 export type RangeLookup = { items: (IpNameLabel & { ip: string })[]; total: number; truncated: boolean } | { invalid: true };
 

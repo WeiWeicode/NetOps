@@ -279,6 +279,9 @@ services:
   #     PA_RECEIVE_ENABLED  控制 HTTP 51293 / Syslog 51294 接收(需機密 pa_http_token、PA_ALLOWED_SOURCES)
   #     PA_QUERY_ENABLED    PA 精準查詢執行者(C5,D31:需 PA_HOST、機密 pa_api_key,API 角色要有 XML API Log 權限 E4);
   #                         測試區預設 0,由需求方手動開;PA_QUERY_MAX_MGMT_CPU 管理平面 CPU 門檻(預設 50,E4,實測前不放寬)
+  #     PA_POLICY_ENABLED   安全規則收集(WARROOM-DIRECTION-POLICY-PLAN §3.2:唯讀 XML API 讀設定與命中數;需 PA_HOST、機密 pa_api_key);
+  #                         預設 0;PA_POLICY_MINUTES 間隔(預設 30,最短 10)、PA_POLICY_MAX_MGMT_CPU 管理平面 CPU 門檻(預設 50,只能調低)、
+  #                         PA_POLICY_HTTP_TIMEOUT_SECONDS(預設 15)。專用帳號 PA_POLICY_API_KEY_FILE(§3.2 緩解 ①)尚未接 Docker secret,沿用 pa_api_key
   #   port 只綁 WSL 的 127.0.0.1:Windows 以 portproxy 帶進來,Windows 防火牆只放行 PA-560(docs/PA-FORWARDING-SPEC.md 附錄 F)
   #   機密(NETOPS_SECRETS_DIR,uid 1000 可讀;deploy/host2-set-pa-secrets.sh):pa_api_key(空檔 = 尚未取得)、pa_http_token
   netops-pa:
@@ -309,6 +312,10 @@ services:
       PA_RECEIVE_ENABLED: ${PA_RECEIVE_ENABLED:-0}
       PA_QUERY_ENABLED: ${PA_QUERY_ENABLED:-0}
       PA_QUERY_MAX_MGMT_CPU: ${PA_QUERY_MAX_MGMT_CPU:-}
+      PA_POLICY_ENABLED: ${PA_POLICY_ENABLED:-0}
+      PA_POLICY_MINUTES: ${PA_POLICY_MINUTES:-}
+      PA_POLICY_MAX_MGMT_CPU: ${PA_POLICY_MAX_MGMT_CPU:-}
+      PA_POLICY_HTTP_TIMEOUT_SECONDS: ${PA_POLICY_HTTP_TIMEOUT_SECONDS:-}
       PA_HTTP_TOKEN_FILE: /run/secrets/pa_http_token
       PA_ALLOWED_SOURCES: ${PA_ALLOWED_SOURCES:-}
       # 憑證(選用;檔案放在主機 NETOPS_PA_TLS_HOST_DIR,唯讀掛到 /run/pa-tls,檔名固定見 docs/PA-FORWARDING-SPEC.md 附錄 F.6):

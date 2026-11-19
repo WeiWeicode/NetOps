@@ -17,6 +17,7 @@ import { handlePaLog } from './paLog.ts';
 import { handlePa } from './pa.ts';
 import { handlePaEvents } from './paEvents.ts';
 import { handlePaLive, streamPaLive } from './paLive.ts';
+import { handlePaPolicy } from './paPolicy.ts';
 import { handlePaQuery } from './paQuery.ts';
 import type { MockCtx } from './types.ts';
 import { handleViz } from './viz.ts';
@@ -38,6 +39,10 @@ const MENUS = [
   { code: 'netops.pa-heatmap.read', name: '活動熱力圖', kind: 'menu', parentCode: 'netops.group.firewall', sort: 12, icon: null },
   { code: 'netops.pa-insight.read', name: '分析儀表板', kind: 'menu', parentCode: 'netops.group.firewall', sort: 15, icon: null },
   { code: 'netops.pa-events.read', name: '安全事件', kind: 'menu', parentCode: 'netops.group.firewall', sort: 20, icon: null },
+  // PR-2 安全規則(gateway-rbac.yaml sort 25;手動重新整理只給 admin)
+  { code: 'netops.pa-policy-page.read', name: '安全規則', kind: 'menu', parentCode: 'netops.group.firewall', sort: 25, icon: null },
+  { code: 'netops.pa-policy-page.refresh', name: '手動重新整理規則', kind: 'button', parentCode: 'netops.pa-policy-page.read', sort: 10, icon: null },
+  { code: 'netops.pa-policy-page.ai', name: 'AI 判讀規則順序', kind: 'button', parentCode: 'netops.pa-policy-page.read', sort: 20, icon: null },
   { code: 'netops.pa-search.read', name: 'Log 明細查詢', kind: 'menu', parentCode: 'netops.group.firewall', sort: 30, icon: null },
   { code: 'netops.pa-files.read', name: 'FTP Log 檔案', kind: 'menu', parentCode: 'netops.group.firewall', sort: 40, icon: null },
   { code: 'netops.pa-files.manage', name: '管理', kind: 'button', parentCode: 'netops.pa-files.read', sort: 10, icon: null },
@@ -63,10 +68,10 @@ const MENUS = [
   { code: 'netops.pa-search.ai', name: 'AI 說明威脅', kind: 'button', parentCode: 'netops.pa-search.read', sort: 10, icon: null },
   { code: 'netops.pa-events.ai', name: 'AI 摘要安全事件', kind: 'button', parentCode: 'netops.pa-events.read', sort: 10, icon: null },
 ];
-const READ_API = ['netops.ping.read', 'netops.pa-realtime.read', 'netops.pa.read', 'netops.pa-log.read', 'netops.ftp.read', 'netops.ad.read', 'netops.ad-log.read', 'netops.kb.read', 'netops.ai.use'];
+const READ_API = ['netops.ping.read', 'netops.pa-realtime.read', 'netops.pa.read', 'netops.pa-log.read', 'netops.ftp.read', 'netops.ad.read', 'netops.ad-log.read', 'netops.kb.read', 'netops.ai.use', 'netops.pa-policy.read'];
 /** viewer 也有的 AI 按鈕(netops.ai.use 給 admin 與 viewer,2026-11-05 決定) */
-const AI_BUTTONS = ['netops.pa-ask.use', 'netops.pa-dashboard.ai', 'netops.ad-ask.use', 'netops.pa-heatmap.ai', 'netops.pa-insight.ai', 'netops.pa-search.ai', 'netops.pa-events.ai'];
-const WRITE_API = ['netops.ftp.write', 'netops.kb.write', 'netops.pa-realtime.write', 'netops.pa-query.read', 'netops.ip-name.read', 'netops.ip-name.write'];
+const AI_BUTTONS = ['netops.pa-ask.use', 'netops.pa-dashboard.ai', 'netops.ad-ask.use', 'netops.pa-heatmap.ai', 'netops.pa-insight.ai', 'netops.pa-search.ai', 'netops.pa-events.ai', 'netops.pa-policy-page.ai'];
+const WRITE_API = ['netops.ftp.write', 'netops.kb.write', 'netops.pa-realtime.write', 'netops.pa-query.read', 'netops.ip-name.read', 'netops.ip-name.write', 'netops.pa-policy.refresh'];
 /** 只給 admin 的選單(viewer 沒有;AC3 IP 對照表) */
 const ADMIN_ONLY = new Set(['netops.ip-name-page.read']);
 const BUTTONS = MENUS.filter((m) => m.kind === 'button').map((m) => m.code);
@@ -112,7 +117,7 @@ async function readBody(req: IncomingMessage): Promise<unknown> {
 }
 
 /** 各模組的假 API(依序嘗試,處理了就回 true) */
-const HANDLERS: ((ctx: MockCtx) => boolean)[] = [handleViz, handlePaQuery, handleAi, handleFtp, handleAd, handlePaEvents, handlePa, handlePaLog, handleKb, handleIpNames, handlePaLive];
+const HANDLERS: ((ctx: MockCtx) => boolean)[] = [handleViz, handlePaQuery, handleAi, handleFtp, handleAd, handlePaEvents, handlePa, handlePaLog, handleKb, handlePaPolicy, handleIpNames, handlePaLive];
 const fail = (res: ServerResponse, status: number, code: string, message: string) => send(res, status, { code, message, requestId: rid() });
 
 export function mockGateway(role: string | undefined): Plugin | null {

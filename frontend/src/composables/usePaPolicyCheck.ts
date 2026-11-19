@@ -13,7 +13,7 @@
 import { computed, reactive, ref, shallowRef } from 'vue';
 import { can } from '@/api/gateway';
 import { UI } from '@/api/perms';
-import { paPolicyApi, type CheckCode, type CheckItem, type CheckSeverity, type PolicyChecks } from '@/api/paPolicy';
+import { paPolicyApi, type CheckCode, type CheckItem, type CheckSeverity, type PolicyCheckInfo, type PolicyChecks } from '@/api/paPolicy';
 import { useAiExplain } from './useAiExplain';
 import type { OrderCheckMark } from './usePaPolicyViz';
 
@@ -83,11 +83,11 @@ export function usePaPolicyCheck(options: UsePaPolicyCheckOptions = {}) {
     load,
     loading,
     error,
-    info: computed(() => {
+    info: computed<PolicyCheckInfo | null>(() => {
       const r = result.value;
       if (!r) return null;
       const { items: _i, summary: _s, imprecise: _m, ...rest } = r;
-      return rest;
+      return rest as PolicyCheckInfo;
     }),
     items,
     summary: computed(() => result.value?.summary ?? null),

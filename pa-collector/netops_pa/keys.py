@@ -99,3 +99,48 @@ POLICY_STATUS = f"{POLICY_PREFIX}:status"
 POLICY_REFRESH = f"{POLICY_PREFIX}:refresh"
 POLICY_COOL = f"{POLICY_PREFIX}:cool"
 POLICY_TTL = 7 * DAY
+
+# PA 威脅特徵碼(TS-1;docs/THREAT-SIGNATURE-PLAN.md §4.1、§5.4)。netops-pa 寫入、netops-api 讀取;
+# 鍵格式同 backend/src/infra/redis/pa-signature.ts(TS-2),兩邊一起改。
+#   meta                 String(JSON):fetchedAt、checkedAt、threatVersion、threatReleaseDate、appVersion、appReleaseDate、
+#                        avVersion、avReleaseDate、wildfireVersion、wildfireReleaseDate、urlFilteringVersion、
+#                        counts({vulnerability,spyware,total})、hash、baselineAt
+#   items:vulnerability  String(JSON):弱點特徵正規化清單(TS-0 實測約 2.5 萬筆)
+#   items:spyware        String(JSON):間諜軟體特徵正規化清單(TS-0 實測約 1 萬筆)
+#   profiles             String(JSON):fetchedAt、vsys、profileGroups、vulnerabilityProfiles、spywareProfiles(vsys1)
+#   status               Hash:state(ok / failed / rejected / paused)、message、lastRunAt、trigger、mgmtCpu
+#                        與最近一次成功的 lastOkAt、durationMs、count、threatVersion、fullFetch
+#   refresh              String:手動重新整理請求(netops-api SET、netops-pa GETDEL)
+#   cool                 String:手動重新整理冷卻(netops-api SET NX EX 300)
+#   lookup:jobs          List:抽屜按需單筆查詢工作 id(netops-api LPUSH、netops-pa RPOP)
+#   lookup:job:{id}      Hash:threatId、emp、status(queued/running/done/not_found/rejected/failed)、時間、結果;TTL 10 分鐘
+#   lookup:cache:{tid}   String(JSON):單筆查詢結果快取({found,item?,checkedAt});TTL 1 天
+#   lookup:cool          String:單筆查詢全域限流(netops-pa 每次查詢 PA 前 SET NX EX 10)
+# 快照 7 天過期(每次定期檢查成功時續期):收集器停很久時不把過期快照當現況
+SIG_PREFIX = f"{PREFIX}:sig"
+SIG_META = f"{SIG_PREFIX}:meta"
+SIG_ITEMS_VULN = f"{SIG_PREFIX}:items:vulnerability"
+SIG_ITEMS_SPYWARE = f"{SIG_PREFIX}:items:spyware"
+SIG_PROFILES = f"{SIG_PREFIX}:profiles"
+SIG_STATUS = f"{SIG_PREFIX}:status"
+SIG_REFRESH = f"{SIG_PREFIX}:refresh"
+SIG_COOL = f"{SIG_PREFIX}:cool"
+SIG_TTL = 7 * DAY
+
+SIG_LOOKUP_JOBS = f"{SIG_PREFIX}:lookup:jobs"
+SIG_LOOKUP_COOL = f"{SIG_PREFIX}:lookup:cool"
+SIG_LOOKUP_JOB_TTL = 600
+SIG_LOOKUP_CACHE_TTL = DAY
+SIG_LOOKUP_COOL_SEC = 10
+
+
+def sig_items(kind: str) -> str:
+    return f"{SIG_PREFIX}:items:{kind}"
+
+
+def sig_lookup_job(lookup_id: str) -> str:
+    return f"{SIG_PREFIX}:lookup:job:{lookup_id}"
+
+
+def sig_lookup_cache(threat_id: str) -> str:
+    return f"{SIG_PREFIX}:lookup:cache:{threat_id}"

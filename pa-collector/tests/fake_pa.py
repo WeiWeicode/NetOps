@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import re
 import threading
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -41,14 +42,144 @@ ERROR_NULL_VALUE = """<response status="error"><msg><line><![CDATA[ show -> coun
 
 ERROR_403 = '<response status="error" code="403"><result><msg>Invalid Credential</msg></result></response>'
 
+# ---------- TS-0 實測(2026-11-19)假資料:威脅特徵碼與 vsys1 profile ----------
+SYSTEM_INFO_SIG = """<response status="success"><result><system>
+<hostname>PA-560</hostname><model>PA-560</model><sw-version>12.1.7-h3</sw-version>
+<threat-version>{threat_version}</threat-version>
+<threat-release-date>{threat_release_date}</threat-release-date>
+<app-version>{app_version}</app-version>
+<app-release-date>{app_release_date}</app-release-date>
+<av-version>{av_version}</av-version>
+<av-release-date>{av_release_date}</av-release-date>
+<wildfire-version>{wildfire_version}</wildfire-version>
+<wildfire-release-date>{wildfire_release_date}</wildfire-release-date>
+<url-filtering-version>20261006.20097</url-filtering-version>
+</system></result></response>"""
+
+# 弱點特徵(TS-0 欄位:threatname、severity、category、affected-host、engine-version、default-action、cve、vendor、disable、time-attribute;無發布日)
+PREDEFINED_VULNERABILITY = """<response status="success"><result><vulnerability>
+<entry name="547000">
+  <threatname>HTTP Remote Code Execution Vulnerability</threatname>
+  <severity>critical</severity>
+  <category>code-execution</category>
+  <affected-host><server>yes</server></affected-host>
+  <engine-version>8.0</engine-version>
+  <default-action><reset-both/></default-action>
+  <cve><member>CVE-2026-1001</member><member>CVE-2026-1002</member></cve>
+  <vendor><member>MS26-001</member></vendor>
+  <time-attribute><threshold>5</threshold><track-by>source</track-by><interval>60</interval></time-attribute>
+</entry>
+<entry name="30000">
+  <threatname>Legacy SMB Info Leak</threatname>
+  <severity>high</severity>
+  <category>info-leak</category>
+  <affected-host>client</affected-host>
+  <engine-version>7.1</engine-version>
+  <disable>yes</disable>
+</entry>
+</vulnerability></result></response>"""
+
+# 間諜軟體特徵(TS-0 欄位:無 CVE、無 affected-host、無 vendor)
+PREDEFINED_PHONE_HOME = """<response status="success"><result><phone-home>
+<entry name="10001">
+  <threatname>Generic C2 Beacon Traffic</threatname>
+  <severity>critical</severity>
+  <category>spyware</category>
+  <engine-version>8.0</engine-version>
+  <default-action><reset-both/></default-action>
+</entry>
+<entry name="87187">
+  <threatname>DNS Tunneling Probe</threatname>
+  <severity>medium</severity>
+  <category>dns-c2</category>
+  <engine-version>8.0</engine-version>
+  <default-action><alert/></default-action>
+  <disable/>
+</entry>
+</phone-home></result></response>"""
+
+PROFILE_GROUP_VSYS = """<response status="success"><result><profile-group>
+<entry name="SG">
+  <virus><member>AV_POC</member></virus>
+  <spyware><member>Spyware_POC</member></spyware>
+  <vulnerability><member>Vulnerability_POC</member></vulnerability>
+  <url-filtering><member>URL_POC</member></url-filtering>
+  <file-blocking><member>FB_POC</member></file-blocking>
+  <wildfire-analysis><member>WF_POC</member></wildfire-analysis>
+</entry>
+<entry name="AV_ONLY">
+  <virus><member>AV_POC</member></virus>
+</entry>
+</profile-group></result></response>"""
+
+# 故意加入巢狀 rules/threat-exception entry(TS-0 實測共 14 / 21 個巢狀 entry),確認解析只取第一層 profile 名稱
+VP_PROFILES_VSYS = """<response status="success"><result><vulnerability>
+<entry name="Vulnerability_POC">
+  <rules><entry name="simple-client-critical"><action><reset-both/></action></entry></rules>
+  <threat-exception><entry name="547000"><action><alert/></action></entry></threat-exception>
+</entry>
+</vulnerability></result></response>"""
+
+AS_PROFILES_VSYS = """<response status="success"><result><spyware>
+<entry name="Spyware_POC">
+  <rules><entry name="simple-critical"><action><reset-both/></action></entry></rules>
+  <botnet-domains><lists><entry name="default-paloalto-dns"/></lists></botnet-domains>
+</entry>
+</spyware></result></response>"""
+
+SHOW_THREAT_ID_FOUND = """<response status="success"><result>
+<entry name="{name}">
+  <subtype>{subtype}</subtype>
+  <severity>{severity}</severity>
+  <description>{description}</description>
+</entry>
+</result></response>"""
+
+NO_SUCH_NODE = '<response status="error"><msg><line>No such node</line></msg></response>'
+_THREAT_ID_CMD = re.compile(r"<show><threat><id>(\d+)</id></threat></show>")
+
 
 class FakePa:
-    def __init__(self, api_key: str = "test-key") -> None:
+    def __init__(self, api_key: str = "test-key", *, require_header_key: bool = False) -> None:
         self.api_key = api_key
+        self.require_header_key = require_header_key
         self.requests: list[dict[str, str]] = []
         # 每次查詢回傳的數值(測試可改)
-        self.values = {"max": 262142, "active": 3912, "cps": 45, "kbps": 85000, "pps": 12000, "idle": 90.0,
-                       "c0": 4, "c1": 6, "i1": 1000, "o1": 2000, "i2": 0, "o2": 0}
+        self.values: dict[str, object] = {
+            "max": 262142,
+            "active": 3912,
+            "cps": 45,
+            "kbps": 85000,
+            "pps": 12000,
+            "idle": 90.0,
+            "c0": 4,
+            "c1": 6,
+            "i1": 1000,
+            "o1": 2000,
+            "i2": 0,
+            "o2": 0,
+            "threat_version": "9173-10354",
+            "threat_release_date": "2026/11/17 05:46:29 CST",
+            "app_version": "9173-10354",
+            "app_release_date": "2026/11/17 05:46:29 CST",
+            "av_version": "5749-6277",
+            "av_release_date": "2026/11/18 20:00:27 CST",
+            "wildfire_version": "1136765-1141451",
+            "wildfire_release_date": "2026/11/19 14:57:18 CST",
+        }
+        self.vuln_xml = PREDEFINED_VULNERABILITY
+        self.phone_home_xml = PREDEFINED_PHONE_HOME
+        self.profile_group_xml = PROFILE_GROUP_VSYS
+        self.vp_profiles_xml = VP_PROFILES_VSYS
+        self.as_profiles_xml = AS_PROFILES_VSYS
+        self.threat_ids: dict[str, dict[str, str]] = {
+            "547000": {
+                "name": "Test App-ID change signature",
+                "subtype": "vulnerability",
+                "severity": "informational",
+                "description": "Test threat description from PA-560.",
+            },
+        }
         # 指定要失敗的指令(cmd XML 子字串 → 回應)
         self.fail: dict[str, str] = {}
         fake = self
@@ -61,7 +192,10 @@ class FakePa:
                 q = urllib.parse.urlsplit(self.path).query
                 n = int(self.headers.get("Content-Length") or 0)
                 body = self.rfile.read(n).decode() if n else ""
-                return {k: v[0] for k, v in urllib.parse.parse_qs(q + "&" + body).items()}
+                p = {k: v[0] for k, v in urllib.parse.parse_qs(q + "&" + body).items()}
+                p["_url"] = self.path
+                p["_header_key"] = self.headers.get("X-PAN-KEY", "")
+                return p
 
             def _handle(self) -> None:
                 p = self._params()
@@ -81,7 +215,8 @@ class FakePa:
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
 
     def respond(self, p: dict[str, str]) -> str:
-        if p.get("key") != self.api_key:
+        provided_key = p.get("_header_key") if self.require_header_key else (p.get("_header_key") or p.get("key"))
+        if provided_key != self.api_key:
             return ERROR_403
         cmd = p.get("cmd", "")
         for frag, resp in self.fail.items():
@@ -92,12 +227,30 @@ class FakePa:
             return SESSION_INFO.format(**v)
         if "<system><resources" in cmd:
             return SYSTEM_RESOURCES.format(**v)
+        if "<system><info" in cmd:
+            return SYSTEM_INFO_SIG.format(**v)
         if "<resource-monitor>" in cmd:
             return RESOURCE_MONITOR.format(**v)
         if "<counter><interface>all</interface>" in cmd:
             return COUNTERS.format(**v)
         if "<counter><interface>" in cmd:
             return ERROR_NULL_VALUE
+        if "/predefined/threats/vulnerability</xpath>" in cmd:
+            return self.vuln_xml
+        if "/predefined/threats/phone-home</xpath>" in cmd:
+            return self.phone_home_xml
+        if "vsys1']/profile-group</xpath>" in cmd:
+            return self.profile_group_xml
+        if "vsys1']/profiles/vulnerability</xpath>" in cmd:
+            return self.vp_profiles_xml
+        if "vsys1']/profiles/spyware</xpath>" in cmd:
+            return self.as_profiles_xml
+        m = _THREAT_ID_CMD.search(cmd)
+        if m:
+            entry = self.threat_ids.get(m.group(1))
+            if entry:
+                return SHOW_THREAT_ID_FOUND.format(**entry)
+            return '<response status="success"><result/></response>'
         return '<response status="error" code="17"><msg><line>Invalid syntax.</line></msg></response>'
 
     def __enter__(self) -> FakePa:

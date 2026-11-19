@@ -22,6 +22,7 @@ import {
   type RuleView,
   type Snapshot,
 } from './core.js';
+import { checkContext, checkRules } from './check.js';
 
 /** 快照超過這個時間沒更新就標 stale(收集週期 30 分鐘;失敗會 5 分鐘重試) */
 export const STALE_MS = 2 * 3600_000;
@@ -173,6 +174,23 @@ export function createPaPolicyService(deps: {
         if (err instanceof AppError) throw err;
         throw Object.assign(new AppError(424, 'NETOPS_REDIS_UNAVAILABLE', 'netops-redis 暫時無法連線,稍後再試'), { cause: err });
       }
+    },
+
+    /** 排序檢查(PR-5):目前快照的確定性檢查結果;沒有快照回 available false(同清單) */
+    async checks(unusedDays: number) {
+      const l = await load();
+      if (!('snap' in l)) return { ...l, items: [], summary: null, imprecise: 0, unusedDays };
+      const r = checkRules(l.views, { unusedDays, now: now() });
+      return { ...meta(l), unusedDays, ...r };
+    },
+
+    /** AI 判讀的資料(PR-5 第 2 層):檢查結果 + 相關規則;沒有快照回 404(串流開始前) */
+    async forAi(unusedDays: number) {
+      const l = await load();
+      if (!('snap' in l)) throw new AppError(404, 'NETOPS_PA_POLICY_UNAVAILABLE', l.message);
+      const r = checkRules(l.views, { unusedDays, now: now() });
+      const ctx = checkContext(l.views, r, { fetchedAt: l.snap.fetchedAt, unusedDays });
+      return { ...ctx, fetchedAt: l.snap.fetchedAt, hash: l.snap.hash, stale: meta(l).stale, ruleCount: l.snap.rules.length, summary: r.summary, imprecise: r.imprecise };
     },
 
     async versions(): Promise<{ items: PaPolicyVersionMeta[]; total: number }> {

@@ -160,6 +160,36 @@ const paPolicyRoutes: FastifyPluginAsync<{ svc: PaPolicyService }> = async (app,
       }),
   );
 
+  app.get<{ Querystring: { unusedDays?: number } }>(
+    '/v1/pa-policy-checks',
+    {
+      schema: {
+        operationId: 'netops.pa-policy-check.list',
+        summary: 'PA 安全規則排序檢查',
+        description:
+          '依目前快照用程式檢查規則順序(PR-5,確定性,不用 AI):conflict(被前面涵蓋且動作不同)、shadowed(被涵蓋、永遠不會命中)、redundant(相同或可合併)、broad-early(過寬 allow 排在較具體規則前)、' +
+          'unused(命中 0 或最後命中超過 unusedDays 天,預設 90)、disabled、no-profile(allow 沒有 Security Profile)、no-log-end、undeterminable(可能被涵蓋但含應用群組 / 動態群組 / FQDN / 使用者 / negate 等無法精準比對,需人工確認)。' +
+          '回 { items: [{ code, severity, position, name, related: [{ position, name }], message, reasons? }], summary, imprecise, unusedDays, fetchedAt, hash, stale, status };沒有快照時 200、available false。',
+        tags: ['PA 安全規則'],
+        'x-permission': 'netops.pa-policy.read',
+        'x-gherkin': [
+          '場景: 找出被遮蔽的規則',
+          '  假如 第 3 條 allow 10.10.0.0/16 → any,第 9 條 deny 10.10.48.0/24 → any',
+          '  當 呼叫 GET /api/netops/pa-policy-checks',
+          '  那麼 items 含 { code: "conflict", position: 9 } 且 related 含第 3 條',
+          '',
+          '場景: 動態位址群組無法判定',
+          '  假如 第 5 條的來源是動態位址群組且可能被第 2 條涵蓋',
+          '  當 呼叫 GET /api/netops/pa-policy-checks',
+          '  那麼 items 含 { code: "undeterminable", position: 5 }',
+        ].join('\n'),
+        querystring: { type: 'object', additionalProperties: false, properties: { unusedDays: { type: 'integer', minimum: 1, maximum: 3650, default: 90 } } },
+        response: { 200: looseObject('{ available, items, summary, imprecise, unusedDays, fetchedAt, hash, stale, status, reason?, message? }') },
+      },
+    },
+    async (req) => svc.checks(req.query.unusedDays ?? 90),
+  );
+
   app.get(
     '/v1/pa-policy-versions',
     {

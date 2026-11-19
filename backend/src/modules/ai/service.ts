@@ -35,6 +35,8 @@ import {
   EVENTS_TASK,
   eventsContext,
   EXPLAIN_PROMPT,
+  PA_POLICY_PROMPT,
+  PA_POLICY_TASK,
   HEATMAP_TASK,
   heatmapContext,
   INSIGHT_TASK,
@@ -107,6 +109,20 @@ export interface ExplainSources {
   threat?: (q: ThreatProfileQuery) => Promise<ThreatForAi>;
   /** AC6:四類安全事件的總覽(同 GET /pa-events/overview 的快取) */
   events?: (q: EventsParams) => Promise<EventsForAi>;
+  /** PR-5:PA 安全規則排序檢查結果 + 相關規則(不含 IP 對照表名稱,§3.6) */
+  paPolicy?: (q: PaPolicyParams) => Promise<PaPolicyForAi>;
+}
+export type PaPolicyParams = { unusedDays?: number };
+export interface PaPolicyForAi {
+  text: string;
+  clipped: boolean;
+  sent: number;
+  fetchedAt: string;
+  hash: string;
+  stale: boolean;
+  ruleCount: number;
+  summary: Record<string, number>;
+  imprecise: number;
 }
 export type EventsParams = { from: string; to: string };
 export type InsightParams = { view: 'traffic' | 'threat'; from: string; to: string };
@@ -116,7 +132,8 @@ export type ExplainInput =
   | { kind: 'insight'; params: InsightParams }
   | { kind: 'threat'; params: ThreatProfileQuery }
   | { kind: 'heatmap'; params: HeatmapParams }
-  | { kind: 'events'; params: EventsParams };
+  | { kind: 'events'; params: EventsParams }
+  | { kind: 'pa-policy'; params: PaPolicyParams };
 /** 時段明細工作最多等多久(工作本身 120 秒逾時;再加排隊的餘裕) */
 export const EXPLAIN_SLICE_WAIT_MS = 180_000;
 /** 等時段明細工作時每次等多久 */
@@ -464,7 +481,8 @@ export function createAiService(deps: {
     | { kind: 'insight'; params: InsightParams; data: TrafficInsightForAi | ThreatInsightForAi; prev: TrafficPrev | null; prevError: boolean }
     | { kind: 'threat'; data: ThreatForAi }
     | { kind: 'heatmap'; data: HeatmapForAi }
-    | { kind: 'events'; data: EventsForAi };
+    | { kind: 'events'; data: EventsForAi }
+    | { kind: 'pa-policy'; unusedDays: number; data: PaPolicyForAi };
 
   const noSource = () => new AppError(503, 'NETOPS_CLICKHOUSE_UNAVAILABLE', 'PA log 資料庫(ClickHouse)暫時無法使用,請稍後再試');
 
@@ -490,6 +508,11 @@ export function createAiService(deps: {
     if (input.kind === 'heatmap') {
       if (!src?.heatmap) throw noSource();
       return { kind: 'heatmap', data: (await src.heatmap(input.params)) as HeatmapForAi };
+    }
+    if (input.kind === 'pa-policy') {
+      if (!src?.paPolicy) throw new AppError(503, 'NETOPS_PA_POLICY_UNAVAILABLE', 'PA 安全規則尚未提供');
+      const unusedDays = input.params.unusedDays ?? 90;
+      return { kind: 'pa-policy', unusedDays, data: await src.paPolicy({ unusedDays }) };
     }
     if (input.kind === 'events') {
       const q = dayRange(input.params);
@@ -536,6 +559,41 @@ export function createAiService(deps: {
     let task: string;
     let info: Record<string, unknown>;
     let clipped: boolean;
+    if (ctx.kind === 'pa-policy') {
+      // PR-5:只送檢查結果與相關規則;不附 IP 對照表名稱(§3.6)與知識庫筆記
+      const d = ctx.data;
+      const model = await llm.model();
+      s.send('meta', {
+        kind: 'pa-policy',
+        model,
+        source: 'pa-policy',
+        fetchedAt: d.fetchedAt,
+        stale: d.stale,
+        ruleCount: d.ruleCount,
+        unusedDays: ctx.unusedDays,
+        summary: d.summary,
+        imprecise: d.imprecise,
+        sent: d.sent,
+        contextChars: d.text.length,
+        clipped: d.clipped,
+        // 同其他 kind 的欄位(畫面共用):partial = 快照過期;不查知識庫
+        partial: d.stale,
+        gapsKnown: true,
+        notes: [],
+        vectorError: false,
+      });
+      if (s.signal.aborted) return;
+      await streamAnswer(s, llm, input.think, [
+        { role: 'system', content: PA_POLICY_PROMPT },
+        { role: 'user', content: `${PA_POLICY_TASK}
+
+---
+以下是系統檢查的結果與相關規則：
+
+${d.text}` },
+      ]);
+      return;
+    }
     if (ctx.kind === 'slice') {
       const got = await sliceResult(s, ctx);
       if (!got) return;

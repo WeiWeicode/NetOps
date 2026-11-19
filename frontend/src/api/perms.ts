@@ -53,6 +53,8 @@ export const UI = {
   paLiveAi: 'netops.pa-live.ai',
   // PR-2:安全規則手動重新整理(只給網管)
   paPolicyRefresh: 'netops.pa-policy-page.refresh',
+  // PR-5:排序檢查「AI 判讀」(includes netops.ai.use)
+  paPolicyAi: 'netops.pa-policy-page.ai',
 } as const;
 
 export const API = {

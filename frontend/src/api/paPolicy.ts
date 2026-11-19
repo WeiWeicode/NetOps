@@ -152,6 +152,21 @@ export interface PolicyDiff {
   objects: ObjectChange[];
 }
 
+/** PR-5 排序檢查 */
+export type CheckCode = 'conflict' | 'shadowed' | 'redundant' | 'broad-early' | 'unused' | 'disabled' | 'no-profile' | 'no-log-end' | 'undeterminable';
+export type CheckSeverity = 'high' | 'medium' | 'low' | 'info';
+export interface CheckItem {
+  code: CheckCode;
+  severity: CheckSeverity;
+  position: number;
+  name: string;
+  related: { position: number; name: string }[];
+  message: string;
+  /** undeterminable:無法精準比對的原因 */
+  reasons?: string[];
+}
+export type PolicyChecks = (Available | Unavailable) & { items: CheckItem[]; summary: Record<CheckCode, number> | null; imprecise: number; unusedDays: number };
+
 export type RangeLookup = { items: (IpNameLabel & { ip: string })[]; total: number; truncated: boolean } | { invalid: true };
 
 /** 錯誤代碼 */
@@ -169,6 +184,7 @@ export const paPolicyApi = {
   list: (f: PolicyFilter, page: number, pageSize: number) => http.get<PolicyList>('/api/netops/pa-policies', { query: { ...f, page, pageSize } }),
   get: (name: string) => http.get<PolicyDetail>(`/api/netops/pa-policies/${encodeURIComponent(name)}`),
   refresh: () => http.post<{ requestedAt: string; cooldownSec: number }>('/api/netops/pa-policy-refreshes'),
+  checks: (unusedDays: number) => http.get<PolicyChecks>('/api/netops/pa-policy-checks', { query: { unusedDays } }),
   versions: () => http.get<{ items: PolicyVersion[]; total: number }>('/api/netops/pa-policy-versions'),
   diff: (id: string, base?: string) => http.get<PolicyDiff>(`/api/netops/pa-policy-versions/${encodeURIComponent(id)}/diffs`, { query: { base } }),
   /** §3.6:單一 IP 的名稱(既有 ip-name-lookups) */

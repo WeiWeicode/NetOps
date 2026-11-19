@@ -166,7 +166,9 @@ export type ExplainInput =
   | { kind: 'insight'; params: { view: 'traffic' | 'threat'; from: string; to: string } }
   | { kind: 'threat'; params: { name: string; from: string; to: string } }
   | { kind: 'heatmap'; params: { granularity: 'year' | 'month' | 'day'; metric: 'traffic' | 'deny' | 'threat'; date?: string } }
-  | { kind: 'events'; params: { from: string; to: string } };
+  | { kind: 'events'; params: { from: string; to: string } }
+  /** PR-5:PA 安全規則排序 AI 判讀(後端依目前快照自己算檢查結果;只送檢查項目與相關規則,不送 IP 對照名稱) */
+  | { kind: 'pa-policy'; params: { unusedDays?: number } };
 
 /** AC6 安全事件 meta.types:四類各自的筆數與狀態 */
 export interface ExplainEventType {
@@ -192,9 +194,9 @@ export interface ExplainCell {
 
 /** AI 解讀的 meta 事件(docs/API.md §10.3) */
 export interface ExplainMeta {
-  kind: 'slice' | 'insight' | 'threat' | 'heatmap' | 'events';
+  kind: 'slice' | 'insight' | 'threat' | 'heatmap' | 'events' | 'pa-policy';
   model: string;
-  source: 'clickhouse';
+  source: 'clickhouse' | 'pa-policy';
   /** 資料落在已知缺口(對帳發現少資料) */
   partial: boolean;
   /** false = 尚未完成每日 FTP 對帳 */
@@ -231,6 +233,14 @@ export interface ExplainMeta {
   cells?: ExplainCell[];
   /** events(AC6) */
   types?: ExplainEventType[];
+  /** pa-policy(PR-5):快照時間、規則數、門檻、各檢查項目數量、含無法精準比對條件的規則數、送出的項目數 */
+  fetchedAt?: string;
+  stale?: boolean;
+  ruleCount?: number;
+  unusedDays?: number;
+  summary?: Record<string, number>;
+  imprecise?: number;
+  sent?: number;
 }
 
 /** AC7 每日摘要(GET /ai/daily-summary;docs/API.md §10.4) */

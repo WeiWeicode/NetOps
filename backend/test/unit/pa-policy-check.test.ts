@@ -1,0 +1,110 @@
+/**
+ * PA 安全規則 PR-5(docs/WARROOM-DIRECTION-POLICY-PLAN.md §3.3 PR-5):排序檢查(確定性)與 AI 判讀(只送檢查結果與相關規則、不送 IP 對照名稱)
+ */
+import assert from 'node:assert/strict';
+import { after, before, describe, it } from 'node:test';
+import { createPaPolicyRedis } from '../../src/infra/redis/pa-policy.js';
+import { checkContext, checkRules, type CheckCode } from '../../src/modules/pa-policy/check.js';
+import { buildViews, parseHits, parseSnapshot } from '../../src/modules/pa-policy/core.js';
+import { fakeAiHost } from '../fixtures/fake-ai.js';
+import { createTestApp, type TestApp } from '../helpers.js';
+import { FakePolicyClient, HITS, OBJECTS, rule } from '../fixtures/pa-policy.js';
+
+const NOW = Date.parse('2026-11-19T02:00:00Z');
+const RULES = [
+  rule(1, 'Allow-Office-Any', { sources: ['10.10.0.0/16'], destinations: ['any'], services: ['any'] }),
+  rule(2, 'Deny-48', { sources: ['Net_48'], action: 'deny' }), // 被 1 涵蓋、動作不同 → conflict
+  rule(3, 'Allow-49-5', { sources: ['Host_5'] }), // 被 1 涵蓋、動作相同 → shadowed
+  rule(4, 'Allow-DMZ-A', { fromZones: ['dmz'], sources: ['10.50.0.1'], destinations: ['10.60.0.0/24'] }),
+  rule(5, 'Allow-DMZ-B', { fromZones: ['dmz'], sources: ['10.50.0.2'], destinations: ['10.60.0.0/24'] }), // 只差來源 → redundant
+  rule(6, 'FQDN-Dst', { fromZones: ['trust'], sources: ['10.10.5.0/24'], destinations: ['Web_FQDN'], profileGroup: null, logEnd: false }), // 可能被 1 涵蓋但 FQDN → undeterminable
+  rule(7, 'Old', { disabled: true, fromZones: ['guest'] }),
+];
+const HIT_ITEMS = {
+  'Allow-Office-Any': { hitCount: 1000, lastHit: '2026-11-19T01:00:00Z' },
+  'Deny-48': { hitCount: 0, lastHit: null },
+  'Allow-49-5': { hitCount: 0, lastHit: null },
+  'Allow-DMZ-A': { hitCount: 3, lastHit: '2026-01-01T00:00:00Z' },
+  'Allow-DMZ-B': { hitCount: 3, lastHit: '2026-11-18T00:00:00Z' },
+  'FQDN-Dst': { hitCount: 4, lastHit: '2026-11-18T00:00:00Z' },
+};
+const SNAP = { fetchedAt: '2026-11-19T01:00:00Z', hash: 'c'.repeat(64), rules: RULES, objects: OBJECTS };
+
+const views = () => buildViews(parseSnapshot(SNAP)!, parseHits({ items: HIT_ITEMS }).items);
+const codesOf = (pos: number, items: { position: number; code: CheckCode }[]) => items.filter((i) => i.position === pos).map((i) => i.code).sort();
+
+describe('排序檢查(確定性)', () => {
+  const r = checkRules(views(), { now: NOW });
+  it('衝突遮蔽、遮蔽、相關規則編號', () => {
+    assert.deepEqual(codesOf(2, r.items), ['conflict', 'unused']);
+    assert.deepEqual(r.items.find((i) => i.position === 2)!.related, [{ position: 1, name: 'Allow-Office-Any' }]);
+    assert.ok(codesOf(3, r.items).includes('shadowed'));
+    assert.equal(r.items[0]!.code, 'conflict'); // high 排最前
+  });
+  it('可合併、過寬在前、未命中、停用、無 Profile、無 Log at Session End、無法判定', () => {
+    assert.ok(codesOf(5, r.items).includes('redundant'));
+    assert.ok(codesOf(1, r.items).includes('broad-early'));
+    assert.ok(r.items.find((i) => i.position === 1 && i.code === 'broad-early')!.related.some((x) => x.position === 4) === false); // dmz 和 trust 不重疊
+    assert.ok(codesOf(4, r.items).includes('unused'));
+    assert.ok(!codesOf(2, r.items).includes('no-profile'), 'deny 不檢查 profile');
+    assert.deepEqual(codesOf(7, r.items), ['disabled']);
+    assert.deepEqual(codesOf(6, r.items), ['no-log-end', 'no-profile', 'undeterminable']);
+    assert.match(r.items.find((i) => i.code === 'undeterminable')!.reasons!.join(), /FQDN/);
+    assert.equal(r.summary.conflict, 1);
+    assert.equal(r.imprecise, 1);
+  });
+  it('未命中門檻可調', () => {
+    assert.ok(!codesOf(4, checkRules(views(), { now: NOW, unusedDays: 365 }).items).includes('unused'));
+  });
+  it('AI 資料:只有檢查項目與相關規則、不送說明欄、info 不送', () => {
+    const v = views();
+    v[0]!.rule.description = '王小明申請';
+    const ctx = checkContext(v, checkRules(v, { now: NOW }), { fetchedAt: SNAP.fetchedAt, unusedDays: 90 });
+    assert.match(ctx.text, /conflict #2 Deny-48/);
+    assert.match(ctx.text, /#1 Allow-Office-Any\|trust → untrust\|來源 10\.10\.0\.0\/16/);
+    assert.doesNotMatch(ctx.text, /王小明/);
+    assert.doesNotMatch(ctx.text, /\] disabled #7/);
+    assert.doesNotMatch(ctx.text, /#7 Old/); // 停用規則沒有相關項目,不送
+  });
+});
+
+describe('API:排序檢查與 AI 判讀', () => {
+  const host = fakeAiHost({ streamDelayMs: 0 });
+  let t: TestApp;
+  const client = new FakePolicyClient();
+  client.clock = () => NOW;
+  before(async () => {
+    const base = await host.start();
+    t = await createTestApp({ env: { LLM_URL: `${base}/v1` }, ai: { heartbeatMs: 50 }, paPolicy: { redis: createPaPolicyRedis(client), now: () => NOW, syncMs: 0 } });
+  });
+  after(async () => {
+    await t.close();
+    host.close();
+  });
+
+  it('GET /v1/pa-policy-checks:沒有快照 available false;有快照回項目', async () => {
+    let res = await t.call({ url: '/v1/pa-policy-checks' });
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.json().available, false);
+    client.put(SNAP, { ...HITS, items: HIT_ITEMS });
+    res = await t.call({ url: '/v1/pa-policy-checks?unusedDays=30' });
+    assert.equal(res.json().unusedDays, 30);
+    assert.equal(res.json().items[0].code, 'conflict');
+    assert.equal((await t.call({ url: '/v1/pa-policy-checks?unusedDays=0' })).statusCode, 400);
+  });
+
+  it('AI 判讀:SSE、只送檢查結果、不附 IP 對照名稱與知識庫', async () => {
+    client.put(SNAP, { ...HITS, items: HIT_ITEMS });
+    assert.equal((await t.call({ method: 'POST', url: '/v1/ip-names', payload: { ip: '10.10.0.0/16', name: '王小明', department: '資訊處' } })).statusCode, 201);
+    host.reqs.splice(0);
+    const res = await t.call({ method: 'POST', url: '/v1/ai/explanations', payload: { kind: 'pa-policy', params: { unusedDays: 90 } } });
+    assert.equal(res.statusCode, 200, res.body);
+    assert.match(res.body, /event: meta\ndata: \{"kind":"pa-policy"/);
+    const chat = host.reqs.find((r) => r.url === '/v1/chat/completions')!;
+    const user = chat.body.messages.at(-1).content as string;
+    assert.match(user, /conflict #2 Deny-48/);
+    assert.doesNotMatch(user, /王小明|資訊處/);
+    assert.doesNotMatch(user, /IP 對照表|知識庫/);
+    assert.match(chat.body.messages[0].content, /不會自動修改防火牆/);
+  });
+});

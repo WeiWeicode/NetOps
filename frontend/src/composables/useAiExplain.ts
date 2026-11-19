@@ -88,8 +88,10 @@ export interface AiFlag {
   position: number;
   /** mismatch 時回答講的檢查類別(CHECK_LABELS 的 key) */
   code?: string;
-  /** 回答中的那一行 */
-  line: string;
+  /** mismatch 時程式檢查對這條規則列出的類別 */
+  actual?: string[];
+  /** 簡短原因,例「#135:AI 歸為遮蔽,程式檢查為過寬規則位置過前」 */
+  reason: string;
 }
 export const AI_FLAG_LABELS: Record<AiFlag['kind'], string> = {
   unknown: '資料中沒有這條規則',

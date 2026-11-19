@@ -603,8 +603,8 @@ describe('Policies.vue (PR-4 安全規則四分頁)', () => {
         event: 'verify',
         data: {
           flags: [
-            { kind: 'unknown', position: 999, line: '參考 #999 <script>alert(1)</script>' },
-            { kind: 'mismatch', position: 114, code: 'no-profile', line: '缺少 Security Profile:#114' },
+            { kind: 'unknown', position: 999, reason: '#999:資料中沒有這條規則 <script>alert(1)</script>' },
+            { kind: 'mismatch', position: 114, code: 'no-profile', actual: ['broad-early'], reason: '#114:AI 歸為沒有 Security Profile,程式檢查為過寬規則位置過前' },
           ],
         },
       });
@@ -620,6 +620,7 @@ describe('Policies.vue (PR-4 安全規則四分頁)', () => {
     expect(wrapper.text()).toContain('#114');
     expect(wrapper.text()).toContain('程式檢查沒有把這條規則列在這一類');
     expect(wrapper.text()).toContain('沒有 Security Profile');
+    expect(wrapper.text()).toContain('#114:AI 歸為沒有 Security Profile,程式檢查為過寬規則位置過前');
     expect(wrapper.text()).toContain('<script>alert(1)</script>');
     expect(wrapper.find('script').exists()).toBe(false);
   });

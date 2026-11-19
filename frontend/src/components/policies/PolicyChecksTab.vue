@@ -165,7 +165,7 @@ const hasUndeterminable = computed(() => props.check.byCode('undeterminable').le
                 {{ CHECK_LABELS[flag.code as CheckCode] ?? flag.code }}
               </GBadge>
             </span>
-            <span class="flag-line">{{ flag.line }}</span>
+            <span class="flag-line">{{ flag.reason }}</span>
           </li>
         </ul>
       </GAlert>

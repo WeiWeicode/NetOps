@@ -155,15 +155,29 @@ describe('AI 回答驗證(2026-11-19 驗收 §3 幻覺)', () => {
   it('資料沒有的規則編號 → unknown', () => {
     const f = verifyAnswer('## 需要人工確認\n- #87 、#88 的 0.pool.ntp.org 無法對應 IP\n- #6 FQDN-Dst 無法判定', ctx.ref);
     assert.deepEqual(f.map((x) => [x.kind, x.position]), [['unknown', 87], ['unknown', 88]]);
-    assert.match(f[0]!.line, /0\.pool\.ntp\.org/);
+    assert.equal(f[0]!.reason, '#87:資料中沒有這條規則');
+    assert.ok(!f.some((x) => 'line' in x), '不回原句');
   });
   it('不在該類檢查的規則 → mismatch(#114 缺 Profile 的情形)', () => {
     const f = verifyAnswer('- 缺少 Security Profile:#6 FQDN-Dst、#5 Allow-DMZ-B', ctx.ref);
     assert.deepEqual(f.map((x) => [x.kind, x.position, x.code]), [['mismatch', 5, 'no-profile']]);
+    assert.match(f[0]!.reason, /^#5:AI 歸為沒有 Security Profile,程式檢查/);
+  });
+  it('「寬泛規則遮蔽具體規則」以過寬為準,規則屬過寬不標記(2026-11-19 補驗 #135 誤報)', () => {
+    assert.ok(ctx.ref.codes[6]!.includes('broad-early') && !ctx.ref.codes[6]!.includes('shadowed'));
+    assert.deepEqual(verifyAnswer('- #6 FQDN-Dst:寬泛規則遮蔽具體規則,建議移到後面', ctx.ref), []);
+    assert.deepEqual(verifyAnswer('- #6 位置過前,遮蔽了 #5', ctx.ref), []);
+  });
+  it('遮蔽只在有「永遠不會命中 / 不會被命中 / shadow」時才算', () => {
+    assert.deepEqual(verifyAnswer('- #6 遮蔽其他規則', ctx.ref), []);
+    const f = verifyAnswer('- #6 永遠不會命中', ctx.ref);
+    assert.deepEqual(f.map((x) => [x.kind, x.position, x.code]), [['mismatch', 6, 'shadowed']]);
+    assert.match(f[0]!.reason, /^#6:AI 歸為遮蔽,程式檢查為過寬規則位置過前、/);
+    assert.deepEqual(verifyAnswer('- #3 被 #1 遮蔽,永遠不會命中', ctx.ref), []);
   });
   it('相關規則也算在該類檢查內;一行講多類時不判歸類', () => {
     assert.deepEqual(verifyAnswer('- 衝突遮蔽:#2 Deny-48 被 #1 Allow-Office-Any 擋住', ctx.ref), []);
-    assert.deepEqual(verifyAnswer('- #5 長期未命中,另有遮蔽問題', ctx.ref), []);
+    assert.deepEqual(verifyAnswer('- #5 長期未命中,另有冗餘問題', ctx.ref), []);
   });
   it('稱有使用者條件但資料沒有標 → user;說「沒有使用者條件」不算', () => {
     const f = verifyAnswer('#1 Allow-Office-Any 有使用者條件,範圍較窄', ctx.ref);

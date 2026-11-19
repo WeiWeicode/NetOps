@@ -64,6 +64,7 @@ export function imprecision(v: RuleView): string[] {
   if (r.expanded.services.some((s) => s.kind === 'unknown')) out.push('找不到定義的服務');
   if (!isAny(r.sourceDevices) || !isAny(r.destinationDevices)) out.push('裝置條件');
   if (r.schedule) out.push('排程');
+  if (r.type !== 'universal') out.push(`規則類型 ${r.type}(intrazone / interzone 的比對範圍和 zone 欄位不同)`);
   return out;
 }
 
@@ -117,6 +118,9 @@ const isBroadAllow = (v: RuleView) => {
   return r.action === 'allow' && (v.src.any || v.dst.any) && (isAny(r.applications) || svc.any);
 };
 
+/** 動作分類:allow 以外(deny、drop、reset-*)都是擋;衝突只看分類不同 */
+const verdict = (a: string) => (a === 'allow' ? 'allow' : 'block');
+
 const ref = (v: RuleView) => ({ position: v.rule.position, name: v.rule.name });
 
 export interface CheckResult {
@@ -152,10 +156,12 @@ export function checkRules(views: RuleView[], opts: { unusedDays?: number; now?:
     if (sure.length) {
       const first = sure[0]!;
       const identical = covers(b, first) && first.rule.action === b.rule.action;
-      if (first.rule.action !== b.rule.action)
+      const sameClassOtherAction = first.rule.action !== b.rule.action;
+      if (verdict(first.rule.action) !== verdict(b.rule.action))
         push('conflict', b, sure, `被第 ${first.rule.position} 條「${first.rule.name}」完全涵蓋且動作不同(${first.rule.action} → 本條 ${b.rule.action} 永遠不會生效)`);
       else if (identical) push('redundant', b, [first], `和第 ${first.rule.position} 條「${first.rule.name}」條件與動作完全相同,永遠不會命中,可刪除`);
-      else push('shadowed', b, sure, `被第 ${first.rule.position} 條「${first.rule.name}」完全涵蓋(動作相同),永遠不會命中`);
+      else
+        push('shadowed', b, sure, `被第 ${first.rule.position} 條「${first.rule.name}」完全涵蓋${sameClassOtherAction ? `(同樣是擋,但擋法不同:${first.rule.action} / 本條 ${b.rule.action})` : '(動作相同)'},永遠不會命中`);
     } else if (maybe.length) {
       const reasons = [...new Set([b, ...maybe].flatMap((v) => imp.get(v.rule.position)!))];
       push('undeterminable', b, maybe, `可能被第 ${maybe.map((v) => v.rule.position).slice(0, 5).join('、')} 條涵蓋,但含無法精準比對的條件,需人工確認`, reasons);
@@ -170,7 +176,9 @@ export function checkRules(views: RuleView[], opts: { unusedDays?: number; now?:
     if (items.some((x) => x.position === b.position && (x.code === 'redundant' || x.code === 'shadowed' || x.code === 'conflict'))) continue;
     const same = (k: 'fromZones' | 'toZones' | 'applications' | 'services' | 'sourceUsers' | 'categories') => sameSet(a[k], b[k]);
     if (!(same('fromZones') && same('toZones') && same('applications') && same('services') && same('sourceUsers') && same('categories'))) continue;
-    if (a.profileGroup !== b.profileGroup || a.logEnd !== b.logEnd || a.negateSource !== b.negateSource || a.negateDestination !== b.negateDestination) continue;
+    // 其他會改變行為的欄位都要相同才建議合併(排程、裝置、個別 Profile、Log 設定、規則類型)
+    const opt = (r: typeof a) => JSON.stringify([r.type, r.profileGroup, r.profiles, r.logStart, r.logEnd, r.logSetting, r.schedule, r.negateSource, r.negateDestination, r.sourceDevices, r.destinationDevices]);
+    if (opt(a) !== opt(b)) continue;
     const srcSame = sameSet(a.sources, b.sources);
     const dstSame = sameSet(a.destinations, b.destinations);
     if (srcSame !== dstSame) push('redundant', enabled[j]!, [enabled[j - 1]!], `和第 ${a.position} 條「${a.name}」只差${srcSame ? '目的' : '來源'}位址、動作相同,可考慮合併`);
@@ -180,9 +188,10 @@ export function checkRules(views: RuleView[], opts: { unusedDays?: number; now?:
   for (let i = 0; i < enabled.length; i++) {
     const a = enabled[i]!;
     if (!isBroadAllow(a)) continue;
-    const later = enabled.slice(i + 1).filter((b) => !isBroadAllow(b) && mayOverlap(a, b));
+    // 只看順序會影響結果的:後面較具體、和它重疊,而且動作不同(會被它先放行)或 Security Profile 不同
+    const later = enabled.slice(i + 1).filter((b) => !isBroadAllow(b) && mayOverlap(a, b) && (verdict(b.rule.action) !== 'allow' || b.rule.profileGroup !== a.rule.profileGroup || JSON.stringify(b.rule.profiles) !== JSON.stringify(a.rule.profiles)));
     if (later.length)
-      push('broad-early', a, later, `來源或目的為 any 且應用或服務為 any 的 allow,排在 ${later.length} 條和它重疊的較具體規則之前(第 ${later.slice(0, 5).map((v) => v.rule.position).join('、')} 條…)`);
+      push('broad-early', a, later, `來源或目的為 any 且應用或服務為 any 的 allow,排在 ${later.length} 條和它重疊、動作或 Profile 不同的較具體規則之前(第 ${later.slice(0, 5).map((v) => v.rule.position).join('、')} 條…),那些流量會先被這條放行`);
   }
 
   for (const v of ordered) {
@@ -209,7 +218,7 @@ export const AI_MAX_CHARS = 30_000;
 
 /**
  * AI 判讀的資料(§3.3 PR-5 第 2 層):只有檢查項目 + 相關規則的正規化內容(名稱、zone、物件名稱與展開後網段、應用、服務、動作、命中數)。
- * 不送整份規則、不送 IP 對照表的姓名 / 部門(§3.6),也不送說明欄(description 可能有人名)。
+ * 不送整份規則、不送 IP 對照表的姓名 / 部門(§3.6),也不送說明欄(description 可能有人名)與使用者 / 群組名稱(AD 帳號,只送數量)。
  */
 export function checkContext(views: RuleView[], result: CheckResult, meta: { fetchedAt: string; unusedDays: number }): { text: string; clipped: boolean; sent: number } {
   const picked = result.items.filter((i) => i.severity !== 'info').slice(0, AI_MAX_ITEMS);
@@ -224,7 +233,7 @@ export function checkContext(views: RuleView[], result: CheckResult, meta: { fet
     const svc = r.expanded.services.map((s) => (s.values.length ? `${s.name}[${s.values.join(', ')}]` : s.name)).join('; ');
     const app = r.expanded.applications.map((a) => (a.values.length ? `${a.name}[${a.values.join(', ')}]` : a.name)).join('; ');
     const hits = r.hits ? `命中 ${r.hits.hitCount ?? '?'} 次,最後 ${r.hits.lastHit?.slice(0, 10) ?? '無'}` : '命中數不明';
-    return `#${r.position} ${r.name}${r.disabled ? '(停用)' : ''}|${r.fromZones.join(',') || 'any'} → ${r.toZones.join(',') || 'any'}|來源 ${addr(r.expanded.sources)}${r.negateSource ? '(negate)' : ''}|目的 ${addr(r.expanded.destinations)}${r.negateDestination ? '(negate)' : ''}|使用者 ${r.sourceUsers.join(',') || 'any'}|應用 ${app}|服務 ${svc}|動作 ${r.action}|Profile ${r.profileGroup ?? (Object.keys(r.profiles).join(',') || '無')}|${hits}`;
+    return `#${r.position} ${r.name}${r.disabled ? '(停用)' : ''}|${r.fromZones.join(',') || 'any'} → ${r.toZones.join(',') || 'any'}|來源 ${addr(r.expanded.sources)}${r.negateSource ? '(negate)' : ''}|目的 ${addr(r.expanded.destinations)}${r.negateDestination ? '(negate)' : ''}|使用者 ${isAny(r.sourceUsers) ? 'any' : `有使用者條件(${r.sourceUsers.length} 個,名稱不送)`}|應用 ${app}|服務 ${svc}|動作 ${r.action}|Profile ${r.profileGroup ?? (Object.keys(r.profiles).join(',') || '無')}|${hits}`;
   };
   const findings = picked.map((i) => `- [${i.severity}] ${i.code} #${i.position} ${i.name}:${i.message}${i.reasons ? `(原因:${i.reasons.join('、')})` : ''}`);
   const sum = Object.entries(result.summary).filter(([, n]) => n).map(([c, n]) => `${c} ${n}`).join('、');

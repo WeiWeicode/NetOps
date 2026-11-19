@@ -68,6 +68,35 @@ describe('排序檢查(確定性)', () => {
   });
 });
 
+describe('審查修正(PR-5)', () => {
+  const run = (rules: Record<string, unknown>[]) => checkRules(buildViews(parseSnapshot({ ...SNAP, rules })!, {}), { now: NOW });
+  it('drop 在前、deny 在後:不是衝突(同樣是擋)', () => {
+    const r = run([rule(1, 'A', { action: 'drop', sources: ['10.0.0.0/8'] }), rule(2, 'B', { action: 'deny', sources: ['10.1.0.0/16'] })]);
+    assert.deepEqual(codesOf(2, r.items).filter((c) => c !== 'unused'), ['shadowed']);
+    assert.match(r.items.find((i) => i.position === 2 && i.code === 'shadowed')!.message, /擋法不同/);
+  });
+  it('intrazone / interzone 規則不當成確定涵蓋', () => {
+    const r = run([rule(1, 'A', { type: 'interzone', fromZones: ['any'], toZones: ['any'] }), rule(2, 'B', { fromZones: ['trust'], toZones: ['trust'], action: 'deny' })]);
+    assert.ok(!codesOf(2, r.items).includes('conflict'));
+    assert.ok(codesOf(2, r.items).includes('undeterminable'));
+  });
+  it('相鄰規則排程不同不建議合併', () => {
+    const base = { fromZones: ['dmz'], destinations: ['10.60.0.0/24'] };
+    const r = run([rule(1, 'A', { ...base, sources: ['10.50.0.1'], schedule: 'office-hours' }), rule(2, 'B', { ...base, sources: ['10.50.0.2'] })]);
+    assert.ok(!codesOf(2, r.items).includes('redundant'));
+  });
+  it('過寬 allow 之後只有同 Profile 的 allow:不報 broad-early', () => {
+    const r = run([rule(1, 'A', { services: ['any'] }), rule(2, 'B', { sources: ['10.1.0.0/16'], destinations: ['10.2.0.0/16'] })]);
+    assert.ok(!codesOf(1, r.items).includes('broad-early'));
+  });
+  it('AI 資料不送使用者名稱', () => {
+    const v = buildViews(parseSnapshot({ ...SNAP, rules: [rule(1, 'A', { sources: ['10.0.0.0/8'] }), rule(2, 'B', { sources: ['10.1.0.0/16'], sourceUsers: ['gsmc\s112009'], action: 'deny' })] })!, {});
+    const ctx = checkContext(v, checkRules(v, { now: NOW }), { fetchedAt: 'x', unusedDays: 90 });
+    assert.doesNotMatch(ctx.text, /s112009/i);
+    assert.match(ctx.text, /有使用者條件\(1 個/);
+  });
+});
+
 describe('API:排序檢查與 AI 判讀', () => {
   const host = fakeAiHost({ streamDelayMs: 0 });
   let t: TestApp;

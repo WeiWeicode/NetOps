@@ -1,9 +1,10 @@
 """TS-0 唯讀實測:PA-560 本機特徵庫能不能用 op 指令讀(docs/THREAT-SIGNATURE-PLAN.md §2)。
 
-由需求方在測試區 netops-pa 容器執行(Claude 不連 PA):
-    docker cp NetOps/scripts/ts0_probe.py netops-pa:/tmp/ts0_probe.py
-    docker exec netops-pa python /tmp/ts0_probe.py              # 預設步驟
-    docker exec netops-pa python /tmp/ts0_probe.py --with-app   # 加讀 App 清單(較大)
+由需求方在測試區(主機 2)netops-pa 容器執行(Claude 不連 PA);完整步驟見 docs/THREAT-SIGNATURE-PLAN.md §2.2:
+    python /tmp/ts0_probe.py                      # 預設步驟(不含 App 清單)
+    python /tmp/ts0_probe.py --only application   # 另外單獨讀 App 清單(較大)
+步驟名稱:system-info、vulnerability、phone-home、profile-group-vsys、profile-group-shared、vp-profiles-vsys、
+as-profiles-vsys、vp-profiles-shared、as-profiles-shared、application、single(單筆查詢,需同時列 vulnerability)
 
 只送下列唯讀 op 指令(白名單完全比對;單筆查詢用固定格式 + 純數字 ID):
     show system resources                                     管理平面 CPU(每一步前後各取一次)
@@ -13,7 +14,7 @@
     show predefined xpath /predefined/threats/vulnerability/entry[@name='<ID>']  單筆(ID 取自上一步第一筆)
     show threat id <ID>                                       單筆說明(CLI 指令,是否支援待實測)
     show config running xpath <vsys1 | shared>/profile-group、profiles/vulnerability、profiles/spyware
-    show predefined xpath /predefined/application             App 清單(--with-app 才送)
+    show predefined xpath /predefined/application             App 清單(--only application 才送)
 不送 type=config、不 Commit、不寫檔到 PA;不輸出 API Key、不輸出特徵碼內容(只輸出筆數、欄位名稱與分布)。
 管理平面 CPU 讀不到或超過 50% 時整個停止。
 """
@@ -226,15 +227,16 @@ def summarize_info(root: ET.Element) -> dict[str, Any]:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="TS-0 唯讀實測(PA 本機特徵庫)")
-    ap.add_argument("--with-app", action="store_true", help="加讀 /predefined/application(App 清單,較大)")
-    ap.add_argument("--only", help="只跑指定步驟(逗號分隔),例如 system-info,vulnerability")
+    ap.add_argument("--only", help="只跑指定步驟(逗號分隔),例如 system-info,vulnerability;App 清單用 --only application")
     ap.add_argument("--cap-mb", type=int, default=64, help="單一回應大小上限(MB,預設 64;超過就中止該步)")
     ap.add_argument("--timeout", type=float, default=120.0, help="單一請求逾時秒數(預設 120)")
     ap.add_argument("--pause", type=float, default=3.0, help="步驟之間等待秒數(預設 3)")
     args = ap.parse_args()
 
     only = {s.strip() for s in args.only.split(",")} if args.only else None
-    steps = [(n, c) for n, c, d in STEPS if (only and n in only) or (not only and (d or (n == "application" and args.with_app)))]
+    if only and not only <= {n for n, _, _ in STEPS} | {"single"}:
+        sys.exit(f"未知的步驟:{'、'.join(sorted(only - {n for n, _, _ in STEPS} - {'single'}))}")
+    steps = [(n, c) for n, c, d in STEPS if (n in only if only else d)]
     probe = Probe(args.cap_mb, args.timeout)
     report: dict[str, Any] = {"startedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "maxCpu": MAX_CPU, "steps": []}
 

@@ -64,6 +64,14 @@ export function createPaPolicyService(deps: {
 }) {
   const now = deps.now ?? Date.now;
   let cache: { key: string; views: RuleView[] } | null = null;
+  /** 排序檢查結果快取(同一份快照 + 命中數 + 門檻;O(n²),資安審查 L3) */
+  let checkCache: { key: string; result: ReturnType<typeof checkRules> } | null = null;
+  const checksOf = (l: Loaded, unusedDays: number) => {
+    // 「長期未命中」和現在時間有關:以小時為單位重算
+    const key = `${l.snap.hash}|${l.hitsFetchedAt ?? ''}|${unusedDays}|${Math.floor(now() / 3600_000)}`;
+    if (!checkCache || checkCache.key !== key) checkCache = { key, result: checkRules(l.views, { unusedDays, now: now() }) };
+    return checkCache.result;
+  };
 
   async function status(): Promise<PolicyStatus> {
     const r = deps.redis!;
@@ -180,7 +188,7 @@ export function createPaPolicyService(deps: {
     async checks(unusedDays: number) {
       const l = await load();
       if (!('snap' in l)) return { ...l, items: [], summary: null, imprecise: 0, unusedDays };
-      const r = checkRules(l.views, { unusedDays, now: now() });
+      const r = checksOf(l, unusedDays);
       return { ...meta(l), unusedDays, ...r };
     },
 
@@ -188,7 +196,7 @@ export function createPaPolicyService(deps: {
     async forAi(unusedDays: number) {
       const l = await load();
       if (!('snap' in l)) throw new AppError(404, 'NETOPS_PA_POLICY_UNAVAILABLE', l.message);
-      const r = checkRules(l.views, { unusedDays, now: now() });
+      const r = checksOf(l, unusedDays);
       const ctx = checkContext(l.views, r, { fetchedAt: l.snap.fetchedAt, unusedDays });
       return { ...ctx, fetchedAt: l.snap.fetchedAt, hash: l.snap.hash, stale: meta(l).stale, ruleCount: l.snap.rules.length, summary: r.summary, imprecise: r.imprecise };
     },

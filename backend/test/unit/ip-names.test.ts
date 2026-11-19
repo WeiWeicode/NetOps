@@ -215,9 +215,9 @@ describe('API', () => {
     const doc = (await t.app.inject('/openapi.json')).json();
     const ops = Object.entries(doc.paths as Record<string, Record<string, Record<string, unknown>>>).flatMap(([p, m]) => Object.entries(m).map(([verb, op]) => ({ p, verb, op })));
     const mine = ops.filter((o) => o.p.startsWith('/v1/ip-name'));
-    assert.equal(mine.length, 10);
+    assert.equal(mine.length, 11);
     for (const { p, verb, op } of mine) {
-      assert.equal(op['x-permission'], verb === 'get' || p === '/v1/ip-name-searches' || p === '/v1/ip-name-lookups' ? 'netops.ip-name.read' : 'netops.ip-name.write', `${verb} ${p}`);
+      assert.equal(op['x-permission'], verb === 'get' || p === '/v1/ip-name-searches' || p === '/v1/ip-name-lookups' || p === '/v1/ip-name-range-lookups' ? 'netops.ip-name.read' : 'netops.ip-name.write', `${verb} ${p}`);
       assert.notEqual(op['x-audit-level'], 'body', `${verb} ${p} 不可記錄內容`);
     }
     assert.equal(doc.paths['/v1/pa/log-searches/{id}/rows'].get['x-permission'], 'netops.pa-log.read');

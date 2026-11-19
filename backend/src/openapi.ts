@@ -51,6 +51,9 @@ export const PERMISSIONS = [
   // SG-1:網段設定(戰情室內部網段;只給 netops-admin,SEGMENT-SETTINGS-PLAN §6 Q1)
   { code: 'netops.segment.read', name: 'NetOps 網段設定:查詢與預覽' },
   { code: 'netops.segment.write', name: 'NetOps 網段設定:編輯' },
+  // PR-2:PA 安全規則(讀:admin、viewer;手動重新整理只給 admin,WARROOM-DIRECTION-POLICY-PLAN §3.3)
+  { code: 'netops.pa-policy.read', name: 'NetOps PA 安全規則:查詢' },
+  { code: 'netops.pa-policy.refresh', name: 'NetOps PA 安全規則:手動重新整理' },
 ];
 
 /** project:開發專案(package.json gateway.project,由 SDK loadGatewayEnv 讀取) */

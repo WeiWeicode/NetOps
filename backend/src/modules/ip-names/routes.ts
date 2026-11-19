@@ -165,6 +165,43 @@ const ipNameRoutes: FastifyPluginAsync<{ svc: IpNameService }> = async (app, { s
     async (req) => ({ names: svc.labels(req.body.ips) }),
   );
 
+  app.post<{ Body: { ranges: string[] } }>(
+    '/v1/ip-name-range-lookups',
+    {
+      schema: {
+        operationId: 'netops.ip-name.range-lookup',
+        summary: '依網段 / 範圍反查 IP 對照表',
+        description:
+          'PA 安全規則的位址物件是網段或範圍時使用(WARROOM-DIRECTION-POLICY-PLAN §3.6):一次最多 200 個 IPv4 / CIDR / a-b 範圍,' +
+          '回 { results: { [range]: { items: [{ ip, name, department, device, deviceType }], total, truncated } } },items 是對照表中整個落在範圍內的項目(依 IP 排序,最多 50 筆);' +
+          '格式不符的範圍回 { invalid: true }。用 POST 不把查詢放進網址;不改變資料。姓名、部門屬個資,只給 netops.ip-name.read。',
+        tags: ['IP 對照表'],
+        'x-permission': 'netops.ip-name.read',
+        'x-audit-level': 'meta',
+        'x-gherkin': [
+          '場景: 規則網段的使用者',
+          '  假如 使用者擁有 netops.ip-name.read 且對照表有 10.10.48.5、10.10.49.1',
+          '  當 呼叫 POST /api/netops/ip-name-range-lookups 帶 ranges ["10.10.48.0/24"]',
+          '  那麼 回應 200',
+          '  而且 results["10.10.48.0/24"].items 只有 10.10.48.5',
+          '',
+          '場景: 沒有對照表權限',
+          '  假如 使用者只有 netops-viewer 角色',
+          '  當 呼叫 POST /api/netops/ip-name-range-lookups',
+          '  那麼 回應 403',
+        ].join('\n'),
+        body: {
+          type: 'object',
+          required: ['ranges'],
+          additionalProperties: false,
+          properties: { ranges: { type: 'array', maxItems: 200, items: { type: 'string', minLength: 7, maxLength: 31, pattern: '^[0-9./ -]+$' } } },
+        },
+        response: { 200: looseObject('{ results }') },
+      },
+    },
+    async (req) => ({ results: svc.rangeLookup(req.body.ranges) }),
+  );
+
   app.get<{ Querystring: { format?: 'csv' | 'xlsx' } }>(
     '/v1/ip-name-template',
     {

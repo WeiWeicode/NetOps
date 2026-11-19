@@ -249,7 +249,8 @@ export function checkContext(views: RuleView[], result: CheckResult, meta: { fet
     clipped = true;
   }
   // 驗證 AI 回答用:只算真的留在 text 裡的(截斷後被切掉的規則不算送出)
-  const inText = (p: number) => text.includes(`#${p} `);
+  const sentLines = new Set((text.split('## 相關規則')[1] ?? '').split('\n').map((l) => /^#(\d+) /.exec(l)?.[1]).filter(Boolean).map(Number));
+  const inText = (p: number) => sentLines.has(p);
   const codes: Record<number, CheckCode[]> = {};
   for (const i of picked) {
     if (!inText(i.position)) continue;

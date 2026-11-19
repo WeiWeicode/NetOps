@@ -170,6 +170,24 @@ describe('AI 回答驗證(2026-11-19 驗收 §3 幻覺)', () => {
     assert.deepEqual(f.map((x) => [x.kind, x.position]), [['user', 1]]);
     assert.deepEqual(verifyAnswer('#1 沒有使用者條件', ctx.ref), []);
   });
+  it('否定說法不算使用者條件;同行另一子句的真幻覺仍標出', () => {
+    for (const t of ['#1 未設定使用者條件', '#1 不限使用者條件', '#1 使用者為 any']) assert.deepEqual(verifyAnswer(t, ctx.ref), [], t);
+    assert.deepEqual(verifyAnswer('#2 沒有使用者條件,#1 有使用者條件', ctx.ref).map((x) => [x.kind, x.position]), [['user', 1]]);
+  });
+  it('「把 #X 移到 #Y 之後」只檢查 #X 的歸類;「已有 Profile」不當成缺 Profile', () => {
+    assert.deepEqual(verifyAnswer('- #4 長期未命中,建議移到 #1 之後', ctx.ref), []);
+    assert.deepEqual(verifyAnswer('- #1 已有 Security Profile', ctx.ref), []);
+  });
+  it('截斷後被切掉的規則不算送出;名稱裡的 #N 不算', () => {
+    const many = Array.from({ length: 60 }, (_, i) => rule(i + 1, `R${i + 1}-#${i + 200} x`.padEnd(400, 'x'), { sources: [`10.0.${i}.0/24`], logEnd: false }));
+    const vs = buildViews(parseSnapshot({ ...SNAP, rules: many })!, {});
+    const c = checkContext(vs, checkRules(vs, { now: NOW }), { fetchedAt: SNAP.fetchedAt, unusedDays: 90 });
+    assert.ok(c.clipped);
+    const lines = (c.text.split('## 相關規則')[1] ?? '').split('\n').filter((l) => /^#\d+ /.test(l)).map((l) => Number(/^#(\d+)/.exec(l)![1]));
+    assert.deepEqual(c.ref.positions, lines);
+    assert.ok(c.ref.positions.length < 40);
+    assert.ok(!c.ref.positions.some((x) => x >= 200));
+  });
   it('同一規則同一類只標一次;#編號後接數字不誤判', () => {
     const f = verifyAnswer('#99 a\n#99 b\n#1234567', ctx.ref);
     assert.equal(f.filter((x) => x.position === 99).length, 1);

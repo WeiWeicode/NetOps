@@ -5,7 +5,11 @@
  *   unknown   回答提到的 #編號 不在送出的資料內(資料沒有這條規則)
  *   mismatch  同一行只講一類檢查(例:Security Profile),但這條規則沒有出現在程式檢查的這一類項目
  *   user      稱規則「有使用者條件」,但資料沒有標這條規則有使用者條件
- * 「同一行講哪一類」用關鍵字判斷,是保守的提示,不是判決;一行講多類或對不到關鍵字時只做 unknown 檢查。
+ *
+ * 是保守的提示,不是判決:
+ *   - 歸類只看「同一行」的關鍵字;關鍵字只在章節標題、條列行沒有時不判歸類;一行講多類時也不判
+ *   - 「把 #X 移到 #Y 之前」這類句子只檢查第一個編號(後面的是參照對象)
+ *   - 使用者條件以子句(逗號、分號、句號切開)判斷,否定說法(沒有 / 未設定 / 不限 / any)不算
  */
 import type { AiRef, CheckCode } from './check.js';
 
@@ -14,7 +18,7 @@ export interface AiFlag {
   position: number;
   /** mismatch:回答這一行講的檢查類別 */
   code?: CheckCode;
-  /** 回答中的那一行(最多 200 字,畫面定位用) */
+  /** 回答中的那一行(最多 200 字,畫面定位用;畫面須以純文字顯示) */
   line: string;
 }
 
@@ -25,14 +29,18 @@ const KEYWORDS: [RegExp, CheckCode][] = [
   [/過寬|broad/i, 'broad-early'],
   [/冗餘|可合併|redundant/i, 'redundant'],
   [/未命中|命中數\s*(?:為\s*)?0(?!\d)|unused/i, 'unused'],
-  [/Security Profile|Profile Group|沒有.{0,4}Profile|缺.{0,4}Profile/i, 'no-profile'],
+  [/(?:沒有|缺少?|未設定?|無)\s*(?:Security\s*)?Profile|no-profile/i, 'no-profile'],
   [/Session End|no-log-end/i, 'no-log-end'],
   [/無法判定|無法精準|undeterminable/i, 'undeterminable'],
 ];
+/** 句中有這些字:第一個編號是主體,其他是參照 */
+const REFER_RE = /移到|移至|之前|之後|前面|後面|被\s*#|合併|擋住|涵蓋/;
 const USER_RE = /使用者條件|source.?user/i;
-const NO_USER_RE = /沒有使用者條件|無使用者條件|不含使用者條件/;
+const NO_USER_RE = /(?:沒有|無|未|不|非)[^#]{0,4}使用者條件|使用者(?:條件)?\s*(?:為|是|=)\s*any/i;
 const POS_RE = /#(\d{1,4})(?!\d)/g;
 const MAX_FLAGS = 100;
+
+const numsIn = (s: string) => [...s.matchAll(POS_RE)].map((m) => Number(m[1]));
 
 export function verifyAnswer(answer: string, ref: AiRef): AiFlag[] {
   const sent = new Set(ref.positions);
@@ -47,19 +55,21 @@ export function verifyAnswer(answer: string, ref: AiRef): AiFlag[] {
   };
   for (const raw of answer.split('\n')) {
     const line = raw.trim();
-    const nums = [...line.matchAll(POS_RE)].map((m) => Number(m[1]));
+    const nums = numsIn(line);
     if (!nums.length) continue;
     const short = line.slice(0, 200);
+    for (const n of nums) if (!sent.has(n)) add({ kind: 'unknown', position: n, line: short });
+
     const codes = KEYWORDS.filter(([re]) => re.test(line)).map(([, c]) => c);
-    const code = codes.length === 1 ? codes[0] : undefined;
-    const userClaim = USER_RE.test(line) && !NO_USER_RE.test(line);
-    for (const n of nums) {
-      if (!sent.has(n)) {
-        add({ kind: 'unknown', position: n, line: short });
-        continue;
-      }
-      if (code && !(ref.codes[n] ?? []).includes(code)) add({ kind: 'mismatch', position: n, code, line: short });
-      if (userClaim && !users.has(n)) add({ kind: 'user', position: n, line: short });
+    if (codes.length === 1) {
+      const code = codes[0]!;
+      const subjects = REFER_RE.test(line) ? nums.slice(0, 1) : nums;
+      for (const n of subjects) if (sent.has(n) && !(ref.codes[n] ?? []).includes(code)) add({ kind: 'mismatch', position: n, code, line: short });
+    }
+
+    for (const clause of line.split(/[,，;；。]/)) {
+      if (!USER_RE.test(clause) || NO_USER_RE.test(clause)) continue;
+      for (const n of numsIn(clause)) if (sent.has(n) && !users.has(n)) add({ kind: 'user', position: n, line: short });
     }
   }
   return out;

@@ -728,7 +728,7 @@ ${d.text}` },
   }
 
   /** 模型串流 → SSE:thinking、content、done(同舊版 streamChat) */
-  /** beforeDone:收到 done 時先以完整回答呼叫(PA 規則判讀的回答驗證) */
+  /** beforeDone:收到 done 時先以完整回答呼叫(PA 規則判讀的回答驗證);失敗略過、done 照送;中止(沒有 done)時不呼叫 */
   async function streamAnswer(s: SseStream, llm: Llm, think: boolean, messages: ChatMessage[], beforeDone?: (answer: string) => void) {
     let answer = '';
     for await (const e of llm.stream({ messages, think, signal: s.signal })) {
@@ -737,7 +737,11 @@ ${d.text}` },
         if (beforeDone) answer += e.text;
         s.send('content', { text: e.text });
       } else {
-        beforeDone?.(answer);
+        try {
+          beforeDone?.(answer);
+        } catch {
+          // 驗證是輔助:失敗略過,done 照送
+        }
         s.send('done', { finish: e.finish, truncated: e.finish === 'length' });
       }
     }

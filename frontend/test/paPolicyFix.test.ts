@@ -140,6 +140,14 @@ describe('規則圖匯出(不含姓名部門)', () => {
     expect(e.rules[0]!.checks[1]).toMatchObject({ related: [2], reasons: ['FQDN'] });
     expect(e.defaults).toHaveLength(2);
   });
+  it('動態群組 Tag 運算式不匯出;Markdown 特殊字元跳脫', () => {
+    const d = rule(8, 'Dyn<b>`x`', { expanded: { sources: [{ name: 'DAG', kind: 'dynamic-group', values: ["dynamic:'user-王小明'", "dynamic:'dept-HR'"], unresolved: true }], destinations: [], services: [], applications: [] } });
+    const x = buildExport([d], [], []);
+    expect(x.rules[0]!.sources[0]!.values).toEqual(['dynamic:(省略)']);
+    const md = toMarkdown(x);
+    expect(md).not.toMatch(/王小明|dept-HR/);
+    expect(md).toContain('Dyn\\<b\\>\\`x\\`');
+  });
   it('不含使用者名稱、說明欄、uuid、Tag、Log Forwarding', () => {
     for (const s of [toJson(e), toMarkdown(e)]) {
       expect(s).not.toMatch(/s112009|王小明|u-1|人資|fwd-1/);
@@ -157,7 +165,7 @@ describe('規則圖匯出(不含姓名部門)', () => {
     expect(JSON.parse(toJson(e)).rules[0].position).toBe(7);
   });
   it('檔名與下載;沒有規則不下載', () => {
-    expect(exportFileName(e, 'md')).toBe('pa-policy-20261119-0233.md');
+    expect(exportFileName(e, 'md')).toBe('pa-policy-20261119-1033.md');
     const create = vi.fn(() => 'blob:x');
     const revoke = vi.fn();
     Object.assign(URL, { createObjectURL: create, revokeObjectURL: revoke });

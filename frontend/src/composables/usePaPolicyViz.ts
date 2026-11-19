@@ -165,6 +165,8 @@ export function buildOrder(rules: PolicyRule[], defaults: DefaultRuleHits[], che
 }
 
 export const DEFAULT_NODE = 'p:預設規則';
+/** PA 預設規則與動作(intrazone-default 允許、interzone-default 拒絕) */
+const DEFAULT_RULE_OF_ACTION = { allow: 'intrazone-default', deny: 'interzone-default' } as const;
 
 export function buildSankey(rules: PolicyRule[], defaults: DefaultRuleHits[]): { nodes: VizSankeyNode[]; links: VizSankeyLink[] } {
   const nodes = new Map<string, VizSankeyNode>();
@@ -216,7 +218,7 @@ export function selectionOf(sel: VizSelection, matrix: ZoneMatrix, sankey: { lin
   const l = sankey.links.find((x) => x.source === sel.source && x.target === sel.target);
   if (!l) return null;
   // 預設規則的連線:預設規則 → 允許(intrazone-default)/ 拒絕(interzone-default)
-  const defaults = new Set<string>(sel.source === DEFAULT_NODE ? [sel.target === 'a:allow' ? 'intrazone-default' : 'interzone-default'] : []);
+  const defaults = new Set<string>(sel.source === DEFAULT_NODE ? [DEFAULT_RULE_OF_ACTION[sel.target === 'a:allow' ? 'allow' : 'deny']] : []);
   return { positions: new Set(l.positions), defaults };
 }
 

@@ -71,13 +71,16 @@ export interface PolicyExport {
   defaults: { name: string; hitCount: number | null; lastHit: string | null }[];
 }
 
-const NOTE = 'PA-560 安全規則(由上往下比對,# 為 PA 規則編號);排序檢查為系統程式比對結果;不含 IP 對照姓名 / 部門、說明欄與使用者名稱。';
+const NOTE =
+  'PA-560 安全規則(由上往下比對,# 為 PA 規則編號);排序檢查為系統程式比對結果;不含 IP 對照姓名 / 部門、說明欄、使用者名稱與動態群組 Tag。規則與物件名稱照 PA 原名匯出。';
+/** 動態位址群組的 Tag 運算式可能含人名 / 部門(User-ID 自動 Tag),不匯出 */
+const maskValue = (v: string) => (v.startsWith('dynamic:') ? 'dynamic:(省略)' : v);
 const isAny = (xs: string[]) => !xs.length || xs.includes('any');
 
 export function buildExport(rules: PolicyRule[], defaults: DefaultRuleHits[], checks: CheckItem[], meta: ExportMeta = {}, now = new Date()): PolicyExport {
   const byPos = new Map<number, CheckItem[]>();
   for (const c of checks) byPos.set(c.position, [...(byPos.get(c.position) ?? []), c]);
-  const addr = (xs: ExpandedAddress[]): ExportAddress[] => xs.map((x) => ({ name: x.name, kind: x.kind, values: [...x.values], unresolved: x.unresolved }));
+  const addr = (xs: ExpandedAddress[]): ExportAddress[] => xs.map((x) => ({ name: x.name, kind: x.kind, values: [...new Set(x.values.map(maskValue))], unresolved: x.unresolved }));
   return {
     generatedAt: now.toISOString(),
     fetchedAt: meta.fetchedAt ?? null,
@@ -122,7 +125,7 @@ export function buildExport(rules: PolicyRule[], defaults: DefaultRuleHits[], ch
 }
 
 /** Markdown 表格儲存格:去掉換行、跳脫 | */
-const cell = (s: string) => s.replace(/[\r\n]+/g, ' ').replace(/\|/g, '\\|');
+const cell = (s: string) => s.replace(/[\r\n]+/g, ' ').replace(/[|`<>]/g, (c) => '\\' + c);
 const addrText = (xs: ExportAddress[], negate: boolean) =>
   (xs.length
     ? xs
@@ -178,11 +181,11 @@ export function toMarkdown(e: PolicyExport): string {
   for (const { r, c } of checks)
     lines.push(
       `- [${SEVERITY_LABELS[c.severity as keyof typeof SEVERITY_LABELS] ?? c.severity}] ${c.label} #${r.position} ${cell(r.name)}:${cell(c.message)}` +
-        `${c.related.length ? `(相關 #${c.related.join(', #')})` : ''}${c.reasons?.length ? `(原因:${c.reasons.join('、')})` : ''}`,
+        `${c.related.length ? `(相關 #${c.related.join(', #')})` : ''}${c.reasons?.length ? `(原因:${cell(c.reasons.join('、'))})` : ''}`,
     );
   if (e.defaults.length) {
     lines.push('', '## 預設規則(只有命中數)', '');
-    for (const d of e.defaults) lines.push(`- ${d.name}:命中 ${d.hitCount ?? '不明'} 次,最後 ${d.lastHit?.slice(0, 10) ?? '無'}`);
+    for (const d of e.defaults) lines.push(`- ${cell(d.name)}:命中 ${d.hitCount ?? '不明'} 次,最後 ${d.lastHit?.slice(0, 10) ?? '無'}`);
   }
   return `${lines.join('\n')}\n`;
 }
@@ -191,9 +194,10 @@ export function toJson(e: PolicyExport): string {
   return `${JSON.stringify(e, null, 2)}\n`;
 }
 
-/** 檔名:pa-policy-<快照時間 yyyyMMdd-HHmm>.<ext> */
+/** 檔名:pa-policy-<快照時間,台灣時間 yyyyMMdd-HHmm>.<ext> */
 export function exportFileName(e: PolicyExport, ext: 'md' | 'json'): string {
-  const t = (e.fetchedAt ?? e.generatedAt).replace(/[-:]/g, '').replace('T', '-').slice(0, 13);
+  const d = new Date(Date.parse(e.fetchedAt ?? e.generatedAt) + 8 * 3600_000);
+  const t = Number.isNaN(d.getTime()) ? 'unknown' : d.toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 13);
   return `pa-policy-${t}.${ext}`;
 }
 

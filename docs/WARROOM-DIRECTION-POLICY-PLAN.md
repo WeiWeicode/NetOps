@@ -1,6 +1,6 @@
 # 戰情室進出方向(WD)與 PA 安全規則檢視(PR)計畫
 
-> 狀態:計畫,需求方 2026-11-18 已決定 §4(Q1–Q4)。時程以 NexusPlan 甘特圖為準。
+> 狀態:計畫,需求方 2026-11-18 已決定 §4(Q1–Q4),2026-11-19 加 Q5(規則圖分頁,§3.5)。時程以 NexusPlan 甘特圖為準。
 > 相關:`docs/WARROOM-PLAN.md`(戰情室)、`docs/SEGMENT-SETTINGS-PLAN.md`(網段設定)、`docs/ARCHITECTURE.md` D19 / D22 / D31、`pa-collector/netops_pa/poller.py`、`pa_query.py`。
 
 ## 1. 背景
@@ -91,8 +91,8 @@ netops-pa(pan-os-python,唯讀) ──► netops-redis(快照 JSON + 版本) ─
   - `POST /v1/pa-policy-refreshes`:手動重新整理(冷卻 5 分鐘)。
   - `GET /v1/pa-policy-versions`、`GET /v1/pa-policy-versions/{id}/diffs`:版本清單與差異(新增 / 刪除 / 移動位置 / 欄位變更,逐條列出)。PA 的變更者與 Commit 時間另由 op `show config audit` / Config log 補(PR-0 一併確認可否讀)。
   - 新權限代碼(建議)`netops.pa-policy.read`(admin、viewer)、`netops.pa-policy.refresh`(admin);寫進 `deploy/gateway-rbac.yaml`,依 Gateway 規範登記。
-- **PR-3 前端邏輯(Opus)**:`api/paPolicy.ts`、`composables/usePaPolicy.ts`(含版本差異)。
-- **PR-4 頁面(Gemini)**:「防火牆 › 安全規則」頁,表格版面仿 PA GUI(編號、來源 / 目的分組欄、物件可展開、命中數與最後命中、停用規則淡色);「變更紀錄」分頁顯示版本差異;「排序檢查」分頁顯示 PR-5 結果。另:Log 明細與戰情室抽屜的規則名稱可點開規則內容(log 已有 `rule` 欄位)。
+- **PR-3 前端邏輯(Opus)**:`api/paPolicy.ts`、`composables/usePaPolicy.ts`(含版本差異),以及規則圖資料 `composables/usePaPolicyViz.ts`(§3.5)。
+- **PR-4 頁面(Gemini)**:「防火牆 › 安全規則」頁,表格版面仿 PA GUI(編號、來源 / 目的分組欄、物件可展開、命中數與最後命中、停用規則淡色);「變更紀錄」分頁顯示版本差異;「排序檢查」分頁顯示 PR-5 結果;「規則圖」分頁(§3.5)。另:Log 明細與戰情室抽屜的規則名稱可點開規則內容(log 已有 `rule` 欄位)。
 - **PR-5 排序檢查與 AI 判讀(Opus)**:分兩層,**先用程式算、再讓 AI 解釋**,避免 AI 對 168 條規則自行比對而漏判或誤判。
   1. **程式檢查(確定性)**,每項都標出相關規則編號:
      - **遮蔽(shadowed)**:後面的規則條件完全被前面某條涵蓋(zone、位址展開後的 CIDR、使用者、應用、服務都是子集),永遠不會命中。
@@ -112,6 +112,30 @@ netops-pa(pan-os-python,唯讀) ──► netops-redis(快照 JSON + 版本) ─
 - 測試區:168 條規則數、順序、欄位與 PA GUI 一致(抽 10 條逐欄比對);物件展開正確;命中數與 GUI 一致。
 - 管理平面 CPU 在讀取期間不超過門檻。
 
+### 3.5 規則圖分頁(Q5,需求方 2026-11-19)
+
+「防火牆 › 安全規則」頁加「規則圖」分頁,把規則圖像化。圖表用既有的 ECharts 6.1(`frontend/package.json`),不新增套件。資料全部來自 PR-1 快照(`position`、`fromZones` / `toZones`、`action`、`disabled`)與命中數,**不需要新的後端 API**;整理資料的邏輯寫在 PR-3 的 `composables/usePaPolicyViz.ts`(Claude,含單元測試),畫面交 PR-4(Gemini)。
+
+| 順序 | 圖表 | 呈現 | 回答的問題 | 元件 |
+| --- | --- | --- | --- | --- |
+| 1(主圖) | Zone × Zone 矩陣熱力圖 | 列 = 來源 zone、欄 = 目的 zone;格子深淺 = 規則數,顏色分 allow / deny / 混合;tooltip 列規則編號 | 哪些 zone 之間開了什麼、有沒有不該開的格子 | 既有 `ui/charts/GHeatmap.vue` |
+| 2 | 規則順序條(rulebase 階梯) | 依 `position` 由上往下;長條 = 命中數(log 刻度,0 次另用記號);顏色 = 動作,停用淡色;PR-5 結果(遮蔽、衝突、長期未命中)加標記;規則多時用垂直捲動(dataZoom) | PA 由上往下比對,看哪幾條擋在前面吃掉流量、哪些永遠不會命中 | 新元件(ECharts 橫條圖) |
+| 3 | Sankey | 來源 zone → 動作 → 目的 zone;線寬 = 命中數 | 實際流量經過規則後往哪裡走 | 既有 `ui/charts/GSankey.vue` |
+
+**連動**:點矩陣格子或 Sankey 線 → 順序條只標出相關規則;點順序條上的規則 → 開規則內容(物件展開,同清單分頁的詳細)。篩選(動作、zone、長期未命中 N 天)三張圖共用。
+
+**資料規則(`usePaPolicyViz.ts`)**:
+
+- `any` zone 獨立成一列 / 一欄,不攤到每一格。
+- 規則有多個 zone 時每個(來源, 目的)組合各算一次;矩陣的「規則數」是規則出現次數,不能加總成總規則數。
+- Sankey 的命中數:多 zone 規則依組合數平均分攤,tooltip 標「多 zone 規則平均分攤,為估算值」。
+- 停用規則不進矩陣與 Sankey,只在順序條淡色顯示。
+- `intrazone-default` / `interzone-default` 只有命中數沒有規則內容(PR-0):順序條放在最後並標「預設規則」;Sankey 以「預設規則」節點呈現,不歸到任何 zone 組合。
+- 輸出純資料(矩陣格、順序條列、Sankey 節點與連線),不依賴 ECharts 型別,方便測試與換圖。
+- PR-5 尚未完成時,順序條的檢查標記欄位留空,不顯示「無問題」。
+
+**不採用**:網路圖 / 力導向圖(規則 166 條、位址物件 302 個,畫面會糊成一團且看不出順序)。
+
 ## 4. 決定事項(需求方 2026-11-18)
 
 | # | 問題 | 決定 |
@@ -120,6 +144,7 @@ netops-pa(pan-os-python,唯讀) ──► netops-redis(快照 JSON + 版本) ─
 | Q2 | WD-3 Canvas 動畫由誰做 | **Claude 一起做**;圖例文字、樣式微調之後可交 Gemini |
 | Q3 | 規則讀取的權限做法 | **先做 PR-0 唯讀實測**;op 能讀就不加權限,不行再請網通開專用帳號的 Configuration 權限並修改 D22 |
 | Q4 | 規則功能範圍 | 原話:「清單+物件展開+命中數+版本差異 是否可以依照PA的排序?並且讓AI判斷security排序是否符合邏輯」→ 第一版含清單、物件展開、命中數、**版本差異**;**依 PA 排序**(§3.3 排序);加 **PR-5 排序檢查與 AI 判讀** |
+| Q5 | 規則圖像化(2026-11-19) | 原話:「前端再幫我規劃新增一個tab,把規則圖像化」、「寫入並併入 PR-3」→ 加「規則圖」分頁(§3.5):Zone 矩陣熱力圖、規則順序條、Sankey;資料邏輯併入 PR-3,畫面歸 PR-4 |
 
 ## 5. 分批與負責人
 
@@ -128,8 +153,8 @@ netops-pa(pan-os-python,唯讀) ──► netops-redis(快照 JSON + 版本) ─
 | WD-1+2+3 | 後端方向欄位、composable、Canvas、圖例 | Claude Opus 子任務 | `feature/warroom-direction` |
 | WD 驗收 | 測試區真實流量、效能回歸、報告 | Claude Sonnet 子任務 + 網通 | — |
 | PR-0 | 權限實測(唯讀) | Claude(主串或 Sonnet),需求方同意對 PA 送查詢 | — |
-| PR-1~3 | 收集器、API、composable | Claude Opus 子任務 | `feature/pa-policy-collector`(堆疊 `feature/pa-policy-api`) |
-| PR-4 | 安全規則頁(清單、變更紀錄、排序檢查) | Gemini | `feature/pa-policy-page` |
+| PR-1~3 | 收集器、API、composable(含規則圖資料 `usePaPolicyViz.ts`) | Claude Opus 子任務 | `feature/pa-policy-collector`(堆疊 `feature/pa-policy-api`) |
+| PR-4 | 安全規則頁(清單、變更紀錄、排序檢查、規則圖) | Gemini | `feature/pa-policy-page` |
 | PR-5 | 排序檢查(程式)+ AI 判讀 API 與 composable | Claude Opus 子任務 | 堆疊在 `feature/pa-policy-api` 之後 |
 | 文件 | API.md、ARCHITECTURE(D22 修改或新 D49)、IMPL-PLAN、HANDOFF | Claude Sonnet 子任務(統一一個 docs MR) | `docs/…` |
 | 上線 | GigaItApp 路由 / 選單 / 權限、正式區部署 | 需求方 | — |

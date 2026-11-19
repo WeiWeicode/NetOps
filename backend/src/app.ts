@@ -337,6 +337,8 @@ export async function buildApp(
     heatmap: heatSvc.heatmap,
     threat: heatSvc.threatProfile,
     events: (q: { from: string; to: string }) => eventsForAi(ch, q.from, q.to),
+    // PR-5:安全規則排序檢查結果(只送檢查項目與相關規則,不附 IP 對照表名稱)
+    paPolicy: (q: { unusedDays?: number }) => paPolicy.forAi(q.unusedDays ?? 90),
   };
   // 每日同步這一輪結束(完成 / 停止重試 / 未啟用),或沒有要同步的類型(沒有啟用 PA 三類也沒有 AD)
   const syncReady = () => {

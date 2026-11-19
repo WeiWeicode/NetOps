@@ -230,3 +230,30 @@ describe('審查修正', () => {
     expect(v.highlighted).toBeNull();
   });
 });
+
+describe('usePaPolicyCheck(PR-5)', () => {
+  it('載入前 marks 為 null;載入後依規則編號分組、接上順序條', async () => {
+    const { usePaPolicyCheck, marksOf } = await import('@/composables/usePaPolicyCheck');
+    const { explainNotices } = await import('@/composables/useAiExplain');
+    const items = [
+      { code: 'conflict' as const, severity: 'high' as const, position: 2, name: 'B', related: [{ position: 1, name: 'A' }], message: 'x' },
+      { code: 'unused' as const, severity: 'low' as const, position: 2, name: 'B', related: [], message: 'y' },
+    ];
+    const checks = vi.fn(async (unusedDays: number) => ({ available: true as const, fetchedAt: 'x', hash: 'h', versionId: null, stale: false, hitsFetchedAt: null, ruleCount: 2, status: null as never, items, summary: null, imprecise: 0, unusedDays }));
+    const c = usePaPolicyCheck({ backend: { checks }, can: () => false });
+    expect(c.marks).toBeNull();
+    c.unusedDays = 30;
+    await c.load();
+    expect(checks).toHaveBeenCalledWith(30);
+    expect(c.marks!.get(2)).toEqual([
+      { code: 'conflict', severity: 'high', related: [1] },
+      { code: 'unused', severity: 'low', related: [] },
+    ]);
+    expect(c.byCode('conflict')).toHaveLength(1);
+    expect(c.canAi).toBe(false);
+    const order = buildOrder([rule(1, 'A'), rule(2, 'B')], [], marksOf(items));
+    expect(order[0]!.checks).toEqual([]);
+    expect(order[1]!.checks).toHaveLength(2);
+    expect(explainNotices({ kind: 'pa-policy', stale: true, imprecise: 3, clipped: false } as never).map((n) => n.tone)).toEqual(['warning', 'info']);
+  });
+});

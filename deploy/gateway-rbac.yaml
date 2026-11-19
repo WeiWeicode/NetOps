@@ -46,6 +46,8 @@ permissions:
   #   規則位址的姓名 / 部門(§3.6)要另有 netops.ip-name.read(IP 對照表選單),這裡不綁,viewer 只看 IP
   - { code: netops.pa-policy-page.read, name: 安全規則, kind: menu, parent: netops.group.firewall, sort: 25, includes: [netops.pa-policy.read] }
   - { code: netops.pa-policy-page.refresh, name: 手動重新整理規則, kind: button, parent: netops.pa-policy-page.read, sort: 10, includes: [netops.pa-policy.refresh] }
+  # PR-5 排序檢查「AI 判讀」(POST /ai/explanations kind pa-policy):資料是排序檢查結果與相關規則,綁 netops.ai.use、netops.pa-policy.read(netops.ai.use 給 admin 與 viewer,2026-11-05 決定)
+  - { code: netops.pa-policy-page.ai, name: AI 判讀規則順序, kind: button, parent: netops.pa-policy-page.read, sort: 20, includes: [netops.ai.use, netops.pa-policy.read] }
   - { code: netops.pa-search.read, name: Log 明細查詢, kind: menu, parent: netops.group.firewall, sort: 30, includes: [netops.pa-log.read] }
   - { code: netops.pa-files.read, name: FTP Log 檔案, kind: menu, parent: netops.group.firewall, sort: 40, includes: [netops.ftp.read] }
   # 同步 / 分析 / 刪除分析結果(FTP 唯讀,只刪本系統資料;AGENT.md §7.4)
@@ -106,6 +108,7 @@ roles:
       # PR-2 安全規則
       - netops.pa-policy-page.read
       - netops.pa-policy-page.refresh
+      - netops.pa-policy-page.ai
       - netops.pa-files.read
       - netops.pa-files.manage
       - netops.ad-events.read
@@ -146,8 +149,9 @@ roles:
       - netops.pa-insight.read
       - netops.pa-events.read
       - netops.pa-search.read
-      # PR-2 安全規則(唯讀)
+      # PR-2 安全規則(唯讀;PR-5 AI 判讀)
       - netops.pa-policy-page.read
+      - netops.pa-policy-page.ai
       - netops.pa-files.read
       - netops.ad-events.read
       - netops.ad-search.read

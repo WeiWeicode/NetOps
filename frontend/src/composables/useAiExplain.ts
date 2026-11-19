@@ -19,6 +19,13 @@ export function explainNotices(m: ExplainMeta | null): { tone: 'warning' | 'info
   if (!m) return [];
   const out: { tone: 'warning' | 'info'; text: string }[] = [];
   if (m.kind === 'events') return [...eventNotices(m), ...common(m)];
+  if (m.kind === 'pa-policy') {
+    // PR-5:規則快照過期、含無法精準比對條件的規則(結果只能人工確認)
+    if (m.stale) out.push({ tone: 'warning', text: '規則快照超過 2 小時沒有更新,AI 看到的可能不是 PA 上的最新規則' });
+    if (m.imprecise) out.push({ tone: 'info', text: `${m.imprecise} 條規則含應用群組 / 動態位址群組 / FQDN / 使用者 / negate 等條件,相關判斷需人工確認` });
+    if (m.clipped) out.push({ tone: 'info', text: '檢查項目較多,只送前面(依嚴重度)的部分給 AI' });
+    return out;
+  }
   if (m.partial) out.push({ tone: 'warning', text: '資料落在已知缺口內(FTP 對帳發現少資料),AI 看到的數量可能少於實際' });
   else if (!m.gapsKnown) out.push({ tone: 'info', text: '這段資料尚未完成每日 FTP 對帳檢查' });
   if (m.kind === 'insight' && m.prev === false) out.push({ tone: 'info', text: '前一期資料不足,這次不和前一期比較' });

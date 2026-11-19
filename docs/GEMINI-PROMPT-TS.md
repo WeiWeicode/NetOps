@@ -10,7 +10,7 @@
 ## 先讀
 
 1. 工作區 `../AGENT.md` §4、§7、§9(Git 協作);本 repo `AGENT.md` 全部(特別是「AI 分工」、「Git 分支與推送」、§2、§5、§7.2 ~ §7.5、§8)。
-2. `docs/THREAT-SIGNATURE-PLAN.md` 全部;**§1.2 是需求方決定,照做**;§2.3 依 TS-0 結果調整設計(TS-0 結果出來前,特徵欄位以 `tests/` 的假資料為準,標「待 TS-0」)。
+2. `docs/THREAT-SIGNATURE-PLAN.md` 全部;**§1.2 是需求方決定,照做**;§2.3、§2.4 是 TS-0 實測結果(2026-11-19),**特徵欄位依實測**:弱點(`/predefined/threats/vulnerability`,約 2.5 萬筆)與間諜軟體(`/predefined/threats/phone-home`,約 1 萬筆,無 CVE)的 entry `name` 是數字 ID,子欄位 `threatname`、`severity`、`category`、`affected-host`、`engine-version`(每筆都有)、`default-action`、`cve`、`vendor`、`disable`、`time-attribute`(部分有);**沒有每筆發布日**。Profile Group 與 VP / AS profile **只讀 vsys1**(shared 沒設定,不讀)。`tests/fake_pa.py` 的假資料照這些欄位做。
 3. `docs/ARCHITECTURE.md` D6、D20、D22、D23、D27;`docs/PA-LIVE-PLAN.md` §4(Redis 鍵名慣例);`docs/API.md` 開頭的通用規則與 PR 相關段落。
 4. 照著仿的既有實作(安全規則 PR,結構幾乎相同):
    - 收集器:`pa-collector/netops_pa/policies.py`(白名單 `ALLOWED_CMDS`、`PolicyApi`、CPU 保護、手動請求與冷卻、失敗保留上一份快照)、`keys.py`、`config.py`(`PA_POLICY_*`、`read_secret` 的 `*_FILE`)、`__main__.py`(啟動執行者)、`tests/fake_pa.py`、`tests/test_policies.py`。
@@ -40,7 +40,7 @@
 1. 資料來源:兩者都做,本機為主。第一階段 netops-pa 用唯讀 op 讀 PA 本機特徵庫,內容版本變動時比對新增 / 變更 / 停用並保存版本歷史(Redis 或 `infra/store`,不用關聯式資料庫)。第二階段 Threat Vault(TS-5)等需求方申請到 Key 再做,**這次不做**。
 2. 結合範圍四項都做:a. 命中比對 b. 規則覆蓋 c. AI 摘要 d. 戰情室 / 安全事件連結。
 3. 頁面:**防火牆 › 威脅特徵碼**;權限代碼 `netops.pa-signature.read`(檢視)、`netops.pa-signature.refresh`(手動更新)。
-4. TS-1 ~ TS-4 全部交 Gemini(邏輯 + 畫面);TS-0 由需求方在主機 2 執行。
+4. TS-1 ~ TS-4 全部交 Gemini(邏輯 + 畫面);TS-0 已完成(計畫書 §2.4)。
 5. 每個 Gemini MR 都由 Claude 審查(`docs/reviews/YYYY-MM-DD-ts-<批>.md` 或 MR 評論,只提問題、不改你的分支);compose / env 範本 / `gateway-rbac.yaml` / CI 屬敏感變更,MR 描述要寫審查者與紀錄位置。
 6. 計畫 MR !161 由需求方合併後,從 `origin/develop` 開分支。
 7. Q2:畫面可選 **7 / 30 / 90 天,預設 30**;API `days` 只接受這三個值。
@@ -49,7 +49,11 @@
 10. Q7:Threat Vault 由 `netops-pa` 收集器呼叫,`netops-api` 不出外網,Key 用 `*_FILE`。
 11. Q8:命中比對的 IP / 名稱要有 **Log 明細權限**才顯示;只有 `netops.pa-signature.read` 只看筆數與動作分布(後端依權限決定回不回 IP,不只靠前端隱藏)。
 12. Q9:`read` 給 `netops-admin`、`netops-viewer`;`refresh` 只給 `netops-admin`。
-13. 未定(計畫書 §9):Q1、Q4 等 TS-0 結果;Q6、Q10 上線前決定。碰到這些**停下回報**,不要自己決定。
+13. Q1:不適用;`show predefined` 可用,走計畫書 §4 原設計(每 30 分鐘只讀 `show system info`,`threat-version` 變了 / 手動 / 沒快照才讀全清單)。
+14. **基準**:第一次讀到的清單當基準,**不算新增**;之後每次內容版本更新才算新增 / 變更 / 停用。畫面選 30 / 90 天而歷史不足時,標示「自 YYYY-MM-DD 起統計」(基準日)。官方發布日等 TS-5 Threat Vault 再補。
+15. Q4:AV / WildFire 第一版**只顯示版本與發布時間**(`show system info` 的 `av-version`、`av-release-date`、`wildfire-version`、`wildfire-release-date`),不讀清單。
+16. 抽屜:快照沒有的 ID 可按需查 `show threat id <ID>`(回 description / subtype / severity),**經收集器、限流**,`netops-api` 不碰 PA(計畫書 §2.3、§5.4)。
+17. 未定(計畫書 §9):Q6、Q10 上線前決定。碰到這些或計畫書沒寫的事**停下回報**,不要自己決定。
 
 ## 規則
 

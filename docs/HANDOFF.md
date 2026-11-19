@@ -2,7 +2,34 @@
 
 > 接手時先讀 `AGENT.md`,再讀 `docs/ARCHITECTURE.md`、`docs/IMPL-PLAN.md`。
 
-## 2026-11-18 收工(晚):戰情室進出方向(WD)完成、PA 安全規則(PR)做到 PR-1
+## 2026-11-19 收工:PA 安全規則檢視(PR)測試區完成,準備上正式區
+
+**接手方式**:新討論串說「從 `NetOps/docs/HANDOFF.md`「2026-11-19 收工」接手」。計畫書 `docs/WARROOM-DIRECTION-POLICY-PLAN.md`(§3.5 規則圖、§3.6 IP 對照表、§4 Q1–Q6)。
+
+### 已完成
+
+- PR-2/3/5、規則圖、IP 對照、跨頁規則抽屜邏輯、匯出、AI 判讀 verify 標記:!145–!149、!151、!152、!157;Gemini 畫面 !148、!154。測試區 `PA_POLICY_ENABLED=1`(11-19 10:11 起,讀到 165→166 條)。
+- 驗收:`docs/test-reports/2026-11-19-pa-policy-acceptance.md`(!150,通過 6 / 部分 3 / 失敗 0)、`2026-11-19-pa-policy-reverify.md`(!155,通過 11 / 部分 2 / 無法驗 1 / 失敗 0)。
+- 需求方 11-19 決定(照做):AI 判讀權限維持現狀(只有 `netops.ai.use` 也能用);規則說明欄給 viewer 與進備份可以;網段反查只回範圍內項目;匯出含規則內容、不含 IP 對照姓名 / 部門,名稱照 PA 原名並加警告;「AI 建議,需網通確認」只在開頭。
+- `savedAt` 比 `fetchedAt` 晚 0–5 分鐘是正常(版本在後端下次讀快照時才存)。
+- AI 分工改為不限制、由需求方指定互相審查(AGENT.md,!153、!156);README 去識別化(!158),公司環境對照在工作區根目錄本機檔 `COMPANY-CONTEXT.local.md`(不進 git)。
+
+### 下一步(依序)
+
+1. 需求方合併 !158 → !159(develop → main),手動 `deploy-prod`、`rbac-prod`;主機 3 `netops.env` 不加 `PA_POLICY_ENABLED`(維持 0)。
+2. 正式區 GigaItApp「服務與路由」發佈新路由草稿(pa-policies、pa-policy-versions、pa-policy-refreshes、ip-name-range-lookups、AI 判讀)。
+3. 補驗(需求方操作):物件展開(位址 / 服務群組)對照 PA Objects、viewer 匯出無姓名、PA GUI 條數(166 + 2)、手動重新整理 5 分鐘冷卻;!157 合併後重跑 AI 判讀確認 #135 不再誤報。
+4. 跨頁規則抽屜(Log 明細、戰情室點規則名稱開規則內容):邏輯 `usePolicyRuleDrawer` 已有,畫面未接。
+5. 文件 docs MR:API.md(PR API、`verify` 事件、`ip-name-range-lookups`)、PA-LIVE-PLAN §4 新 Redis 鍵、ARCHITECTURE D22 補 PR-0 結論、`PA_POLICY_*` 設定、RUNBOOK-prod 還原清單補 `papolicy`、PROJECT-MAP(`usePaPolicyExport.ts`、`verify.ts`)。
+6. 正式區是否開規則收集、PA API 帳號降級前的權限確認(見下段「PA API 帳號降級前要做」)。
+
+### 待決 / 注意
+
+- 開發方式改為不開 worktree,在本機原 repo 目錄開發(要 worktree 先問需求方)。
+- 未合併分支保留:`docs/segment-settings-backup`(1 commit)。
+- 工作區根目錄 `BackToNas/README.md` 舊版曾含 NAS 帳號明文密碼(仍在 git 歷史與 GitHub),建議更換密碼。
+
+## 〔前一輪〕2026-11-18 收工(晚):戰情室進出方向(WD)完成、PA 安全規則(PR)做到 PR-1
 
 **接手方式**:新討論串說「從 `NetOps/docs/HANDOFF.md`「2026-11-18 收工(晚)」接手,繼續 PR-2」。計畫書:`docs/WARROOM-DIRECTION-POLICY-PLAN.md`(§4 是需求方決定,照做)。
 

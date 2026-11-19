@@ -12,6 +12,7 @@ import { fmtNum } from '@/api/format';
 import { describeError } from '@/api/gateway';
 import type { CheckCode, CheckItem, CheckSeverity } from '@/api/paPolicy';
 import AiMarkdown from '@/components/AiMarkdown.vue';
+import { AI_FLAG_LABELS } from '@/composables/useAiExplain';
 import { AI_DISCLAIMER, CHECK_LABELS, SEVERITY_LABELS } from '@/composables/usePaPolicyCheck';
 import { CHECK_CODES_ORDER, SEVERITY_TONES, type PaPolicyCheckStore } from './types';
 
@@ -143,6 +144,31 @@ const hasUndeterminable = computed(() => props.check.byCode('undeterminable').le
 
       <GAlert v-for="n in check.ai.notices" :key="n.text" :tone="n.tone">{{ n.text }}</GAlert>
       <GAlert v-if="check.ai.error" tone="danger">{{ check.ai.error }}</GAlert>
+
+      <p v-if="check.ai.flags !== null && check.ai.flags.length === 0" class="ai-verify-ok xs" role="status">
+        <GIcon name="check-circle" :size="14" />
+        系統比對:引用的規則編號都在檢查資料內
+      </p>
+
+      <GAlert
+        v-else-if="check.ai.flags && check.ai.flags.length > 0"
+        tone="warning"
+        :title="`系統比對發現 ${fmtNum(check.ai.flags.length)} 處 AI 引用與檢查結果不符,請以排序檢查清單為準`"
+      >
+        <p class="xs muted verify-note">系統以關鍵字比對提醒,請對照下方排序檢查清單與規則原文:</p>
+        <ul class="flag-list">
+          <li v-for="(flag, idx) in check.ai.flags" :key="`${flag.kind}-${flag.position}-${idx}`" class="flag-item xs">
+            <span class="flag-head">
+              <strong class="mono">#{{ flag.position }}</strong>
+              <GBadge tone="warning" variant="outline" class="mini-flag">{{ AI_FLAG_LABELS[flag.kind] }}</GBadge>
+              <GBadge v-if="flag.kind === 'mismatch' && flag.code" tone="info" variant="soft" class="mini-flag">
+                {{ CHECK_LABELS[flag.code as CheckCode] ?? flag.code }}
+              </GBadge>
+            </span>
+            <span class="flag-line">{{ flag.line }}</span>
+          </li>
+        </ul>
+      </GAlert>
 
       <div v-if="check.ai.text" class="ai-body">
         <AiMarkdown :text="check.ai.text" />
@@ -305,6 +331,44 @@ const hasUndeterminable = computed(() => props.check.byCode('undeterminable').le
   border: 1px solid var(--line);
   max-height: 55vh;
   overflow-y: auto;
+}
+.ai-verify-ok {
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--c-success);
+  font-weight: 600;
+}
+.verify-note {
+  margin: 0 0 6px;
+}
+.flag-list {
+  margin: 0;
+  padding-left: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.flag-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.flag-head {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.mini-flag {
+  height: 18px;
+  padding: 0 6px;
+  font-size: 11px;
+}
+.flag-line {
+  color: var(--text-2);
+  word-break: break-word;
 }
 .summary-grid {
   display: grid;

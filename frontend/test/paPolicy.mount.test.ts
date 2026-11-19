@@ -22,7 +22,19 @@ vi.mock('vue-router', () => ({
   useRoute: () => ({ path: '/netops/firewall/policies', query: {} }),
 }));
 
-// GEChart 在 happy-dom 中以輕量 stub 掛載,避免動態載入完整 ECharts
+// AI SSE 串流 mock(測試 PR-FIX 驗證標註 verify 事件)
+type OnAiEvent = (e: { event: string; data: unknown }) => void;
+const aiState = vi.hoisted(() => ({
+  script: async (_on: (e: { event: string; data: unknown }) => void) => {},
+}));
+vi.mock('@/api/ai', () => ({
+  AiStreamError: class extends Error {},
+  ai: {
+    explain: async (_body: unknown, on: OnAiEvent) => aiState.script(on),
+  },
+}));
+
+// GEChart 在 happy-dom 中以輕量 stub 掛載,避免動態載入完整 ECharts,同時保留 option 供測試檢查
 vi.mock('@/ui/charts/GEChart.vue', () => ({
   default: {
     name: 'GEChart',
@@ -304,14 +316,19 @@ function mountPage(opts: { canAll?: boolean; available?: boolean; stale?: boolea
 }
 
 describe('Policies.vue (PR-4 安全規則四分頁)', () => {
-  it('清單分頁:顯示規則表格、停用淡色、反向、預設規則、過期警告與物件展開/IP 對照', async () => {
+  it('清單分頁:無重複 GPageHeader、FQDN 標「無法對應 IP」、停用淡色、反向、預設規則、過期警告與物件展開/IP 對照', async () => {
     const { wrapper, mocks } = mountPage({ stale: true });
     await flushPromises();
 
-    // 頁首狀態與過期警告
+    // PR-FIX #1: 外層 TabbedPage 已有標題,頁內不再重複 GPageHeader,只留狀態與重新整理列
+    expect(wrapper.find('.g-page-header').exists()).toBe(false);
     expect(wrapper.text()).toContain('超過 2 小時沒更新');
     expect(wrapper.text()).toContain('管理平面 CPU 14%');
     expect(wrapper.text()).toContain('重新整理');
+
+    // PR-FIX #2: unresolved 顯示「無法對應 IP」而非「無法展開」
+    expect(wrapper.text()).toContain('無法對應 IP');
+    expect(wrapper.text()).not.toContain('無法展開');
 
     // 表格內容
     expect(wrapper.text()).toContain('Allow-Web-Out');
@@ -321,7 +338,7 @@ describe('Policies.vue (PR-4 安全規則四分頁)', () => {
     expect(wrapper.text()).toContain('intrazone-default');
     expect(wrapper.text()).toContain('interzone-default');
 
-    // 展開位址物件並觸發 IP 對照
+    // 展開位址物件仍列出 fqdn: 成員並觸發 IP 對照
     const objBtn = wrapper.findAll('button.obj-btn').find((b) => b.text().includes('Office-Net'));
     expect(objBtn).toBeTruthy();
     await objBtn!.trigger('click');
@@ -329,6 +346,7 @@ describe('Policies.vue (PR-4 安全規則四分頁)', () => {
 
     expect(mocks.lookupIps).toHaveBeenCalledWith(['10.1.1.5']);
     expect(mocks.lookupRanges).toHaveBeenCalledWith(['10.2.0.0/16']);
+    expect(wrapper.text()).toContain('fqdn:example.com');
     expect(wrapper.text()).toContain('王小明 / IT / NB-01');
     expect(wrapper.text()).toContain('無法對照');
     expect(wrapper.text()).toContain('對照 62 筆');
@@ -451,5 +469,158 @@ describe('Policies.vue (PR-4 安全規則四分頁)', () => {
 
     expect(mocks.searchNames).toHaveBeenCalledWith('王');
     expect(wrapper.text()).toContain('只用前 50 個 IP 篩選');
+  });
+
+  it('PR-FIX #3 & #4: 規則圖點矩陣/Sankey 篩選順序條與 Sankey、清除選取、匯出給外部 AI(不含個資)', async () => {
+    const extraRules: PolicyRule[] = [
+      rule(1, 'Allow-Web-Out', {
+        fromZones: ['trust'],
+        toZones: ['untrust'],
+        sourceUsers: ['gsmc\\s112009'],
+        description: '王小明 申請開通',
+        action: 'allow',
+        hits: { hitCount: 100, lastHit: '2026-11-19T01:00:00Z', firstHit: null, lastReset: null, created: null, modified: null },
+      }),
+      rule(2, 'Allow-Guest-Net', {
+        fromZones: ['guest'],
+        toZones: ['untrust'],
+        action: 'allow',
+        hits: { hitCount: 25, lastHit: '2026-11-19T01:00:00Z', firstHit: null, lastReset: null, created: null, modified: null },
+      }),
+    ];
+    const { backend, checkBackend } = makeBackend();
+    (backend.list as ReturnType<typeof vi.fn>).mockImplementation(async (): Promise<PolicyList> => ({
+      available: true,
+      fetchedAt: '2026-11-19T01:00:00Z',
+      hash: 'h-viz',
+      versionId: 'v2',
+      stale: false,
+      hitsFetchedAt: '2026-11-19T01:00:00Z',
+      ruleCount: extraRules.length,
+      status: { collectorEnabled: true, state: 'ok', message: null, lastRunAt: null, lastOkAt: null, trigger: null, mgmtCpu: 8, durationMs: 100, refreshCooldownSec: 0 },
+      items: extraRules,
+      total: extraRules.length,
+      page: 1,
+      pageSize: 100,
+      defaults: DEFAULTS,
+    }));
+
+    const wrapper = mount(Policies, {
+      props: {
+        policyOptions: { backend, can: () => true },
+        checkOptions: { backend: checkBackend, can: () => true },
+      },
+      global: { plugins: [ui], stubs: { RouterLink: true, Teleport: true } },
+    });
+    await flushPromises();
+
+    // 切到規則圖分頁
+    const vizTabBtn = wrapper.findAll('button[role="tab"]').find((b) => b.text().includes('規則圖'));
+    await vizTabBtn!.trigger('click');
+    await flushPromises();
+
+    // 說明字樣與匯出按鈕存在
+    expect(wrapper.text()).toContain('Sankey 會畫出選取規則的所有 zone 組合');
+    expect(wrapper.text()).toContain('匯出目前圖上的規則(含篩選與選取);不含 IP 對照姓名 / 部門、說明欄與使用者名稱');
+
+    const orderStub = () => wrapper.findComponent({ name: 'GEChart' });
+    const getCharts = () => wrapper.findAllComponents({ name: 'GEChart' });
+    expect(orderStub().exists()).toBe(true);
+    // 選取前:順序條有 2 條規則 + 2 條預設規則 = 4
+    const orderBefore = getCharts().find((c) => c.props('chart') === 'policy-order')!.props('option') as { yAxis: { data: string[] } };
+    expect(orderBefore.yAxis.data).toHaveLength(4);
+
+    // 點選 trust → untrust 格子
+    const cells = wrapper.findAll('button.m-cell');
+    expect(cells).toHaveLength(2);
+    const trustCell = cells.find((b) => (b.attributes('title') ?? '').includes('trust → untrust'));
+    await trustCell!.trigger('click');
+
+    // 矩陣維持 2 格不縮小,並顯示已篩選列
+    expect(wrapper.findAll('button.m-cell')).toHaveLength(2);
+    expect(wrapper.text()).toContain('已篩選：trust → untrust，共 1 條');
+
+    // 順序條與 Sankey 只剩選取的 #1 Allow-Web-Out
+    const orderAfter = getCharts().find((c) => c.props('chart') === 'policy-order')!.props('option') as { yAxis: { data: string[] } };
+    expect(orderAfter.yAxis.data).toEqual(['#1 Allow-Web-Out']);
+    const sankeyAfter = getCharts().find((c) => c.props('chart') === 'policy-sankey')!.props('option') as { series: { links: { source: string; target: string }[] }[] };
+    expect(sankeyAfter.series[0]!.links.every((l) => l.source !== 'z:guest' && l.source !== 'p:預設規則')).toBe(true);
+
+    // 複製 Markdown:只含選取的 #1,且不含姓名/部門、說明欄、使用者帳號
+    const writeText = vi.fn(async (_text: string) => {});
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    const copyBtn = wrapper.findAll('button').find((b) => b.text().includes('複製 Markdown'));
+    await copyBtn!.trigger('click');
+    await flushPromises();
+    expect(writeText).toHaveBeenCalledTimes(1);
+    const md = writeText.mock.calls[0]![0];
+    expect(md).toContain('Allow-Web-Out');
+    expect(md).not.toContain('Allow-Guest-Net');
+    expect(md).not.toContain('王小明');
+    expect(md).not.toContain('s112009');
+    expect(md).toContain('選取 trust → untrust');
+
+    // 清除選取 → 恢復全部 4 列
+    const clearBtn = wrapper.findAll('button').find((b) => b.text().includes('清除選取'));
+    await clearBtn!.trigger('click');
+    const orderReset = getCharts().find((c) => c.props('chart') === 'policy-order')!.props('option') as { yAxis: { data: string[] } };
+    expect(orderReset.yAxis.data).toHaveLength(4);
+
+    // 點選 Sankey「預設規則 → 允許」連線 → 只剩 intrazone-default
+    const sankeyComp = getCharts().find((c) => c.props('chart') === 'policy-sankey')!;
+    sankeyComp.vm.$emit('pick', { chart: 'policy-sankey', name: 'p:預設規則>a:allow', data: { source: 'p:預設規則', target: 'a:allow' } });
+    await flushPromises();
+    expect(wrapper.text()).toContain('預設規則 → 允許');
+    const orderDefaultOnly = getCharts().find((c) => c.props('chart') === 'policy-order')!.props('option') as { yAxis: { data: string[] } };
+    expect(orderDefaultOnly.yAxis.data).toEqual(['[預設] intrazone-default']);
+  });
+
+  it('PR-FIX #5: AI 判讀完成後顯示驗證標註(相符提示與不符警告,純文字不執行 HTML)', async () => {
+    const { wrapper } = mountPage();
+    await flushPromises();
+
+    // 切到排序檢查分頁
+    const chkTabBtn = wrapper.findAll('button[role="tab"]').find((b) => b.text().includes('排序檢查'));
+    await chkTabBtn!.trigger('click');
+    await flushPromises();
+
+    // 情境 A: 驗證通過(flags 為空陣列)
+    aiState.script = async (on) => {
+      on({ event: 'content', data: { text: '檢查完成,#2 需優先處理。' } });
+      on({ event: 'verify', data: { flags: [] } });
+      on({ event: 'done', data: { truncated: false } });
+    };
+    const aiBtn = wrapper.findAll('button').find((b) => b.text().includes('AI 判讀排序建議'));
+    await aiBtn!.trigger('click');
+    await flushPromises();
+
+    expect(wrapper.text()).toContain('系統比對:引用的規則編號都在檢查資料內');
+
+    // 情境 B: 驗證發現不符(含 mismatch code 與 HTML 字串純文字呈現)
+    aiState.script = async (on) => {
+      on({ event: 'content', data: { text: '缺少 Security Profile:#114。' } });
+      on({
+        event: 'verify',
+        data: {
+          flags: [
+            { kind: 'unknown', position: 999, line: '參考 #999 <script>alert(1)</script>' },
+            { kind: 'mismatch', position: 114, code: 'no-profile', line: '缺少 Security Profile:#114' },
+          ],
+        },
+      });
+      on({ event: 'done', data: { truncated: false } });
+    };
+    const reRunBtn = wrapper.findAll('button').find((b) => b.text().includes('重新 AI 判讀'));
+    await reRunBtn!.trigger('click');
+    await flushPromises();
+
+    expect(wrapper.text()).toContain('系統比對發現 2 處 AI 引用與檢查結果不符,請以排序檢查清單為準');
+    expect(wrapper.text()).toContain('#999');
+    expect(wrapper.text()).toContain('資料中沒有這條規則');
+    expect(wrapper.text()).toContain('#114');
+    expect(wrapper.text()).toContain('程式檢查沒有把這條規則列在這一類');
+    expect(wrapper.text()).toContain('沒有 Security Profile');
+    expect(wrapper.text()).toContain('<script>alert(1)</script>');
+    expect(wrapper.find('script').exists()).toBe(false);
   });
 });

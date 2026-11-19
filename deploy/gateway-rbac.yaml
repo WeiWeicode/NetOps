@@ -48,6 +48,11 @@ permissions:
   - { code: netops.pa-policy-page.refresh, name: 手動重新整理規則, kind: button, parent: netops.pa-policy-page.read, sort: 10, includes: [netops.pa-policy.refresh] }
   # PR-5 排序檢查「AI 判讀」(POST /ai/explanations kind pa-policy):資料是排序檢查結果與相關規則,綁 netops.ai.use、netops.pa-policy.read(netops.ai.use 給 admin 與 viewer,2026-11-05 決定)
   - { code: netops.pa-policy-page.ai, name: AI 判讀規則順序, kind: button, parent: netops.pa-policy-page.read, sort: 20, includes: [netops.ai.use, netops.pa-policy.read] }
+  # TS-2 威脅特徵碼(THREAT-SIGNATURE-PLAN §7、TS-Q8、TS-Q9):清單、版本差異、命中比對、規則覆蓋同一個選單;手動重新整理只給 netops-admin。
+  #   命中比對含 IP 須另有 netops.pa-log.read、IP 名稱須另有 netops.ip-name.read、規則覆蓋須另有 netops.pa-policy.read,這裡不綁
+  - { code: netops.pa-signature-page.read, name: 威脅特徵碼, kind: menu, parent: netops.group.firewall, sort: 27, includes: [netops.pa-signature.read] }
+  - { code: netops.pa-signature-page.refresh, name: 手動重新整理威脅特徵碼, kind: button, parent: netops.pa-signature-page.read, sort: 10, includes: [netops.pa-signature.refresh] }
+  - { code: netops.pa-signature-page.ai, name: AI 摘要新威脅特徵碼, kind: button, parent: netops.pa-signature-page.read, sort: 20, includes: [netops.ai.use, netops.pa-signature.read] }
   - { code: netops.pa-search.read, name: Log 明細查詢, kind: menu, parent: netops.group.firewall, sort: 30, includes: [netops.pa-log.read] }
   - { code: netops.pa-files.read, name: FTP Log 檔案, kind: menu, parent: netops.group.firewall, sort: 40, includes: [netops.ftp.read] }
   # 同步 / 分析 / 刪除分析結果(FTP 唯讀,只刪本系統資料;AGENT.md §7.4)
@@ -109,6 +114,10 @@ roles:
       - netops.pa-policy-page.read
       - netops.pa-policy-page.refresh
       - netops.pa-policy-page.ai
+      # TS-2 威脅特徵碼(TS-Q9)
+      - netops.pa-signature-page.read
+      - netops.pa-signature-page.refresh
+      - netops.pa-signature-page.ai
       - netops.pa-files.read
       - netops.pa-files.manage
       - netops.ad-events.read
@@ -152,6 +161,9 @@ roles:
       # PR-2 安全規則(唯讀;PR-5 AI 判讀)
       - netops.pa-policy-page.read
       - netops.pa-policy-page.ai
+      # TS-2 威脅特徵碼(TS-Q9:唯讀 + AI 摘要,不含手動重新整理)
+      - netops.pa-signature-page.read
+      - netops.pa-signature-page.ai
       - netops.pa-files.read
       - netops.ad-events.read
       - netops.ad-search.read

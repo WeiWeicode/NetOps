@@ -21,6 +21,15 @@ export interface TopItem {
   count: number;
 }
 
+/** TS-2 戰情室新威脅特徵碼命中提示(近 30 天新增特徵碼命中;選填,舊版後端或無命中時不存在) */
+export interface NewSignatureHit {
+  id: string;
+  name: string;
+  severity: string;
+  firstVersion: string;
+  count: number;
+}
+
 /**
  * 外部來源節點;conn / deny / threat 是 minutes 分鐘內的筆數。
  * id:`cc:<國家代碼>` / `ip:<IP>`(Top 攻擊 IP,只計連入)/ `other`(其他與未知國家)/ `lan`(內部互連,kind other)
@@ -100,6 +109,8 @@ export interface Warroom {
   segments: WarroomSegment[];
   links: WarroomLink[];
   kpis: { denyPerMin: number | null; threat5m: number | null };
+  /** TS-2:近 30 天新增威脅特徵碼在本視窗的命中(無命中時省略) */
+  newSignatureHits?: NewSignatureHit[];
   sample: WarroomSample | null;
 }
 
@@ -117,6 +128,8 @@ export interface WarroomRisk {
   critical: number | null;
   topThreats: { name: string; severity: string | null; count: number }[];
   topSources: { key: string; label: string; country: string | null; count: number; denyRatio: number | null }[];
+  /** TS-2:近 30 天新增威脅特徵碼在本視窗的命中(無命中時省略) */
+  newSignatureHits?: NewSignatureHit[];
   /** partial 時沒有這個欄位 */
   sample?: { threat: number; complete: boolean } | null;
 }

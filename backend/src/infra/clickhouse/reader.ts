@@ -170,6 +170,33 @@ export interface ClickHouseReader {
   aiDays(fromMs: number, toMs: number, signal?: AbortSignal): Promise<AiDayRow[]>;
   /** AI 分析超過 30 天的部分:動作、App、區域(每小時彙總 App,13 個月)與來源 IP(每小時彙總來源,90 天)的排行 */
   aiTops(fromMs: number, toMs: number, limit: number, signal?: AbortSignal): Promise<AiTops>;
+  /** TS-2 威脅特徵碼命中數(最近 N 天,log_type = 'threat';id → 筆數) */
+  signatureHitCounts(fromMs: number, toMs: number, signal?: AbortSignal): Promise<Record<string, number>>;
+  /**
+   * TS-2 威脅特徵碼命中比對(log_type = 'threat',ids 上限 500 個純數字,經 query_params 傳陣列):
+   * includeIps=false 時不查也不回來源 / 目的 IP(TS-Q8)。
+   */
+  signatureHits(
+    ids: readonly string[],
+    fromMs: number,
+    toMs: number,
+    opts: { includeIps: boolean; signal?: AbortSignal },
+  ): Promise<SignatureHitRow[]>;
+}
+
+/** TS-2 單一特徵碼在期間內的命中統計(includeIps=false 時無 topSrc / topDst 欄位) */
+export interface SignatureHitRow {
+  id: string;
+  hits: number;
+  repeats: number;
+  firstSeen: string | null;
+  lastSeen: string | null;
+  blocked: number;
+  alerted: number;
+  actions: Record<string, number>;
+  rules: string[];
+  topSrc?: { ip: string; count: number }[];
+  topDst?: { ip: string; count: number }[];
 }
 
 /** AI 問答條件(ai/core/evidence.js parseQuestion):1 個 IP = 來源或目的(含 NAT);2 個 = 兩者之間;3–4 個 = 任一;Port = 目的 Port */
@@ -841,6 +868,120 @@ export function createClickHouseReader(cfg: ClickHouseConfig, fetchImpl: Fetch =
         src: await top(READ_TABLES.hourlySrc, ipText('src')),
         blockSrc: await top(READ_TABLES.hourlySrc, ipText('src'), "AND action != 'allow'"),
       };
+    },
+    async signatureHitCounts(fromMs, toMs, signal) {
+      // pa_threat_logs.name 格式「名稱(ID)」或純數字 ID(THREAT-SIGNATURE-PLAN §5.1)
+      const sigIdExpr = `if(match(name, '^\\\\d+$'), name, extract(name, '\\\\((\\\\d+)\\\\)$'))`;
+      const r = await rows<{ sid: string; n: number }>(
+        `SELECT sid, count() AS n FROM (
+           SELECT ${sigIdExpr} AS sid FROM ${READ_TABLES.threat}
+           WHERE log_type = 'threat' AND event_time >= toDateTime({from:UInt32}) AND event_time < toDateTime({to:UInt32})
+         ) WHERE sid != '' GROUP BY sid`,
+        { from: sec(fromMs), to: Math.ceil(toMs / 1000) },
+        signal,
+      );
+      const out: Record<string, number> = {};
+      for (const x of r) if (x.sid) out[x.sid] = Number(x.n) || 0;
+      return out;
+    },
+    async signatureHits(ids, fromMs, toMs, opts) {
+      const clean = [...new Set(ids.filter((x) => /^\d{1,10}$/.test(x)))].slice(0, 500);
+      if (!clean.length) return [];
+      const sigIdExpr = `if(match(name, '^\\\\d+$'), name, extract(name, '\\\\((\\\\d+)\\\\)$'))`;
+      const params: Record<string, Param> = {
+        from: sec(fromMs),
+        to: Math.ceil(toMs / 1000),
+        ids: `[${clean.map((id) => `'${id}'`).join(',')}]`,
+      };
+      const baseWhere = `log_type = 'threat' AND event_time >= toDateTime({from:UInt32}) AND event_time < toDateTime({to:UInt32})`;
+      const summary = await rows<{
+        sid: string;
+        hits: number;
+        repeats: number;
+        t1: number;
+        t2: number;
+        blocked: number;
+        alerted: number;
+        act_keys: string[];
+        act_vals: number[];
+        rules: string[];
+      }>(
+        `SELECT
+           sid,
+           count() AS hits,
+           sum(greatest(repeat_count, 1)) AS repeats,
+           toUnixTimestamp(min(event_time)) AS t1,
+           toUnixTimestamp(max(event_time)) AS t2,
+           countIf(match(action, '^(deny|drop|reset|block|sinkhole)')) AS blocked,
+           countIf(action IN ('alert', 'allow')) AS alerted,
+           tupleElement(sumMap([action], [toUInt64(1)]), 1) AS act_keys,
+           tupleElement(sumMap([action], [toUInt64(1)]), 2) AS act_vals,
+           topK(10)(rule) AS rules
+         FROM (
+           SELECT ${sigIdExpr} AS sid, event_time, repeat_count, action, rule
+           FROM ${READ_TABLES.threat}
+           WHERE ${baseWhere}
+         )
+         WHERE sid IN {ids:Array(String)}
+         GROUP BY sid
+         ORDER BY hits DESC, sid`,
+        params,
+        opts.signal,
+      );
+      if (!summary.length) return [];
+
+      const bySrc = new Map<string, { ip: string; count: number }[]>();
+      const byDst = new Map<string, { ip: string; count: number }[]>();
+      if (opts.includeIps) {
+        const topIps = async (col: 'src' | 'dst') => {
+          const r = await rows<{ sid: string; ip: string; n: number }>(
+            `SELECT sid, ip, count() AS n FROM (
+               SELECT ${sigIdExpr} AS sid, ${ipText(col)} AS ip
+               FROM ${READ_TABLES.threat}
+               WHERE ${baseWhere}
+             )
+             WHERE sid IN {ids:Array(String)} AND ip != ''
+             GROUP BY sid, ip
+             ORDER BY sid, n DESC, ip
+             LIMIT 10 BY sid`,
+            params,
+            opts.signal,
+          );
+          const m = col === 'src' ? bySrc : byDst;
+          for (const x of r) {
+            const arr = m.get(x.sid) ?? [];
+            arr.push({ ip: x.ip, count: Number(x.n) || 0 });
+            m.set(x.sid, arr);
+          }
+        };
+        // 依序查詢,避免同時佔兩個 ClickHouse 名額
+        await topIps('src');
+        await topIps('dst');
+      }
+
+      const isoSec = (ts: number) => (ts > 0 ? new Date(ts * 1000).toISOString() : null);
+      return summary.map((r) => {
+        const actions: Record<string, number> = {};
+        const ks = Array.isArray(r.act_keys) ? r.act_keys : [];
+        const vs = Array.isArray(r.act_vals) ? r.act_vals : [];
+        for (let i = 0; i < ks.length; i++) if (ks[i]) actions[ks[i]!] = Number(vs[i]) || 0;
+        const row: SignatureHitRow = {
+          id: r.sid,
+          hits: Number(r.hits) || 0,
+          repeats: Number(r.repeats) || 0,
+          firstSeen: isoSec(Number(r.t1) || 0),
+          lastSeen: isoSec(Number(r.t2) || 0),
+          blocked: Number(r.blocked) || 0,
+          alerted: Number(r.alerted) || 0,
+          actions,
+          rules: Array.isArray(r.rules) ? r.rules.filter((x): x is string => typeof x === 'string' && !!x) : [],
+        };
+        if (opts.includeIps) {
+          row.topSrc = bySrc.get(r.sid) ?? [];
+          row.topDst = byDst.get(r.sid) ?? [];
+        }
+        return row;
+      });
     },
     threatRecords: (type, fromMs, toMs, onRow, signal) => records('threat', THREAT_FIELDS, fromMs, toMs, onRow, signal, type),
   };

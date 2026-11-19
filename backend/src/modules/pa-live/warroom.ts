@@ -16,7 +16,23 @@ import { isIP } from 'node:net';
 import { GEOIP_ATTRIBUTION, type GeoIp } from '../../infra/geoip/index.js';
 import { RedisReplyError, RedisUnavailableError, type PaLiveRedis, type StreamEntry } from '../../infra/redis/index.js';
 import type { WarroomStore } from '../../infra/store/index.js';
+import { extractThreatId } from '../pa-signature/core.js';
 import { bucketsOf } from './service.js';
+
+export interface NewSignatureHit {
+  id: string;
+  name: string;
+  severity: string;
+  firstVersion: string;
+  count: number;
+}
+
+export interface NewSignatureRef {
+  id: string;
+  name: string;
+  severity: string;
+  firstVersion: string;
+}
 
 // ---------- 設定(Q3、Q5) ----------
 
@@ -584,10 +600,48 @@ function memo<T>(ttlMs: number, now: () => number) {
 
 export function createWarroomService(
   redis: PaLiveRedis | null,
-  deps: { geo: GeoIp; store: WarroomStore; now?: () => number; log?: Log; agg?: Partial<AggregateOptions> },
+  deps: {
+    geo: GeoIp;
+    store: WarroomStore;
+    now?: () => number;
+    log?: Log;
+    agg?: Partial<AggregateOptions>;
+    /** TS-2:近 30 天新增特徵碼集合(由 pa-signature 服務快取 5 分鐘提供) */
+    newSignatures?: () => Map<string, NewSignatureRef>;
+  },
 ) {
   const now = deps.now ?? Date.now;
   const opts = { ...DEFAULT_AGG, ...deps.agg };
+
+  const loadNewSigs = (): Map<string, NewSignatureRef> => {
+    if (!deps.newSignatures) return new Map();
+    try {
+      return deps.newSignatures();
+    } catch {
+      return new Map();
+    }
+  };
+
+  /** 從威脅紀錄(Stream 或每分鐘排行)比對近 30 天新增特徵碼(TS-2 §5.4);沒有命中回 undefined 保持回應精簡 */
+  const collectNewSigHits = (pairs: Iterable<[string, number]>, scale = 1): NewSignatureHit[] | undefined => {
+    const map = loadNewSigs();
+    if (!map.size) return undefined;
+    const counts = new Map<string, number>();
+    for (const [raw, n] of pairs) {
+      if (n <= 0) continue;
+      const id = extractThreatId(raw);
+      if (!id || !map.has(id)) continue;
+      counts.set(id, (counts.get(id) ?? 0) + n);
+    }
+    if (!counts.size) return undefined;
+    return [...counts.entries()]
+      .map(([id, c]) => {
+        const ref = map.get(id)!;
+        return { id, name: ref.name, severity: ref.severity, firstVersion: ref.firstVersion, count: Math.max(1, Math.round(c * scale)) };
+      })
+      .sort((a, b) => b.count - a.count || a.id.localeCompare(b.id))
+      .slice(0, 20);
+  };
 
   // 設定檔依修改時間快取;格式錯誤時回 400 等級的錯誤不合適(是部署問題):記 warn 並改用範例,畫面標示 segmentsSource "invalid"
   let cfgCache: { mtime: number | null; cfg: WarroomConfig; source: 'file' | 'example' | 'invalid' } | null = null;
@@ -667,11 +721,19 @@ export function createWarroomService(
         const lastMinSec = Math.min(60, trSec);
         const denyLastMin = tr.entries.filter((e) => e.ms >= t - lastMinSec * 1000 && isDenyAction(e.data.action)).length;
         const threat5m = threatAggs.reduce((s, h) => s + (Number(h.count) || 0), 0);
+        const newSignatureHits = collectNewSigHits(
+          th.entries.map((e) => [
+            typeof e.data.name === 'string' && e.data.name ? e.data.name : typeof e.data.threatId === 'string' || typeof e.data.threatId === 'number' ? String(e.data.threatId) : '',
+            1,
+          ]),
+          windowSec / thSec,
+        );
         return {
           ...base,
           partial: false,
           ...agg,
           kpis: { denyPerMin: Math.round((denyLastMin * 60) / Math.max(1, lastMinSec)), threat5m },
+          ...(newSignatureHits ? { newSignatureHits } : {}),
           sample: { traffic: tr.entries.length, trafficSec: Math.round(trSec), threat: th.entries.length, threatSec: Math.round(thSec), complete: tr.reachedStart && th.reachedStart },
         };
       } catch (err) {
@@ -755,6 +817,21 @@ export function createWarroomService(
           const a = bySrc.get(key);
           return { key, label: g ? g.name : isPrivateIp(key) ? '內部' : '未知', country: g?.code ?? null, count, denyRatio: a ? round2(a.deny / a.n) : null };
         });
+        const mergedNames = merge(nameTops);
+        // 以每分鐘排行為主(準確筆數),並補上明細樣本中沒進前 200 的特徵
+        const riskSigPairs = new Map<string, number>();
+        const seenIds = new Set<string>();
+        for (const [name, count] of mergedNames) {
+          riskSigPairs.set(name, (riskSigPairs.get(name) ?? 0) + count);
+          const id = extractThreatId(name);
+          if (id) seenIds.add(id);
+        }
+        for (const e of sample.entries) {
+          const raw = typeof e.data.name === 'string' && e.data.name ? e.data.name : typeof e.data.threatId === 'string' || typeof e.data.threatId === 'number' ? String(e.data.threatId) : '';
+          const id = extractThreatId(raw);
+          if (id && !seenIds.has(id)) riskSigPairs.set(raw, (riskSigPairs.get(raw) ?? 0) + 1);
+        }
+        const newSignatureHits = collectNewSigHits(riskSigPairs);
         return {
           ...base,
           partial: false,
@@ -764,10 +841,11 @@ export function createWarroomService(
           // 每分鐘排行只留前 200 名:任一分鐘滿 200 名時為下限(畫面標示 ≥)
           attackSourcesLowerBound: srcTops.some((l) => l.length >= 200),
           critical,
-          topThreats: merge(nameTops)
+          topThreats: mergedNames
             .slice(0, 10)
             .map(([name, count]) => ({ name, severity: sev.get(name) ?? null, count })),
           topSources,
+          ...(newSignatureHits ? { newSignatureHits } : {}),
           // attackSources 為合併每分鐘前 200 名的不重複數(下限);嚴重度與阻擋比例來自威脅明細樣本
           sample: { threat: sample.entries.length, complete: sample.reachedStart },
         };

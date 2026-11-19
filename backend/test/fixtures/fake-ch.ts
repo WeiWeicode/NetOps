@@ -2,7 +2,7 @@
  * 假 ClickHouse 唯讀查詢(C3):記憶體中的 TRAFFIC 與威脅類紀錄(核心紀錄格式),實作 infra/clickhouse/reader 的介面
  */
 import { ClickHouseError } from '../../src/infra/clickhouse/index.js';
-import type { AiCond, AiFlowRow, AiThreatRow, ChEventType, ClickHouseReader, LogRecord, TopRow, TrafficFilter } from '../../src/infra/clickhouse/reader.js';
+import type { AiCond, AiFlowRow, AiThreatRow, ChEventType, ClickHouseReader, LogRecord, SignatureHitRow, TopRow, TrafficFilter } from '../../src/infra/clickhouse/reader.js';
 import { buildCondition } from '../../src/modules/ai/core/evidence.js';
 import { buildFilter } from '../../src/modules/pa/core/palog.js';
 
@@ -247,6 +247,103 @@ export function createFakeReader(traffic: LogRecord[] = [], threats: { type: ChE
         blockSrc: top((r) => s(r.src), rs.filter((r) => r.action !== 'allow')),
       };
     },
+    async signatureHitCounts(from, to) {
+      check('signatureHitCounts');
+      const since = f.rawSince.threat ?? -Infinity;
+      const out: Record<string, number> = {};
+      for (const { type, rec } of f.threats) {
+        const t = ms(s(rec.time));
+        if (type !== 'threat' || t < Math.max(from, since) || t >= to) continue;
+        const id = extractSigId(s(rec.name));
+        if (id) out[id] = (out[id] ?? 0) + 1;
+      }
+      return out;
+    },
+    async signatureHits(ids, from, to, opts) {
+      check('signatureHits');
+      const wanted = new Set(ids.filter((x) => /^\d{1,10}$/.test(x)).slice(0, 500));
+      if (!wanted.size) return [];
+      const since = f.rawSince.threat ?? -Infinity;
+      const map = new Map<
+        string,
+        {
+          hits: number;
+          repeats: number;
+          first: number;
+          last: number;
+          blocked: number;
+          alerted: number;
+          actions: Record<string, number>;
+          rules: Map<string, number>;
+          src: Map<string, number>;
+          dst: Map<string, number>;
+        }
+      >();
+      for (const { type, rec } of f.threats) {
+        const t = ms(s(rec.time));
+        if (type !== 'threat' || t < Math.max(from, since) || t >= to) continue;
+        const id = extractSigId(s(rec.name));
+        if (!id || !wanted.has(id)) continue;
+        const acc = map.get(id) ?? {
+          hits: 0,
+          repeats: 0,
+          first: t,
+          last: t,
+          blocked: 0,
+          alerted: 0,
+          actions: {} as Record<string, number>,
+          rules: new Map<string, number>(),
+          src: new Map<string, number>(),
+          dst: new Map<string, number>(),
+        };
+        acc.hits++;
+        acc.repeats += Math.max(1, Number(rec.repeat) || 1);
+        acc.first = Math.min(acc.first, t);
+        acc.last = Math.max(acc.last, t);
+        const act = s(rec.action);
+        if (/^(deny|drop|reset|block|sinkhole)/.test(act)) acc.blocked++;
+        if (act === 'alert' || act === 'allow') acc.alerted++;
+        if (act) acc.actions[act] = (acc.actions[act] ?? 0) + 1;
+        if (s(rec.rule)) acc.rules.set(s(rec.rule), (acc.rules.get(s(rec.rule)) ?? 0) + 1);
+        if (s(rec.src)) acc.src.set(s(rec.src), (acc.src.get(s(rec.src)) ?? 0) + 1);
+        if (s(rec.dst)) acc.dst.set(s(rec.dst), (acc.dst.get(s(rec.dst)) ?? 0) + 1);
+        map.set(id, acc);
+      }
+      const topIps = (m: Map<string, number>) =>
+        [...m.entries()]
+          .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+          .slice(0, 10)
+          .map(([ip, count]) => ({ ip, count }));
+      return [...map.entries()]
+        .sort((a, b) => b[1].hits - a[1].hits || a[0].localeCompare(b[0]))
+        .map(([id, a]) => {
+          const row: SignatureHitRow = {
+            id,
+            hits: a.hits,
+            repeats: a.repeats,
+            firstSeen: new Date(a.first).toISOString(),
+            lastSeen: new Date(a.last).toISOString(),
+            blocked: a.blocked,
+            alerted: a.alerted,
+            actions: a.actions,
+            rules: [...a.rules.entries()]
+              .sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0]))
+              .slice(0, 10)
+              .map(([k]) => k),
+          };
+          if (opts.includeIps) {
+            row.topSrc = topIps(a.src);
+            row.topDst = topIps(a.dst);
+          }
+          return row;
+        });
+    },
+  };
+  const extractSigId = (name: string): string | null => {
+    const t = name.trim();
+    if (/^\d{1,10}$/.test(t)) return t;
+    const m = /\((\d{1,10})\)$/.exec(t);
+    return m ? m[1]! : null;
   };
   const s = (v: unknown) => String(v ?? '');
   /** 原始 TRAFFIC(保留期限內)符合 AI 問答條件的紀錄:條件語意用核心 buildCondition(FTP 版) */

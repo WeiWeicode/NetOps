@@ -63,6 +63,9 @@ import ipNameRoutes from './modules/ip-names/routes.js';
 import paPolicyRoutes from './modules/pa-policy/routes.js';
 import { createPaPolicyService } from './modules/pa-policy/service.js';
 import { connectPaPolicyRedis, type PaPolicyRedis } from './infra/redis/pa-policy.js';
+import paSignatureRoutes from './modules/pa-signature/routes.js';
+import { createPaSignatureService, type NewSignatureEntry } from './modules/pa-signature/service.js';
+import { connectPaSignatureRedis, type PaSignatureRedis } from './infra/redis/pa-signature.js';
 import { createIpNameService, type IpNameService } from './modules/ip-names/service.js';
 
 declare module 'fastify' {
@@ -117,6 +120,8 @@ export async function buildApp(
     paQuery?: { store?: PaQueryStore | null; now?: () => number };
     /** PA 安全規則(PR-2);測試注入,null = 沒有 Redis */
     paPolicy?: { redis?: PaPolicyRedis | null; now?: () => number; syncMs?: number };
+    /** PA 威脅特徵碼(TS-2);測試注入,null = 沒有 Redis */
+    paSignature?: { redis?: PaSignatureRedis | null; now?: () => number; syncMs?: number; syncWaitMs?: number };
     /** 服務日誌的輸出(測試檢查日誌內容用;預設 stdout) */
     logStream?: { write(msg: string): void };
   } = {},
@@ -209,8 +214,15 @@ export async function buildApp(
   // PA 即時監控(R1):只讀 netops-redis;Redis 停止時只有即時監控受影響(不影響 /readyz 與其他功能)
   const paLiveRedis = deps.paLiveRedis ?? (config.redisUrl ? connectPaLiveRedis(config.redisUrl, app.log) : null);
   if (paLiveRedis) app.addHook('onClose', async () => paLiveRedis.close());
-  // 戰情室(WR-1、WR-2):離線 GeoIP + 網段設定檔;SSE logs 每筆補 country、segment
-  const warroom = createWarroomService(paLiveRedis, { geo: deps.geoIp ?? loadGeoIp(config.geoipDb, app.log), store: app.store.warroom, log: app.log, now: deps.warroomNow });
+  // 戰情室(WR-1、WR-2):離線 GeoIP + 網段設定檔;SSE logs 每筆補 country、segment;TS-2 附新特徵碼命中提示
+  let newSigMap: (() => Map<string, NewSignatureEntry>) | null = null;
+  const warroom = createWarroomService(paLiveRedis, {
+    geo: deps.geoIp ?? loadGeoIp(config.geoipDb, app.log),
+    store: app.store.warroom,
+    log: app.log,
+    now: deps.warroomNow,
+    newSignatures: () => newSigMap?.() ?? new Map(),
+  });
   await app.register(paLiveLiveRoutes, {
     live: createPaLiveService(paLiveRedis, { log: app.log, controlAllowed: deps.paLiveControl ?? ['dev', 'test'].includes(config.gateway.gwEnv) }),
     stream: deps.liveStream,
@@ -325,6 +337,27 @@ export async function buildApp(
   await app.register(paPolicyRoutes, { svc: paPolicy });
   if (paPolicyRedis && deps.paPolicy?.syncMs !== 0) {
     const t = setInterval(() => void paPolicy.sync().catch(() => undefined), deps.paPolicy?.syncMs ?? 300_000);
+    t.unref();
+    app.addHook('onClose', async () => clearInterval(t));
+  }
+  // PA 威脅特徵碼(TS-2):單一容器內背景定期同步(預設 10 分鐘,D1/D2),比對 Redis 清單與 infra/store 上一版精簡索引存差異檔(保留 90 份)
+  const paSignatureRedis = deps.paSignature?.redis !== undefined ? deps.paSignature.redis : config.redisUrl ? connectPaSignatureRedis(config.redisUrl) : null;
+  if (paSignatureRedis) app.addHook('onClose', async () => paSignatureRedis.close());
+  const paSignature = createPaSignatureService({
+    redis: paSignatureRedis,
+    store: app.store.paSignature,
+    chReader,
+    policy: paPolicy,
+    jobs: app.jobs,
+    log: app.log,
+    now: deps.paSignature?.now,
+    syncWaitMs: deps.paSignature?.syncWaitMs,
+  });
+  newSigMap = paSignature.newSignatureMap;
+  await app.register(paSignatureRoutes, { svc: paSignature });
+  if (paSignatureRedis && deps.paSignature?.syncMs !== 0) {
+    app.addHook('onReady', async () => void paSignature.sync().catch(() => undefined));
+    const t = setInterval(() => void paSignature.sync().catch(() => undefined), deps.paSignature?.syncMs ?? 600_000);
     t.unref();
     app.addHook('onClose', async () => clearInterval(t));
   }

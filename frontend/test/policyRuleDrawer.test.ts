@@ -75,7 +75,7 @@ describe('usePolicyRuleDrawer', () => {
   });
 
   it('快照不可用 / 後端 403 / 其他錯誤', async () => {
-    const un = setup(fails(new ApiError(503, PA_POLICY_ERRORS.unavailable, '尚無快照', 'r')));
+    const un = setup(fails(new ApiError(404, PA_POLICY_ERRORS.unavailable, '尚無快照', 'r')));
     expect(await un.show('a')).toBe('unavailable');
     expect(un.notice).toBe('尚無快照');
     const fb = setup(fails(new ApiError(403, 'FORBIDDEN', 'no', 'r')));

@@ -120,12 +120,12 @@ const empty = () => process.env.MOCK_PA_POLICY === 'empty';
 const snapshot = () =>
   empty()
     ? { available: false, reason: 'no-snapshot', message: '收集器尚未取得規則快照(測試區預設未開啟 PA_POLICY_ENABLED)', status: { ...status(), collectorEnabled: false, state: null } }
-    : { available: true, fetchedAt, hash: 'mock-hash-3', versionId: 'v3', stale: false, hitsFetchedAt: fetchedAt, ruleCount: RULES.length, status: status() };
+    : { available: true, fetchedAt, hash: 'mock-hash-3', versionId: '20261119T000000000Z-000000000003', stale: false, hitsFetchedAt: fetchedAt, ruleCount: RULES.length, status: status() };
 
 const VERSIONS = [
-  { id: 'v3', hash: 'mock-hash-3', fetchedAt, savedAt: fetchedAt, ruleCount: RULES.length },
-  { id: 'v2', hash: 'mock-hash-2', fetchedAt: at(3), savedAt: at(3), ruleCount: RULES.length - 1 },
-  { id: 'v1', hash: 'mock-hash-1', fetchedAt: at(10), savedAt: at(10), ruleCount: RULES.length - 1 },
+  { id: '20261119T000000000Z-000000000003', hash: 'mock-hash-3', fetchedAt, savedAt: fetchedAt, ruleCount: RULES.length },
+  { id: '20261116T000000000Z-000000000002', hash: 'mock-hash-2', fetchedAt: at(3), savedAt: at(3), ruleCount: RULES.length - 1 },
+  { id: '20261109T000000000Z-000000000001', hash: 'mock-hash-1', fetchedAt: at(10), savedAt: at(10), ruleCount: RULES.length - 1 },
 ];
 
 /* IP 對照(只含文件保留網段;姓名為假) */
@@ -197,10 +197,11 @@ const CHECKS = [
   { code: 'broad-early', severity: 'medium', position: 3, name: 'Office-to-Servers', related: [], message: '目的為整個伺服器群組、應用程式 any,位置偏前' },
   { code: 'no-profile', severity: 'low', position: 3, name: 'Office-to-Servers', related: [], message: '允許規則沒有 Security Profile' },
   { code: 'no-log-end', severity: 'low', position: 5, name: 'Partner-API', related: [], message: '沒有勾選 Log at Session End' },
-  { code: 'unused', severity: 'info', position: 6, name: 'Admin-Host-SSH', related: [], message: '超過 90 天未命中' },
   { code: 'disabled', severity: 'info', position: 8, name: 'Legacy-FTP', related: [], message: '規則已停用' },
   { code: 'undeterminable', severity: 'info', position: 7, name: 'Updates-Out', related: [], message: '目的含 FQDN,無法精準比對', reasons: ['fqdn:updates.example.com'] },
 ] as const;
+/** 長期未命中:Admin-Host-SSH 最後命中 120 天前,依 unusedDays 重算 */
+const unusedItem = (days: number) => (days <= 120 ? [{ code: 'unused', severity: 'info', position: 6, name: 'Admin-Host-SSH', related: [], message: `超過 ${days} 天未命中` }] : []);
 
 export function handlePaPolicy({ method, path, url, body, need, send, fail }: MockCtx): boolean {
   if (path === '/api/netops/ip-name-lookups' && method === 'POST') {
@@ -231,6 +232,7 @@ export function handlePaPolicy({ method, path, url, body, need, send, fail }: Mo
 
   if (path === '/api/netops/pa-policy-refreshes' && method === 'POST') {
     if (!need('netops.pa-policy.refresh')) return true;
+    if (empty()) return (fail(409, 'NETOPS_PA_POLICY_DISABLED', '規則收集器未啟用(PA_POLICY_ENABLED=0)'), true);
     const left = status().refreshCooldownSec;
     if (lastRefresh && left > 0) return (fail(429, 'NETOPS_PA_POLICY_REFRESH_COOLDOWN', `剛重新整理過,請 ${left} 秒後再試`), true);
     lastRefresh = Date.now();
@@ -262,8 +264,9 @@ export function handlePaPolicy({ method, path, url, body, need, send, fail }: Mo
     const unusedDays = Number(url.searchParams.get('unusedDays')) || 90;
     const snap = snapshot();
     if (!snap.available) return (send(200, { ...snap, items: [], summary: null, imprecise: 0, unusedDays }), true);
-    const summary = Object.fromEntries(['conflict', 'shadowed', 'redundant', 'broad-early', 'unused', 'disabled', 'no-profile', 'no-log-end', 'undeterminable'].map((c) => [c, CHECKS.filter((i) => i.code === c).length]));
-    send(200, { ...snap, items: CHECKS, summary, imprecise: 1, unusedDays });
+    const items = [...CHECKS, ...unusedItem(unusedDays)];
+    const summary = Object.fromEntries(['conflict', 'shadowed', 'redundant', 'broad-early', 'unused', 'disabled', 'no-profile', 'no-log-end', 'undeterminable'].map((c) => [c, items.filter((i) => i.code === c).length]));
+    send(200, { ...snap, items, summary, imprecise: 1, unusedDays });
     return true;
   }
   if (path === '/api/netops/pa-policy-versions') {

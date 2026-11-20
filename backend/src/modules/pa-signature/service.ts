@@ -24,6 +24,16 @@ import type {
 } from '../../infra/store/pa-signature.js';
 import type { HitInfo, Snapshot as PolicySnapshot } from '../pa-policy/core.js';
 import {
+  buildSignatureAiContext,
+  pickHighRiskSignatures,
+  SIG_AI_MAX_ITEMS,
+  SIG_AI_TOP_APPS,
+  toAiCoverageSummary,
+  type PaSignatureForAi,
+  type SigAiCoverageSummary,
+  type SigAiHitStat,
+} from './ai.js';
+import {
   computeCoverage,
   diffSignatures,
   filterSignatures,
@@ -945,6 +955,112 @@ export function createPaSignatureService(deps: {
         if (err instanceof AppError) throw err;
         throw Object.assign(new AppError(424, 'NETOPS_PA_SIGNATURE_UNAVAILABLE', 'netops-redis 暫時無法連線,稍後再試'), { cause: err });
       }
+    },
+
+    /** TS-3 AI 摘要的純統計資料(§5.3):只送統計與前 50 筆新增高危特徵,不送 IP / 姓名 / 規則名稱 / 原始 log;無快照回 404 / 424(不回 5xx) */
+    async forAi(days: SigDays = 30): Promise<PaSignatureForAi> {
+      if (!SIG_DAYS.includes(days)) {
+        throw new AppError(400, 'NETOPS_PA_SIGNATURE_QUERY_INVALID', 'days 只接受 7、30 或 90');
+      }
+      const l = await loadSnapshot();
+      if (!('meta' in l)) {
+        const status = l.reason === 'no-snapshot' ? 404 : 424;
+        throw new AppError(status, 'NETOPS_PA_SIGNATURE_UNAVAILABLE', l.message);
+      }
+
+      const toMs = now();
+      const fromMs = toMs - days * DAY_MS;
+      const win = computeNewWindow(days);
+      const checkedMs = Date.parse(l.meta.checkedAt);
+      const stale = Number.isNaN(checkedMs) || toMs - checkedMs > SIG_STALE_MS;
+      const curVer = win.versions.find((v) => v.threatVersion === l.meta.threatVersion) ?? win.versions[0] ?? null;
+      const rebuilt =
+        Boolean(curVer?.rebuilt) ||
+        win.versions.some((v) => v.rebuilt && !Number.isNaN(Date.parse(v.savedAt)) && Date.parse(v.savedAt) >= fromMs);
+      const baselineOnly = win.versions.length > 0 && win.versions.every((v) => v.isBaseline);
+
+      const newItems: SigItem[] = [];
+      for (const id of win.newIds) {
+        const item = l.byId.get(id);
+        if (item) newItems.push(item);
+      }
+
+      // 並行讀取命中筆數、本環境近 30 天熱門 App 與安全規則覆蓋(各外部依賴失敗皆降級註明,不回 5xx)
+      const [hitCounts, topApps, polSnap] = await Promise.all([
+        (async (): Promise<Record<string, number> | null> => {
+          if (!deps.chReader) return null;
+          if (days === 30) return loadHits30d();
+          try {
+            return await deps.chReader.signatureHitCounts(fromMs, toMs);
+          } catch (err) {
+            deps.log?.warn({ err: err instanceof ClickHouseError ? err.code : (err as Error).name }, 'ClickHouse 讀取 AI 摘要特徵碼命中數失敗');
+            return null;
+          }
+        })(),
+        (async (): Promise<{ app: string; sessions: number }[] | null> => {
+          if (!deps.chReader) return null;
+          try {
+            return await deps.chReader.topApps(toMs - 30 * DAY_MS, toMs, SIG_AI_TOP_APPS);
+          } catch (err) {
+            deps.log?.warn({ err: err instanceof ClickHouseError ? err.code : (err as Error).name }, 'ClickHouse 讀取 AI 摘要近 30 天 App 排行失敗');
+            return null;
+          }
+        })(),
+        deps.policy?.currentSnapshot().catch(() => null) ?? Promise.resolve(null),
+      ]);
+
+      let coverageSummary: SigAiCoverageSummary | null = null;
+      let unprotectedRules = new Set<string>();
+      if (polSnap) {
+        const cov = computeCoverage(polSnap.snap, polSnap.hits, l.profiles);
+        coverageSummary = toAiCoverageSummary(cov.summary, l.profiles !== null);
+        unprotectedRules = cov.unprotectedRules;
+      }
+
+      const { picked } = pickHighRiskSignatures(newItems, hitCounts, SIG_AI_MAX_ITEMS);
+      let hitStats: Record<string, SigAiHitStat> | null = null;
+      if (hitCounts !== null && deps.chReader) {
+        const hitIds = picked.filter((x) => (hitCounts[x.id] ?? 0) > 0).map((x) => x.id);
+        if (!hitIds.length) {
+          hitStats = {};
+        } else {
+          try {
+            // 強制 includeIps: false,不查詢也不回傳任何來源 / 目的 IP
+            const rows = await deps.chReader.signatureHits(hitIds, fromMs, toMs, { includeIps: false });
+            hitStats = {};
+            for (const r of rows) {
+              hitStats[r.id] = {
+                id: r.id,
+                hits: r.hits,
+                repeats: r.repeats,
+                blocked: r.blocked,
+                alerted: r.alerted,
+                actions: r.actions,
+                unprotectedRuleCount: r.rules.filter((rn) => unprotectedRules.has(rn)).length,
+              };
+            }
+          } catch (err) {
+            deps.log?.warn({ err: err instanceof ClickHouseError ? err.code : (err as Error).name }, 'ClickHouse 讀取 AI 摘要特徵碼動作分布失敗');
+            hitStats = null;
+          }
+        }
+      }
+
+      return buildSignatureAiContext({
+        meta: l.meta,
+        stale,
+        days,
+        baselineAt: win.baselineAt,
+        since: win.since,
+        rebuilt,
+        baselineOnly,
+        latestVersion: curVer,
+        newItems,
+        hitCounts,
+        hitStats,
+        topApps,
+        coverage: coverageSummary,
+      });
     },
 
     async status() {

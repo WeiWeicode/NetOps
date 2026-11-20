@@ -34,6 +34,10 @@ import {
   type SignatureVersionDiffs,
   type SignatureVersionMeta,
 } from '@/api/paSignature';
+import { useAiExplain } from './useAiExplain';
+
+/** TS-3 AI 摘要開頭固定提示(只放開頭,同 PR-5 決定) */
+export const PA_SIGNATURE_AI_DISCLAIMER = 'AI 建議,需網通確認;系統不會自動修改防火牆設定或特徵動作';
 
 export type PaSignatureBackend = typeof paSignatureApi;
 
@@ -343,9 +347,15 @@ export function usePaSignature(options: UsePaSignatureOptions = {}) {
     }
   }
 
-  /* ───────── 5. 手動重新整理與收集狀態 ───────── */
+  /* ───────── 5. 手動重新整理、收集狀態與 AI 摘要(TS-3) ───────── */
   const canRefresh = computed(() => allowed(UI.paSignatureRefresh));
   const canAi = computed(() => allowed(UI.paSignatureAi));
+  const ai = useAiExplain();
+  const runAi = (days?: SignatureDays, opts?: { think?: boolean }) => {
+    if (!canAi.value) return Promise.resolve();
+    const d = days && PA_SIGNATURE_DAYS.includes(days) ? days : (filters.days && PA_SIGNATURE_DAYS.includes(filters.days) ? filters.days : 30);
+    return ai.start({ kind: 'pa-signature', params: { days: d } }, opts);
+  };
   const refreshing = ref(false);
   const refreshNotice = ref<string | null>(null);
   const status = shallowRef<SignatureStatusResponse | null>(null);
@@ -394,6 +404,7 @@ export function usePaSignature(options: UsePaSignatureOptions = {}) {
   function dispose(): void {
     hitsSeq++;
     clearHitsTimer();
+    ai.stop();
   }
 
   if (getCurrentScope()) onScopeDispose(dispose);
@@ -445,6 +456,8 @@ export function usePaSignature(options: UsePaSignatureOptions = {}) {
     loadCoverage,
     canRefresh,
     canAi,
+    ai,
+    runAi,
     refreshing,
     refreshNotice,
     cooldownSec,

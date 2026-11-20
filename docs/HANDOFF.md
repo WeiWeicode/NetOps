@@ -2,7 +2,50 @@
 
 > 接手時先讀 `AGENT.md`,再讀 `docs/ARCHITECTURE.md`、`docs/IMPL-PLAN.md`。
 
-## 2026-11-19 收工(晚):威脅特徵碼(TS)TS-1 已上測試區、TS-2 審查通過待合併
+## 2026-11-20 收工:威脅特徵碼(TS)TS-1 ~ TS-4 測試區完成並驗收,推正式區
+
+**接手方式**:新討論串說「從 `NetOps/docs/HANDOFF.md`「2026-11-20 收工」接手」。計畫書 `docs/THREAT-SIGNATURE-PLAN.md`(§9 待決 Q6、Q10);審查 `docs/reviews/2026-11-20-ts-3-ts-4.md`;驗收 `docs/test-reports/2026-11-20-ts-acceptance.md`(!171)、`2026-11-20-ts-fix-1-acceptance.md`(!173)。
+
+### 分工(需求方 2026-11-20,照做)
+
+- Claude 只當規劃員與審查員,程式全部交 Gemini(原話「今天你當規劃員與審查員就好 程式碼都給gemini」)。審查紀錄用 git 底層指令另建分支(本機 `NetOps/` 工作目錄是 Gemini 在用,不切分支)。
+- 驗收由 Sonnet 子任務帶需求方做。
+
+### 已完成
+
+- !168 TS-3 AI 摘要、!169 TS-4 頁面(Claude 審查通過,!170)、!172 驗收修正 ts-fix-1(F1 按需查詢把 PA 回的 `Unknown` 當查到、查詢結果缺近 30 天命中數;F2 AI 摘要「沒有任何命中」措辭)。develop 部署 pipeline 1251 / 1252 / 1260 成功。
+- **測試區 `PA_SIGNATURE_ENABLED=1`**(11-20 08:16 起,主機 2 `netops.env`;重跑 deploy-api-test 重建 netops-pa、網通重新 Commit Syslog)。基準版本 9174-10361(35,026 筆:弱點 25,460、間諜軟體 9,566),netops-api 08:35 寫入 `pa-signature/index.json`。
+- 驗收(!171 + !173):通過 11、失敗 0;8 個 ID 與 PA GUI 對照 0 差異;規則覆蓋 152 / 151 / 1(#100 無 profile)與 PA GUI 一致;AI 摘要 30 / 90 天約 10 秒。
+- **正式區每日 AI 摘要開啟**:主機 3 `netops.env` 改 `NETOPS_AI_SOURCE=clickhouse`、`NETOPS_AI_DAILY_SUMMARY=1`、刪 `FTP_SYNC_MINUTES`,重跑 `deploy-prod`(job 4151,08:57 成功)。11-21 08:10 對帳後應出現第一份摘要。
+
+### 需求方 2026-11-20 決定(照做)
+
+1. TS-3 AI 摘要權限**比照 PR-5 接受現狀**:只由 `netops.ai.use` 控管(Gateway 每路由只綁一個 `x-permission`,無法同時檢查 `netops.pa-signature.read`)。
+2. 文件(PR + TS)等 TS 全部完成後合成一個 docs MR,由 Sonnet 子任務寫(週額度重置後)。
+3. 推正式區(下一步 1)。
+
+### 下一步(依序)
+
+1. **推正式區**:需求方合併 develop → main MR → 手動 `deploy-prod`、`rbac-prod`。
+   - develop 比 main 多了 `pa-collector/`(TS-1、ts-fix-1)→ **`deploy-prod` 會重建正式區 netops-pa,Syslog 會斷,要網通在場、部署後對 Syslog Server Profile 重新 Commit**;部署後確認 `syslogOkAt` 與流量恢復。
+   - 主機 3 `netops.env` **不加 `PA_SIGNATURE_ENABLED`(維持 0)**:正式區何時開是 TS-Q10(未定,建議與 PR 收集器一起開)。沒開時頁面顯示「沒有快照」是預期。
+   - 正式區 GigaItApp「服務與路由」發佈新路由草稿(`pa-signatures`、`pa-signature-*`),選單「威脅特徵碼」權限分配照 TS-Q9。
+2. 確認正式區每日 AI 摘要:11-21 08:10 後流量總覽「AI 每日摘要」卡片有內容。
+3. 補驗(需求方):只有 `netops.pa-signature.read`、沒有 Log 明細權限的帳號看不到 IP;時段明細 / 戰情室開特徵碼抽屜;PA 下一次內容更新後的版本差異、戰情室新特徵提示列、「新特徵」篩選。
+4. docs MR(Sonnet):API.md(TS API、`kind: pa-signature`、lookup `hits30d`)、PA-LIVE-PLAN §4 `netops:pa:sig:*`、ARCHITECTURE D22 補充、PROJECT-MAP、RUNBOOK-prod;加上 11-19 PR 待寫文件(見「2026-11-19 收工」下一步 5)。依 !166、!168、!169、!172 描述的「要寫進文件的變更」。
+5. 正式區開特徵碼收集前決定 TS-Q6(PA API 帳號降級後怎麼辦)與 TS-Q10。
+
+### 待決 / 注意
+
+- PA Vulnerability profile 例外清單 22,766 筆 vs NetOps 弱點 25,460 筆,ID 抽樣無差異,請網通確認 PA 畫面計算範圍。
+- 抽屜「近 30 天命中」是整個特徵 ID 合計(例如 109010004 由多個 `Proxy:xxx` 名稱共用,45,887 筆),和排行頁單一名稱數字不同;可補註解(非必須)。
+- !172 分支 pipeline 1258 `check:pa-collector` 失敗、同 commit develop 1260 通過,推測偶發,未查 log。
+- !172 在 Claude 審查前就合併(事後審查無問題);**改到 `pa-collector/` 的 MR 合併會重建 netops-pa、斷 Syslog**,合併前先審、挑網通在的時段。
+- 主機 2 WSL 讀 Redis 常回 `Wsl/Service/0x8007274c` 逾時,重試即可。
+- 本機 `NetOps/ts0-result.json`、`docs/GEMINI-PROMPT-SG.md` 是未追蹤檔,不要 commit。
+- Claude 週額度 11-20 已達 96%(週日 11-22 18:00 重置)。
+
+## 〔前一輪〕2026-11-19 收工(晚):威脅特徵碼(TS)TS-1 已上測試區、TS-2 審查通過待合併
 
 **接手方式**:新討論串說「從 `NetOps/docs/HANDOFF.md`「2026-11-19 收工(晚)」接手,繼續 TS」。計畫書 `docs/THREAT-SIGNATURE-PLAN.md`(§1.2 需求方決定、§2.4 TS-0 結果、§9 待決);Gemini 提示詞 `docs/GEMINI-PROMPT-TS.md`;審查紀錄 `docs/reviews/2026-11-19-ts-1.md`、`2026-11-19-ts-2.md`(MR !165)。
 

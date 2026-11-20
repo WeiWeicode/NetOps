@@ -37,6 +37,8 @@ const props = withDefaults(defineProps<{
   focus: Focus | null;
   sources?: readonly WarroomSource[];
   segments?: readonly WarroomSegment[];
+  /** TS-4:威脅名稱是否可點開特徵碼說明抽屜 */
+  sigLinkable?: (nameOrId: string) => boolean;
 }>(), { open: true });
 
 const emit = defineEmits<{
@@ -44,6 +46,7 @@ const emit = defineEmits<{
   (e: 'update:paused', v: boolean): void;
   (e: 'clearFocus'): void;
   (e: 'update:open', v: boolean): void;
+  (e: 'open-signature', name: string): void;
 }>();
 
 const isOpen = computed(() => props.open !== false);
@@ -148,7 +151,13 @@ function segmentLabel(segId: unknown): string {
   return g?.label ?? segId;
 }
 
+function threatNameOf(l: LiveLog): string | null {
+  return l.type === 'threat' && typeof l.name === 'string' && l.name.trim() ? l.name.trim() : null;
+}
+
 function sessionOrThreat(l: LiveLog): string {
+  const threat = threatNameOf(l);
+  if (threat) return threat;
   const sid = l.sessionid ?? (l as Record<string, unknown>).sessionId;
   if (sid !== undefined && sid !== null && sid !== '') return String(sid);
   if (l.name) return String(l.name);
@@ -257,7 +266,18 @@ function sessionOrThreat(l: LiveLog): string {
               <td>{{ l.app ?? '—' }}</td>
               <td>{{ l.rule ?? '—' }}</td>
               <td>{{ typeof l.bytes === 'number' ? fmtNum(l.bytes) : '—' }}</td>
-              <td>{{ sessionOrThreat(l) }}</td>
+              <td>
+                <button
+                  v-if="threatNameOf(l) && sigLinkable?.(threatNameOf(l)!)"
+                  type="button"
+                  class="wr-logbar__sig"
+                  :title="`${threatNameOf(l)}（檢視威脅特徵碼說明）`"
+                  @click="emit('open-signature', threatNameOf(l)!)"
+                >
+                  {{ threatNameOf(l) }}
+                </button>
+                <span v-else>{{ sessionOrThreat(l) }}</span>
+              </td>
             </tr>
             <tr v-if="range.padBottom" class="pad" aria-hidden="true"><td colspan="11" :style="{ height: `${range.padBottom}px` }" /></tr>
           </template>
@@ -416,6 +436,27 @@ tr:hover td {
 }
 .threat {
   color: #f5b03a;
+}
+.wr-logbar__sig {
+  display: inline-block;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #f5b03a;
+  font: inherit;
+  line-height: 23px;
+  vertical-align: top;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
+  cursor: pointer;
+  text-decoration: underline dotted rgba(245, 176, 58, 0.55);
+}
+.wr-logbar__sig:hover {
+  color: #ffd685;
+  text-decoration: underline solid #ffd685;
 }
 .wr-logbar__sev {
   font-size: 11px;

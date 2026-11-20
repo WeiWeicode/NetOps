@@ -27,10 +27,13 @@ const props = withDefaults(defineProps<{
   sources?: readonly WarroomSource[];
   segments?: readonly WarroomSegment[];
   open?: boolean;
+  /** TS-4:威脅名稱是否可點開特徵碼說明抽屜 */
+  sigLinkable?: (nameOrId: string) => boolean;
 }>(), { open: true });
 
 const emit = defineEmits<{
   (e: 'update:open', v: boolean): void;
+  (e: 'open-signature', name: string): void;
 }>();
 
 const isOpen = computed(() => props.open !== false);
@@ -97,7 +100,16 @@ function dstText(log: LiveLog): string {
           <span class="route">{{ srcText(ev.log) }} → {{ dstText(ev.log) }}</span>
           <template v-if="ev.kind === 'threat' && ev.log.name">
             <br />
-            <span class="threat">{{ ev.log.name }}</span>
+            <button
+              v-if="sigLinkable?.(String(ev.log.name))"
+              type="button"
+              class="threat wr-feed__sig-btn"
+              title="檢視威脅特徵碼說明"
+              @click="emit('open-signature', String(ev.log.name))"
+            >
+              {{ ev.log.name }}
+            </button>
+            <span v-else class="threat">{{ ev.log.name }}</span>
           </template>
         </div>
       </template>
@@ -198,6 +210,20 @@ function dstText(log: LiveLog): string {
 }
 .threat {
   color: #f5b03a;
+}
+.wr-feed__sig-btn {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  text-decoration: underline dotted rgba(245, 176, 58, 0.55);
+  word-break: break-all;
+}
+.wr-feed__sig-btn:hover {
+  color: #ffd685;
+  text-decoration: underline solid #ffd685;
 }
 .wr-feed__empty {
   color: #6f86a8;

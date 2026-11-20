@@ -23,12 +23,15 @@ const props = defineProps<{
   loading: boolean;
   /** logSource(collector):接收端點是否在線與說明文字 */
   source: { live: boolean; empty: string; stale: string };
+  /** TS-4:威脅名稱是否可點開特徵碼說明抽屜 */
+  sigLinkable?: (nameOrId: string) => boolean;
 }>();
 
 const emit = defineEmits<{
   (e: 'update:modelValue', v: boolean): void;
   (e: 'update:type', v: LogType): void;
   (e: 'update:minutes', v: TopMinutes): void;
+  (e: 'open-signature', name: string): void;
 }>();
 
 const typeOptions = LOG_TYPES.map((t) => ({ label: t.label, value: t.value }));
@@ -70,7 +73,17 @@ const typeModel = computed({
           </div>
         </div>
         <div v-if="lists.length" class="rk-grid">
-          <TopList v-for="t in lists" :key="t.dim" :title="t.title" :items="t.items" :by-bytes="t.byBytes" :show-bytes="t.byBytes" :pickable="() => false" />
+          <TopList
+            v-for="t in lists"
+            :key="t.dim"
+            :title="t.title"
+            :items="t.items"
+            :by-bytes="t.byBytes"
+            :show-bytes="t.byBytes"
+            :pickable="top.type === 'threat' && t.dim === 'name' ? (k) => Boolean(sigLinkable?.(k)) : () => false"
+            :pick-hint="top.type === 'threat' && t.dim === 'name' ? '檢視威脅特徵碼說明' : undefined"
+            @pick="(k) => top?.type === 'threat' && t.dim === 'name' && emit('open-signature', k)"
+          />
         </div>
         <GEmpty v-else icon="activity" :title="source.live ? '這段期間沒有資料' : '沒有 log 來源'" :description="source.empty" />
       </template>

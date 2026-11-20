@@ -140,6 +140,20 @@ const PAGES: PageDef[] = [
     view: page(() => import('./pages/firewall/Policies.vue')),
   },
   {
+    // TS-2 / TS-4(THREAT-SIGNATURE-PLAN §1.2、§5、§7):清單、版本差異、命中比對、規則覆蓋、AI 摘要五個分頁在頁面內切換
+    path: 'firewall/signatures',
+    meta: {
+      permission: NETOPS.paSignaturePage,
+      requires: [API.paSignatureRead],
+      title: '威脅特徵碼',
+      subtitle: 'PA-560 Threat Signatures',
+      icon: 'fingerprint',
+      group: 'firewall',
+      description: 'PA-560 本機弱點與間諜軟體特徵清單、內容版本差異、命中比對、規則覆蓋缺口與 AI 摘要',
+    },
+    view: page(() => import('./pages/firewall/Signatures.vue')),
+  },
+  {
     path: 'firewall/search',
     meta: {
       permission: NETOPS.paSearch,

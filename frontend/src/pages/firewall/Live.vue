@@ -10,20 +10,32 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { fmtNum } from '@/api/format';
 import { collectorView, fmtBps, logSource } from '@/composables/paLive';
 import { useLiveTop } from '@/composables/useLiveTop';
+import { usePaSignatureDrawer } from '@/composables/usePaSignatureDrawer';
 import { useWarroom } from '@/composables/useWarroom';
 import { useWarroomAi } from '@/composables/useWarroomAi';
+import SignatureDrawer from '@/components/signatures/SignatureDrawer.vue';
 import AiPanel from '@/components/warroom/AiPanel.vue';
 import EventFeed, { readFeedOpen } from '@/components/warroom/EventFeed.vue';
 import LegendPanel, { readLegendOpen } from '@/components/warroom/LegendPanel.vue';
+import NewSignatureHitsBar from '@/components/warroom/NewSignatureHitsBar.vue';
 import Notices from '@/components/warroom/Notices.vue';
 import RiskPanel, { readRiskOpen } from '@/components/warroom/RiskPanel.vue';
 import RankingDrawer from '@/components/warroom/RankingDrawer.vue';
 import SystemStatusDrawer from '@/components/warroom/SystemStatusDrawer.vue';
 import TrafficLogTable, { readLogOpen } from '@/components/warroom/TrafficLogTable.vue';
 import WarroomCanvas from '@/components/warroom/WarroomCanvas.vue';
+import { toast } from '@/ui';
 
 const w = useWarroom();
 const a = useWarroomAi();
+const sigDrawer = usePaSignatureDrawer();
+
+async function openSignature(nameOrId: string) {
+  const r = await sigDrawer.show(nameOrId);
+  if (r !== 'ok' && r !== 'stale' && !sigDrawer.open && sigDrawer.notice) {
+    toast.info(sigDrawer.notice);
+  }
+}
 
 const legendOpen = ref(readLegendOpen());
 const feedOpen = ref(readFeedOpen());
@@ -174,6 +186,14 @@ const kpiCpu = computed(() => {
       :stream-error="w.streamError.value"
     />
 
+    <!-- TS-4:近 30 天新增威脅特徵碼命中提示列(有命中時顯示,點選開特徵碼說明抽屜) -->
+    <NewSignatureHitsBar
+      :hits="w.newSignatureHits.value"
+      :can-open-signature-page="w.canOpenSignaturePage.value"
+      :sig-linkable="sigDrawer.linkable"
+      @open-signature="openSignature"
+    />
+
     <!-- 主視覺區 -->
     <div class="wr-main" :style="mainStyle">
       <WarroomCanvas
@@ -201,6 +221,8 @@ const kpiCpu = computed(() => {
         :events="w.events.value"
         :sources="w.nodes.value.sources"
         :segments="w.nodes.value.segments"
+        :sig-linkable="sigDrawer.linkable"
+        @open-signature="openSignature"
       />
 
       <AiPanel
@@ -226,6 +248,8 @@ const kpiCpu = computed(() => {
         :risk="w.risk.value"
         :error="w.riskError.value"
         :center-x="canvasCenterX"
+        :sig-linkable="sigDrawer.linkable"
+        @open-signature="openSignature"
       />
 
       <TrafficLogTable
@@ -236,7 +260,9 @@ const kpiCpu = computed(() => {
         :focus="w.focus.value"
         :sources="w.nodes.value.sources"
         :segments="w.nodes.value.segments"
+        :sig-linkable="sigDrawer.linkable"
         @clear-focus="w.toggleFocus(null)"
+        @open-signature="openSignature"
       />
     </div>
 
@@ -251,6 +277,8 @@ const kpiCpu = computed(() => {
       :error="rk.error.value"
       :loading="rk.loading.value"
       :source="rkSource"
+      :sig-linkable="sigDrawer.linkable"
+      @open-signature="openSignature"
     />
 
     <!-- 系統狀態收摺抽屜(原 Live.vue 收集器狀態、測試區暫停開關、PA 精準查詢) -->
@@ -262,6 +290,9 @@ const kpiCpu = computed(() => {
       :can-manage="w.canManage.value"
       :set-control="w.setControl"
     />
+
+    <!-- TS-4:跨頁威脅特徵碼說明抽屜 -->
+    <SignatureDrawer :drawer="sigDrawer" />
   </div>
 </template>
 

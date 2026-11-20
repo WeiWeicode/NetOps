@@ -8,9 +8,9 @@
  */
 import { computed, getCurrentScope, onScopeDispose, ref, shallowRef, watch } from 'vue';
 import { can } from '@/api/gateway';
-import { UI } from '@/api/perms';
+import { NETOPS, UI } from '@/api/perms';
 import { paLive, type CollectorControl, type LiveLog, type PaLiveSnapshot } from '@/api/paLive';
-import { LAN_SOURCE, OTHER_SOURCE, warroom as api, type Warroom, type WarroomLink, type WarroomRisk, type WarroomSegment, type WarroomSource } from '@/api/warroom';
+import { LAN_SOURCE, OTHER_SOURCE, warroom as api, type NewSignatureHit, type Warroom, type WarroomLink, type WarroomRisk, type WarroomSegment, type WarroomSource } from '@/api/warroom';
 import { MAX_LOGS, useLiveStream } from './paLive';
 import { usePolling } from './usePolling';
 import { createWarroomMock, resolveMock, warroomMockLoadScale, type WarroomMock } from './warroomMock';
@@ -305,6 +305,48 @@ export function warroomNotices(w: Warroom | null, r: WarroomRisk | null): Warroo
   return out;
 }
 
+const SIG_SEV_ORDER: Record<string, number> = {
+  critical: 5,
+  high: 4,
+  medium: 3,
+  low: 2,
+  informational: 1,
+  info: 1,
+};
+
+/**
+ * 合併 WR-1(5 分鐘)與 WR-2(60 分鐘)回傳的新特徵命中提示(TS-4):
+ *   - 兩個視窗重疊,同特徵 ID 取較大命中數(不重複加總),並依嚴重度高 → 命中數高 → ID 排序
+ *   - 回傳不含 IP(與後端契約一致)
+ */
+export function mergeNewSignatureHits(w: Warroom | null, r: WarroomRisk | null): NewSignatureHit[] {
+  const byId = new Map<string, NewSignatureHit>();
+  for (const list of [r?.newSignatureHits, w?.newSignatureHits]) {
+    if (!list?.length) continue;
+    for (const h of list) {
+      const prev = byId.get(h.id);
+      if (!prev) {
+        byId.set(h.id, { ...h });
+      } else {
+        byId.set(h.id, {
+          id: h.id,
+          name: h.name || prev.name,
+          severity: h.severity || prev.severity,
+          firstVersion: h.firstVersion || prev.firstVersion,
+          count: Math.max(prev.count, h.count),
+        });
+      }
+    }
+  }
+  return [...byId.values()].sort((a, b) => {
+    const sa = SIG_SEV_ORDER[a.severity.toLowerCase()] ?? 0;
+    const sb = SIG_SEV_ORDER[b.severity.toLowerCase()] ?? 0;
+    if (sb !== sa) return sb - sa;
+    if (b.count !== a.count) return b.count - a.count;
+    return a.id.localeCompare(b.id);
+  });
+}
+
 export interface UseWarroomOptions {
   /** 強制開關 mock;沒給時依 warroomMockEnabled() */
   mock?: boolean;
@@ -466,6 +508,8 @@ export function useWarroom(options: UseWarroomOptions = {}) {
   const partial = computed(() => !!data.value?.partial || !!risk.value?.partial || !!stream?.degraded.value);
   /** 畫面提示:範例網段、網段設定錯誤、樣本不完整(推估)、partial 說明 */
   const notices = computed(() => warroomNotices(data.value, risk.value));
+  /** TS-4:近 30 天新增威脅特徵碼命中提示(合併 WR-1 / WR-2,不含 IP) */
+  const newSignatureHits = computed(() => mergeNewSignatureHits(data.value, risk.value));
   /** 儀表滿格值(後端設定;還沒載入時用預設 1 Gbps / 64K) */
   const gauge = computed(() => data.value?.gauge ?? DEFAULT_GAUGE);
   /** GeoIP 授權標示(畫面必須顯示並連結);GeoIP 不可用時 null */
@@ -512,6 +556,7 @@ export function useWarroom(options: UseWarroomOptions = {}) {
     stale,
     partial,
     notices,
+    newSignatureHits,
     gauge,
     geoAttribution,
     connected,
@@ -530,6 +575,8 @@ export function useWarroom(options: UseWarroomOptions = {}) {
     setControl,
     /** 測試區暫停 / 繼續開關的權限(netops.pa-live.manage);畫面不自行判斷 */
     canManage: computed(() => (options.can ?? can)(UI.paLiveManage)),
+    /** TS-4:是否有「威脅特徵碼」頁面選單權限(netops.pa-signature-page.read) */
+    canOpenSignaturePage: computed(() => (options.can ?? can)(NETOPS.paSignaturePage)),
     stop,
   };
 }

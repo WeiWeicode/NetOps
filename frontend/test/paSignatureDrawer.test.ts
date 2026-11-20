@@ -106,6 +106,7 @@ describe('usePaSignatureDrawer', () => {
               cached: false,
               mgmtCpu: 15,
               result: { id: '888888', name: 'Virus-XYZ', subtype: 'virus', severity: 'high', description: 'Test virus' },
+              hits30d: 37,
               error: null,
               message: null,
             },
@@ -116,8 +117,39 @@ describe('usePaSignatureDrawer', () => {
     expect(calls).toBe(2);
     expect(d.open).toBe(true);
     expect(d.polling).toBe(false);
+    expect(d.notFound).toBe(false);
     expect(d.detail?.source).toBe('lookup');
     expect(d.detail?.item.name).toBe('Virus-XYZ');
+    expect(d.detail?.item.hits30d).toBe(37);
+    expect(d.hits30d).toBe(37);
+
+    // F1-c/d:202 查無保留抽屜開啟並帶近 30 天命中數
+    const nf = usePaSignatureDrawer({
+      backend: {
+        get,
+        lookup: vi.fn(async (): Promise<SignatureLookupJob> => ({
+          lookupId: 'lk-nf',
+          threatId: '109010004',
+          status: 'not_found',
+          createdAt: null,
+          startedAt: null,
+          finishedAt: '2026-11-20T01:00:00Z',
+          cached: false,
+          mgmtCpu: 12,
+          result: null,
+          hits30d: 1408,
+          error: null,
+          message: '本機特徵庫查無(可能是病毒 / WildFire / 自訂特徵)',
+        })),
+      },
+      can: () => true,
+      pollMs: 5,
+    });
+    expect(await nf.show('Proxy:hola.org(109010004)')).toBe('not-found');
+    expect(nf.open).toBe(true);
+    expect(nf.notFound).toBe(true);
+    expect(nf.hits30d).toBe(1408);
+    expect(nf.notice).toContain('本機特徵庫查無');
 
     // CPU 過高拒絕
     const rej = usePaSignatureDrawer({
@@ -133,6 +165,7 @@ describe('usePaSignatureDrawer', () => {
           cached: false,
           mgmtCpu: 65,
           result: null,
+          hits30d: null,
           error: 'CPU_HIGH',
           message: 'CPU 65% 超過門檻',
         })),
@@ -141,10 +174,30 @@ describe('usePaSignatureDrawer', () => {
       pollMs: 5,
     });
     expect(await rej.show('888888')).toBe('rejected');
+    expect(rej.notFound).toBe(false);
     expect(rej.notice).toContain('65%');
   });
 
-  it('429 限流 / 200 查無不開抽屜;較新的 show 或 close 取代舊請求', async () => {
+  it('200 查無(快取命中)開抽屜並顯示近 30 天命中數;429 限流不開抽屜;較新的 show 或 close 取代舊請求', async () => {
+    const cachedNf = usePaSignatureDrawer({
+      backend: {
+        get: vi.fn(async (): Promise<SignatureGetResponse> => ({
+          found: false,
+          source: 'lookup',
+          checkedAt: '2026-11-20T01:00:00Z',
+          hits30d: 1408,
+          message: '本機特徵庫查無(可能是病毒 / WildFire / 自訂特徵)',
+        })),
+        lookup: vi.fn(),
+      },
+      can: () => true,
+    });
+    expect(await cachedNf.show('Proxy:hola.org(109010004)')).toBe('not-found');
+    expect(cachedNf.open).toBe(true);
+    expect(cachedNf.notFound).toBe(true);
+    expect(cachedNf.hits30d).toBe(1408);
+    expect(cachedNf.notice).toContain('本機特徵庫查無');
+
     const cool = usePaSignatureDrawer({
       backend: {
         get: vi.fn(async () => {

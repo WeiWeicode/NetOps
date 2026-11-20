@@ -173,6 +173,8 @@ export interface SignatureDetailNotFound {
   found: false;
   source: 'snapshot' | 'lookup';
   checkedAt?: string | null;
+  /** F1-c/d:即使特徵庫查無,仍附帶 ClickHouse 近 30 天命中數(ClickHouse 失敗為 null) */
+  hits30d?: number | null;
   message: string;
 }
 
@@ -196,6 +198,8 @@ export interface SignatureLookupJob {
   cached: boolean;
   mgmtCpu: number | null;
   result: { id: string; name: string; subtype: string | null; severity: string | null; description: string | null } | null;
+  /** F1-c:完成(done 或 not_found)時附帶近 30 天命中數(ClickHouse 失敗為 null) */
+  hits30d?: number | null;
   error: string | null;
   message: string | null;
 }

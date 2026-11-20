@@ -64,6 +64,16 @@ export interface LookupThreatResult {
   description: string | null;
 }
 
+/** F1:PA show threat id 對本機查無的 ID 會回 name=Unknown、subtype=Unknown 且沒有 severity / description */
+export function isUnknownLookupResult(item: Partial<LookupThreatResult> | null | undefined): boolean {
+  if (!item || typeof item !== 'object') return false;
+  const name = typeof item.name === 'string' ? item.name.trim().toLowerCase() : '';
+  const subtype = typeof item.subtype === 'string' ? item.subtype.trim().toLowerCase() : '';
+  const severity = typeof item.severity === 'string' ? item.severity.trim() : '';
+  const description = typeof item.description === 'string' ? item.description.trim() : '';
+  return name === 'unknown' && subtype === 'unknown' && !severity && !description;
+}
+
 /* ───────── 威脅 ID 擷取 ───────── */
 
 const PURE_ID_RE = /^\d{1,10}$/;

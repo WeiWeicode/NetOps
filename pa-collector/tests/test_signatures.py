@@ -185,6 +185,37 @@ def test_parse_threat_id():
     }
     assert parse_threat_id(ET.fromstring('<response status="success"><result/></response>'), "999999") is None
 
+    # F1-a:PA 對本機查無的 ID(如 Proxy:hola.org 109010004)回 Unknown 佔位且無 severity/description → 回 None
+    unknown_xmls = (
+        '<response status="success"><result><entry name="Unknown"><subtype>Unknown</subtype></entry></result></response>',
+        (
+            '<response status="success"><result>'
+            '<entry name="unknown"><subtype>UNKNOWN</subtype><severity>  </severity><description/></entry>'
+            "</result></response>"
+        ),
+        (
+            '<response status="success"><result>'
+            '<entry name="  Unknown "><subtype> unknown </subtype><severity></severity><description></description></entry>'
+            "</result></response>"
+        ),
+    )
+    for raw in unknown_xmls:
+        assert parse_threat_id(ET.fromstring(raw), "109010004") is None
+
+    # 若有 severity 或 description,即使名稱/子類型為 Unknown 也不誤判為查無
+    with_sev = (
+        '<response status="success"><result>'
+        '<entry name="Unknown"><subtype>Unknown</subtype><severity>high</severity></entry>'
+        "</result></response>"
+    )
+    assert parse_threat_id(ET.fromstring(with_sev), "109010004") is not None
+    with_desc = (
+        '<response status="success"><result>'
+        '<entry name="Unknown"><subtype>Unknown</subtype><description>Real desc</description></entry>'
+        "</result></response>"
+    )
+    assert parse_threat_id(ET.fromstring(with_desc), "109010004") is not None
+
 
 def test_whitelist_rejects_other_commands_on_op_and_call(pa):
     w, _, _ = make(pa)
@@ -546,6 +577,41 @@ def test_on_demand_threat_id_lookup_cache_cooldown_cpu_and_validation(pa):
     lid7 = enqueue_lookup(r_paused, "222222", "l-7")
     assert w_paused.run_one_lookup() == lid7
     assert read_lookup(r_paused, lid7)["error"] == "NETOPS_PA_SIGNATURE_PAUSED" and pa.requests == []
+
+
+def test_on_demand_lookup_unknown_placeholder_and_stale_cache(pa):
+    """F1-a:PA 回 Unknown 佔位時寫為 not_found 並快取 found=false;舊快取含 Unknown 亦直接視為 not_found 且不改寫快取。"""
+    w, r, _ = make(pa)
+    pa.threat_ids["109010004"] = {
+        "name": "Unknown",
+        "subtype": "Unknown",
+        "severity": "",
+        "description": "",
+    }
+    lid1 = enqueue_lookup(r, "109010004", "l-unk-1")
+    assert w.run_one_lookup() == lid1
+    j1 = read_lookup(r, lid1)
+    assert j1["status"] == "not_found"
+    assert "本機特徵庫查無" in j1["message"]
+    assert json.loads(r.get(keys.sig_lookup_cache("109010004")))["found"] is False
+
+    # 舊快取若曾存成 found:true + Unknown 佔位 → 視為 not_found、不打 PA、不刪除/改寫快取
+    pa.requests.clear()
+    stale_val = json.dumps(
+        {
+            "found": True,
+            "checkedAt": "2026-11-20T01:00:00Z",
+            "item": {"id": "109010005", "name": "Unknown", "subtype": "Unknown", "severity": None, "description": None},
+        }
+    )
+    r.set(keys.sig_lookup_cache("109010005"), stale_val, ex=3600)
+    lid2 = enqueue_lookup(r, "109010005", "l-unk-2")
+    assert w.run_one_lookup() == lid2
+    j2 = read_lookup(r, lid2)
+    assert j2["status"] == "not_found" and j2["cached"] == "1"
+    assert "本機特徵庫查無" in j2["message"]
+    assert pa.requests == []
+    assert r.get(keys.sig_lookup_cache("109010005")).decode() == stale_val
 
 
 def test_signature_config(tmp_path):

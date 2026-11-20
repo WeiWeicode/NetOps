@@ -267,11 +267,63 @@ describe('TS-3 純函式:高危挑選與統計組裝', () => {
     assert.match(ctx.text, /尚未取得 PA 安全規則快照/);
   });
 
-  it('提示詞與免責常數遵守「AI 建議,需網通確認」只放開頭原則', () => {
+  it('提示詞與免責常數遵守「AI 建議,需網通確認」只放開頭原則與 F2 零新增高危措辭規則', () => {
     assert.match(PA_SIGNATURE_AI_DISCLAIMER, /AI 建議,需網通確認/);
     assert.match(PA_SIGNATURE_PROMPT, /畫面開頭已固定標示「AI 建議，需網通確認」/);
     assert.match(PA_SIGNATURE_PROMPT, /不需要重複輸出免責警語/);
     assert.match(PA_SIGNATURE_PROMPT, /不要寫出 PA 指令或 API 呼叫/);
+    assert.match(PA_SIGNATURE_PROMPT, /近 N 天沒有新增高危特徵，因此沒有新特徵命中可統計/);
+    assert.match(PA_SIGNATURE_PROMPT, /不可寫成整體環境「沒有任何命中」/);
+  });
+
+  it('F2:新增高危特徵 0 筆且 ClickHouse 正常時,命中段落明確寫「近 N 天沒有新增高危特徵，因此沒有新特徵命中可統計」', () => {
+    const ctx30 = buildSignatureAiContext({
+      meta: BASE_META,
+      stale: false,
+      days: 30,
+      baselineAt: '2026-11-20T00:16:00Z',
+      since: '2026-11-20',
+      rebuilt: false,
+      baselineOnly: true,
+      latestVersion: null,
+      newItems: [],
+      hitCounts: { '32256': 7065 },
+      hitStats: {},
+      topApps: [{ app: 'ssl', sessions: 50000 }],
+      coverage: {
+        totalAllowEnabled: 152,
+        covered: 151,
+        missingBoth: 1,
+        missingVulnerability: 0,
+        missingSpyware: 0,
+        unknown: 0,
+        profilesAvailable: true,
+      },
+    });
+    assert.equal(ctx30.hitsAvailable, true);
+    assert.equal(ctx30.totalHighRiskNew, 0);
+    assert.match(ctx30.text, /近 30 天沒有新增高危特徵，因此沒有新特徵命中可統計/);
+    assert.match(ctx30.text, /不代表整體環境沒有既有威脅特徵命中/);
+    assert.doesNotMatch(ctx30.text, /0 \/ 0 個有命中/);
+
+    // 7 天且僅有低危新增(高危仍 0 筆)時同樣明確標示
+    const ctx7 = buildSignatureAiContext({
+      meta: BASE_META,
+      stale: false,
+      days: 7,
+      baselineAt: '2026-10-01T00:00:00Z',
+      since: null,
+      rebuilt: false,
+      baselineOnly: false,
+      latestVersion: null,
+      newItems: [makeSig('50001', { severity: 'low', name: 'Low Info Sig' })],
+      hitCounts: { '50001': 3 },
+      hitStats: {},
+      topApps: [],
+      coverage: null,
+    });
+    assert.match(ctx7.text, /近 7 天沒有新增高危特徵，因此沒有新特徵命中可統計/);
+    assert.match(ctx7.text, /中低危 \/ 資訊等級特徵（共 1 筆）：1 個有命中，共 3 筆/);
   });
 });
 
@@ -600,6 +652,8 @@ describe('TS-3 API:POST /v1/ai/explanations kind pa-signature', () => {
     const chat = host.reqs.find((r) => r.url === '/v1/chat/completions')!;
     const user = (chat.body.messages as { content: string }[]).at(-1)!.content;
     assert.match(user, /精簡索引遺失或損壞而重建/);
+    // F2:本版重建(無新增高危特徵)且 ClickHouse 正常 → 明確告知沒有新特徵命中可統計
+    assert.match(user, /近 30 天沒有新增高危特徵，因此沒有新特徵命中可統計/);
   });
 });
 

@@ -145,7 +145,7 @@ const paSignatureRoutes: FastifyPluginAsync<{ svc: PaSignatureService }> = async
         ].join('\n'),
         params: { type: 'object', required: ['id'], properties: { id: SIG_ID } },
         response: {
-          200: looseObject('{ found, source, item?, message?, threatVersion?, fetchedAt?, baselineAt?, rebuilt? }'),
+          200: looseObject('{ found, source, item?, hits30d?, message?, threatVersion?, fetchedAt?, baselineAt?, rebuilt? }'),
           202: looseObject('{ lookupId, id, status }'),
         },
       },
@@ -179,7 +179,7 @@ const paSignatureRoutes: FastifyPluginAsync<{ svc: PaSignatureService }> = async
           '  那麼 回應 404 NETOPS_PA_SIGNATURE_LOOKUP_NOT_FOUND',
         ].join('\n'),
         params: { type: 'object', required: ['lookupId'], properties: { lookupId: { type: 'string', format: 'uuid' } } },
-        response: { 200: looseObject('{ lookupId, threatId, status, createdAt, startedAt, finishedAt, cached, mgmtCpu, result, error, message }') },
+        response: { 200: looseObject('{ lookupId, threatId, status, createdAt, startedAt, finishedAt, cached, mgmtCpu, result, hits30d, error, message }') },
       },
     },
     async (req) => {

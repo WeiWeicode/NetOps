@@ -237,6 +237,18 @@ export function buildSignatureAiContext(input: SigAiBuildInput, maxChars = SIG_A
   const hitSection: string[] = [`## 近 ${days} 天新增高危特徵命中統計與動作分布`];
   if (!hitsAvailable) {
     hitSection.push('- ClickHouse 暫時無法連線，本次未取得特徵碼命中統計，無法判斷新特徵是否已有命中。');
+  } else if (totalHighRisk === 0) {
+    // F2:新增高危 0 筆時明確指出沒有新特徵命中可統計,避免模型誤寫成整體環境「沒有任何命中」
+    hitSection.push(
+      `- 近 ${days} 天沒有新增高危特徵，因此沒有新特徵命中可統計（本段僅統計近 ${days} 天新增特徵，不代表整體環境沒有既有威脅特徵命中）。`,
+    );
+    if (newItems.length > 0) {
+      const allNewHitSigs = newItems.filter((x) => (hitCounts![x.id] ?? 0) > 0).length;
+      const allNewTotalHits = newItems.reduce((acc, x) => acc + (hitCounts![x.id] ?? 0), 0);
+      hitSection.push(
+        `- 另近 ${days} 天新增之中低危 / 資訊等級特徵（共 ${n(newItems.length)} 筆）：${n(allNewHitSigs)} 個有命中，共 ${n(allNewTotalHits)} 筆。`,
+      );
+    }
   } else {
     let hitSigCount = 0;
     let totalHits = 0;
@@ -260,7 +272,7 @@ export function buildSignatureAiContext(input: SigAiBuildInput, maxChars = SIG_A
     }
     const allNewHitSigs = newItems.filter((x) => (hitCounts![x.id] ?? 0) > 0).length;
     const allNewTotalHits = newItems.reduce((acc, x) => acc + (hitCounts![x.id] ?? 0), 0);
-    hitSection.push(`- 全部新增特徵（含中低危）：${n(allNewHitSigs)} 個有命中，共 ${n(allNewTotalHits)} 筆`);
+    hitSection.push(`- 全部新增特徵（含中低危，不含既有特徵庫命中）：${n(allNewHitSigs)} 個有命中，共 ${n(allNewTotalHits)} 筆`);
     hitSection.push(
       `- 已列出之新增高危特徵：${n(hitSigCount)} / ${n(picked.length)} 個有命中，共 ${n(totalHits)} 筆（含重複累計 ${n(totalRepeats)} 次；阻擋 ${n(totalBlocked)} 筆、僅告警/放行 ${n(totalAlerted)} 筆）`,
     );

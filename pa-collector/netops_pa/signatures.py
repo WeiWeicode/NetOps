@@ -332,8 +332,26 @@ def parse_profile_names(root: ET.Element, tag: str) -> list[str]:
     return sorted(names)
 
 
+def _is_unknown_threat(name: str | None, subtype: str | None, severity: str | None, description: str | None) -> bool:
+    """F1:PA 對本機查無的 ID 會回 name=Unknown、subtype=Unknown 且沒有 severity / description。"""
+    n = (name or "").strip().lower()
+    st = (subtype or "").strip().lower()
+    sev = (severity or "").strip()
+    desc = (description or "").strip()
+    return n == "unknown" and st == "unknown" and not sev and not desc
+
+
+def _is_unknown_threat_item(item: dict[str, Any]) -> bool:
+    return _is_unknown_threat(
+        item.get("name") if isinstance(item.get("name"), str) else None,
+        item.get("subtype") if isinstance(item.get("subtype"), str) else None,
+        item.get("severity") if isinstance(item.get("severity"), str) else None,
+        item.get("description") if isinstance(item.get("description"), str) else None,
+    )
+
+
 def parse_threat_id(root: ET.Element, threat_id: str) -> dict[str, Any] | None:
-    """show threat id <ID> → 單筆說明(TS-0 實測:entry name + subtype / severity / description)。查無回 None。"""
+    """show threat id <ID> → 單筆說明(TS-0 實測:entry name + subtype / severity / description)。查無或 PA 回 Unknown 佔位回 None。"""
     result = root.find("./result")
     if result is None:
         return None
@@ -347,6 +365,8 @@ def parse_threat_id(root: ET.Element, threat_id: str) -> dict[str, Any] | None:
     severity = _text(entry.findtext("severity"))
     description = _text(entry.findtext("description"))
     if not any((name, subtype, severity, description)):
+        return None
+    if _is_unknown_threat(name, subtype, severity, description):
         return None
     return {
         "id": threat_id,
@@ -678,7 +698,7 @@ class SignatureWorker:
                     cached = None
                 if isinstance(cached, dict) and isinstance(cached.get("found"), bool):
                     now = iso()
-                    if cached["found"] and isinstance(cached.get("item"), dict):
+                    if cached["found"] and isinstance(cached.get("item"), dict) and not _is_unknown_threat_item(cached["item"]):
                         self.r.hset(
                             jk,
                             mapping={

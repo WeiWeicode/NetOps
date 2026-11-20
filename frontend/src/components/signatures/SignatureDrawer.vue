@@ -78,17 +78,31 @@ function onUpdate(v: boolean) {
       <GSkeleton :lines="6" />
     </div>
 
-    <!-- 查無 / 拒絕 / 錯誤(例:202 按需查無回「本機特徵庫查無(可能是病毒 / WildFire / 自訂特徵)」) -->
+    <!-- 查無 / 拒絕 / 錯誤(F1-d:查無顯示「本機特徵庫查無(可能是病毒 / WildFire / 自訂特徵)」+ 近 30 天命中數) -->
     <div v-else-if="!drawer.detail && drawer.notice" class="sig-notice-wrap">
       <GEmpty
         icon="shield-alert"
-        :title="`查無特徵碼 #${drawer.threatId ?? ''}`"
+        :title="drawer.notFound ? `查無特徵碼 #${drawer.threatId ?? ''}` : `特徵碼 #${drawer.threatId ?? ''} 暫時無法查詢`"
         :description="drawer.notice"
-      >
-        <RouterLink v-if="searchLink" :to="searchLink" @click="drawer.close()">
-          <GButton size="sm" variant="secondary" icon="search">到 Log 明細查詢</GButton>
+      />
+
+      <section v-if="drawer.notFound" class="sec not-found-box">
+        <h3 class="sec-title">命中紀錄統計</h3>
+        <dl class="kv">
+          <dt>特徵 ID</dt>
+          <dd class="mono">{{ drawer.threatId }}</dd>
+          <dt>近 30 天命中</dt>
+          <dd class="mono">
+            {{ drawer.hits30d != null ? `${fmtNum(drawer.hits30d)} 筆` : '無法取得（ClickHouse 未連線）' }}
+          </dd>
+        </dl>
+      </section>
+
+      <div v-if="searchLink" class="sig-footer">
+        <RouterLink :to="searchLink" @click="drawer.close()">
+          <GButton size="sm" variant="secondary" icon="search">查看近 30 天威脅 Log 明細</GButton>
         </RouterLink>
-      </GEmpty>
+      </div>
     </div>
 
     <!-- 快照命中 -->
@@ -219,7 +233,7 @@ function onUpdate(v: boolean) {
           <dd class="mono">{{ formatFirstVersion(lookupDetail.item.firstVersion) }}</dd>
           <dt>近 30 天命中</dt>
           <dd class="mono">
-            {{ lookupDetail.item.hits30d != null ? `${fmtNum(lookupDetail.item.hits30d)} 筆` : '無法取得' }}
+            {{ lookupDetail.item.hits30d != null ? `${fmtNum(lookupDetail.item.hits30d)} 筆` : '無法取得（ClickHouse 未連線）' }}
           </dd>
           <dt>說明</dt>
           <dd class="desc-text">{{ lookupDetail.item.description || '—' }}</dd>
@@ -263,6 +277,15 @@ function onUpdate(v: boolean) {
 }
 .sig-notice-wrap {
   padding: 12px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.not-found-box {
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--glass-soft);
+  border: 1px solid var(--line);
 }
 .sig-body {
   display: flex;

@@ -30,6 +30,7 @@ import {
   computeCoverage,
   diffSignatures,
   extractThreatId,
+  isUnknownLookupResult,
   parseProfiles,
   toCompactEntry,
   type SigItem,
@@ -555,6 +556,114 @@ describe('PA 威脅特徵碼 API、D1/D2 版本差異、TS-Q8 命中比對與戰
     assert.equal(cachedHit.statusCode, 200);
     assert.equal(cachedHit.json().source, 'lookup');
     assert.equal(cachedHit.json().item.name, 'Cached Threat');
+  });
+
+  it('F1-b/c:舊 1 天快取含 Unknown 視為 not_found(不刪快取),且 get 與 getLookup 皆帶近 30 天命中數(CH 失敗回 null)', async () => {
+    // 單元驗證 isUnknownLookupResult 邊界
+    assert.equal(isUnknownLookupResult({ id: '109010004', name: 'Unknown', subtype: 'Unknown', severity: null, description: null }), true);
+    assert.equal(isUnknownLookupResult({ id: '109010004', name: ' unknown ', subtype: 'UNKNOWN', severity: '', description: '  ' }), true);
+    assert.equal(isUnknownLookupResult({ id: '109010004', name: 'Unknown', subtype: 'Unknown', severity: 'high', description: null }), false);
+    assert.equal(isUnknownLookupResult({ id: '109010004', name: 'Unknown', subtype: 'Unknown', severity: null, description: 'has desc' }), false);
+
+    // 推進時間超過 hits30d 5 分鐘快取(SIG_CACHE_MS),確保讀取本次 ClickHouse 資料
+    now = Date.parse('2026-11-20T05:00:00Z');
+    sigClient.putSnapshot({
+      threatVersion: '9174-10355',
+      hash: '2'.repeat(64),
+      fetchedAt: new Date(now).toISOString(),
+      vuln: [sig('30001', 'vulnerability', { name: 'Base RCE', severity: 'critical' })],
+      spyware: [],
+    });
+
+    // 2026/11/20 12:30:00 (+08:00) = 04:30Z,在 now 05:00Z 近 30 天內
+    ch.threats = [
+      { type: 'threat', rec: { time: '2026/11/20 12:00:00', name: 'Proxy:hola.org(109010004)', action: 'alert', src: '10.10.1.5', dst: '1.2.3.4', repeat: 1 } },
+      { type: 'threat', rec: { time: '2026/11/20 12:10:00', name: 'Proxy:hola.org(109010004)', action: 'alert', src: '10.10.1.6', dst: '1.2.3.4', repeat: 1 } },
+      { type: 'threat', rec: { time: '2026/11/20 12:20:00', name: 'Virus-XYZ(888888)', action: 'reset-both', src: '1.2.3.4', dst: '10.10.1.5', repeat: 1 } },
+    ];
+
+    // 1. 舊的 1 天快取存了 found:true + Unknown(重現 Proxy:hola.org(109010004))
+    const cacheKey = PA_SIGNATURE_KEYS.lookupCache('109010004');
+    const rawOldCache = JSON.stringify({
+      found: true,
+      checkedAt: '2026-11-20T04:00:00Z',
+      item: { id: '109010004', name: 'Unknown', subtype: 'Unknown', severity: null, description: null },
+    });
+    sigClient.strings.set(cacheKey, { v: rawOldCache, exp: null });
+
+    const rOld = await t.call({ url: '/v1/pa-signatures/109010004', emp: 'S112009' });
+    assert.equal(rOld.statusCode, 200);
+    assert.equal(rOld.json().found, false);
+    assert.equal(rOld.json().source, 'lookup');
+    assert.equal(rOld.json().hits30d, 2);
+    assert.match(rOld.json().message, /本機特徵庫查無/);
+    // 絕對不能寫或刪 Redis 快取
+    assert.equal(sigClient.strings.get(cacheKey)?.v, rawOldCache);
+
+    // 2. getLookup 完成(done)帶近 30 天命中數
+    const qDone = await t.call({ url: '/v1/pa-signatures/888888', emp: 'S112009' });
+    assert.equal(qDone.statusCode, 202);
+    const lidDone = qDone.json().lookupId as string;
+    sigClient.setHash(PA_SIGNATURE_KEYS.lookupJob(lidDone), {
+      status: 'done',
+      finishedAt: new Date(now + 1000).toISOString(),
+      result: JSON.stringify({ id: '888888', name: 'Virus-XYZ', subtype: 'virus', severity: 'high', description: 'Real virus' }),
+    });
+    const resDone = await t.call({ url: `/v1/pa-signature-lookups/${lidDone}`, emp: 'S112009' });
+    assert.equal(resDone.statusCode, 200);
+    assert.equal(resDone.json().status, 'done');
+    assert.equal(resDone.json().hits30d, 1);
+
+    // 3. getLookup 查無(not_found)與舊 Unknown 結果皆帶近 30 天命中數,且不寫 Redis
+    const lidNf = '11111111-1111-4111-8111-111111111111';
+    sigClient.hashes.set(PA_SIGNATURE_KEYS.lookupJob(lidNf), {
+      v: {
+        emp: 'emp:S112009',
+        threatId: '109010004',
+        status: 'not_found',
+        createdAt: new Date(now).toISOString(),
+        finishedAt: new Date(now + 1000).toISOString(),
+        message: '本機特徵庫查無(可能是病毒 / WildFire / 自訂特徵)',
+      },
+      exp: null,
+    });
+    const resNf = await t.call({ url: `/v1/pa-signature-lookups/${lidNf}`, emp: 'S112009' });
+    assert.equal(resNf.statusCode, 200);
+    assert.equal(resNf.json().status, 'not_found');
+    assert.equal(resNf.json().hits30d, 2);
+
+    const lidLegacy = '22222222-2222-4222-8222-222222222222';
+    const rawLegacyResult = JSON.stringify({ id: '109010004', name: 'Unknown', subtype: 'Unknown', severity: null, description: null });
+    sigClient.hashes.set(PA_SIGNATURE_KEYS.lookupJob(lidLegacy), {
+      v: {
+        emp: 'emp:S112009',
+        threatId: '109010004',
+        status: 'done',
+        createdAt: new Date(now).toISOString(),
+        finishedAt: new Date(now + 1000).toISOString(),
+        result: rawLegacyResult,
+      },
+      exp: null,
+    });
+    const resLegacy = await t.call({ url: `/v1/pa-signature-lookups/${lidLegacy}`, emp: 'S112009' });
+    assert.equal(resLegacy.statusCode, 200);
+    assert.equal(resLegacy.json().status, 'not_found');
+    assert.equal(resLegacy.json().result, null);
+    assert.equal(resLegacy.json().hits30d, 2);
+    assert.match(resLegacy.json().message, /本機特徵庫查無/);
+    assert.equal(sigClient.hashes.get(PA_SIGNATURE_KEYS.lookupJob(lidLegacy))?.v.status, 'done');
+
+    // 4. ClickHouse 失敗時(超過快取 TTL)hits30d 回 null,不回 5xx
+    now += 10 * 60_000;
+    ch.failing = true;
+    const resChFail = await t.call({ url: `/v1/pa-signature-lookups/${lidNf}`, emp: 'S112009' });
+    assert.equal(resChFail.statusCode, 200);
+    assert.equal(resChFail.json().status, 'not_found');
+    assert.equal(resChFail.json().hits30d, null);
+    const rOldChFail = await t.call({ url: '/v1/pa-signatures/109010004', emp: 'S112009' });
+    assert.equal(rOldChFail.statusCode, 200);
+    assert.equal(rOldChFail.json().found, false);
+    assert.equal(rOldChFail.json().hits30d, null);
   });
 
   it('命中比對(TS-Q8 無 IP vs 含 IP、規則缺口標註、90 天轉 202 工作、ClickHouse 失敗回 424)', async () => {

@@ -73,6 +73,9 @@ export function usePaSignatureDrawer(options: UsePaSignatureDrawerOptions = {}) 
   const threatId = ref<string | null>(null);
   const detail = shallowRef<SignatureDetailFound | null>(null);
   const lookupJob = shallowRef<SignatureLookupJob | null>(null);
+  /** F1-d:查無時是否為「特徵庫查無」(區別於 CPU 拒絕 / 查詢失敗),並保存近 30 天命中數 */
+  const notFound = ref(false);
+  const hits30d = ref<number | null>(null);
   const notice = ref<string | null>(null);
   /** P2:此特徵目前版本或異動紀錄中是否包含「索引重建、差異無法計算」的版本 */
   const hasRebuiltChanges = computed(() =>
@@ -103,6 +106,8 @@ export function usePaSignatureDrawer(options: UsePaSignatureDrawerOptions = {}) 
     polling.value = false;
     detail.value = null;
     lookupJob.value = null;
+    notFound.value = false;
+    hits30d.value = null;
     notice.value = null;
 
     let res: SignatureGetResponse;
@@ -152,6 +157,9 @@ export function usePaSignatureDrawer(options: UsePaSignatureDrawerOptions = {}) 
             }
             lookupJob.value = job;
             if (job.status === 'done' && job.result) {
+              const lookupHits = typeof job.hits30d === 'number' ? job.hits30d : null;
+              notFound.value = false;
+              hits30d.value = lookupHits;
               detail.value = {
                 found: true,
                 source: 'lookup',
@@ -161,7 +169,7 @@ export function usePaSignatureDrawer(options: UsePaSignatureDrawerOptions = {}) 
                   firstVersion: null,
                   isNew: false,
                   changes: [],
-                  hits30d: null,
+                  hits30d: lookupHits,
                   vault: null,
                 },
               };
@@ -173,6 +181,8 @@ export function usePaSignatureDrawer(options: UsePaSignatureDrawerOptions = {}) 
             if (job.status === 'not_found') {
               loading.value = false;
               polling.value = false;
+              notFound.value = true;
+              hits30d.value = typeof job.hits30d === 'number' ? job.hits30d : null;
               notice.value = job.message || NOT_FOUND_FALLBACK;
               resolve('not-found');
               return;
@@ -219,11 +229,16 @@ export function usePaSignatureDrawer(options: UsePaSignatureDrawerOptions = {}) 
     loading.value = false;
     if (res.found) {
       detail.value = res;
+      notFound.value = false;
+      hits30d.value = res.item.hits30d ?? null;
       open.value = true;
       return 'ok';
     }
-    open.value = false;
+    // F1-d:查無(含命中 1 天負快取 / 舊 Unknown 快取)仍開啟抽屜,顯示「本機特徵庫查無…」與近 30 天命中數
+    notFound.value = true;
+    hits30d.value = typeof res.hits30d === 'number' ? res.hits30d : null;
     notice.value = res.message || NOT_FOUND_FALLBACK;
+    open.value = true;
     return 'not-found';
   }
 
@@ -236,6 +251,8 @@ export function usePaSignatureDrawer(options: UsePaSignatureDrawerOptions = {}) 
     threatId.value = null;
     detail.value = null;
     lookupJob.value = null;
+    notFound.value = false;
+    hits30d.value = null;
     notice.value = null;
   }
 
@@ -253,6 +270,8 @@ export function usePaSignatureDrawer(options: UsePaSignatureDrawerOptions = {}) 
     detail,
     hasRebuiltChanges,
     lookupJob,
+    notFound,
+    hits30d,
     notice,
   });
 }

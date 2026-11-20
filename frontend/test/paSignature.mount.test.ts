@@ -893,6 +893,7 @@ describe('SignatureDrawer.vue — 202 按需查詢與查無提示(TS-2 審查結
       cached: false,
       mgmtCpu: 18,
       result: null,
+      hits30d: 1408,
       error: null,
       message: '本機特徵庫查無(可能是病毒 / WildFire / 自訂特徵)',
     });
@@ -902,11 +903,44 @@ describe('SignatureDrawer.vue — 202 按需查詢與查無提示(TS-2 審查結
     expect(res).toBe('not-found');
     expect(drawer.open).toBe(true);
     expect(document.body.textContent).toContain('本機特徵庫查無(可能是病毒 / WildFire / 自訂特徵)');
+    expect(document.body.textContent).toContain('1,408 筆');
 
     w.unmount();
   });
 
-  it('快照查無走 202 + lookup,查到時顯示按需結果且 firstVersion 為 null 顯示「未知」', async () => {
+  it('200 快取查無(含舊 Unknown 快取轉 not_found)開啟抽屜並顯示說明與近 30 天命中數(CH 失敗顯示無法取得)', async () => {
+    const backend = {
+      get: vi.fn(async (id: string) => ({
+        found: false as const,
+        source: 'lookup' as const,
+        checkedAt: '2026-11-20T01:00:00Z',
+        hits30d: id === '109010004' ? 1408 : null,
+        message: '本機特徵庫查無(可能是病毒 / WildFire / 自訂特徵)',
+      })),
+      lookup: vi.fn(),
+    };
+    const drawer = usePaSignatureDrawer({ backend, can: () => true });
+    const w = mount(SignatureDrawer, {
+      props: { drawer },
+      global: MOUNT_GLOBAL,
+      attachTo: document.body,
+    });
+
+    expect(await drawer.show('Proxy:hola.org(109010004)')).toBe('not-found');
+    await flushPromises();
+    expect(drawer.open).toBe(true);
+    expect(document.body.textContent).toContain('本機特徵庫查無(可能是病毒 / WildFire / 自訂特徵)');
+    expect(document.body.textContent).toContain('1,408 筆');
+
+    // ClickHouse 未連線(hits30d: null)顯示「無法取得（ClickHouse 未連線）」
+    expect(await drawer.show('109010005')).toBe('not-found');
+    await flushPromises();
+    expect(document.body.textContent).toContain('無法取得（ClickHouse 未連線）');
+
+    w.unmount();
+  });
+
+  it('快照查無走 202 + lookup,查到時顯示按需結果、近 30 天命中數且 firstVersion 為 null 顯示「未知」', async () => {
     const backend = {
       get: vi.fn(async () => ({ lookupId: 'lk-ok', id: '888888', status: 'queued' as const })),
       lookup: vi.fn(async (): Promise<SignatureLookupJob> => ({
@@ -925,6 +959,7 @@ describe('SignatureDrawer.vue — 202 按需查詢與查無提示(TS-2 審查結
           severity: 'critical',
           description: 'On-demand lookup description',
         },
+        hits30d: 25,
         error: null,
         message: null,
       })),
@@ -941,6 +976,7 @@ describe('SignatureDrawer.vue — 202 按需查詢與查無提示(TS-2 審查結
     expect(res).toBe('ok');
     expect(document.body.textContent).toContain('WildFire ZeroDay');
     expect(document.body.textContent).toContain('On-demand lookup description');
+    expect(document.body.textContent).toContain('25 筆');
     expect(document.body.textContent).toContain('未知');
 
     w.unmount();

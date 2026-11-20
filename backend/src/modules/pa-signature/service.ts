@@ -37,6 +37,7 @@ import {
   computeCoverage,
   diffSignatures,
   filterSignatures,
+  isUnknownLookupResult,
   parseItems,
   parseMeta,
   parseProfiles,
@@ -751,8 +752,9 @@ export function createPaSignatureService(deps: {
         throw Object.assign(new AppError(424, 'NETOPS_PA_SIGNATURE_UNAVAILABLE', 'netops-redis 暫時無法連線,稍後再試'), { cause: err });
       }
       if (cached && typeof cached.found === 'boolean') {
-        if (cached.found && cached.item && typeof cached.item === 'object') {
-          const item = cached.item as LookupThreatResult;
+        const cachedItem = cached.found && cached.item && typeof cached.item === 'object' ? (cached.item as LookupThreatResult) : null;
+        // F1-b:舊的 1 天快取若存了 PA 的 Unknown 佔位結果(name/subtype 為 Unknown 且無 severity/description)也當查無,不寫 Redis 刪快取
+        if (cachedItem && !isUnknownLookupResult(cachedItem)) {
           return {
             status: 200 as const,
             body: {
@@ -760,7 +762,7 @@ export function createPaSignatureService(deps: {
               source: 'lookup' as const,
               checkedAt: typeof cached.checkedAt === 'string' ? cached.checkedAt : null,
               item: {
-                ...item,
+                ...cachedItem,
                 firstVersion: null,
                 isNew: false,
                 changes: [],
@@ -776,6 +778,7 @@ export function createPaSignatureService(deps: {
             found: false as const,
             source: 'lookup' as const,
             checkedAt: typeof cached.checkedAt === 'string' ? cached.checkedAt : null,
+            hits30d: hits30d ? (hits30d[id] ?? 0) : null,
             message: '本機特徵庫查無(可能是病毒 / WildFire / 自訂特徵)',
           },
         };
@@ -787,6 +790,7 @@ export function createPaSignatureService(deps: {
           body: {
             found: false as const,
             source: 'snapshot' as const,
+            hits30d: hits30d ? (hits30d[id] ?? 0) : null,
             message: '本機特徵庫查無(收集器未啟用按需查詢)',
           },
         };
@@ -825,18 +829,32 @@ export function createPaSignatureService(deps: {
           result = null;
         }
       }
+      let status = h.status ?? 'queued';
+      let message = h.message || null;
+      // F1-b:相容舊版收集器寫入的 Unknown 結果,讀出時直接正規化為 not_found(不寫 Redis)
+      if (status === 'done' && isUnknownLookupResult(result)) {
+        status = 'not_found';
+        result = null;
+        message = '本機特徵庫查無(可能是病毒 / WildFire / 自訂特徵)';
+      }
+      const threatId = h.threatId ?? '';
+      // F1-c:完成(done 或 not_found)時附帶近 30 天命中數(同 get 的 hits30d,ClickHouse 失敗回 null)
+      const isFinishedLookup = status === 'done' || status === 'not_found';
+      const hits30dMap = isFinishedLookup && threatId ? await loadHits30d() : null;
+      const hits30d = isFinishedLookup && threatId && hits30dMap ? (hits30dMap[threatId] ?? 0) : null;
       return {
         lookupId,
-        threatId: h.threatId ?? '',
-        status: h.status ?? 'queued',
+        threatId,
+        status,
         createdAt: h.createdAt || null,
         startedAt: h.startedAt || null,
         finishedAt: h.finishedAt || null,
         cached: h.cached === '1',
         mgmtCpu: num(h.mgmtCpu),
         result,
+        hits30d,
         error: h.error || null,
-        message: h.message || null,
+        message,
       };
     },
 

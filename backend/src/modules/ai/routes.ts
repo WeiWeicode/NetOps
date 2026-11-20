@@ -10,7 +10,8 @@ import { dayRange, timeIn, validation } from '../../shared/time.js';
 import { ownerOf } from '../../infra/jobs/index.js';
 import { SLICE_QUERY } from '../pa-heat/routes.js';
 import type { SliceQuery, ThreatProfileQuery } from '../pa-heat/service.js';
-import type { AiService, ExplainInput, HeatmapParams, HistoryItem, InsightParams } from './service.js';
+import { SIG_DAYS } from '../pa-signature/core.js';
+import type { AiService, ExplainInput, HeatmapParams, HistoryItem, InsightParams, PaPolicyParams, PaSignatureParams } from './service.js';
 import { SSE_TIMEOUT_MS, type SseHub } from './sse.js';
 import type { DailySummaryScheduler } from './daily-summary.js';
 
@@ -66,8 +67,22 @@ const PA_POLICY_PARAMS = {
   additionalProperties: false,
   properties: { unusedDays: { type: 'integer', minimum: 1, maximum: 3650, default: 90 } },
 } as const;
-const KINDS = ['slice', 'insight', 'threat', 'heatmap', 'events', 'pa-policy'] as const;
-const PARAMS_OF = { slice: SLICE_QUERY, insight: INSIGHT_PARAMS, threat: THREAT_PARAMS, heatmap: HEATMAP_PARAMS, events: EVENTS_PARAMS, 'pa-policy': PA_POLICY_PARAMS } as const;
+/** TS-3:PA 威脅特徵碼 AI 摘要(只送統計與前 50 筆新增高危特徵,days 限 7 / 30 / 90) */
+const PA_SIGNATURE_PARAMS = {
+  type: 'object',
+  additionalProperties: false,
+  properties: { days: { type: 'integer', enum: [...SIG_DAYS], default: 30 } },
+} as const;
+const KINDS = ['slice', 'insight', 'threat', 'heatmap', 'events', 'pa-policy', 'pa-signature'] as const;
+const PARAMS_OF = {
+  slice: SLICE_QUERY,
+  insight: INSIGHT_PARAMS,
+  threat: THREAT_PARAMS,
+  heatmap: HEATMAP_PARAMS,
+  events: EVENTS_PARAMS,
+  'pa-policy': PA_POLICY_PARAMS,
+  'pa-signature': PA_SIGNATURE_PARAMS,
+} as const;
 
 const aiRoutes: FastifyPluginAsync<{ ai: AiService; hub: SseHub; daily?: DailySummaryScheduler | null }> = async (app, { ai, hub, daily }) => {
   app.get(
@@ -274,7 +289,7 @@ const aiRoutes: FastifyPluginAsync<{ ai: AiService; hub: SseHub; daily?: DailySu
       return hub.open(req, reply, owner, (s) => ai.ask(s, { from, to, question, think: req.body.think === true }, p));
     },
   );
-  app.post<{ Body: { kind: (typeof KINDS)[number]; params: SliceQuery | InsightParams | ThreatProfileQuery | HeatmapParams; think?: boolean } }>(
+  app.post<{ Body: { kind: (typeof KINDS)[number]; params: SliceQuery | InsightParams | ThreatProfileQuery | HeatmapParams | PaPolicyParams | PaSignatureParams; think?: boolean } }>(
     '/v1/ai/explanations',
     {
       schema: {
@@ -283,7 +298,7 @@ const aiRoutes: FastifyPluginAsync<{ ai: AiService; hub: SseHub; daily?: DailySu
         description:
           'PA 頁面的 AI 按鈕共用(AC4–AC6,ARCHITECTURE D44 ③;細節見 docs/API.md §10.3)。後端依 params 自己取資料(不接受前端送來的統計),只送統計與排行給模型,以 SSE 回答;不送原始 log。' +
           'kind:slice = 時段明細(params 同 GET /pa/slice,重用同一人同條件的工作);insight = 分析儀表板(params { view, from, to },用儀表板快取);' +
-          'threat = 威脅說明與處理建議(params { name, from, to }:名稱完全相同,或只有數字時當威脅 ID 比對名稱結尾;最長 31 天);heatmap = 熱力圖異常格(params 同 GET /pa/heatmap,metric 不含 ad;只送統計與異常格,meta.cells 列出異常時段);events = 安全事件摘要(params { from, to? } 同 GET /pa-events/overview,威脅、URL 過濾、資料過濾、WildFire 四類一起;meta.types 為各類筆數與是否不完整);pa-policy = 安全規則排序判讀(只送檢查結果與相關規則)。' +
+          'threat = 威脅說明與處理建議(params { name, from, to }:名稱完全相同,或只有數字時當威脅 ID 比對名稱結尾;最長 31 天);heatmap = 熱力圖異常格(params 同 GET /pa/heatmap,metric 不含 ad;只送統計與異常格,meta.cells 列出異常時段);events = 安全事件摘要(params { from, to? } 同 GET /pa-events/overview,威脅、URL 過濾、資料過濾、WildFire 四類一起;meta.types 為各類筆數與是否不完整);pa-policy = 安全規則排序判讀(只送檢查結果與相關規則);pa-signature = 威脅特徵碼 AI 摘要(params { days?: 7|30|90 },只送統計與前 50 筆新增高危特徵,不含 IP 與姓名)。' +
           '事件:open、meta、scan、thinking、content、done、error、heartbeat。錯誤:參數 400;時段明細照 GET /pa/slice;儀表板 429 NETOPS_INSIGHT_BUSY;威脅整段(events 為四類都)超過保留期限 404 NETOPS_PA_OUT_OF_RETENTION;日視圖超過 1 年 422;ClickHouse 503;未設定 AI 409 NETOPS_AI_DISABLED;名額 429 NETOPS_STREAM_BUSY。',
         tags: ['AI'],
         'x-permission': 'netops.ai.use',
@@ -329,6 +344,12 @@ const aiRoutes: FastifyPluginAsync<{ ai: AiService; hub: SseHub; daily?: DailySu
           '  那麼 送給模型的資料只有檢查項目與相關規則,沒有整份規則',
           '  而且 沒有 IP 對照表的姓名與部門',
           '',
+          '場景: PA 威脅特徵碼 AI 摘要只送統計與前 50 筆高危特徵',
+          '  假如 內容版本更新新增了多筆高危威脅特徵碼',
+          '  當 呼叫 POST /api/netops/ai/explanations 帶 { kind: "pa-signature", params: { days: 30 } }',
+          '  那麼 送給模型的資料只有內容版本、最多 50 筆新增高危特徵(並註明總數)、近 30 天 App 統計、命中統計與規則覆蓋缺口條數',
+          '  而且 沒有任何 IP、姓名或原始 log',
+          '',
           '場景: 資料有字數上限',
           '  假如 排行的名稱很長',
           '  當 呼叫 POST /api/netops/ai/explanations',
@@ -343,8 +364,8 @@ const aiRoutes: FastifyPluginAsync<{ ai: AiService; hub: SseHub; daily?: DailySu
           required: ['kind', 'params'],
           additionalProperties: false,
           properties: {
-            kind: { type: 'string', enum: KINDS, description: 'slice = 時段明細;insight = 分析儀表板;threat = 威脅說明(AC5);heatmap = 熱力圖異常格(AC5);events = 安全事件摘要(AC6);pa-policy = PA 安全規則排序 AI 判讀(PR-5)' },
-            params: { type: 'object', description: 'slice 同 GET /pa/slice 的條件;insight { view, from, to };threat { name, from, to };heatmap 同 GET /pa/heatmap;events { from, to? }' },
+            kind: { type: 'string', enum: KINDS, description: 'slice = 時段明細;insight = 分析儀表板;threat = 威脅說明(AC5);heatmap = 熱力圖異常格(AC5);events = 安全事件摘要(AC6);pa-policy = PA 安全規則排序 AI 判讀(PR-5);pa-signature = PA 威脅特徵碼 AI 摘要(TS-3)' },
+            params: { type: 'object', description: 'slice 同 GET /pa/slice 的條件;insight { view, from, to };threat { name, from, to };heatmap 同 GET /pa/heatmap;events { from, to? };pa-policy { unusedDays? };pa-signature { days?: 7|30|90 }' },
             think: { type: 'boolean', default: false, description: '深入思考(比較久)' },
           },
           allOf: KINDS.map((k) => ({ if: { properties: { kind: { const: k } } }, then: { properties: { params: PARAMS_OF[k] } } })),

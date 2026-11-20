@@ -168,7 +168,9 @@ export type ExplainInput =
   | { kind: 'heatmap'; params: { granularity: 'year' | 'month' | 'day'; metric: 'traffic' | 'deny' | 'threat'; date?: string } }
   | { kind: 'events'; params: { from: string; to: string } }
   /** PR-5:PA 安全規則排序 AI 判讀(後端依目前快照自己算檢查結果;只送檢查項目與相關規則,不送 IP 對照名稱) */
-  | { kind: 'pa-policy'; params: { unusedDays?: number } };
+  | { kind: 'pa-policy'; params: { unusedDays?: number } }
+  /** TS-3:PA 威脅特徵碼 AI 摘要(只送統計與前 50 筆新增高危特徵,不含 IP、姓名與原始 log) */
+  | { kind: 'pa-signature'; params: { days?: 7 | 30 | 90 } };
 
 /** AC6 安全事件 meta.types:四類各自的筆數與狀態 */
 export interface ExplainEventType {
@@ -194,9 +196,9 @@ export interface ExplainCell {
 
 /** AI 解讀的 meta 事件(docs/API.md §10.3) */
 export interface ExplainMeta {
-  kind: 'slice' | 'insight' | 'threat' | 'heatmap' | 'events' | 'pa-policy';
+  kind: 'slice' | 'insight' | 'threat' | 'heatmap' | 'events' | 'pa-policy' | 'pa-signature';
   model: string;
-  source: 'clickhouse' | 'pa-policy';
+  source: 'clickhouse' | 'pa-policy' | 'pa-signature';
   /** 資料落在已知缺口(對帳發現少資料) */
   partial: boolean;
   /** false = 尚未完成每日 FTP 對帳 */
@@ -241,6 +243,20 @@ export interface ExplainMeta {
   summary?: Record<string, number>;
   imprecise?: number;
   sent?: number;
+  /** pa-signature(TS-3):內容版本、天數、基準日、歷史不足 since、重建標記、高危筆數與截斷狀態、外部依賴可用狀態 */
+  threatVersion?: string;
+  threatReleaseDate?: string | null;
+  days?: 7 | 30 | 90;
+  baselineAt?: string | null;
+  since?: string | null;
+  rebuilt?: boolean;
+  totalNew?: number;
+  totalHighRiskNew?: number;
+  sentSignatures?: number;
+  truncatedSignatures?: boolean;
+  hitsAvailable?: boolean;
+  appsAvailable?: boolean;
+  coverageAvailable?: boolean;
 }
 
 /** AC7 每日摘要(GET /ai/daily-summary;docs/API.md §10.4) */

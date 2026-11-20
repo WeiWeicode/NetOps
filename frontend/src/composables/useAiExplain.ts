@@ -26,6 +26,23 @@ export function explainNotices(m: ExplainMeta | null): { tone: 'warning' | 'info
     if (m.clipped) out.push({ tone: 'info', text: '檢查項目較多,只送前面(依嚴重度)的部分給 AI' });
     return out;
   }
+  if (m.kind === 'pa-signature') {
+    // TS-3:特徵碼快照過期、索引重建、歷史不足 since、高危超過 50 筆截斷、ClickHouse / 規則覆蓋不可用
+    if (m.stale) out.push({ tone: 'warning', text: '威脅特徵碼快照超過 2 小時沒有更新,AI 看到的可能不是 PA 上的最新內容版本' });
+    if (m.rebuilt) out.push({ tone: 'warning', text: '本期間有版本因精簡索引遺失或損壞而重建,該版差異無法計算' });
+    if (m.since) out.push({ tone: 'info', text: `自 ${m.since} 起統計(歷史不足 ${m.days ?? 30} 天)` });
+    if (m.truncatedSignatures) {
+      out.push({
+        tone: 'info',
+        text: `新增高危特徵共 ${(m.totalHighRiskNew ?? 0).toLocaleString()} 筆,依有命中優先與嚴重度僅送前 ${(m.sentSignatures ?? 50).toLocaleString()} 筆給 AI`,
+      });
+    }
+    if (m.hitsAvailable === false) out.push({ tone: 'warning', text: 'ClickHouse 暫時無法連線,本次未取得命中比對統計' });
+    if (m.appsAvailable === false) out.push({ tone: 'info', text: 'ClickHouse 暫時無法連線,本次未取得近 30 天本環境 App 統計' });
+    if (m.coverageAvailable === false) out.push({ tone: 'info', text: '尚未取得 PA 安全規則快照,本次未包含規則覆蓋缺口統計' });
+    if (m.clipped) out.push({ tone: 'info', text: '統計資料過長,後面部分已省略' });
+    return out;
+  }
   if (m.partial) out.push({ tone: 'warning', text: '資料落在已知缺口內(FTP 對帳發現少資料),AI 看到的數量可能少於實際' });
   else if (!m.gapsKnown) out.push({ tone: 'info', text: '這段資料尚未完成每日 FTP 對帳檢查' });
   if (m.kind === 'insight' && m.prev === false) out.push({ tone: 'info', text: '前一期資料不足,這次不和前一期比較' });

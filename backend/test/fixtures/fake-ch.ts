@@ -247,6 +247,22 @@ export function createFakeReader(traffic: LogRecord[] = [], threats: { type: ChE
         blockSrc: top((r) => s(r.src), rs.filter((r) => r.action !== 'allow')),
       };
     },
+    async topApps(from, to, limit) {
+      check('topApps');
+      const lim = Math.min(Math.max(Math.floor(limit), 1), 200);
+      const counts = new Map<string, number>();
+      for (const r of f.traffic) {
+        const t = ms(s(r.time));
+        if (t < from || t >= to) continue;
+        const app = s(r.app);
+        if (!app) continue;
+        counts.set(app, (counts.get(app) ?? 0) + 1);
+      }
+      return [...counts.entries()]
+        .map(([app, sessions]) => ({ app, sessions }))
+        .sort((a, b) => b.sessions - a.sessions || a.app.localeCompare(b.app))
+        .slice(0, lim);
+    },
     async signatureHitCounts(from, to) {
       check('signatureHitCounts');
       const since = f.rawSince.threat ?? -Infinity;

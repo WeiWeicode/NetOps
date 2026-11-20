@@ -170,6 +170,8 @@ export interface ClickHouseReader {
   aiDays(fromMs: number, toMs: number, signal?: AbortSignal): Promise<AiDayRow[]>;
   /** AI 分析超過 30 天的部分:動作、App、區域(每小時彙總 App,13 個月)與來源 IP(每小時彙總來源,90 天)的排行 */
   aiTops(fromMs: number, toMs: number, limit: number, signal?: AbortSignal): Promise<AiTops>;
+  /** TS-3 威脅特徵碼 AI 摘要用:期間內(近 30 天)前 limit 個 App 名稱與連線數(來自每小時彙總,不含 IP 或原始 log) */
+  topApps(fromMs: number, toMs: number, limit: number, signal?: AbortSignal): Promise<{ app: string; sessions: number }[]>;
   /** TS-2 威脅特徵碼命中數(最近 N 天,log_type = 'threat';id → 筆數) */
   signatureHitCounts(fromMs: number, toMs: number, signal?: AbortSignal): Promise<Record<string, number>>;
   /**
@@ -868,6 +870,17 @@ export function createClickHouseReader(cfg: ClickHouseConfig, fetchImpl: Fetch =
         src: await top(READ_TABLES.hourlySrc, ipText('src')),
         blockSrc: await top(READ_TABLES.hourlySrc, ipText('src'), "AND action != 'allow'"),
       };
+    },
+    async topApps(fromMs, toMs, limit, signal) {
+      const lim = Math.min(Math.max(Math.floor(limit), 1), 200);
+      const r = await rows<{ app: string; n: number }>(
+        `SELECT app, sum(sessions) AS n FROM ${READ_TABLES.hourlyApp}
+         WHERE hour >= toDateTime({from:UInt32}) AND hour < toDateTime({to:UInt32}) AND app != ''
+         GROUP BY app ORDER BY n DESC, app LIMIT {lim:UInt16}`,
+        { ...range(fromMs, toMs), lim },
+        signal,
+      );
+      return r.map((x) => ({ app: x.app, sessions: Number(x.n) || 0 }));
     },
     async signatureHitCounts(fromMs, toMs, signal) {
       // pa_threat_logs.name 格式「名稱(ID)」或純數字 ID(THREAT-SIGNATURE-PLAN §5.1)

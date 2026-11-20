@@ -37,6 +37,8 @@ import {
   EXPLAIN_PROMPT,
   PA_POLICY_PROMPT,
   PA_POLICY_TASK,
+  PA_SIGNATURE_PROMPT,
+  PA_SIGNATURE_TASK,
   HEATMAP_TASK,
   heatmapContext,
   INSIGHT_TASK,
@@ -59,6 +61,8 @@ import { ipsInText } from '../ip-names/core.js';
 import { dayOut, dayRange, logTimeOut } from '../../shared/time.js';
 import type { AiRef } from '../pa-policy/check.js';
 import { verifyAnswer } from '../pa-policy/verify.js';
+import type { PaSignatureForAi } from '../pa-signature/ai.js';
+import type { SigDays } from '../pa-signature/core.js';
 
 /** 語意搜尋(kb/core/vector.js searchVectors) */
 export interface VectorSearch {
@@ -113,8 +117,11 @@ export interface ExplainSources {
   events?: (q: EventsParams) => Promise<EventsForAi>;
   /** PR-5:PA 安全規則排序檢查結果 + 相關規則(不含 IP 對照表名稱,§3.6) */
   paPolicy?: (q: PaPolicyParams) => Promise<PaPolicyForAi>;
+  /** TS-3:PA 威脅特徵碼 AI 摘要(只送統計與前 50 筆新增高危特徵,不含 IP、姓名與原始 log) */
+  paSignature?: (q: PaSignatureParams) => Promise<PaSignatureForAi>;
 }
 export type PaPolicyParams = { unusedDays?: number };
+export type PaSignatureParams = { days?: SigDays };
 export interface PaPolicyForAi {
   text: string;
   clipped: boolean;
@@ -137,7 +144,8 @@ export type ExplainInput =
   | { kind: 'threat'; params: ThreatProfileQuery }
   | { kind: 'heatmap'; params: HeatmapParams }
   | { kind: 'events'; params: EventsParams }
-  | { kind: 'pa-policy'; params: PaPolicyParams };
+  | { kind: 'pa-policy'; params: PaPolicyParams }
+  | { kind: 'pa-signature'; params: PaSignatureParams };
 /** 時段明細工作最多等多久(工作本身 120 秒逾時;再加排隊的餘裕) */
 export const EXPLAIN_SLICE_WAIT_MS = 180_000;
 /** 等時段明細工作時每次等多久 */
@@ -486,7 +494,8 @@ export function createAiService(deps: {
     | { kind: 'threat'; data: ThreatForAi }
     | { kind: 'heatmap'; data: HeatmapForAi }
     | { kind: 'events'; data: EventsForAi }
-    | { kind: 'pa-policy'; unusedDays: number; data: PaPolicyForAi };
+    | { kind: 'pa-policy'; unusedDays: number; data: PaPolicyForAi }
+    | { kind: 'pa-signature'; days: SigDays; data: PaSignatureForAi };
 
   const noSource = () => new AppError(503, 'NETOPS_CLICKHOUSE_UNAVAILABLE', 'PA log 資料庫(ClickHouse)暫時無法使用,請稍後再試');
 
@@ -517,6 +526,11 @@ export function createAiService(deps: {
       if (!src?.paPolicy) throw new AppError(503, 'NETOPS_PA_POLICY_UNAVAILABLE', 'PA 安全規則尚未提供');
       const unusedDays = input.params.unusedDays ?? 90;
       return { kind: 'pa-policy', unusedDays, data: await src.paPolicy({ unusedDays }) };
+    }
+    if (input.kind === 'pa-signature') {
+      if (!src?.paSignature) throw new AppError(424, 'NETOPS_PA_SIGNATURE_UNAVAILABLE', 'PA 威脅特徵碼尚未提供');
+      const days = input.params.days ?? 30;
+      return { kind: 'pa-signature', days, data: await src.paSignature({ days }) };
     }
     if (input.kind === 'events') {
       const q = dayRange(input.params);
@@ -597,6 +611,51 @@ export function createAiService(deps: {
 
 ${d.text}` },
       ], (answer) => s.send('verify', { flags: verifyAnswer(answer, d.ref) }));
+      return;
+    }
+    if (ctx.kind === 'pa-signature') {
+      // TS-3:只送純統計與前 50 筆新增高危特徵;不附 IP 對照表與知識庫筆記(避免帶入 IP 或姓名)
+      const d = ctx.data;
+      const model = await llm.model();
+      s.send('meta', {
+        kind: 'pa-signature',
+        model,
+        source: 'pa-signature',
+        threatVersion: d.threatVersion,
+        threatReleaseDate: d.threatReleaseDate,
+        fetchedAt: d.fetchedAt,
+        stale: d.stale,
+        days: ctx.days,
+        baselineAt: d.baselineAt,
+        since: d.since,
+        rebuilt: d.rebuilt,
+        totalNew: d.totalNew,
+        totalHighRiskNew: d.totalHighRiskNew,
+        sentSignatures: d.sentSignatures,
+        truncatedSignatures: d.truncatedSignatures,
+        hitsAvailable: d.hitsAvailable,
+        appsAvailable: d.appsAvailable,
+        coverageAvailable: d.coverageAvailable,
+        contextChars: d.text.length,
+        clipped: d.clipped,
+        partial: d.stale || d.rebuilt || !d.hitsAvailable || !d.appsAvailable || !d.coverageAvailable,
+        gapsKnown: true,
+        notes: [],
+        vectorError: false,
+      });
+      if (s.signal.aborted) return;
+      await streamAnswer(s, llm, input.think, [
+        { role: 'system', content: PA_SIGNATURE_PROMPT },
+        {
+          role: 'user',
+          content: `${PA_SIGNATURE_TASK}
+
+---
+以下是系統彙整的威脅特徵碼統計資料（不含 IP、姓名或原始 log）：
+
+${d.text}`,
+        },
+      ]);
       return;
     }
     if (ctx.kind === 'slice') {

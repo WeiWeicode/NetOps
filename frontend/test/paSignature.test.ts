@@ -2,6 +2,7 @@
  * PA 威脅特徵碼 composable(usePaSignature):清單篩選與 days / since、版本差異、TS-Q8 命中比對權限分流與 202 輪詢、IP 名稱權限、規則覆蓋、手動重新整理
  */
 import { describe, expect, it, vi } from 'vitest';
+import { ai as aiApi, type ExplainMeta } from '@/api/ai';
 import { ApiError } from '@/api/gateway';
 import {
   PA_SIGNATURE_ERRORS,
@@ -12,7 +13,13 @@ import {
   type SignatureVersionDiffs,
   type SignatureVersionList,
 } from '@/api/paSignature';
-import { isDiffUnavailable, usePaSignature, type PaSignatureBackend } from '@/composables/usePaSignature';
+import { explainNotices } from '@/composables/useAiExplain';
+import {
+  isDiffUnavailable,
+  PA_SIGNATURE_AI_DISCLAIMER,
+  usePaSignature,
+  type PaSignatureBackend,
+} from '@/composables/usePaSignature';
 
 const makeList = (overrides: Partial<SignatureList> = {}): SignatureList =>
   ({
@@ -278,5 +285,89 @@ describe('usePaSignature', () => {
     await s.loadDiff('9174-10355');
     expect(s.diffUnavailable).toBe(true);
     expect(s.diffUnavailableMessage).toContain('無法計算');
+  });
+
+  it('TS-3 AI 摘要:權限控管、送出 kind pa-signature、explainNotices 與開頭免責常數', async () => {
+    expect(PA_SIGNATURE_AI_DISCLAIMER).toContain('AI 建議,需網通確認');
+    const spy = vi.spyOn(aiApi, 'explain').mockImplementation(async (_body, onEvent) => {
+      onEvent({
+        event: 'meta',
+        data: {
+          kind: 'pa-signature',
+          model: 'Qwen',
+          source: 'pa-signature',
+          threatVersion: '9174-10355',
+          days: 30,
+          since: '2026-11-10',
+          rebuilt: false,
+          totalNew: 60,
+          totalHighRiskNew: 55,
+          sentSignatures: 50,
+          truncatedSignatures: true,
+          hitsAvailable: true,
+          appsAvailable: true,
+          coverageAvailable: true,
+          partial: false,
+          gapsKnown: true,
+          contextChars: 2000,
+          clipped: false,
+          notes: [],
+          vectorError: false,
+        },
+      });
+      onEvent({ event: 'content', data: { text: '## 本次版本與重點摘要\n測試摘要' } });
+      onEvent({ event: 'done', data: { finish: 'stop', truncated: false } });
+    });
+
+    try {
+      const noAi = usePaSignature({ backend: createMockBackend(), can: () => false });
+      await noAi.runAi();
+      expect(spy).not.toHaveBeenCalled();
+
+      const allowed = usePaSignature({ backend: createMockBackend(), can: (c) => c === 'netops.pa-signature-page.ai' });
+      allowed.setDays(7);
+      await allowed.runAi();
+      expect(spy).toHaveBeenCalledWith(
+        { kind: 'pa-signature', params: { days: 7 }, think: false },
+        expect.any(Function),
+        expect.any(AbortSignal),
+      );
+      expect(allowed.ai.phase).toBe('done');
+      expect(allowed.ai.text).toContain('測試摘要');
+
+      const notices = explainNotices({
+        kind: 'pa-signature',
+        model: 'Qwen',
+        source: 'pa-signature',
+        stale: true,
+        rebuilt: true,
+        since: '2026-11-10',
+        days: 30,
+        totalHighRiskNew: 72,
+        sentSignatures: 50,
+        truncatedSignatures: true,
+        hitsAvailable: false,
+        appsAvailable: false,
+        coverageAvailable: false,
+        partial: true,
+        gapsKnown: true,
+        contextChars: 24000,
+        clipped: true,
+        notes: [],
+        vectorError: false,
+      } as ExplainMeta);
+      const texts = notices.map((x) => x.text).join('\n');
+      expect(texts).toContain('超過 2 小時');
+      expect(texts).toContain('差異無法計算');
+      expect(texts).toContain('自 2026-11-10 起統計');
+      expect(texts).toContain('72');
+      expect(texts).toContain('50');
+      expect(texts).toContain('命中比對統計');
+      expect(texts).toContain('App 統計');
+      expect(texts).toContain('規則覆蓋缺口');
+      expect(texts).toContain('已省略');
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

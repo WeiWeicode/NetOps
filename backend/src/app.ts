@@ -372,6 +372,8 @@ export async function buildApp(
     events: (q: { from: string; to: string }) => eventsForAi(ch, q.from, q.to),
     // PR-5:安全規則排序檢查結果(只送檢查項目與相關規則,不附 IP 對照表名稱)
     paPolicy: (q: { unusedDays?: number }) => paPolicy.forAi(q.unusedDays ?? 90),
+    // TS-3:PA 威脅特徵碼 AI 摘要(只送統計與前 50 筆新增高危特徵,不含 IP、姓名與原始 log)
+    paSignature: (q: { days?: 7 | 30 | 90 }) => paSignature.forAi(q.days ?? 30),
   };
   // 每日同步這一輪結束(完成 / 停止重試 / 未啟用),或沒有要同步的類型(沒有啟用 PA 三類也沒有 AD)
   const syncReady = () => {

@@ -25,7 +25,10 @@ import { searchExtraOf, topLabelOf, type useSlice } from '@/composables/useSlice
 import type { GBarListItem } from '@/ui/charts/GBarList.vue';
 import { formatRange } from '@/composables/vizTime';
 import type { Column } from '@/ui/components/GTable.vue';
+import { usePaSignatureDrawer } from '@/composables/usePaSignatureDrawer';
+import { toast } from '@/ui';
 import AiExplainPanel from './AiExplainPanel.vue';
+import SignatureDrawer from './signatures/SignatureDrawer.vue';
 
 const props = withDefaults(
   defineProps<{
@@ -49,6 +52,14 @@ const emit = defineEmits<{
 }>();
 
 const livePa = useLivePaQuery();
+/** TS-4:威脅類明細列點威脅名稱開特徵碼說明抽屜 */
+const sigDrawer = usePaSignatureDrawer();
+async function openSignature(nameOrId: string) {
+  const r = await sigDrawer.show(nameOrId);
+  if (r !== 'ok' && r !== 'stale' && !sigDrawer.open && sigDrawer.notice) {
+    toast.info(sigDrawer.notice);
+  }
+}
 
 /** AC4:AI 解讀這個時段(條件同目前的時段明細;後端自己取同一份結果) */
 const canAi = computed(() => !!props.aiPerm && can(props.aiPerm));
@@ -249,8 +260,17 @@ const tableRows = computed(() => {
 
 function onDrawerToggle(v: boolean) {
   emit('update:modelValue', v);
-  if (!v) void props.slice.close();
+  if (!v) {
+    sigDrawer.close();
+    void props.slice.close();
+  }
 }
+watch(
+  () => props.modelValue,
+  (v) => {
+    if (!v) sigDrawer.close();
+  },
+);
 </script>
 
 <template>
@@ -513,6 +533,18 @@ function onDrawerToggle(v: boolean) {
             <GBadge v-if="value" :tone="value === 'critical' ? 'danger' : value === 'high' ? 'warning' : 'info'">{{ value }}</GBadge>
             <span v-else class="faint xs">—</span>
           </template>
+          <template #cell-name="{ value }">
+            <button
+              v-if="slice.result.value?.type === 'threat' && value && sigDrawer.linkable(String(value))"
+              type="button"
+              class="slice-ip-btn xs"
+              :title="`檢視威脅特徵碼說明：${value}`"
+              @click.stop="openSignature(String(value))"
+            >
+              {{ value }}
+            </button>
+            <span v-else class="xs">{{ value || '—' }}</span>
+          </template>
           <template #cell-bytes="{ value }">
             <span class="num nowrap">{{ fmtSize(typeof value === 'number' ? value : Number(value ?? 0)) }}</span>
           </template>
@@ -533,6 +565,7 @@ function onDrawerToggle(v: boolean) {
       </GCard>
     </div>
   </GDrawer>
+  <SignatureDrawer :drawer="sigDrawer" />
 </template>
 
 <style scoped>

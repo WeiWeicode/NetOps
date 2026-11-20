@@ -30,12 +30,15 @@ const props = withDefaults(
     error?: Error | null;
     centerX?: number | null;
     open?: boolean;
+    /** TS-4:威脅名稱是否可點開特徵碼說明抽屜 */
+    sigLinkable?: (nameOrId: string) => boolean;
   }>(),
   { error: null, centerX: null, open: true },
 );
 
 const emit = defineEmits<{
   (e: 'update:open', v: boolean): void;
+  (e: 'open-signature', name: string): void;
 }>();
 
 function toggleOpen() {
@@ -164,7 +167,16 @@ const topSources = computed(() => {
         <div id="rTypes">
           <template v-if="topThreats.length">
             <div v-for="t in topThreats" :key="t.label" class="rb">
-              <span class="l" :title="t.label">{{ t.label }}</span>
+              <button
+                v-if="sigLinkable?.(t.label)"
+                type="button"
+                class="l wr-risk__sig-btn"
+                :title="`${t.label}（檢視威脅特徵碼說明）`"
+                @click="emit('open-signature', t.label)"
+              >
+                {{ t.label }}
+              </button>
+              <span v-else class="l" :title="t.label">{{ t.label }}</span>
               <span class="b"><i :style="{ width: `${t.pct}%`, background: t.color }" /></span>
               <span class="v">{{ fmtNum(t.count) }}</span>
             </div>
@@ -270,6 +282,19 @@ const topSources = computed(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.wr-risk__sig-btn {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #8fc3ff;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.wr-risk__sig-btn:hover {
+  color: #cfe3ff;
+  text-decoration: underline;
 }
 .rb .b {
   flex: 1;

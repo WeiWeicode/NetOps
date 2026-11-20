@@ -21,7 +21,10 @@ import { UI } from '@/api/perms';
 import { askLink } from '@/composables/aiChat';
 import type { ExplainEventType, ExplainInput, ExplainMeta } from '@/api/ai';
 import AiExplainPanel from '@/components/AiExplainPanel.vue';
+import SignatureDrawer from '@/components/signatures/SignatureDrawer.vue';
 import { EVENT_TYPE_LABELS } from '@/composables/useAiExplain';
+import { usePaSignatureDrawer } from '@/composables/usePaSignatureDrawer';
+import { toast } from '@/ui';
 
 const MAX_DAYS = 92;
 const route = useRoute();
@@ -148,8 +151,23 @@ const IP = /(?<![\d.])(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1
 // 要能使用 AI 問答(按鈕 netops.pa-ask.use)才可點;只看得到問答頁的人點了也不能問
 const canAsk = computed(() => can(UI.paAskUse));
 const hasIp = (key: string) => canAsk.value && IP.test(key);
-/** 排行點選:內容含 IP 就到 AI 問答並帶入問題(由使用者送出) */
-function pick(key: string) {
+/** TS-4:威脅類型排行點威脅名稱開啟特徵碼說明抽屜(安全事件 › 威脅 name / highName) */
+const sigDrawer = usePaSignatureDrawer();
+const isThreatNameList = (listKey: string) => type.value === 'threat' && (listKey === 'name' || listKey === 'highName');
+const pickableFor = (listKey: string) => (key: string) => (isThreatNameList(listKey) && sigDrawer.linkable(key)) || hasIp(key);
+const pickHintFor = (listKey: string) => (isThreatNameList(listKey) && sigDrawer.canOpen ? '檢視威脅特徵碼說明' : '到 AI 問答查詢這個 IP');
+async function openSignature(nameOrId: string) {
+  const r = await sigDrawer.show(nameOrId);
+  if (r !== 'ok' && r !== 'stale' && !sigDrawer.open && sigDrawer.notice) {
+    toast.info(sigDrawer.notice);
+  }
+}
+/** 排行點選:威脅名稱開特徵碼抽屜;其餘含 IP 就到 AI 問答並帶入問題(由使用者送出) */
+function pick(key: string, listKey: string) {
+  if (isThreatNameList(listKey) && sigDrawer.linkable(key)) {
+    void openSignature(key);
+    return;
+  }
   const ip = key.match(IP)?.[0];
   if (!ip) return;
   void router.push(askLink(`${ip} 在${current.value?.label ?? ''} log 的狀況,有沒有問題?`, range.from, range.to));
@@ -271,11 +289,12 @@ const typeAria = (t: ExplainEventType) =>
           :title="t.title"
           :items="t.items"
           :tone="toneOf(t.key)"
-          :pickable="hasIp"
-          pick-hint="到 AI 問答查詢這個 IP"
-          @pick="pick"
+          :pickable="pickableFor(t.key)"
+          :pick-hint="pickHintFor(t.key)"
+          @pick="(k) => pick(k, t.key)"
         />
       </div>
+      <p v-if="type === 'threat' && sigDrawer.canOpen" class="xs faint"><GIcon name="fingerprint" :size="12" /> 點威脅名稱排行可檢視威脅特徵碼說明。</p>
       <p v-if="canAsk" class="xs faint"><GIcon name="sparkles" :size="12" /> 點排行中含 IP 的項目,會到 AI 問答並帶入問題(同時參考防火牆流量與這些 log)。</p>
     </template>
 
@@ -313,6 +332,8 @@ const typeAria = (t: ExplainEventType) =>
         </template>
       </AiExplainPanel>
     </GModal>
+
+    <SignatureDrawer :drawer="sigDrawer" />
   </div>
 </template>
 

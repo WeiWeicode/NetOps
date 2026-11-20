@@ -30,7 +30,9 @@ import { cameFromApp, ignoredThreatCond as threatCondOf, isPorts, isSearchType, 
 import { useJob } from '@/composables/useJob';
 import { ipNameOf, ipNameTitle } from '@/composables/ipNames';
 import DateRangeField from '@/components/DateRangeField.vue';
+import SignatureDrawer from '@/components/signatures/SignatureDrawer.vue';
 import ThreatAiDialog from '@/components/ThreatAiDialog.vue';
+import { usePaSignatureDrawer } from '@/composables/usePaSignatureDrawer';
 import { UI } from '@/api/perms';
 import { coverageText } from '@/composables/dateRange';
 import type { Coverage } from '@/api/pa';
@@ -225,6 +227,20 @@ function explainThreat(row: PaLogRow) {
   threatAi.value = { name, severity: String(row.severity ?? '') };
 }
 
+// ---------- TS-4:威脅名稱點開特徵碼說明抽屜 ----------
+const sigDrawer = usePaSignatureDrawer();
+async function openSignature(nameOrId: string) {
+  const r = await sigDrawer.show(nameOrId);
+  if (r !== 'ok' && r !== 'stale' && !sigDrawer.open && sigDrawer.notice) {
+    toast.info(sigDrawer.notice);
+  }
+}
+function openSignatureFromDetail(nameOrId: string) {
+  // 從明細對話框開啟時先關掉明細(不疊兩層彈窗)
+  detail.value = null;
+  void openSignature(nameOrId);
+}
+
 const pad = (n: number) => String(n).padStart(2, '0');
 const localMinute = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 
@@ -371,8 +387,21 @@ const asRow = (r: unknown) => r as PaLogRow;
         <template #cell-bytes="{ row }">
           <span class="small num">{{ fmtSize(asRow(row).bytes) }}</span>
         </template>
+        <template #cell-threat="{ row }">
+          <button
+            v-if="asRow(row).threat && sigDrawer.linkable(asRow(row).threat)"
+            type="button"
+            class="sig-link"
+            :title="`檢視威脅特徵碼說明：${asRow(row).threat}`"
+            @click.stop="openSignature(asRow(row).threat)"
+          >
+            {{ asRow(row).threat }}
+          </button>
+          <span v-else>{{ asRow(row).threat || '—' }}</span>
+        </template>
         <template #cell-ai="{ row }">
           <GButton v-if="asRow(row).threat" size="sm" variant="ghost" icon="sparkles" :aria-label="`AI 說明威脅 ${asRow(row).threat}`" @click.stop="explainThreat(asRow(row))">說明</GButton>
+          <span v-else class="faint xs">—</span>
         </template>
       </GTable>
     </GCard>
@@ -385,12 +414,21 @@ const asRow = (r: unknown) => r as PaLogRow;
         </template>
       </dl>
       <template #footer>
+        <GButton
+          v-if="result?.type === 'THREAT' && detail?.threat && sigDrawer.linkable(detail.threat)"
+          variant="secondary"
+          icon="fingerprint"
+          @click="detail?.threat && openSignatureFromDetail(detail.threat)"
+        >
+          特徵碼說明
+        </GButton>
         <GButton v-if="canThreatAi && result?.type === 'THREAT' && detail?.threat" variant="primary" icon="sparkles" @click="detail && explainThreat(detail)">AI 說明這個威脅</GButton>
         <GButton @click="detail = null">關閉</GButton>
       </template>
     </GModal>
 
     <ThreatAiDialog v-if="canThreatAi && result" v-model:open="threatAiOpen" :name="threatAi?.name ?? ''" :severity="threatAi?.severity ?? ''" :from="result.from" :to="result.to" />
+    <SignatureDrawer :drawer="sigDrawer" />
   </div>
 </template>
 
@@ -452,6 +490,18 @@ const asRow = (r: unknown) => r as PaLogRow;
 .detail dd {
   margin: 0;
   word-break: break-all;
+}
+.sig-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--c-primary-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.sig-link:hover {
+  text-decoration: underline;
 }
 @media (max-width: 760px) {
   .dt {

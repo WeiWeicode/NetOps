@@ -3,6 +3,7 @@
  * 戰情室「即時排行」收摺抽屜(需求方 2026-11-17 決定加回舊即時監控頁的排行卡):
  *   - 類型下拉、5 / 15 / 60 分鐘切換;資料與狀態全部來自 useLiveTop()(頁面傳入),本元件不自行查詢
  *   - 接收端點停止時標示「停止更新」,沒有來源時不寫成「這段期間沒有資料」
+ *   - 威脅名稱排行可點開特徵碼說明(open-signature);規則排行可點開安全規則(open-rule)
  */
 import { computed } from 'vue';
 import { describeError } from '@/api/gateway';
@@ -25,6 +26,8 @@ const props = defineProps<{
   source: { live: boolean; empty: string; stale: string };
   /** TS-4:威脅名稱是否可點開特徵碼說明抽屜 */
   sigLinkable?: (nameOrId: string) => boolean;
+  /** 規則名稱是否可點開安全規則抽屜(沒有 netops.pa-policy.read 時不傳或回 false) */
+  ruleLinkable?: (name: string) => boolean;
 }>();
 
 const emit = defineEmits<{
@@ -32,7 +35,31 @@ const emit = defineEmits<{
   (e: 'update:type', v: LogType): void;
   (e: 'update:minutes', v: TopMinutes): void;
   (e: 'open-signature', name: string): void;
+  (e: 'open-rule', name: string): void;
 }>();
+
+/** 可點的排行:威脅類的「名稱」開特徵碼說明、「規則」開安全規則抽屜;其他只顯示 */
+type PickKind = 'signature' | 'rule' | null;
+function pickKind(dim: string): PickKind {
+  if (props.top?.type === 'threat' && dim === 'name') return 'signature';
+  if (dim === 'rule') return 'rule';
+  return null;
+}
+function pickableOf(dim: string): (key: string) => boolean {
+  const kind = pickKind(dim);
+  if (kind === 'signature') return (k) => Boolean(props.sigLinkable?.(k));
+  if (kind === 'rule') return (k) => Boolean(props.ruleLinkable?.(k));
+  return () => false;
+}
+function pickHintOf(dim: string): string | undefined {
+  const kind = pickKind(dim);
+  return kind === 'signature' ? '檢視威脅特徵碼說明' : kind === 'rule' ? '檢視安全規則' : undefined;
+}
+function onPick(dim: string, key: string) {
+  const kind = pickKind(dim);
+  if (kind === 'signature') emit('open-signature', key);
+  else if (kind === 'rule') emit('open-rule', key);
+}
 
 const typeOptions = LOG_TYPES.map((t) => ({ label: t.label, value: t.value }));
 const minuteOptions = TOP_MINUTES.map((m) => ({ label: `${m} 分鐘`, value: String(m) }));
@@ -80,9 +107,9 @@ const typeModel = computed({
             :items="t.items"
             :by-bytes="t.byBytes"
             :show-bytes="t.byBytes"
-            :pickable="top.type === 'threat' && t.dim === 'name' ? (k) => Boolean(sigLinkable?.(k)) : () => false"
-            :pick-hint="top.type === 'threat' && t.dim === 'name' ? '檢視威脅特徵碼說明' : undefined"
-            @pick="(k) => top?.type === 'threat' && t.dim === 'name' && emit('open-signature', k)"
+            :pickable="pickableOf(t.dim)"
+            :pick-hint="pickHintOf(t.dim)"
+            @pick="(k) => onPick(t.dim, k)"
           />
         </div>
         <GEmpty v-else icon="activity" :title="source.live ? '這段期間沒有資料' : '沒有 log 來源'" :description="source.empty" />

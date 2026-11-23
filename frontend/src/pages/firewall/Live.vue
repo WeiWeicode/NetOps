@@ -5,6 +5,7 @@
  *   - 版面(對照樣稿 warroom-v5.html):頂部 KPI、提示橫幅(Notices)、左說明(LegendPanel,可收摺)、中央 Canvas(WarroomCanvas)、
  *     右即時事件(EventFeed)、上 AI 分析框(AiPanel)、下近一小時高風險統計(RiskPanel)、底部 Log 表(TrafficLogTable)
  *   - 收集器狀態與測試區暫停開關移至收摺的「系統狀態」抽屜(SystemStatusDrawer)
+ *   - 系統狀態、即時排行、Log 明細查詢入口都在戰情室頂列;頁首只留連線狀態徽章(需求方 2026-11-23)
  */
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { fmtNum } from '@/api/format';
@@ -121,15 +122,6 @@ const kpiCpu = computed(() => {
       <GBadge :tone="isLive ? 'success' : w.stale.value || w.partial.value ? 'warning' : 'neutral'" dot>
         {{ isLive ? '戰情室連線中' : colView.title }}
       </GBadge>
-      <GButton size="sm" variant="secondary" icon="radio" @click="statusDrawerOpen = true">
-        系統狀態
-      </GButton>
-      <GButton size="sm" variant="secondary" icon="trending-up" @click="rankingOpen = true">
-        即時排行
-      </GButton>
-      <RouterLink to="/firewall/search">
-        <GButton size="sm" variant="ghost" icon="search">Log 明細查詢</GButton>
-      </RouterLink>
     </Teleport>
 
     <!-- 頂部戰情室標題與 6 個即時 KPI(對照樣稿 header) -->
@@ -143,8 +135,18 @@ const kpiCpu = computed(() => {
         title="開啟收集器與系統狀態抽屜"
         @click="statusDrawerOpen = true"
       >
-        ⚙ 系統狀態
+        <GIcon name="radio" :size="13" />
+        系統狀態
       </button>
+      <!-- 需求方 2026-11-23:即時排行、Log 明細查詢由頁首移進戰情室頂列 -->
+      <button type="button" class="wr-sys-btn" title="開啟即時排行抽屜" @click="rankingOpen = true">
+        <GIcon name="trending-up" :size="13" />
+        即時排行
+      </button>
+      <RouterLink to="/firewall/search" class="wr-sys-btn" title="前往 Log 明細查詢">
+        <GIcon name="search" :size="13" />
+        Log 明細查詢
+      </RouterLink>
 
       <GSegmented v-model="w.direction.value" class="wr-dir" size="sm" :options="DIRECTION_OPTIONS" aria-label="進出方向篩選" />
 
@@ -360,6 +362,9 @@ const kpiCpu = computed(() => {
   }
 }
 .wr-sys-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   padding: 3px 10px;
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -369,13 +374,24 @@ const kpiCpu = computed(() => {
   font-size: 12px;
   cursor: pointer;
   white-space: nowrap;
+  text-decoration: none;
   transition: border-color 0.2s;
 }
+/* 方向篩選:GSegmented 用全域 token(亮色主題是白底),在戰情室深色面板內改用戰情室配色(需求方 2026-11-23) */
 .wr-dir {
   flex: none;
+  --glass-soft: rgba(20, 34, 58, 0.75);
+  --glass-strong: rgba(62, 168, 255, 0.22);
+  --text: var(--txt);
+  --text-2: var(--dim);
+  --shadow-sm: none;
 }
 .wr-sys-btn:hover {
   border-color: var(--acc);
+}
+.wr-sys-btn:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: 1px;
 }
 .kpis {
   display: flex;

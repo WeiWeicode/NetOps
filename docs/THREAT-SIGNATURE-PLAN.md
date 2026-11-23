@@ -248,4 +248,4 @@ ClickHouse pa_threat_logs(90 天) ──► netops-api(命中比對,唯讀帳號
 | TS-Q7 | Threat Vault 呼叫放哪 | — | **已決定(2026-11-19)**:`netops-pa` 收集器;`netops-api` 不出外網;Key 用 `*_FILE` |
 | TS-Q8 | 命中比對結果含 IP 的權限 | — | **已決定(2026-11-19)**:IP / 名稱要有 Log 明細權限才顯示;只有 `netops.pa-signature.read` 只看筆數與動作分布 |
 | TS-Q9 | 權限分配 | — | **已決定(2026-11-19)**:`read` 給 `netops-admin`、`netops-viewer`;`refresh` 只給 `netops-admin` |
-| TS-Q10 | 正式區何時開 | A. 測試區驗收後立即 B. 與 PR 收集器一起開 | 未定,上線前決定;建議 B |
+| TS-Q10 | 正式區何時開 | A. 測試區驗收後立即 B. 與 PR 收集器一起開 | **已決定(2026-11-23)**:B,兩個收集器一起開;正式區 11-20 起運作 |

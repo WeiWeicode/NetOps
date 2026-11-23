@@ -1111,7 +1111,7 @@ API 權限:`netops.pa-policy.read`(清單、單條、檢查、版本)、`netops.
 | 設定 | 預設 | 說明 |
 | --- | --- | --- |
 | `PA_POLICY_ENABLED` | `0` | 安全規則收集總開關;`1` 時要有 `PA_HOST` 與 API Key,缺少則 `netops-pa` 啟動失敗 |
-| `PA_POLICY_API_KEY_FILE` | 未設定 | 專用帳號的 Key(Docker secret 路徑);**未設定時沿用 `PA_API_KEY_FILE`**(需求方 2026-11-18 決定不另開帳號)。compose 尚未把專用 Key 接成 Docker secret,目前實際沿用 `pa_api_key` |
+| `PA_POLICY_API_KEY_FILE` | 未設定 | 專用帳號的 Key(Docker secret 路徑);**未設定時沿用 `PA_API_KEY_FILE`**(需求方 2026-11-18 決定不另開帳號)。compose 不接專用 Key(M1:需求方 2026-11-23 決定沿用 `pa_api_key`) |
 | `PA_POLICY_MINUTES` | `30` | 讀取間隔,範圍 10–1440 分鐘 |
 | `PA_POLICY_MAX_MGMT_CPU` | `50` | 送出前管理平面 CPU 門檻(%),只能調低(範圍 10–50);超過或讀不到就不讀(`rejected`),5 分鐘後重試 |
 | `PA_POLICY_HTTP_TIMEOUT_SECONDS` | `15` | 單次 HTTP 逾時,範圍 2–30 秒 |
@@ -1211,7 +1211,7 @@ API 權限:`netops.pa-signature.read`、`netops.pa-signature.refresh`(同樣不�
 | 設定 | 預設 | 說明 |
 | --- | --- | --- |
 | `PA_SIGNATURE_ENABLED` | `0` | 威脅特徵碼收集總開關;`1` 時缺 `PA_HOST` 或 API Key 則 `netops-pa` 啟動失敗 |
-| `PA_SIGNATURE_API_KEY_FILE` | 未設定 | 選填;未設定時依序沿用 `PA_POLICY_API_KEY_FILE`、`PA_API_KEY_FILE`(compose 尚未接專用 Key,沿用 `pa_api_key`) |
+| `PA_SIGNATURE_API_KEY_FILE` | 未設定 | 選填;未設定時依序沿用 `PA_POLICY_API_KEY_FILE`、`PA_API_KEY_FILE`(M1:需求方 2026-11-23 決定沿用 `pa_api_key`,不接專用 Key) |
 | `PA_SIGNATURE_MINUTES` | `30` | 檢查內容版本間隔,範圍 10–1440 分鐘 |
 | `PA_SIGNATURE_MAX_MGMT_CPU` | `50` | 管理平面 CPU 門檻(%),只能調低(範圍 10–50);通過開頭檢查後,讀弱點清單與間諜軟體清單**之前各再檢查一次**,超過或讀不到即 `rejected` 並保留上一份快照 |
 | `PA_SIGNATURE_HTTP_TIMEOUT_SECONDS` | `30` | 單次 HTTP 逾時,範圍 5–120 秒;回應上限 64 MB |

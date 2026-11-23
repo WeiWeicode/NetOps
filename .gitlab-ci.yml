@@ -1,6 +1,8 @@
 # NetOps Pipeline(Runner:主機 2 WSL shell executor,tag windows-runner;與 Gateway 同一台主機;IMPL-PLAN B0)
 #   check            所有分支:netops-api、netops-web(frontend/)型別檢查、單元測試、建置;netops-pa(pa-collector/)ruff 與 pytest;
 #                    netops-ingest 整合測試(check:ingest-int:一次性 Redis + ClickHouse 容器,只在 backend/ 或 deploy/clickhouse/ 有變更時)
+#   build:ad-agent   AD Agent(ad-agent/,Rust Windows 服務,AD-2):主機 2 的 Windows 本機 Runner(tag windows)跑 clippy、cargo test、安裝腳本測試,
+#                    建置未簽章的發佈資料夾與 SHA256SUMS.txt;ad-agent/ 有變更時手動、tag netops-ad-v* 自動
 #   deploy-api-test  develop:在主機 2 建置並更新 netops-api(加入 Gateway 網路;啟動後自動註冊路由草稿)與知識庫 NAS 備份 netops-kb-backup;
 #                    PA 即時監控 netops-redis、netops-pa(R1;netops-pa 沒變更時不重建,deploy/ci-netops-pa.sh);PA log ClickHouse netops-clickhouse 與建表(C1);
 #                    寫入管線 netops-ingest(C2;C4 起含每天的冷歸檔,NAS 目錄唯讀掛給 netops-clickhouse)
@@ -134,6 +136,27 @@ check:ingest-int:
     - docker rm -f "$N-ch" "$N-redis" >/dev/null 2>&1 || true
     - docker network rm "$N-net" >/dev/null 2>&1 || true
     - if [ -s "/tmp/$N.path" ]; then rm -rf "$(cat "/tmp/$N.path")" "/tmp/$N.path"; fi
+
+# AD Agent(AD-2;docs/AD-AGENT-PLAN.md AD2、AD10、M6;寫法同 RustIt build:release)
+#   Runner:主機 2 的 Windows 本機 Runner(shell executor、PowerShell;Description host2-windows、tag windows),與 RustIt 共用。
+#           GitLab 的 Runner 設定要把它指派給 giganexus/NetOps 才會執行(RustIt docs/WINDOWS-RUNNER-SETUP.md;需求方設定)
+#   ad-agent/ 有變更的分支與 MR:手動 + allow_failure(Runner 未指派時不擋 pipeline);tag netops-ad-v<版本>:自動(版本與 Cargo.toml 不符即失敗)
+#   產出**未簽章**的 exe 與 SHA256SUMS.txt(artifact 30 天);job 記錄最後一行是安裝用的 -ExpectedSha256(deploy/RUNBOOK-ad.md §7)
+build:ad-agent:
+  tags: [windows]
+  stage: check
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^netops-ad-v/
+    - changes: [ad-agent/**/*]
+      when: manual
+      allow_failure: true
+  script:
+    - powershell -NoProfile -ExecutionPolicy Bypass -File ad-agent/scripts/build-release.ps1 -OutDir release-out
+  artifacts:
+    name: netops-ad-agent-$CI_COMMIT_SHORT_SHA
+    paths:
+      - release-out/
+    expire_in: 30 days
 
 deploy-api-test:
   <<: *runner

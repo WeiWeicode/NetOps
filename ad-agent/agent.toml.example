@@ -1,0 +1,20 @@
+# NetOps AD Agent 設定(AD-2;docs/AD-AGENT-PLAN.md §3、deploy/RUNBOOK-ad.md §7)
+# 正式位置:%ProgramData%\GigaNexus\NetOpsAdAgent\agent.toml(由 Install-NetOpsAdAgent.ps1 產生,UTF-8 無 BOM)
+# Token 不寫在這裡:放在 token_file 指向的檔案(安裝腳本以隱藏輸入寫入,ACL 只允許 SYSTEM 與 Administrators)
+
+# 接收端 netops-ad-receiver(明文 HTTP,需求方 2026-11-23 決定;測試區主機 2、正式區主機 3)
+server_url = "http://10.10.130.124:51295"
+# DC 主機名稱與網域:必須與主機機密腳本(deploy/host2-set-ad-secrets.sh add <COMPUTER> <DOMAIN>)登記的相同,否則接收端回 403
+computer = "GSMC-DC1"
+domain = "gsmc.com.tw"
+token_file = "secrets/ad_agent.token"
+
+# 以下都有預設值,通常不用改
+# state_dir = "state"                    # bookmarks.json、watchdog-events.json
+# log_dir = "logs"                       # agent.log、watchdog.log(各 5 MB,保留 1 個舊檔)
+# initial_lookback_minutes = 60          # 第一次啟動往回讀幾分鐘(M8)
+# include_user_logon_4624 = false        # 4624 真人帳號登入(AD5;事件量大,實測後由需求方決定)
+# batch_interval_sec = 4                 # 3–5 秒一批(AD6)
+# max_batch_events = 500                 # 一批最多幾筆(接收端上限 1,000)
+# heartbeat_interval_sec = 15
+# channels = ["Security", "System", "Directory Service", "DNS Server"]

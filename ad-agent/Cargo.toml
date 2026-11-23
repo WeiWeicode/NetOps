@@ -1,0 +1,47 @@
+[package]
+name = "netops-ad-agent"
+version = "0.1.0"
+edition = "2024"
+description = "NetOps AD Agent 與 Watchdog(AD-2;docs/AD-AGENT-PLAN.md §3、ARCHITECTURE D49):DC 上增量讀 Windows Event Log 送到 netops-ad-receiver"
+publish = false
+
+[[bin]]
+name = "netops-ad-agent"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+# Event XML(EvtRender)解析;只讀 System 與 EventData 欄位
+roxmltree = "0.20"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+log = { version = "0.4", features = ["std"] }
+# 明文 HTTP(需求方 2026-11-23 決定,不加 TLS):不開 TLS / gzip,執行檔與常駐記憶體都小
+ureq = { version = "3", default-features = false, features = ["json"] }
+
+[target."cfg(windows)".dependencies]
+windows-service = "0.8.1"
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_Security_Authorization",
+  "Win32_Storage_FileSystem",
+  "Win32_System_EventLog",
+  "Win32_System_IO",
+  "Win32_System_Pipes",
+  "Win32_System_ProcessStatus",
+  "Win32_System_Services",
+  "Win32_System_Threading",
+  "Win32_UI_WindowsAndMessaging",
+] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

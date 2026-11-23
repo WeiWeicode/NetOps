@@ -4,6 +4,60 @@
 
 > 2026-11-23:WR-1 / PR / TS 累積的待寫文件已由 docs MR(`docs/pr-ts-docs`)補齊:API.md §10.3、§11、§12、§13、§14,PA-LIVE-PLAN §4,ARCHITECTURE D22,IMPL-PLAN、PROJECT-MAP、`deploy/RUNBOOK-prod.md` §7–§8,DevelopmentProcess 四份紀錄;下列各段「下一步」裡的「docs MR」項目以此為準(合併後視為完成)。
 
+## 2026-11-23 收工:AD 即時收集 AD-1 已開 MR,AD-2 做到一半
+
+**接手方式**:新討論串說「從 `NetOps/docs/HANDOFF.md`「2026-11-23 收工」接手」,用主討論串協調模式(skill `coordinator`)。計畫書 `docs/AD-AGENT-PLAN.md`,決策 ARCHITECTURE D49,審查 `docs/reviews/2026-11-23-ad-agent-plan.md`。
+
+### 需求方 2026-11-23 決定(照做)
+
+- AD-1 ~ AD-4 **改由 Claude 寫**,開子任務依序一批一批做(原話「先給 claude 做,開子任務一個一個做」);由需求方指派 Gemini 審查。CI、Compose、`.env` 範本、ClickHouse migration 都是敏感變更,合併前要有 Gemini 的審查紀錄。
+- 接收容器 `netops-ad-receiver` 用埠號 **51295**。Gateway `BACKEND-GUIDE` §3.3 已登記(giga-api-gateway-bff !34,已合併 develop)。
+- 第一台試裝 DC:`GSMC-DC1.gsmc.com.tw`(10.10.130.3),由需求方自己遠端安裝。
+- 「清除 Security Log 後 RecordID 是否從 1 重新編號」**在主機 2 的 Hyper-V 測試 VM 上測**,不在 GSMC-DC1 上清除記錄。
+- 對外開放方式和 51293 相同:Compose 只發佈 `127.0.0.1:51295`,主機用 portproxy 轉入,Windows 防火牆只放行 DC IP。
+
+### 已完成
+
+- **AD-1(!184,`feature/ad-1-collector-ingest`,`6457f0c`,未合併)**:
+  - 接收容器用 TypeScript(`backend/src/ad-receiver/`,沿用 netops-api 映像,另起 entrypoint),`pa-collector/` 沒有改動。
+  - migration `005-ad1-ad-events.sql`:`ad_events`(含 `log_epoch`)、`ad_heat_*` 與 3 個 MV。
+  - ingest 寫入與 Parquet 歸檔。
+  - `deploy/RUNBOOK-ad.md`、`host2/3-set-ad-secrets.sh`。
+  - 測試:單元 567 / 整合 45 全部通過。security-auditor 找到的 High(編碼路徑可跳過 Token 檢查)已修正。
+  - 測試報告 `docs/test-reports/2026-11-23-ad-1.md`。
+- **AD-2(`feature/ad-2-rust-agent`,`cd6831f`,從 AD-1 分支堆疊,尚未開 MR)**:
+  - 已完成:Rust Agent、Watchdog、安裝與移除腳本(驗證 SHA-256)、CI job `build:ad-agent`。
+  - 測試:`cargo test` 52、clippy 無警告、腳本測試 55,全部通過。
+  - exe 約 880 KB,本機量到 working set 9.5 MB。
+  - `log_epoch` 接續做法:bookmark 遺失時,用心跳回應裡後端記錄的 `logEpoch` / `lastRecordId` 接續,沒有修改接收容器。
+  - 11-23 因 5h 額度用到 87% 暫停,子任務的進度筆記是 `ad-2-progress.md`。
+
+### 下一步(依序)
+
+1. **AD-2 收尾**(Opus 子任務,接續 `feature/ad-2-rust-agent`):
+   - `deploy/RUNBOOK-ad.md` 新增一節,分「測試 VM:清除記錄實測」和「GSMC-DC1:試裝、Watchdog、4624 事件量」兩部分;
+   - 測試報告 `docs/test-reports/2026-11-23-ad-2.md`;
+   - 跑 test-runner、code-reviewer、security-auditor 並修正;
+   - 開 MR → develop,描述寫「依賴 !184、必須在它之後合併」。
+2. **!184 合併前**(需求方):
+   - 指派 Gemini 審查;
+   - 審查通過後照 `RUNBOOK-ad.md` §2 在主機 2 產生 GSMC-DC1 的 Token、建立 NAS 歸檔目錄、套用 ClickHouse schema、設定 portproxy 和防火牆;
+   - 主串唯讀確認資料表已建立後,需求方再合併;
+   - 合併後看 develop 部署 pipeline,並確認 `netops-pa` 沒有重啟(`RUNBOOK-ad.md` §2 第 6 步)。
+3. **AD-2 合併後**:需求方在測試 VM 做清除記錄實測,在 GSMC-DC1 試裝並量 4624 事件量。
+4. AD-3(查詢切 ClickHouse、FTP 對帳補漏)→ AD-4(熱力圖、儀表板)。AD-5 等 V-c 完成。
+5. 階段結束時派 Sonnet 子任務統一寫 docs MR:API.md、PROJECT-MAP、PA-LIVE-PLAN §4 / AD-AGENT-PLAN §4.2(新增的 Redis 鍵)、IMPL-PLAN、ARCHITECTURE D49(實作語言、對外開放方式、去重做法)。各批要寫的內容列在 !184 描述和 AD-2 的回報裡。
+
+### 待決 / 注意
+
+- **`host2-windows` Runner 目前只指派給 RustIt**:要在 GitLab 指派給 `giganexus/NetOps`,`build:ad-agent` 才會跑。
+- 要不要接 RustIt 的 S1 簽章流程:需求方決定。目前安裝腳本只驗證 SHA-256。
+- 兩個服務都以 LocalSystem 執行(讀 Security Log 和控制服務需要),列為剩餘風險。
+- Redis 沒有 AOF:Agent 已收到 200 的事件,在 Redis 當掉時會遺失,由 AD-3 的 FTP 對帳補回。
+- RecordID 跳號上限:Token 外洩時可能把高水位推高。上限等 AD-2 實測真實跳號幅度後再定。
+- 本機 `NetOps/` 在 develop 上會看到未追蹤的 `ad-agent/`:那是建置輸出,忽略它的 `.gitignore` 在 AD-2 分支上。
+- `GITLAB_TOKEN` 沒有 giga-api-gateway-bff 專案的讀取權限,Gateway 的 pipeline 要從 GitLab 介面看。
+
 ## 2026-11-23:正式區收集器現況與決定
 
 - docs MR !177(WR-1 / PR / TS 文件)已合併 develop(11-23 08:33)。

@@ -787,6 +787,8 @@ AI 相關(語意搜尋、向量同步、外部 IP 自動學習)見 §10.2(A1)。
 | 429 | `NETOPS_PA_QUERY_BUSY` | PA 精準查詢:已有查詢在執行(全系統 1 個)、間隔 / 冷卻中或管理平面 CPU 過高;帶 `Retry-After`(§3.3) |
 | 409 | `NETOPS_PA_QUERY_DISABLED` | PA 精準查詢未啟用(`netops-pa` 沒開查詢執行者或停止回報;§3.3) |
 | 404 | `NETOPS_PA_QUERY_NOT_FOUND` | PA 精準查詢工作不存在、不是本人的或超過 10 分鐘(§3.3) |
+| 404 / 409 / 429 / 503 | `NETOPS_PA_POLICY_*` | PA 安全規則(§13.3):`NOT_FOUND`、`UNAVAILABLE`(無快照)、`VERSION_NOT_FOUND`、`DISABLED`、`REFRESH_COOLDOWN` |
+| 400 / 404 / 409 / 424 / 429 | `NETOPS_PA_SIGNATURE_*` | PA 威脅特徵碼(§14.6):`QUERY_INVALID`、`VERSION_NOT_FOUND`、`LOOKUP_NOT_FOUND`、`DISABLED`、`COOLDOWN`、`UNAVAILABLE`、`CH_UNAVAILABLE` |
 | 424 | `NETOPS_REDIS_UNAVAILABLE` | 即時監控讀不到 `netops-redis`(§3.2;`snapshot` 例外,回 200 `state: unavailable`)。不用 5xx:避免累積 BFF 斷路器失敗。原始錯誤只寫服務日誌 |
 | 424 | `NETOPS_PA_LIVE_DISABLED` | 未設定 `REDIS_URL`(只會在 dev) |
 | 403 | `NETOPS_STREAM_OWNER_UNKNOWN` | 身分沒有工號也沒有 sub,不能建立即時串流(正常經 Gateway 不會發生) |
@@ -927,15 +929,19 @@ AI 串流(§10.1)開始後的錯誤以 `error` 事件回傳 `{ code, message }`:
 - `kind: 'threat'`(AC5,Log 明細查詢 / 時段明細抽屜威脅列「AI 說明這個威脅與處理建議」):`params` 為 `{ name, from, to }`。`name` 是威脅名稱(完全相同;1–300 字、不可有控制字元),只有數字時當**威脅 ID**,比對名稱結尾「(ID)」(名稱格式 `xxx(52316871)`);`from` / `to` 為 ISO 含時區(對齊到分鐘),最長 31 天。後端查原始威脅表(`log_type = threat`)彙總:筆數(另附含 Repeat Count 的次數)、第一 / 最後一次、不同來源 / 目的 IP 數,以及嚴重度、威脅類別、子類型、方向、動作、來源 / 目的 IP(影響主機)、App、協定 / Port、來源 / 目的國家各前 10 名,與每小時(期間 ≤ 2 天)或每天的筆數;不送原始 log 列。Redis 快取(鍵 `ai-threat`,含現在或剛結束 1 小時內 60 秒,更早 1 小時)。整段超過威脅原始表保留期限回 404 `NETOPS_PA_OUT_OF_RETENTION`;一部分超過時只查保留期限內,`meta.skipped` 與送模型的資料都註明「沒有查,不代表沒有發生」。
 - `kind: 'heatmap'`(AC5,活動熱力圖「AI 指出異常格」):`params` 同 `GET /pa/heatmap`(§4.4;`metric` 為 `traffic | deny | threat`,不含 `ad`),沿用熱力圖快取。後端從格子挑出異常時段(`modules/ai/core/anomaly.ts`),**不全送**(月視圖最多 744 格):送整體統計(合計、平均、中位數、P90、最大值、各等級格數、沒有資料 / 不完整的格數)與最多 10 格異常高、最多 3 格異常低。挑選:中位數與 MAD 的穩健偏離程度 ≥ 3.5;月視圖以「一天中的同一個小時」為基準、年視圖分平日 / 假日、日視圖整天一組(同組有資料少於 8 格時改整段);威脅指標先列有嚴重 / 高風險的格子;異常低只看流量、最後一格不列;`v = null` 不參與計算。`meta.cells` 列出這些格子(`t, end, v, kind: high | low | severity, ratio, offHours, partial`,不含 IP),畫面列成按鈕開時段明細,再用 `slice` 解讀。
 - `kind: 'events'`(AC6,安全事件頁「AI 摘要安全事件」):`params` 為 `{ from, to? }`(`YYYY-MM-DD`,同 `GET /pa-events/overview` 的期間,最長 92 天)。後端取**威脅、URL 過濾、資料過濾、WildFire 四類**的總覽(同 §4.2 ClickHouse 路徑與快取;解密、GlobalProtect、User-ID 不在範圍),送各類筆數、時間範圍、KPI 前 6 個值、最多的 3 個小時,再送各排行前 8 名;超過字數上限時從排行後面省略(四類的筆數與 KPI 一定在)。某類沒有資料(`NETOPS_PA_NO_DATA`)或整段超過保留期限只在資料中註明;**四類都是這樣**時回該錯誤(404);期間早於最早資料(`partial`)、每小時摘要沒建好(`missing`)、`topsState` 不是 `ok` 都寫明不完整。`meta.types` 為 `[{ type, rows, empty, partial }]`,畫面列出四類筆數,點了切換到該類型。
+- `kind: 'pa-policy'`(PR-5,安全規則頁「AI 判讀規則順序」):`params` 為 `{ unusedDays?: 1–3650 }`(預設 90)。後端用 §13 排序檢查(`GET /pa-policy-checks`)的結果,只送檢查項目與相關規則的正規化內容;**不送**整份規則、IP 對照表的姓名 / 部門、知識庫、說明欄,使用者 / 群組名稱只送數量。「無法判定」項目也送給 AI(避免 AI 自己編「需要人工確認」)。提示詞規則 8–11:只引用檢查項目、只用資料中的 `#編號`、使用者條件只依資料;「AI 建議,需網通確認,不自動改 PA」只放開頭。沒有快照回 503 `NETOPS_PA_POLICY_UNAVAILABLE`。權限只檢查 `netops.ai.use`(§13.2)。
+- `kind: 'pa-signature'`(TS-3,威脅特徵碼頁「AI 摘要」):`params` 為 `{ days?: 7 | 30 | 90 }`(預設 30)。後端 `service.forAi()` 組**純統計**:內容版本、近 N 天新增高危(critical / high)特徵(ID、名稱、severity、CVE、預設動作)、近 30 天前 30 個 App 與連線數(`ClickHouseReader.topApps`,`pa_traffic_hourly_app`)、命中數與動作分布、規則覆蓋缺口條數;**不送** IP、姓名、規則名稱、知識庫或原始 log。新增高危特徵超過 50 筆時依「有命中優先、嚴重度高者優先」只送前 50 筆並明確告知總數。Redis / ClickHouse / 安全規則快照失敗不回 5xx,降級並標示資料不完整。新增高危為 0 筆(且 ClickHouse 正常)時,命中段落寫「近 N 天沒有新增高危特徵,因此沒有新特徵命中可統計(本段僅統計近 N 天新增特徵,不代表整體環境沒有既有威脅特徵命中)」,提示詞禁止寫成整體環境「沒有任何命中」(F2,ts-fix-1)。「AI 建議,需網通確認」只放開頭,不重複免責警語、不輸出 PA 指令。快照 404 / 424 `NETOPS_PA_SIGNATURE_UNAVAILABLE`、`days` 不合法 400 `NETOPS_PA_SIGNATURE_QUERY_INVALID`。權限只檢查 `netops.ai.use`(§14.6)。
+- **`pa-policy` 回答驗證與 SSE `verify` 事件**(PR-FIX,2026-11-19 驗收 AI 判讀幻覺):串流**結束後、`done` 之前**多送一個 `verify` 事件 `{ flags: [...] }`(其他 kind 不送)。串流已顯示給使用者,所以**只標註、不剔除**;驗證本身失敗不影響 `done`。`flags[]` 每筆 `{ kind, position, reason, code?, actual? }`:`kind: 'unknown'` = 回答提到的 `#編號` 不在送出的資料內;`'mismatch'` = 同一行只講一類檢查,但這條規則不在程式檢查的該類項目(`code` 為回答講的類別、`actual` 為程式檢查列出的類別,可能為空);`'user'` = 稱規則「有使用者條件」,但資料沒有標示。`reason` 是**簡短原因**(例「#135:AI 歸為遮蔽,程式檢查為過寬規則位置過前」),不含原句,畫面須以純文字顯示;`flags` 為空陣列表示「引用的規則編號都在檢查資料內」。判斷為保守提示:歸類只看同一行關鍵字、一行講多類時不判;「把 #X 移到 #Y 之前」只檢查第一個編號;`shadowed` 只在出現「永遠不會命中 / 不會被命中 / shadow」才算,同行有過寬字樣(過寬 / 寬泛 / 位置過前)時以過寬為準(!157,修正 #135 誤報);最多 100 筆。**欄位演變**:!151 初版的 `flags[].line`(原句)在 !157 改為 `reason` / `actual`,前後端同一個 MR 改。
 - **後端自己取資料**,不接受前端送來的統計;PA 欄位文字(App、威脅名稱、國家、區域、條件)去掉控制字元與換行、每欄 120 字,整段資料上限 8,000 字(超過時省略後面的排行並註明,`meta.clipped`)。附 IP 對照表(AC3,姓名不遮罩,AQ2)與知識庫筆記(只用 IP / 關鍵字比對,不做語意搜尋);提示詞、姓名不寫服務日誌。
 - 錯誤(串流開始前):參數錯誤 400;時段明細的錯誤照 §4.4(409 `NETOPS_COLD_ARCHIVE_DISABLED`、429 `NETOPS_COLD_QUERY_BUSY`、409 `NETOPS_JOB_LIMIT_EXCEEDED`);儀表板 429 `NETOPS_INSIGHT_BUSY`;503 `NETOPS_CLICKHOUSE_UNAVAILABLE`;409 `NETOPS_AI_DISABLED`;429 `NETOPS_STREAM_BUSY`(和分析、問答共用名額)。
 - 資料來源不受 `NETOPS_AI_SOURCE` 影響(一律 ClickHouse,同 §4.4 / §4.5;正式區 C6 之前這兩頁本來就回 503)。
 
 | 事件 | 資料 |
 | --- | --- |
-| `meta` | `{ kind, model, source: 'clickhouse', partial, gapsKnown, contextChars, clipped, notes, vectorError }`;slice 另有 `type, start, end, sliceSource, waited`;insight 另有 `view, from, to, prev`(有沒有前一期可比較);threat 另有 `name, match: name | id, from, to, count, skipped`;heatmap 另有 `granularity, metric, date, from, to, nulls, cells`;events 另有 `from, to, types`(沒有 `gapsKnown`:安全事件不做 FTP 對帳缺口) |
+| `meta` | `{ kind, model, source: 'clickhouse', partial, gapsKnown, contextChars, clipped, notes, vectorError }`;slice 另有 `type, start, end, sliceSource, waited`;insight 另有 `view, from, to, prev`(有沒有前一期可比較);threat 另有 `name, match: name | id, from, to, count, skipped`;pa-signature 另有 `threatVersion, days, since, rebuilt, totalNew, totalHighRiskNew, sentSignatures, truncatedSignatures, hitsAvailable, appsAvailable, coverageAvailable`;heatmap 另有 `granularity, metric, date, from, to, nulls, cells`;events 另有 `from, to, types`(沒有 `gapsKnown`:安全事件不做 FTP 對帳缺口) |
 | `scan` | slice 等工作時 `{ label, source, step: 'slice', waiting: true }` |
 | `open`、`thinking`、`content`、`done`、`error`、`heartbeat` | 同 §10.1 |
+| `verify` | 只有 `kind: 'pa-policy'`:`{ flags }`,在 `done` 之前、串流結束後送(見上) |
 
 - 畫面:時段明細抽屜(熱力圖按鈕 `netops.pa-heatmap.ai`、儀表板 `netops.pa-insight.ai`)與分析儀表板標題列「AI 摘要本期異常」(`netops.pa-insight.ai`,對話框,摘要目前頁籤與期間)。兩個按鈕節點 `includes` `netops.ai.use`、`netops.pa.read`、`netops.pa-log.read`、`netops.kb.read`。
 - AC5 畫面:熱力圖頁首「AI 指出異常格」(`netops.pa-heatmap.ai`,對話框,送目前顯示的粒度 / 指標 / 日期);時段明細抽屜威脅類明細列「說明」(同抽屜的按鈕權限,面板開在抽屜內,期間 = 該時段);Log 明細查詢威脅結果列與明細對話框「AI 說明」(新按鈕 `netops.pa-search.ai`,`includes` `netops.ai.use`、`netops.pa-log.read`、`netops.kb.read`;期間 = 這次查詢的期間)。
@@ -978,6 +984,7 @@ IP / 網段 → 使用者姓名、部門、設備名稱、設備類型、備註�
 | POST | `/api/netops/ip-name-imports` | `netops.ip-name.write` | `{ fileName, format: xlsx|csv, data: base64 }`(檔案上限 2 MB)→ 預覽 `{ id, total, skipped, errors[{row, ip, message}], counts, diff{added, changed[{before, after}], removed, unchanged}, expiresAt }`,清單各最多 500 筆;**整份取代**(檔案沒有的視為刪除);不寫入。欄名列不符、沒有可匯入的資料列、Excel 損壞回 400 `NETOPS_IP_NAME_IMPORT_INVALID`;同一 IP 多列以最後一列為準(列進 errors 提醒) |
 | POST | `/api/netops/ip-name-imports/{id}/confirm` | `netops.ip-name.write` | 寫入預覽內容 `{ added, changed, removed, unchanged, total }`;只有上傳者本人、15 分鐘內;不存在 / 逾期 404 `NETOPS_IP_NAME_IMPORT_NOT_FOUND`;預覽後對照表被改過 409 `NETOPS_IP_NAME_IMPORT_STALE` |
 | DELETE | `/api/netops/ip-name-imports/{id}` | `netops.ip-name.write` | 丟棄自己的預覽,204(冪等) |
+| POST | `/api/netops/ip-name-range-lookups` | `netops.ip-name.read` | 依網段 / 範圍反查(PA 安全規則的位址物件用,§13.1):`{ ranges: string[](最多 200 個 IPv4 / CIDR / a-b) }` → `{ results: { "<range>": { items[{ ip, name, department, device, deviceType }], total, truncated } } }`,只回整個落在範圍內的項目(依 IP 排序,最多 50 筆);格式不符回 `{ invalid: true }`。不改變資料;`x-audit-level: meta` |
 
 **PA 各 API 附名稱**(沿用各 API 原本的權限,看得到 PA 的人就看得到名稱,不需要對照表權限):
 
@@ -1014,3 +1021,199 @@ IP / 網段 → 使用者姓名、部門、設備名稱、設備類型、備註�
 - 每個網段節點(含 `unmatched`「未分類」)有 `topIps`:該網段近期連線數最多的內部 IP(最多 5 筆,`{ key, count }`),畫面滑過節點時顯示。
 - **不再回傳 `names`**(Q10,需求方 2026-11-18;D45 範圍變更):設備名稱一律由前端對 `topIps` 的 IP 呼叫 `POST /ip-name-lookups`,只有 `netops.ip-name.read` 的人拿得到。
 - `/pa-live/stream`(即時 Log 表)**照舊附 `names`**,沿用 `netops.pa-realtime.read`(已知行為:沒有 ip-name.read 的帳號在 Log 表也看得到名稱,見驗收報告 §5 #3)。
+- **進出方向(WD-1,2026-11-18,WARROOM-DIRECTION-POLICY-PLAN §2.2;`/pa-live/warroom` 的 `links`、`sources`、`segments`;不加新 API、權限或設定)**:
+  - **連出**定義:來源是內部、目的是外部(`!inbound && externalIp != null`,沿用 `createClassifier`);連入 = 總數 − 連出;內部互連、外部對外部的轉送**不算**連出。
+  - `links[]` 每筆(來源 → 網段)除 `conn`、`allow`、`deny`、`threat`(每秒速率,3 位小數)外,多 `outConn`、`outDeny`、`outThreat`:其中連出的每秒速率(`outThreat` 只含威脅 log 的連出部分;抽樣放大倍數與原欄位相同)。
+  - `sources[]`、`segments[]`(含 `unmatched`)多 `outConn`:期間內連出的**筆數**(連入 = `conn` − `outConn`),畫面節點顯示「入 x / 出 y」。左側 Top 攻擊 IP 仍只計連入。
+  - 舊前端不認得新欄位時忽略即可;前端用 `linkDirectionProbs`(`useWarroom.ts`)換算,欄位缺少時視為全部連入。畫面篩選(全部 / 連入 / 連出)只在前端,不重新呼叫 API。
+- **新特徵碼命中(TS-2,§14.5)**:`/pa-live/warroom`、`/pa-live/risk` 命中近 30 天新增特徵碼時多選填欄位 `newSignatureHits`;沒有命中(或沒有威脅特徵碼快照)時**省略**欄位。
+
+---
+
+## 13. PA 安全規則檢視 — PR-1~PR-5(WARROOM-DIRECTION-POLICY-PLAN §3,ARCHITECTURE D22)
+
+資料來源:收集器 `netops-pa`(`policies.py`,`PA_POLICY_ENABLED=1` 才運作,預設 0)每 30 分鐘 + 手動,用唯讀 op 讀 PA-560 vsys1 的安全規則、物件與命中數,寫入 `netops-redis`(鍵見 PA-LIVE-PLAN §4 `netops:pa:policy:*`);`netops-api` **不連 PA**,只讀 Redis。規則一律依 PA 比對順序列出,`position` 從 1 起算,等同 PA GUI 的規則編號;命中數另存,不影響版本雜湊。
+
+**共通行為**:
+
+- 沒有快照(收集器未啟用、尚未讀到)或 `netops-redis` 不可用:清單、檢查回 **200** 且 `available: false`(附 `reason`、`message`),不回假資料、不回 5xx(避免累積 BFF 斷路器失敗)。單條規則與版本差異回 404 `NETOPS_PA_POLICY_UNAVAILABLE`。
+- `stale: true`:`fetchedAt` 超過 2 小時沒更新(畫面顯示過期警告)。`status` 為收集狀態(`state`:ok / failed / rejected / paused、管理平面 CPU、手動重新整理冷卻秒數)。收集失敗、被拒絕(管理平面 CPU > 50%)或測試區暫停時**保留上一份快照**,不以空資料覆蓋。
+- 規則說明欄(description)會進版本歷史與 NAS 備份,viewer 也看得到差異(需求方 2026-11-19 同意)。
+
+| 方法 | 路徑 | 權限 | 說明 |
+| --- | --- | --- | --- |
+| GET | `/api/netops/pa-policies` | `netops.pa-policy.read` | 規則清單(依 `position`)。篩選:`q`(名稱 / 說明 / 標籤)、`zone`、`ip`(逗號分隔 IPv4 / CIDR / a-b,最多 50 個,比對**展開後**的位址;`includeAny=true` 才含 any)、`application`、`action`、`unusedDays`(1–3650)、`disabled`;`page`、`pageSize`(≤100,預設 100)。篩選後仍回原編號 |
+| GET | `/api/netops/pa-policies/{name}` | `netops.pa-policy.read` | 單條規則(名稱完全比對,要 URL 編碼);找不到 404 `NETOPS_PA_POLICY_NOT_FOUND` |
+| POST | `/api/netops/pa-policy-refreshes` | `netops.pa-policy.refresh` | 手動重新整理:放請求給收集器,**202** `{ requestedAt, cooldownSec }`;全系統冷卻 5 分鐘(收集器端另有 60 秒最短間隔;管理平面 CPU 超過門檻時收集器不讀,結果看清單 `status`);`x-audit-level: meta` |
+| GET | `/api/netops/pa-policy-checks` | `netops.pa-policy.read` | 排序檢查(程式確定性檢查,不用 AI);`unusedDays`(1–3650,預設 90) |
+| GET | `/api/netops/pa-policy-versions` | `netops.pa-policy.read` | 版本清單(新到舊,保留最近 50 份)`{ items: [{ id, hash, fetchedAt, savedAt, ruleCount }], total }` |
+| GET | `/api/netops/pa-policy-versions/{id}/diffs` | `netops.pa-policy.read` | 版本 `id` 相對於 `base`(查詢參數,省略為前一版)的差異 |
+
+**清單 `GET /pa-policies`**:`{ available, items, total, page, pageSize, defaults, fetchedAt, hash, versionId, stale, hitsFetchedAt, ruleCount, status }`。
+
+- `items[]`:快照欄位 + `hits`(命中數、最後命中;沒有資料為 `null`)+ `expanded`(來源 / 目的位址、服務、應用的**物件展開**:位址群組 → 位址 / 網段、服務群組 → port;FQDN、動態群組、地區、wildcard、IPv6 等無法對應 IP 的成員標 `unresolved`)。物件展開只支援 IPv4。
+- `ip` 篩選:含無法展開物件或 negate 的規則也列出並帶 `ipMatch: "maybe"`(不當成「沒有」)。
+- `defaults`:`intrazone-default` / `interzone-default` 兩條預設規則的命中數(不在 `items`;PA 的 rule-hit-count 比 GUI 規則多這 2 筆)。
+- 物件展開與版本歷史在 `netops-api` 做,收集器只送快照。
+
+**檢查 `GET /pa-policy-checks`**:`{ available, items: [{ code, severity, position, name, related: [{ position, name }], message, reasons? }], summary, imprecise, unusedDays, fetchedAt, hash, stale, status }`;結果有快取。`code`:
+
+| code | 意義 |
+| --- | --- |
+| `conflict` | 被前面的規則涵蓋,且 allow / block 不同 |
+| `shadowed` | 被前面的規則涵蓋,永遠不會命中(同樣是擋但擋法不同時另外註明) |
+| `redundant` | 條件完全相同,或相鄰兩條只差來源 / 目的、其他選項都相同(可合併) |
+| `broad-early` | 過寬的 allow 排在重疊、且動作或 Profile 不同的規則之前 |
+| `unused` | 命中數 0 或最後命中超過 `unusedDays` 天(預設 90) |
+| `disabled`、`no-profile`、`no-log-end` | 停用;allow 沒有 Security Profile;沒有 Log at Session End |
+| `undeterminable` | 涉及應用群組 / 動態群組 / FQDN / 使用者 / negate / 規則 type / 排程 / 裝置,程式無法精準比對,需人工確認(`reasons` 列原因);`imprecise` 為這類項目數 |
+
+**版本差異**:規則或物件**內容雜湊**變了才存一版(命中數不算),經 `infra/store` 的 `papolicy/` 保留最近 50 份,納入 NAS 每日備份(`deploy/kb-backup/backup.sh` 的 `DATA_DIRS`)。`fetchedAt` 是收集器讀到這版的時間,**不是 PA 的 Commit 時間**;`savedAt` 是 `netops-api` 寫入時間,比 `fetchedAt` 晚 0–5 分鐘屬正常(版本在 `netops-api` 下次讀到新快照時才存:有人開頁面,或每 5 分鐘同步)。`diffs` 回 `{ id, baseId, version, base, rules, objects }`:`rules` 逐條列 `added` / `removed` / `moved`(以最長遞增子序列 LIS 判斷,單純因插入造成的位移不算)/ `changed`(含 `position`、`basePosition`、`fields[{ field, before, after }]`);`objects` 依種類列新增 / 刪除 / 修改的物件名稱。第一版沒有前一版時 `baseId` 為 `null`、清單為空;版本不存在 404 `NETOPS_PA_POLICY_VERSION_NOT_FOUND`。
+
+**AI 判讀**:`POST /ai/explanations` `kind: 'pa-policy'`,見 §10.3。
+
+**前端**(PR-3、PR-4):路由 `/firewall/policies`,選單「防火牆 › 安全規則」;`api/paPolicy.ts`、`composables/usePaPolicy.ts`(清單、詳細、重新整理、IP 對照、用名稱找規則、版本差異)、`usePaPolicyCheck.ts`、`usePaPolicyViz.ts`(規則圖資料:Zone 矩陣、規則順序條、Sankey,點選篩選 `shownOrder` / `shownSankey` / `focused` / `clearSelection()`)、`usePaPolicyExport.ts`(規則圖匯出 Markdown / JSON,**前端產生,不需新 API**;不含 IP 對照姓名 / 部門、說明欄、使用者名稱(只給數量)、uuid、Tag、Log Forwarding、動態群組 Tag 運算式;規則名稱照 PA 原名)、`usePolicyRuleDrawer.ts`(跨頁點規則名稱開抽屜的邏輯;**畫面尚未接**到 Log 明細與戰情室)。
+
+### 13.1 規則 × IP 對照表(§3.6)
+
+`POST /api/netops/ip-name-range-lookups`(`netops.ip-name.read`,`x-audit-level: meta`):PA 規則的位址物件是網段或範圍時,反查 IP 對照表(§11)。
+
+- 請求 `{ ranges: string[] }`,最多 200 個 IPv4 / CIDR / `a-b` 範圍(每個 7–31 字元,只接受數字、`.`、`/`、`-`、空白)。用 POST,不把查詢放進網址;不改變資料。
+- 回應 `{ results: { "<range>": { items: [{ ip, name, department, device, deviceType }], total, truncated } } }`:`items` 是對照表中**整個落在範圍內**的項目(依 IP 排序,最多 50 筆),`truncated` 表示是否截斷;格式不符的範圍回 `{ invalid: true }`。**只回範圍內的項目**(需求方 2026-11-19)。
+- 姓名、部門屬個資,只給 `netops.ip-name.read`(沒有的人 BFF 回 403,畫面只顯示 IP / 物件名稱);單一 IP 沿用 `POST /ip-name-lookups`(§12)。
+
+### 13.2 權限與 RBAC 節點
+
+API 權限:`netops.pa-policy.read`(清單、單條、檢查、版本)、`netops.pa-policy.refresh`(手動重新整理;**不是** `.read` / `.write` 結尾,Gateway 允許,專案測試已加例外)。`deploy/gateway-rbac.yaml`:
+
+| 節點 | 種類 | `includes` | 角色 |
+| --- | --- | --- | --- |
+| `netops.pa-policy-page.read` | 選單「安全規則」(`netops.group.firewall`) | `netops.pa-policy.read` | admin、viewer |
+| `netops.pa-policy-page.refresh` | 按鈕 | `netops.pa-policy.refresh` | admin |
+| `netops.pa-policy-page.ai` | 按鈕 | `netops.ai.use`、`netops.pa-policy.read` | admin、viewer |
+
+`POST /ai/explanations` 只檢查 `netops.ai.use`(Gateway 每條路由只綁一個 `x-permission`,後端身分資料沒有權限清單):只有 `ai.use`、沒有 `netops.pa-policy.read` 的帳號理論上可用 `kind: 'pa-policy'` 拿到規則內容;目前角色綁定下沒有人符合,需求方 2026-11-19 決定**維持現狀**。
+
+### 13.3 錯誤代碼
+
+| HTTP | 代碼 | 說明 |
+| --- | --- | --- |
+| 404 | `NETOPS_PA_POLICY_NOT_FOUND` | 找不到這條規則(可能已刪除或改名) |
+| 404 | `NETOPS_PA_POLICY_UNAVAILABLE` | 單條規則 / 版本差異:還沒有快照 |
+| 503 | `NETOPS_PA_POLICY_UNAVAILABLE` | `POST /ai/explanations` `kind: 'pa-policy'`:規則快照尚未提供(`modules/ai/service.ts`) |
+| 404 | `NETOPS_PA_POLICY_VERSION_NOT_FOUND` | 版本不存在(只保留最近 50 份),或比較的 `base` 不存在 |
+| 409 | `NETOPS_PA_POLICY_DISABLED` | 手動重新整理:沒有 `netops-redis` 或收集器未啟用安全規則收集(`PA_POLICY_ENABLED`) |
+| 429 | `NETOPS_PA_POLICY_REFRESH_COOLDOWN` | 手動重新整理冷卻中;`details.retryAfter`、`Retry-After` |
+| 403 | `NETOPS_JOB_OWNER_UNKNOWN` | 身分沒有工號也沒有 sub,不能重新整理 |
+
+### 13.4 收集器設定(`netops-pa`,預設關閉)
+
+| 設定 | 預設 | 說明 |
+| --- | --- | --- |
+| `PA_POLICY_ENABLED` | `0` | 安全規則收集總開關;`1` 時要有 `PA_HOST` 與 API Key,缺少則 `netops-pa` 啟動失敗 |
+| `PA_POLICY_API_KEY_FILE` | 未設定 | 專用帳號的 Key(Docker secret 路徑);**未設定時沿用 `PA_API_KEY_FILE`**(需求方 2026-11-18 決定不另開帳號)。compose 尚未把專用 Key 接成 Docker secret,目前實際沿用 `pa_api_key` |
+| `PA_POLICY_MINUTES` | `30` | 讀取間隔,範圍 10–1440 分鐘 |
+| `PA_POLICY_MAX_MGMT_CPU` | `50` | 送出前管理平面 CPU 門檻(%),只能調低(範圍 10–50);超過或讀不到就不讀(`rejected`),5 分鐘後重試 |
+| `PA_POLICY_HTTP_TIMEOUT_SECONDS` | `15` | 單次 HTTP 逾時,範圍 2–30 秒 |
+
+收集器只送白名單 op(完全比對):`show system resources`、`show config running xpath`(vsys1 的 `rulebase/security` 與 address、address-group、service、service-group、application-group、tag 六種物件)、`show rule-hit-count`;不送 `type=config`、不 Commit。空規則、解析失敗、超過上限(規則 5000、物件 2000)一律標 `failed` 且不覆蓋上一份快照。部署與還原見 `deploy/RUNBOOK-prod.md`(§7 還原清單含 `papolicy/`)。
+
+---
+
+## 14. PA 威脅特徵碼 — TS-1~TS-4(THREAT-SIGNATURE-PLAN,ARCHITECTURE D22)
+
+資料來源:收集器 `netops-pa`(`signatures.py`,`PA_SIGNATURE_ENABLED=1` 才運作,預設 0)用唯讀 op 檢查 PA-560 內容版本(`show system info`),**只在 `threat-version` 變動、手動更新或 Redis 無快照時**讀弱點(vulnerability)與間諜軟體(spyware)特徵清單與 vsys1 Profile Group / Vulnerability / Anti-Spyware profile(版本沒變時只更新 AV / WildFire 版本與發布時間並續期快照 7 天);寫入 `netops-redis`(`netops:pa:sig:*`,PA-LIVE-PLAN §4)。AV / WildFire 第一版只顯示版本與發布時間,不讀清單(TS-Q4)。`netops-api` 每 10 分鐘(啟動時一次)比對 Redis 內容版本與 `infra/store` 的上一版,產生版本差異歷史。命中比對查 ClickHouse `pa_threat_logs`(唯讀、`query_params`);特徵碼 ID 取自 `name` 欄「名稱(ID)」的括號數字。
+
+**共通行為**:
+
+- Redis 不可用、尚無快照:`list`、`status`、`coverage` 回 **200** 且 `available: false`(附 `reason` / `message`);其他依賴失敗回 424 `NETOPS_PA_SIGNATURE_*`。**不回 5xx**。
+- 近 N 天「新特徵碼」的 `days` **只接受 7 / 30 / 90**(預設 30),其他值 400;基準日晚於「今天 − days」時回 `since = YYYY-MM-DD`(畫面顯示「自 YYYY-MM-DD 起統計」)。
+- **基準(D2)**:`infra/store` 無歷史時,第一次讀到的清單存成基準版本(`isBaseline: true`、`added: 0`,不算新增);`baselineAt`、`baselineVersion` 固定在 `pa-signature/index.json`,不依賴 Redis 7 天 TTL。寫入順序 `history/<threatVersion>.json` → `index.json`(保留 90 份)→ `latest-index.json.gz` → 清理舊檔,中途失敗重跑可冪等復原。
+- **`rebuilt`**:有歷史但精簡索引(`latest-index.json.gz`)遺失或損壞時重建,該版標 `rebuilt: true`:不計入新特徵碼與戰情室,`firstVersion` 為 `null`(畫面顯示「未知」,不偽標),「這一版差異無法計算」;下一版恢復正常比對。出現在 `list`、`get`(含 `changes[]` 的 `kind: 'rebuilt'`)、`versions`、`versionDiffs`。
+
+| 方法 | 路徑 | 權限 | 說明 |
+| --- | --- | --- | --- |
+| GET | `/api/netops/pa-signatures` | `netops.pa-signature.read` | 特徵碼清單:`kind`(vulnerability / spyware)、`severity`、`q`(名稱 / ID / CVE / Vendor)、`isNew`、`hasHits`、`days`(7 / 30 / 90)、`page`、`pageSize`(≤100,預設 50) |
+| GET | `/api/netops/pa-signatures/{id}` | `netops.pa-signature.read` | 單筆(`id` 純數字,最多 10 位;抽屜用),見 §14.1 |
+| GET | `/api/netops/pa-signature-lookups/{lookupId}` | `netops.pa-signature.read` | 輪詢按需單筆查詢結果,見 §14.1 |
+| GET | `/api/netops/pa-signature-versions` | `netops.pa-signature.read` | 內容版本清單(新到舊,保留最近 90 份,只存差異與摘要);`{ baselineAt, baselineVersion, items, total }` |
+| GET | `/api/netops/pa-signature-versions/{version}/diffs` | `netops.pa-signature.read` | 單版相對前一版的差異:`kind`(added / changed / removed)、`sigKind`、`severity`、`q`、分頁;changed 列出欄位前後值;版本不存在 404 `NETOPS_PA_SIGNATURE_VERSION_NOT_FOUND` |
+| POST | `/api/netops/pa-signature-hit-queries` | `netops.pa-signature.read` | 命中比對,**不含 IP**(§14.2);`x-timeout-ms: 15000` |
+| GET / DELETE | `/api/netops/pa-signature-hit-queries/{id}` | `netops.pa-signature.read` | 輪詢 / 取消(自己的工作;DELETE 冪等,一律 204) |
+| POST | `/api/netops/pa-signature-hit-ip-queries` | `netops.pa-log.read` | 命中比對,**含前 10 來源 / 目的 IP**(§14.2);`x-audit-level: meta`、`x-timeout-ms: 15000` |
+| GET / DELETE | `/api/netops/pa-signature-hit-ip-queries/{id}` | `netops.pa-log.read` | 輪詢 / 取消;`x-audit-level: meta` |
+| GET | `/api/netops/pa-signature-coverage` | `netops.pa-policy.read` | 規則覆蓋缺口(§14.3);綁安全規則權限以保護規則資料 |
+| POST | `/api/netops/pa-signature-refreshes` | `netops.pa-signature.refresh` | 手動重新整理:**202** `{ requestedAt, cooldownSec }`;全系統冷卻 5 分鐘(收集器端另有 60 秒最短間隔與 CPU 50% 保護);`x-audit-level: meta` |
+| GET | `/api/netops/pa-signature-status` | `netops.pa-signature.read` | 收集狀態:`collectorEnabled`、`state`、`lastRunAt`、`lastOkAt`、`mgmtCpu`、`threatVersion`、`refreshCooldownSec`、`lookupCooldownSec`,加 `baselineAt`、`versionCount` |
+
+**清單回應**:`{ available, items, total, page, pageSize, threatVersion, threatReleaseDate, fetchedAt, checkedAt, stale, baselineAt, since, rebuilt, days, counts, versions, hitsAvailable, status, reason?, message? }`。`items[]` 含 `id`、`kind`、`name`、`severity`、`cves`、`defaultAction` 等正規化欄位,加 `firstVersion`(`null` = 未知)、`isNew`、`hits30d`(ClickHouse 可用時才有;`hitsAvailable` 表示是否可用)。`versions` 為 AV / WildFire / App / URL Filtering 的版本與發布時間。`stale`:`checkedAt` 超過 2 小時沒更新。
+
+### 14.1 單筆與按需查詢(抽屜)
+
+`GET /pa-signatures/{id}`:
+
+- **200** `{ found: true, source, item, hits30d, … }`:快照內有這筆(`source: "snapshot"`)或 1 天按需快取命中;含 `firstVersion`、版本異動紀錄 `changes[]`、`hits30d`(近 30 天命中數,**整個特徵 ID 合計**:同一 ID 有多個名稱時(例 `Proxy:xxx(109010004)`)為各名稱加總,與排行頁單一名稱數字不同)、`vault: null`(TS-5 預留)。
+- **202** `{ lookupId, id, status }`:快照沒有且收集器已啟用,放工作給 `netops-pa` 執行 `show threat id <純數字 ID>`(`netops-api` 不碰 PA)。用 `GET /pa-signature-lookups/{lookupId}` 輪詢,只有建立者本人可查(別人或逾期 404 `NETOPS_PA_SIGNATURE_LOOKUP_NOT_FOUND`)。收集器端:結果快取 1 天(含負快取)、全系統每 10 秒 1 次限流(限流中回 **429** `NETOPS_PA_SIGNATURE_COOLDOWN` + `Retry-After`)、管理平面 CPU 超過 50% 或測試區輪詢暫停時不送。
+- **200** `{ found: false, hits30d, message }`:負快取命中、舊 Unknown 快取、或收集器未啟用。**查無的處理(F1,ts-fix-1)**:PA 對不存在的 ID 會回名稱與 subtype 皆為 `Unknown`(不分大小寫)、severity 與 description 皆空的佔位結果,一律視為查無(`not_found`,寫入負快取;讀到舊的 Unknown 佔位快取也在讀取端當作查無,**不改寫、不刪除** Redis 快取)。訊息為「本機特徵庫查無(可能是病毒 / WildFire / 自訂特徵)」。
+- `GET /pa-signature-lookups/{lookupId}` 回 `{ lookupId, threatId, status, createdAt, startedAt, finishedAt, cached, mgmtCpu, result, hits30d, error, message }`;`status`:`queued`、`running`、`done`、`not_found`、`rejected`、`failed`。**完成狀態(`done`、`not_found`)一律附 `hits30d: number | null`**(ClickHouse 失敗為 `null`,不回 5xx)。
+
+### 14.2 命中比對與權限分權(TS-Q8)
+
+Gateway 的 `X-Internal-Token` 不帶個別權限清單、每條路由只綁一個 `x-permission`,因此命中比對拆成**雙路由**,由 BFF 強制分權,不只靠前端隱藏:
+
+- `/pa-signature-hit-queries`(`netops.pa-signature.read`):**絕不查詢或回傳** `topSrc` / `topDst`。
+- `/pa-signature-hit-ip-queries`(`netops.pa-log.read`、`x-audit-level: meta`):多回前 10 來源 / 目的 IP(`topSrc`、`topDst`)。IP 的姓名**不附在回應**,前端另依 `netops.ip-name.read` 呼叫 `POST /ip-name-lookups`。
+
+請求 body(兩條相同):`{ days?: 7 | 30 | 90, scope?: 'new' | 'ids', ids?: string[](1–500 個純數字 ID) }`;`scope: 'new'` = 近 N 天新特徵碼,`'ids'` = 指定 ID。`ids` 格式錯誤、`days` 不在 7 / 30 / 90 回 400(`VALIDATION_FAILED` 或 `NETOPS_PA_SIGNATURE_QUERY_INVALID`)。
+
+- 30 天內且 8 秒內完成:**200** `{ days, since, from, to, scope, includeIps, queriedIds, truncatedIds, items }`(`includeIps` 分別為 `false` / `true`);超過 8 秒或 `days` 為 90:**202** `{ id, jobId, kind, status, createdAt }`,改走工作模式(D6):`GET` 輪詢、`DELETE` 取消(冪等 204);工作只有建立者本人可查。
+- ClickHouse 未設定或查詢失敗:424 `NETOPS_PA_SIGNATURE_CH_UNAVAILABLE`(不回 5xx)。ID 比對用 `extract(name, '\\((\\d+)\\)$')`;`items[]` 含命中數、時間範圍、動作分布與規則覆蓋標註。
+- 90 天威脅 log 上用正規式取 ID,上正式區後需留意查詢時間(審查 I1,未實測)。
+
+### 14.3 規則覆蓋 `GET /pa-signature-coverage`
+
+比對 PA 安全規則快照(§13)與 vsys1 Profile Group,找出 `action = allow`、啟用中,且缺少弱點防護(VP)或間諜軟體(AS)profile 的規則。第一版**只看有沒有掛**,不判斷 profile 內容(TS-Q5)。回 `{ available, policyFetchedAt?, profilesFetchedAt?, profilesAvailable?, summary, items, reason?, message? }`;群組不存在或讀不到 profile 時該規則 `status: "unknown"`(無法判定,**不可當成已有防護**)。
+
+### 14.4 AI 摘要
+
+`POST /ai/explanations` `kind: 'pa-signature'`,見 §10.3。
+
+### 14.5 戰情室新特徵碼提示
+
+`GET /pa-live/warroom`、`GET /pa-live/risk` 命中近 30 天新增特徵碼時附 `newSignatureHits: [{ id, name, severity, firstVersion, count }]`(依 `count` 由大到小、最多 20 筆;`warroom` 的 `count` 依抽樣放大;`risk` 為排行計數),沒有命中時省略欄位;新特徵清單最多 5 分鐘快取。前端 `mergeNewSignatureHits` 合併兩支 API(同 ID 去重取較大 count),在戰情室頂部顯示提示列。
+
+### 14.6 權限、RBAC 節點與錯誤代碼
+
+API 權限:`netops.pa-signature.read`、`netops.pa-signature.refresh`(同樣不是 `.read` / `.write` 結尾);命中含 IP 另需 `netops.pa-log.read`、IP 名稱另需 `netops.ip-name.read`、規則覆蓋另需 `netops.pa-policy.read`。`deploy/gateway-rbac.yaml`:
+
+| 節點 | 種類 | `includes` | 角色(TS-Q9) |
+| --- | --- | --- | --- |
+| `netops.pa-signature-page.read` | 選單「威脅特徵碼」(`netops.group.firewall`) | `netops.pa-signature.read` | admin、viewer |
+| `netops.pa-signature-page.refresh` | 按鈕 | `netops.pa-signature.refresh` | admin |
+| `netops.pa-signature-page.ai` | 按鈕 | `netops.ai.use`、`netops.pa-signature.read` | admin、viewer |
+
+`kind: 'pa-signature'` 與 pa-policy 相同,後端只檢查 `netops.ai.use`(需求方 2026-11-20 決定**比照 PR-5 接受現狀**)。
+
+| HTTP | 代碼 | 說明 |
+| --- | --- | --- |
+| 400 | `NETOPS_PA_SIGNATURE_QUERY_INVALID` | 命中比對(或 AI 摘要)的 `days` 不在 7 / 30 / 90,或 `ids` 不是 1–500 個純數字 |
+| 404 | `NETOPS_PA_SIGNATURE_VERSION_NOT_FOUND` | 內容版本不存在(只保留最近 90 份) |
+| 404 | `NETOPS_PA_SIGNATURE_LOOKUP_NOT_FOUND` | 按需查詢工作不存在、不是本人的或已逾期(10 分鐘) |
+| 409 | `NETOPS_PA_SIGNATURE_DISABLED` | 手動重新整理:沒有 `netops-redis` 或收集器未啟用(`PA_SIGNATURE_ENABLED`) |
+| 429 | `NETOPS_PA_SIGNATURE_COOLDOWN` | 手動重新整理冷卻(5 分鐘)或單筆按需查詢限流(10 秒);`Retry-After` |
+| 424 | `NETOPS_PA_SIGNATURE_UNAVAILABLE` | `netops-redis` 不可用或沒有設定;`POST /ai/explanations` `kind: 'pa-signature'` 在服務未接上威脅特徵碼來源,或快照讀取失敗時也回此代碼 |
+| 404 | `NETOPS_PA_SIGNATURE_UNAVAILABLE` | `kind: 'pa-signature'`(`forAi`)還沒有快照(`reason: no-snapshot`) |
+| 424 | `NETOPS_PA_SIGNATURE_CH_UNAVAILABLE` | 命中比對:ClickHouse 未設定或查詢失敗 |
+| 403 | `NETOPS_JOB_OWNER_UNKNOWN` | 身分沒有工號也沒有 sub(重新整理、按需查詢、工作) |
+
+### 14.7 收集器設定(`netops-pa`,預設關閉)
+
+| 設定 | 預設 | 說明 |
+| --- | --- | --- |
+| `PA_SIGNATURE_ENABLED` | `0` | 威脅特徵碼收集總開關;`1` 時缺 `PA_HOST` 或 API Key 則 `netops-pa` 啟動失敗 |
+| `PA_SIGNATURE_API_KEY_FILE` | 未設定 | 選填;未設定時依序沿用 `PA_POLICY_API_KEY_FILE`、`PA_API_KEY_FILE`(compose 尚未接專用 Key,沿用 `pa_api_key`) |
+| `PA_SIGNATURE_MINUTES` | `30` | 檢查內容版本間隔,範圍 10–1440 分鐘 |
+| `PA_SIGNATURE_MAX_MGMT_CPU` | `50` | 管理平面 CPU 門檻(%),只能調低(範圍 10–50);通過開頭檢查後,讀弱點清單與間諜軟體清單**之前各再檢查一次**,超過或讀不到即 `rejected` 並保留上一份快照 |
+| `PA_SIGNATURE_HTTP_TIMEOUT_SECONDS` | `30` | 單次 HTTP 逾時,範圍 5–120 秒;回應上限 64 MB |
+
+收集器心跳(`netops:pa:heartbeat`)多 `signatureEnabled`、`signatureState`(`ok` / `rejected` / `paused` / `failed`)、`signatureStateAt`、`signatureNote`:`rejected`(CPU 保護退讓)與 `paused`(測試區輪詢暫停)是正常運作,**不算故障**。空清單、解析失敗、超上限一律 `failed` 且保留上一份快照。

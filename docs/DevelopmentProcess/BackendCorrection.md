@@ -2,6 +2,24 @@
 
 > `backend/`、`deploy/` 的修改;新紀錄加在最上方,格式見 `AGENT.md` §11。
 
+## 2026-11-20 威脅特徵碼後端、收集器與驗收修正(TS-1~TS-3、ts-fix-1)
+- 工作項目:TS-1、TS-2、TS-3、ts-fix-1(`docs/THREAT-SIGNATURE-PLAN.md`)
+- 內容:收集器 `pa-collector/netops_pa/signatures.py`(`PA_SIGNATURE_*` 預設關閉,CPU 保護含讀大清單前重查,失敗保留快照,心跳 `signature*` 欄位,按需 `show threat id`);後端 `modules/pa-signature/`(14 條 API、D1 / D2 版本差異歷史與 `rebuilt`、命中比對雙路由 TS-Q8、規則覆蓋、`forAi`、戰情室 `newSignatureHits`)、`infra/{redis,store}/pa-signature.ts`、`ClickHouseReader.signatureHitCounts` / `signatureHits` / `topApps`;`kind: 'pa-signature'` AI 摘要;`deploy/gateway-rbac.yaml` 新增 `netops.pa-signature-page.*`、`deploy/kb-backup/backup.sh` 加 `pa-signature`、`deploy/docker-compose.yml` 與 env 範本加 `PA_SIGNATURE_*`(預設 0);ts-fix-1:Unknown 佔位視為查無(收集器與後端讀取端)、`hits30d`、AI 摘要零新增措辭。合併 `develop` 會重建 `netops-pa`(PA Syslog 中斷,需網通重新 Commit)。
+- 檔案:`pa-collector/netops_pa/signatures.py`、`backend/src/modules/pa-signature/`、`backend/src/infra/{redis,store}/pa-signature.ts`、`backend/src/modules/ai/`、`backend/src/modules/pa-live/warroom.ts`、`deploy/gateway-rbac.yaml`、`deploy/kb-backup/backup.sh`、`deploy/docker-compose.yml`(!164、!166、!168、!172)
+- 驗證:pa-collector `ruff`、`pytest` 131 通過;backend `typecheck`、`build`、`npm test` 536 通過;`test:int` 本機未跑(沒有一次性 ClickHouse / Redis)
+
+## 2026-11-19 PA 安全規則後端與收集器(PR-1、PR-2、PR-5)
+- 工作項目:PR-1、PR-2、PR-5(`docs/WARROOM-DIRECTION-POLICY-PLAN.md` §3)
+- 內容:收集器 `pa-collector/netops_pa/policies.py`(`PA_POLICY_*` 預設關閉,白名單 op,CPU > 50% 不讀,空規則 / 解析失敗不覆蓋快照);後端 `modules/pa-policy/`(清單、單條、手動重新整理冷卻 5 分鐘、版本與差異 50 份、排序檢查、AI 判讀回答驗證 `verify.ts` 與 SSE `verify` 事件)、`POST /v1/ip-name-range-lookups`、`infra/{redis,store}/pa-policy.ts`;`kind: 'pa-policy'` AI 判讀;`deploy/gateway-rbac.yaml` 新增 `netops.pa-policy-page.*`、`deploy/kb-backup/backup.sh` 加 `papolicy`、`deploy/docker-compose.yml` 與 env 範本加 `PA_POLICY_*`(預設 0)。`verify` 事件欄位 !157 由 `line` 改為 `reason` / `actual`。
+- 檔案:`pa-collector/netops_pa/policies.py`、`backend/src/modules/pa-policy/`、`backend/src/modules/ip-names/routes.ts`、`backend/src/infra/{redis,store}/pa-policy.ts`、`backend/src/modules/ai/`、`deploy/`(!141、!145、!146、!149、!151、!157)
+- 驗證:pa-collector `pytest` 115 通過(`test_pa_query.py::test_whitelist_and_no_redirect` 在 Windows 偶發失敗,重跑通過);backend `npm test` 510 通過;`test:int` 本機未跑
+
+## 2026-11-18 戰情室進出方向後端(WD-1)
+- 工作項目:WD-1(`docs/WARROOM-DIRECTION-POLICY-PLAN.md` §2.2)
+- 內容:`modules/pa-live/warroom.ts`:`links[]` 加 `outConn` / `outDeny` / `outThreat`(每秒,連出 = 來源內部且目的外部),`sources[]`、`segments[]` 加 `outConn`(筆數);pair key 加方向、抽樣放大同樣套用;不加 API、權限、設定。
+- 檔案:`backend/src/modules/pa-live/warroom.ts`、`warroom-routes.ts`(!140)
+- 驗證:單元測試補連入 / 連出 / 內部互連 / 轉送、抽樣放大、Top 攻擊 IP 只算連入;`test:int` 本機未跑
+
 ## 2026-11-18 網段設定 × IP 對照表搭配後端(SG-4)
 - 工作項目:SG-4(`docs/SEGMENT-SETTINGS-PLAN.md` §3、§6 Q3、Q4)
 - 內容:新增 `POST /v1/ip-name-lookups`(依 IP 查名稱,最多 200 個;x-permission `netops.ip-name.read`、稽核 meta),給搭配 A(未分類 IP 名稱)與 D(戰情室提示設備名稱);戰情室 WR-1 `segments[].topIps`(連線數前 5 的內部 IP,不含名稱)。

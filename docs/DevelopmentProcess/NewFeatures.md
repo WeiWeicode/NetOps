@@ -2,6 +2,24 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。
 
+## 2026-11-20 PA 威脅特徵碼(TS-0~TS-4)文件統一
+- 工作項目:TS-0~TS-4、ts-fix-1(`docs/THREAT-SIGNATURE-PLAN.md`;需求方 2026-11-19 §1.2、2026-11-20 決定)
+- 內容:防火牆 › 威脅特徵碼:收集器讀 PA 內容版本與特徵清單(只在版本變動時讀全清單)、版本差異歷史(基準日、`rebuilt`)、新特徵碼清單、命中比對(含 IP 與不含 IP 雙路由分權)、規則覆蓋缺口、AI 摘要、抽屜按需單筆查詢(`show threat id`)、戰情室新特徵提示、跨頁特徵碼抽屜(戰情室、安全事件、Log 明細、時段明細);ts-fix-1:PA 回 `Unknown` 佔位當查無、查無也附近 30 天命中數、AI 摘要新增高危 0 筆措辭。測試區已驗收(通過 11、失敗 0)。正式區收集器預設關閉。本筆統一補文件(功能分支依規定未改文件)。
+- 檔案:`docs/API.md` §10.3、§14、`docs/PA-LIVE-PLAN.md` §4、`docs/ARCHITECTURE.md` D22、`docs/IMPL-PLAN.md`、`docs/PROJECT-MAP.md`、`docs/HANDOFF.md`、`deploy/RUNBOOK-prod.md` §7–§8;程式見 BackendCorrection、FrontendCorrection 同批 MR(!164、!166、!168、!169、!172)
+- 驗證:測試區驗收 2026-11-20(`docs/test-reports/2026-11-20-ts-acceptance.md`、`2026-11-20-ts-fix-1-acceptance.md`):通過 11、失敗 0;未覆蓋:只有 `netops.pa-signature.read` 的帳號看不到 IP、PA 下一次內容更新後的版本差異與「新特徵」篩選(待補驗)
+
+## 2026-11-19 PA 安全規則檢視(PR-0~PR-5)文件統一
+- 工作項目:PR-0~PR-5(`docs/WARROOM-DIRECTION-POLICY-PLAN.md` §3;需求方 2026-11-18 Q3、Q4、2026-11-19 Q5、Q6)
+- 內容:防火牆 › 安全規則:收集器讀 PA 安全規則、物件與命中數(依 PA 順序、物件展開、版本差異歷史)、排序檢查(衝突、被遮蔽、冗餘、過寬、未命中、無法判定)、AI 判讀(含回答驗證標註 `verify`)、規則圖(Zone 矩陣、順序條、Sankey)與匯出給外部 AI、規則 × IP 對照表(`ip-name-range-lookups`)。PR-0 實測證實現有 Key 用 op 即可讀規則,D22 不變。測試區已驗收。正式區收集器預設關閉。本筆統一補文件。
+- 檔案:`docs/API.md` §10.3、§11、§13、`docs/PA-LIVE-PLAN.md` §4、`docs/ARCHITECTURE.md` D22、`docs/IMPL-PLAN.md`、`docs/PROJECT-MAP.md`、`deploy/RUNBOOK-prod.md` §7;程式見 BackendCorrection、FrontendCorrection 同批 MR(!141、!145、!146、!148、!149、!151、!154、!157)
+- 驗證:測試區驗收 2026-11-19(`docs/test-reports/2026-11-19-pa-policy-acceptance.md`、`2026-11-19-pa-policy-reverify.md`):通過 11、部分 2、無法驗 1、失敗 0;未覆蓋:跨頁規則抽屜畫面未接、物件展開對照 PA Objects、viewer 匯出、5 分鐘冷卻(待補驗)
+
+## 2026-11-18 戰情室進出方向(WD)文件統一
+- 工作項目:WD-1~WD-3(`docs/WARROOM-DIRECTION-POLICY-PLAN.md` §2;需求方 2026-11-18 Q1、Q2)
+- 內容:戰情室依連入 / 連出分方向:連出粒子反向、顏色區分、節點「入 / 出」數字、全部 / 連入 / 連出篩選;後端 `links` 多 `outConn` / `outDeny` / `outThreat`、`sources` / `segments` 多 `outConn`。需求方決定不做驗收。本筆統一補文件。
+- 檔案:`docs/API.md` §12、`docs/IMPL-PLAN.md`、`docs/PROJECT-MAP.md`;程式見 BackendCorrection、FrontendCorrection 同批 MR(!139、!140)
+- 驗證:單元與前端掛載測試(見 MR);測試區真實流量、效能回歸未做(需求方不驗收)
+
 ## 2026-11-18 網段設定(SG-0~SG-4)文件統一
 - 工作項目:SG-0~SG-4(ARCHITECTURE D46–D48;需求方 2026-11-17 Q1–Q6、2026-11-18 Q7–Q10)
 - 內容:戰情室右側內部網段改在畫面維護(網通設定 › 網段設定):清單與驗證、版本號與 409 衝突、儲存前預覽近 5 分鐘、JSON 匯入 / 匯出;搭配 IP 對照表 A(未分類 IP 協助分類)、B(從對照表網段列匯入)、C(對照表顯示網段)、D(戰情室滑過節點帶設備名稱);`warroom.json` 寫入前存 `history/`(20 份),NAS 每日備份加 `warroom/`;戰情室右側連線聚集到核心;D45 範圍變更:`/pa-live/warroom`、`/pa-live/risk` 不再回 `names`,名稱只經 `POST /ip-name-lookups`。本筆統一補文件(功能分支依規定未改文件)。

@@ -21,6 +21,9 @@
 | V-b | 儀表板與熱力圖畫面:V-b1 Claude 元件介面與 API,V-b2 Gemini 頁面與動畫 | **測試區上線(2026-11-13)**:V-b1 + V-b2 第一版 !78、部署建置修正 !82;**畫面驗收與調整待做**(新討論串,HANDOFF-GEMINI-VIZ §8)(D40、D41) |
 | V-c | 偵測規則引擎:PA 規則 1–7、冷卻、白名單、網段設定頁、告警頁 | **規劃已合併(2026-11-11,!70)**;前置 C3;**需求方提供網段清單與初始白名單**(X11;網段改在網段設定頁維護,V-c 與 insight 的內網 / 伺服器共用同一份,見 SG、D46)(D37、D38、D39) |
 | SG-0~SG-4 | 網段設定:戰情室右側連線聚集(SG-0)、後端 API + 版本號 + 備份(SG-1)、前端邏輯(SG-2)、畫面(SG-3)、搭配 A–D(SG-4) | **測試區完成並驗收通過(2026-11-18)**:!127 計畫、!128 SG-0、!129 SG-1、!130 SG-2、!131 SG-4 邏輯、!132 畫面(Gemini);驗收報告 `docs/test-reports/2026-11-18-segment-settings-acceptance.md`(!133)。**SG-5 正式區待辦**(D46–D48) |
+| WD(WR-1~3) | 戰情室進出方向:後端 `links` / `sources` / `segments` 加連出欄位、前端方向篩選、Canvas 反向粒子與顏色、節點入 / 出數字 | **測試區完成(2026-11-18,!139 計畫、!140)**;需求方決定不做驗收(「做好先推MR,不用測」);API.md §12 |
+| PR-0~PR-5 | PA 安全規則檢視:唯讀實測(PR-0)、收集器(PR-1)、API 與版本歷史(PR-2)、前端邏輯與規則圖(PR-3)、頁面(PR-4,Gemini)、排序檢查與 AI 判讀(PR-5) | **測試區完成並驗收(2026-11-19)**:!141、!145、!146、!148(Gemini 畫面)、!149、!151、!154、!157;驗收 !150、!155;**正式區 `PA_POLICY_ENABLED` 維持 0,何時開未定**;API.md §13、ARCHITECTURE D22 |
+| TS-0~TS-4 | PA 威脅特徵碼:唯讀實測(TS-0)、收集器(TS-1)、API / 版本差異 / 命中比對 / 規則覆蓋(TS-2)、AI 摘要(TS-3)、頁面與跨頁抽屜(TS-4);TS-5 Threat Vault 未排程 | **測試區完成並驗收(2026-11-20)**:!161–!163 計畫與實測、!164、!166、!168、!169、!172(F1 / F2);審查 !165、!170;驗收 !171、!173(通過 11、失敗 0);**正式區 `PA_SIGNATURE_ENABLED` 維持 0,TS-Q6、TS-Q10 未定**;API.md §14 |
 | V-d | AD:AD 事件進 ClickHouse、AD 指標與圖表、規則 8–9 | **延後**(V4,D36) |
 | AC1–AC7 | AI 改用 ClickHouse、PA 頁面新增 AI 功能、IP 對照表(IP 自動帶出名稱) | **規劃(2026-11-13,需求方已決定範圍)**;AC1 可先開工(D44、D45) |
 | ~~後續~~ | ~~服務寫入資料庫~~ | 取消(D20;PA log 改寫 ClickHouse 見 C0–C6,D27) |
@@ -385,6 +388,49 @@ D13:骨架直接留用;AI 不在這次範圍,不做串流驗證(D7、D17)。
 **與其他工作項目的關係**:V-c 偵測規則的「IT 網段排除」與 `/pa/insight/*` 的「內網 / 伺服器」判斷,**改用同一份網段設定**(`warroom.json`),不另建網段清單;X11「網段清單」因此由網通在網段設定頁填入,不再另外提供檔案。
 
 **測試區驗收(2026-11-18)**:21 項通過(#2 群組名稱 / 順序為 GigaItApp 選單設定,需求方決定維持現狀);未覆蓋:滑鼠拖曳排序(以上移 / 下移驗證)、`history/` 20 份上限、#11(A 的設備名稱內容,測試區對照表無資料)、#12(B 實際匯入)、#22(NAS 備份內容,隔天排程後複查)。
+
+## WD / PR / TS 戰情室進出方向、PA 安全規則檢視、威脅特徵碼(2026-11-18 ~ 2026-11-20 測試區完成)
+
+計畫見 [WARROOM-DIRECTION-POLICY-PLAN.md](WARROOM-DIRECTION-POLICY-PLAN.md)(WD、PR)、[THREAT-SIGNATURE-PLAN.md](THREAT-SIGNATURE-PLAN.md)(TS);介面 API.md §12–§14;Redis 鍵 PA-LIVE-PLAN §4;決策 ARCHITECTURE D22(PR-0、TS-0 結論)。功能分支依規定不改文件,本段由 docs MR 統一補。
+
+**WD 戰情室進出方向(2026-11-18,!139、!140)**
+
+| 批 | 內容 | 狀態 |
+| --- | --- | --- |
+| WD-1 | 後端:`links[]` 加 `outConn` / `outDeny` / `outThreat`(每秒),`sources[]`、`segments[]` 加 `outConn`(筆數);連出 = 來源內部、目的外部,內部互連與轉送不算 | 完成 |
+| WD-2 | 前端邏輯:`linkDirectionProbs`、`direction`(全部 / 連入 / 連出)篩選 | 完成 |
+| WD-3 | Canvas:連出粒子反向、連入青綠 / 連出藍紫、節點「入 / 出」數字、圖例 | 完成 |
+
+需求方決定 WD **不做驗收**,也沒有驗收報告;`test:int` 未在本機跑(沒有一次性 ClickHouse / Redis)。
+
+**PR PA 安全規則檢視(2026-11-18 ~ 2026-11-19)**
+
+| 批 | 內容 | 狀態 |
+| --- | --- | --- |
+| PR-0 | 唯讀實測(測試區 `netops-pa` 容器,PAN-OS 12.1.7-h3):op `show config running xpath` 讀得到規則與物件,不需 Configuration 權限,D22 不變 | 完成(2026-11-18) |
+| PR-1 | 收集器 `policies.py`(每 30 分鐘 + 手動,白名單 op,CPU 保護,失敗保留快照) | 完成(!141) |
+| PR-2 | API:清單 / 單條 / 手動重新整理 / 版本與差異、`POST /ip-name-range-lookups`、權限 `netops.pa-policy.read|refresh`、rbac、`papolicy/` 版本歷史 50 份、kb-backup | 完成(!145) |
+| PR-3 | 前端邏輯:`api/paPolicy.ts`、`usePaPolicy`、`usePaPolicyViz`(規則圖資料) | 完成(!145) |
+| PR-5 | 排序檢查 `GET /pa-policy-checks`、AI 判讀 `kind: 'pa-policy'`、`usePaPolicyCheck` | 完成(!146) |
+| PR-4 | 頁面「防火牆 › 安全規則」四分頁(清單、變更紀錄、排序檢查、規則圖),Gemini | 完成(!147 提示詞、!148) |
+| 後續 | 型別 / mock / `usePolicyRuleDrawer` / compose `PA_POLICY_*`(!149);驗收修正:AI 判讀驗證 `verify` 事件、規則圖點選篩選、匯出(!151、提示詞 !152、畫面 !154);`verify` 誤報修正(!157) | 完成 |
+| 驗收 | 2026-11-19:!150(通過 6 / 部分 3 / 失敗 0)、!155 補驗(通過 11 / 部分 2 / 無法驗 1 / 失敗 0) | 完成 |
+| 未做 | 跨頁規則抽屜畫面(Log 明細、戰情室點規則名稱;邏輯 `usePolicyRuleDrawer` 已有);正式區開規則收集 | 待辦 |
+
+**TS PA 威脅特徵碼(2026-11-19 ~ 2026-11-20,TS-1 ~ TS-4 程式全部由 Gemini 撰寫、Claude 審查)**
+
+| 批 | 內容 | 狀態 |
+| --- | --- | --- |
+| TS-0 | 唯讀實測:弱點 25,450 筆(11.6 MB、2.4 秒)、間諜軟體 9,566 筆;CPU 最高 13%;特徵清單沒有每筆發布日;shared 位置沒有 profile,只讀 vsys1 | 完成(2026-11-19) |
+| TS-1 | 收集器 `signatures.py`(版本檢查、全清單、vsys1 profile、按需 `show threat id`、CPU 保護含大清單前重查) | 完成(!164) |
+| TS-2 | 後端 API(14 條)、版本差異歷史(D1 / D2、`rebuilt`)、命中比對雙路由(TS-Q8)、規則覆蓋、戰情室 `newSignatureHits`、rbac、kb-backup `pa-signature`、前端 `api/paSignature.ts` 與 composables | 完成(!166) |
+| TS-3 | AI 摘要 `kind: 'pa-signature'` | 完成(!168) |
+| TS-4 | 頁面「防火牆 › 威脅特徵碼」五分頁、跨頁 `SignatureDrawer`(戰情室、安全事件、Log 明細、時段明細)、戰情室新特徵提示列 | 完成(!169,審查 !170) |
+| ts-fix-1 | F1:PA 回 `Unknown` 佔位當查無、查無結果附 `hits30d`;F2:AI 摘要新增高危 0 筆措辭 | 完成(!172) |
+| 驗收 | 2026-11-20:!171 + !173,通過 11、失敗 0;8 個 ID 與 PA GUI 對照 0 差異;規則覆蓋 152 / 151 / 1 與 PA GUI 一致 | 完成 |
+| TS-5 | Threat Vault 接入 | 未排程(需求方申請到 Key、確認連外後再指派) |
+
+**測試區 / 正式區**:測試區 `PA_POLICY_ENABLED=1`(11-19 起)、`PA_SIGNATURE_ENABLED=1`(11-20 起)。正式區兩個收集器預設關閉(`deploy/netops-prod.env.example`),改 `netops-pa` 會重建並使 PA Syslog 中斷(見 RUNBOOK-prod §8)。**待需求方決定**:TS-Q6(PA API 帳號降級成只傳 Log 後,規則收集與特徵碼怎麼辦,和 HANDOFF「PA API 帳號降級前要做」一起確認)、TS-Q10(正式區何時開特徵碼收集)、規則收集是否強制專用 Key(資安審查 M1)。
 
 ## AC AI 改用 ClickHouse、PA 頁面 AI 功能、IP 對照表(規劃 2026-11-13)
 

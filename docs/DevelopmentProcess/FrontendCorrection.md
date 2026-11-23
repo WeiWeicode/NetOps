@@ -2,6 +2,24 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。範圍:`frontend/`。
 
+## 2026-11-20 威脅特徵碼前端(TS-2 邏輯、TS-3、TS-4、ts-fix-1)
+- 工作項目:TS-2 前端邏輯、TS-3、TS-4、ts-fix-1(`docs/THREAT-SIGNATURE-PLAN.md`;全部由 Gemini 撰寫、Claude 審查)
+- 內容:`api/paSignature.ts`、`composables/usePaSignature.ts`(清單、版本、命中、覆蓋、AI、`isDiffUnavailable` 等 `rebuilt` 判斷)、`usePaSignatureDrawer.ts`;頁面 `pages/firewall/Signatures.vue`(`/firewall/signatures`,五分頁:清單、版本差異、命中比對、規則覆蓋、AI 摘要)、`components/signatures/*`、`components/warroom/NewSignatureHitsBar.vue`;`SignatureDrawer` 由 `Live.vue`、`Events.vue`、`Search.vue`、`SliceDrawer.vue` 開啟;`useWarroom.ts` 的 `mergeNewSignatureHits`;`firstVersion` 為 `null` 顯示「未知」、`rebuilt` 顯示「這一版差異無法計算」、`since` 顯示「自 YYYY-MM-DD 起統計」;IP 名稱只依後端回傳與 `netops.ip-name.read`;ts-fix-1:查無抽屜顯示近 30 天命中。
+- 檔案:`frontend/src/{api/paSignature.ts,composables/usePaSignature*.ts,pages/firewall/Signatures.vue,components/signatures/,components/warroom/NewSignatureHitsBar.vue}`(!166、!168、!169、!172)
+- 驗證:frontend `typecheck`、`build`、`npm test` 44 檔 346 通過(含 `paSignature.mount.test.ts`、`paSignatureDrawer.test.ts`)
+
+## 2026-11-19 PA 安全規則前端(PR-3、PR-4、驗收修正)
+- 工作項目:PR-3、PR-4、PR-FIX(`docs/WARROOM-DIRECTION-POLICY-PLAN.md` §3.3、§3.5、§3.6)
+- 內容:`api/paPolicy.ts`、`composables/usePaPolicy.ts`、`usePaPolicyCheck.ts`、`usePaPolicyViz.ts`(規則圖資料與點選篩選)、`usePaPolicyExport.ts`(規則圖匯出 Markdown / JSON,前端產生,不含 IP 對照姓名 / 部門、說明欄、使用者名稱)、`usePolicyRuleDrawer.ts`(跨頁規則抽屜邏輯,畫面未接);頁面 `pages/firewall/Policies.vue`(`/firewall/policies`,四分頁:清單、變更紀錄、排序檢查、規則圖;Gemini)、`components/policies/*`;AI 判讀顯示 `verify` 標註(`reason`);`mock/paPolicy.ts`(`MOCK_PA_POLICY=empty`)。
+- 檔案:`frontend/src/{api/paPolicy.ts,composables/usePaPolicy*.ts,usePolicyRuleDrawer.ts,pages/firewall/Policies.vue,components/policies/}`(!145、!146、!148、!149、!151、!154、!157)
+- 驗證:frontend `typecheck`、`build`、`npm test` 319 通過(!157 時)
+
+## 2026-11-18 戰情室進出方向前端(WD-2、WD-3)
+- 工作項目:WD-2、WD-3(`docs/WARROOM-DIRECTION-POLICY-PLAN.md` §2.3、§2.4)
+- 內容:`api/warroom.ts` 型別加選填連出欄位;`useWarroom.ts` 的 `linkDirectionProbs`、`direction` 篩選(全部 / 連入 / 連出,偏好存 `localStorage` `wr-direction`);`WarroomCanvas.vue` 連出粒子反向、連入青綠 / 連出藍紫、節點「入 / 出」數字;`LegendPanel.vue` 圖例。
+- 檔案:`frontend/src/{api/warroom.ts,composables/useWarroom.ts,components/warroom/WarroomCanvas.vue,LegendPanel.vue}`(!140)
+- 驗證:`warroom.test.ts`、`warroom.mount.test.ts`;測試區真實流量與效能回歸未做(需求方不驗收)
+
 ## 2026-11-18 網段設定 × IP 對照表搭配前端邏輯(SG-4)
 - 工作項目:SG-4(`docs/SEGMENT-SETTINGS-PLAN.md` §3、§6 Q3、Q4)
 - 內容:`composables/useSegmentPairing.ts`:名稱快取(只有 `netops.ip-name.read` 才查,只放記憶體)、A `useUnmatchedAssist`(未分類 IP 名稱、加入網段、建 /24)、B `useIpNameCidrImport`(對照表 CIDR 列匯入,同名稱併成一個網段、標出已涵蓋)、C `useSegmentLookup`(IP 對照表所屬網段,範例設定不顯示)、D `useSegmentDeviceNames`(戰情室 Top 內部 IP 設備名稱);`api/ipNames.ts` 加 `lookup`、`api/warroom.ts` 加 `topIps`。畫面交 Gemini。

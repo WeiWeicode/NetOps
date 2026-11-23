@@ -335,25 +335,29 @@ sudo sha256sum /root/netops-deploy/host3-pa-pki.sh    # 和開發機 sha256sum d
 | `warroom/` | 網段設定 `warroom.json`(SG,D46)與 `history/` | 不可重建;**排除** `warroom/ai-hourly.json`(每小時重算)與 `*.tmp`。`warroom/` 還沒建立(沒存過網段設定)時只打包 `knowledge` |
 | `palogs/`(另一個檔,見下) | FTP 分析結果(`index.json`、`summaries/`、`flows/`、`events/`)、外部 IP 學習、ClickHouse 每小時摘要與**對帳結果** `ch/recon/`、AI 每日摘要 `ai-daily/` | FTP 只留約 1 個月,超過就無法重算(2026-11-18 需求方決定併入備份,#5);排除 `*.tmp`。`ai-daily/` 含 IP 與姓名 |
 | `adlogs/`、`ipnames/`(同上) | AD 事件、IP 對照表(含姓名、部門,個資) | 同上 |
+| `papolicy/`(同上) | PA 安全規則版本歷史(PR-2,規則或物件內容雜湊變了才存一版,保留 50 份;含規則說明欄,viewer 看得到差異) | 不可重建(PA 沒有 NetOps 這種版本歷史);目錄還沒建立(`PA_POLICY_ENABLED=0` 或還沒讀到規則)時略過 |
+| `pa-signature/`(同上) | PA 威脅特徵碼版本差異歷史(TS-2,`index.json`、`history/<threatVersion>.json` 保留 90 份、精簡索引 `latest-index.json.gz`,含持久基準日 `baselineAt`) | 基準日與歷史不可重建(精簡索引遺失時會標 `rebuilt`,該版差異無法計算);目錄還沒建立(`PA_SIGNATURE_ENABLED=0`)時略過 |
 
 `warroom/history/warroom-<時間>-v<版本>.json` 是**每次儲存前的舊設定**(保留最近 20 份,檔名的 `v<版本>` 是被取代的那一版),用途是誤改後回到舊版;NAS 每日備份再多一層保護(`warroom.json` 被刪或壞掉時)。
 
 備份位置:NAS `/mnt/nas-docker/giga-netops/<區>/`,每天兩個檔(各附 `.sha256`):
 - `netops-kb-<區>-YYYYMMDD.tar.gz`:`knowledge/`、`warroom/`,保留 `KB_BACKUP_KEEP` 份(預設 30)。
-- `netops-data-<區>-YYYYMMDD.tar.gz`:`palogs/`、`adlogs/`、`ipnames/`,保留 `KB_BACKUP_DATA_KEEP` 份(預設 7)。資料目錄不自動清除(ARCHITECTURE D16),每天成長約 26 MB,
+- `netops-data-<區>-YYYYMMDD.tar.gz`:`palogs/`、`adlogs/`、`ipnames/`、`papolicy/`、`pa-signature/`(`backup.sh` 的 `DATA_DIRS`;不存在的目錄略過),保留 `KB_BACKUP_DATA_KEEP` 份(預設 7)。資料目錄不自動清除(ARCHITECTURE D16),每天成長約 26 MB,
   一份會越來越大(測試區 2026-11-18 約 1.1 GB 未壓縮,`flows/` 已是 gzip),份數和知識庫分開設定;改份數在 `netops.env` 加 `KB_BACKUP_DATA_KEEP=<份數>` 後重試 `deploy-prod`。
 
 兩個都成功才寫 `LAST_RESULT` 的 `OK …`(容器健康檢查看這一行);打包期間清單內的檔被刪除(例如 FTP 分析覆寫)時這次失敗,`KB_BACKUP_HOUR` 那一小時內每 5 分鐘重試,已完成的檔不重做。
 標記檔 `.giga-netops-backup` 不存在時整輪跳過(NAS 沒掛上)。
-NAS 上的備份含個資(`ipnames/`、`palogs/ai-daily/`):`giga-netops/` 目錄的存取權限照附件服務備份的規則由 NAS 管理員控管。
+NAS 上的備份含個資(`ipnames/`、`palogs/ai-daily/`),`papolicy/` 含防火牆規則內容(網路架構資訊):`giga-netops/` 目錄的存取權限照附件服務備份的規則由 NAS 管理員控管。
 
-**還原資料目錄**(主機 3 磁碟遺失時):停 `netops-api` → `sha256sum -c` 核對 → 以 uid 1000 解到暫存目錄、確認只有 `palogs/`、`adlogs/`、`ipnames/` 底下的一般檔案,再搬回資料目錄 → 重試 `deploy-prod`:
+**還原資料目錄**(主機 3 磁碟遺失時):停 `netops-api` → `sha256sum -c` 核對 → 以 uid 1000 解到暫存目錄、確認只有 `palogs/`、`adlogs/`、`ipnames/`、`papolicy/`、`pa-signature/` 底下的一般檔案,再搬回資料目錄 → 重試 `deploy-prod`:
 ```bash
 sudo install -d -o 1000 -g 1000 -m 700 /srv/giga-netops/restore
 sudo -u '#1000' tar -xzf netops-data-prod-YYYYMMDD.tar.gz -C /srv/giga-netops/restore --no-same-owner --no-same-permissions
 sudo find /srv/giga-netops/restore ! -type f ! -type d          # 應該沒有輸出(沒有 symlink 等特殊檔)
-ls /srv/giga-netops/restore                                     # 只有 palogs adlogs ipnames
+ls /srv/giga-netops/restore                                     # 只有 palogs adlogs ipnames(有開安全規則 / 威脅特徵碼收集後還有 papolicy pa-signature)
 sudo mv /srv/giga-netops/restore/palogs /srv/giga-netops/restore/adlogs /srv/giga-netops/restore/ipnames /srv/giga-netops/prod/   # 目的目錄已存在時先改名保留
+# 備份裡有 papolicy、pa-signature 時一併搬回(沒有就略過,mv 找不到目錄會報錯):
+sudo mv /srv/giga-netops/restore/papolicy /srv/giga-netops/restore/pa-signature /srv/giga-netops/prod/
 ```
 `.sha256` 和備份放在同一個 NAS 目錄,只能發現傳輸損壞、不能防竄改;要防竄改時另外保存雜湊(例如每月把 `LAST_RESULT` 與 `.sha256` 複製到 NAS 以外)。
 備份日之後到 FTP 仍保留的檔案,netops-api 啟動後的同步會再分析補上。
@@ -365,3 +369,18 @@ sudo mv /srv/giga-netops/restore/palogs /srv/giga-netops/restore/adlogs /srv/gig
 3. 還原知識庫筆記:解出 `knowledge/` 後依知識庫還原流程處理(見 HANDOFF 的備份可還原驗證項)。
 
 核對備份內容(唯讀):`tar -tzf <檔案> | grep -E "warroom/"` 應有 `warroom/warroom.json` 與 `warroom/history/*`,不應有 `warroom/ai-hourly.json`。
+
+## 8. PA 安全規則與威脅特徵碼收集器(PR、TS;預設關閉)
+
+`netops-pa` 的兩個唯讀收集器,**預設都不開**(`deploy/netops-prod.env.example` 的 `PA_POLICY_ENABLED=0`、`PA_SIGNATURE_ENABLED=0`;`deploy-prod` 不會自動開)。沒開時畫面「防火牆 › 安全規則」「威脅特徵碼」顯示「沒有快照」,屬預期。設定欄位與預設值見 `docs/API.md` §13.4、§14.7。
+
+**開啟前**:
+1. **PA API 帳號權限**:兩個收集器都只送 Operational Requests 的唯讀 op,沿用輪詢的 Key(`pa_api_key`;專用 Key 尚未接 Docker secret)。若 PA API 帳號之後要降級成「只傳 Log」角色,收集器會停,降級前先照 `docs/HANDOFF.md`「PA API 帳號降級前要做」逐項確認。PA 的 Operational Requests 權限無法限制指令,Key 能讀整份 running config(含密碼雜湊、PSK),程式端靠指令白名單限制(ARCHITECTURE D22)。
+2. **GigaItApp「服務與路由」**發佈新路由草稿(`pa-policies`、`pa-policy-*`、`ip-name-range-lookups`、`pa-signatures`、`pa-signature-*`、AI `explanations` 的新 kind)並分配選單「安全規則」「威脅特徵碼」權限;RBAC 節點由 `rbac-prod` 套用(`deploy/gateway-rbac.yaml`)。正式區威脅特徵碼何時開(TS-Q10)與 PA API 帳號降級後的做法(TS-Q6)**未定**。
+
+**開啟時**:在主機 3 `netops.env` 加 `PA_POLICY_ENABLED=1` 或 `PA_SIGNATURE_ENABLED=1`(需求方 / 維運自己改,AI 不碰機密檔),重跑 `deploy-prod`。**改 `netops-pa` 的設定或 compose 會重建 `netops-pa`,PA-560 的 Syslog 連線會斷,要請網通在場、部署後對 Syslog Server Profile 重新 Commit**;部署後確認心跳 `syslogOkAt` 與 TRAFFIC 流量恢復(`deploy/ci-netops-pa.sh` 在 `pa-collector/`、compose 段、`netops.env` 都沒變時不重建)。
+
+**開啟後**:
+- 規則:收集器每 30 分鐘讀一次(管理平面 CPU > 50% 不讀);Redis `netops:pa:policy:*` 有快照、畫面「快照時間」更新。
+- 特徵碼:收集器每 30 分鐘只讀 `show system info`,內容版本變動才讀全清單(TS-0 測試區實測弱點約 2.5 萬筆、間諜軟體約 1 萬筆,11.6 MB、2.4 秒);`netops-api` 約 10 分鐘內在資料目錄寫入基準版本 `pa-signature/index.json`(第一次讀到的清單當基準,不算新增)。
+- 兩者都有 NAS 每日備份與還原方式(§7)。

@@ -2,6 +2,8 @@
 
 > 接手時先讀 `AGENT.md`,再讀 `docs/ARCHITECTURE.md`、`docs/IMPL-PLAN.md`。
 
+> 2026-11-23:WR-1 / PR / TS 累積的待寫文件已由 docs MR(`docs/pr-ts-docs`)補齊:API.md §10.3、§11、§12、§13、§14,PA-LIVE-PLAN §4,ARCHITECTURE D22,IMPL-PLAN、PROJECT-MAP、`deploy/RUNBOOK-prod.md` §7–§8,DevelopmentProcess 四份紀錄;下列各段「下一步」裡的「docs MR」項目以此為準(合併後視為完成)。
+
 ## 2026-11-20 收工:威脅特徵碼(TS)TS-1 ~ TS-4 測試區完成並驗收,推正式區
 
 **接手方式**:新討論串說「從 `NetOps/docs/HANDOFF.md`「2026-11-20 收工」接手」。計畫書 `docs/THREAT-SIGNATURE-PLAN.md`(§9 待決 Q6、Q10);審查 `docs/reviews/2026-11-20-ts-3-ts-4.md`;驗收 `docs/test-reports/2026-11-20-ts-acceptance.md`(!171)、`2026-11-20-ts-fix-1-acceptance.md`(!173)。
@@ -137,9 +139,10 @@
 | 即時監控輪詢(`poller.py`) | op `show session info`、`show system resources`、`show running resource-monitor`、`show counter interface` | Operational Requests |
 | PA 精準查詢(`pa_query.py`,C5) | `type=log` 查詢 / get / finish;op `show session all filter`、`show system resources` | Log、Operational Requests |
 | 規則收集(`policies.py`,PR-1) | op `show config running xpath …`、`show rule-hit-count`、`show system resources`(之後版本差異可能用 `show config audit`、Config log) | Operational Requests(Config log 需 Log) |
+| 威脅特徵碼(`signatures.py`,TS-1) | op `show system info`、`show predefined xpath /predefined/threats/vulnerability`、`show predefined xpath /predefined/threats/phone-home`、`show config running xpath <vsys1>/profile-group`、`<vsys1>/profiles/vulnerability`、`<vsys1>/profiles/spyware`、`show system resources`;抽屜按需單筆 `show threat id <純數字 ID>`(限流:全系統每 10 秒 1 次、管理平面 CPU > 50% 不送)。只在內容版本變動、手動或無快照時讀全清單(回應上限 64 MB) | Operational Requests(TS-0 實測現有 Key 可讀,不需要 Configuration 權限) |
 | Log 轉送(Syslog / HTTP) | PA 主動送出,不經 API Key | 不需要 |
 
-注意:PA 的 Operational Requests 權限無法限制指令,op Key 能讀整份 running config(含密碼雜湊、PSK);程式端靠白名單限制。若角色只留 Log,上表前三項要改設計或停用。
+注意:PA 的 Operational Requests 權限無法限制指令,op Key 能讀整份 running config(含密碼雜湊、PSK);程式端靠白名單限制。若角色只留 Log,上表除「Log 轉送」外各項(輪詢、精準查詢的 op 部分、規則收集、威脅特徵碼)要改設計或停用(威脅特徵碼的降級做法是 TS-Q6,未定)。
 
 ### 已知 / 未處理
 

@@ -112,6 +112,24 @@ flowchart TB
 | `netops:backfill:queue` | List | **C3(D33)**:FTP 補漏工作 id;`netops-api` LPUSH、`netops-ingest` RPOP(一次一個),最多 10 個 | — |
 | `netops:backfill:running` | Set | **C3**:執行中的補漏工作 id;`netops-ingest` 重新啟動時把裡面的工作標失敗 | — |
 | `netops:backfill:job:{id}` | Hash | **C3(D33)**:補漏工作內容(日期、小時、FTP 檔案路徑)與狀態、筆數(`read`、`skipped`、`inserted`、`noSeqno`);`netops-api` 建立、`netops-ingest` 更新 | 7 天 TTL |
+| `netops:pa:policy:snapshot` | String(JSON) | **PR-1(2026-11-18,D22)**:PA 安全規則快照(`netops-pa` 的 `policies.py` 寫;vsys1):`fetchedAt`、`hash`(規則 + 物件內容雜湊,命中數不算)、`vsys`、`rules`(依 PA 順序,含 `position` 1 起算 = PA GUI 編號)、`objects`(address、address-group、service、service-group、application-group、tag)。空規則、解析失敗、超過上限(規則 5000、物件 2000)不覆蓋這個鍵 | 7 天 TTL(收集器停很久時不把舊規則當現況;畫面另依 `fetchedAt` 標過期) |
+| `netops:pa:policy:hits` | String(JSON) | **PR-1**:規則命中數(`netops-pa` 寫):`fetchedAt`、`items{規則名稱: hitCount、lastHit、firstHit、lastReset、created、modified}`(來自 `show rule-hit-count`,含 2 條預設規則) | 同上 |
+| `netops:pa:policy:status` | Hash | **PR-1**:收集狀態(`netops-pa` 寫):`state`(`ok` / `failed` / `rejected` / `paused`)、`message`、`lastRunAt`、`trigger`、`mgmtCpu`(本次;沒讀到為空字串),與最近一次成功的 `lastOkAt`、`durationMs`、`ruleCount`、`hash`(失敗時保留,快照仍是那一次的內容) | 無 |
+| `netops:pa:policy:refresh` | String(JSON) | **PR-2**:手動重新整理請求(`netops-api` SET,值 `{ requestedAt, emp }`;`netops-pa` 讀到就 GETDEL);收集器端最短間隔 60 秒 | 到被 GETDEL |
+| `netops:pa:policy:cool` | String | **PR-2**:手動重新整理冷卻(`netops-api` SET NX EX 300,全系統) | 5 分鐘 |
+| `netops:pa:sig:meta` | String(JSON) | **TS-1(2026-11-19,D22)**:威脅特徵碼內容版本(`signatures.py` 寫):`fetchedAt`、`checkedAt`、`threatVersion`、`threatReleaseDate`、`appVersion`、`appReleaseDate`、`avVersion`、`avReleaseDate`、`wildfireVersion`、`wildfireReleaseDate`、`urlFilteringVersion`、`counts`(`vulnerability`、`spyware`、`total`)、`hash`、`baselineAt`。版本沒變時只更新 AV / WildFire 版本與 `checkedAt` 並續期 | 7 天 TTL(每次定期檢查成功時續期) |
+| `netops:pa:sig:items:vulnerability`、`netops:pa:sig:items:spyware` | String(JSON) | **TS-1**:弱點、間諜軟體特徵正規化清單(`id` 為 entry name 純數字字串、`kind`、`name`、`severity`、`category`、CVE、預設動作等;TS-0 實測弱點約 2.5 萬筆、間諜軟體約 1 萬筆)。只在內容版本變動、手動更新或無快照時重讀 | 同上 |
+| `netops:pa:sig:profiles` | String(JSON) | **TS-1**:vsys1 的 `fetchedAt`、`vsys`、`profileGroups`、`vulnerabilityProfiles`、`spywareProfiles`(規則覆蓋用;只讀 vsys1,shared 位置 TS-0 實測沒有 profile) | 同上 |
+| `netops:pa:sig:status` | Hash | **TS-1**:收集狀態(`netops-pa` 寫):`state`(`ok` / `failed` / `rejected` / `paused`)、`message`、`lastRunAt`、`trigger`、`mgmtCpu`,與最近一次成功的 `lastOkAt`、`durationMs`、`count`、`threatVersion`、`fullFetch` | 無 |
+| `netops:pa:sig:refresh`、`netops:pa:sig:cool` | String | **TS-2**:手動重新整理請求(`netops-api` SET、`netops-pa` GETDEL)、冷卻(`netops-api` SET NX EX 300,全系統) | 到被 GETDEL、5 分鐘 |
+| `netops:pa:sig:lookup:jobs` | List | **TS-1 / TS-2**:抽屜按需單筆查詢(`show threat id <純數字 ID>`)的工作 id;`netops-api` LPUSH、`netops-pa` RPOP | — |
+| `netops:pa:sig:lookup:job:{id}` | Hash | **TS-1**:按需查詢工作:`threatId`、`emp`、`status`(`queued` / `running` / `done` / `not_found` / `rejected` / `failed`)、時間、結果;只有建立者(`emp`)可查 | 10 分鐘 |
+| `netops:pa:sig:lookup:cache:{threatId}` | String(JSON) | **TS-1**:單筆查詢結果快取 `{ found, item?, checkedAt }`(含負快取 `found: false`)。PA 回名稱與 subtype 皆 `Unknown`、severity 與 description 皆空的佔位結果視為查無(ts-fix-1);讀取端也把舊的 Unknown 快取當查無,不改寫、不刪除 | 1 天 |
+| `netops:pa:sig:lookup:cool` | String | **TS-1**:單筆按需查詢全系統限流(`netops-pa` 每次查詢 PA 前 SET NX EX 10) | 10 秒 |
+
+**`netops:pa:heartbeat` 的新欄位**:TS-1 多 `signatureEnabled`、`signatureState`(`ok` / `rejected` / `paused` / `failed`;`rejected` 是 CPU 保護退讓、`paused` 是測試區輪詢暫停,都是正常運作不算故障)、`signatureStateAt`、`signatureNote`;`rejected` / `paused` 時清除 `signatureError` / `signatureErrorAt`。
+
+**PR / TS 鍵的說明**:鍵格式的唯一出處是 `pa-collector/netops_pa/keys.py` 與 `backend/src/infra/redis/{pa-policy,pa-signature}.ts`(兩邊一起改)。`netops-api` 只讀(例外:手動重新整理請求、冷卻、按需查詢工作 id 由它寫入);`netops-pa` 的 `policies.py`、`signatures.py` 才連 PA-560。版本歷史不在 Redis,存在 `infra/store`(`papolicy/` 保留 50 份、`pa-signature/` 保留 90 份),見 `docs/API.md` §13、§14。
 
 **log 欄位**:沿用舊版功能已在用的欄位,不新增。
 

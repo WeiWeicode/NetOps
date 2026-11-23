@@ -16,6 +16,7 @@ export function readLogOpen(): boolean {
  *   - 暫停 / 繼續切換(w.paused)
  *   - 聚焦節點同步篩選提示與一鍵清除聚焦
  *   - 欄位:時間、動作、來源 IP、國家、目的 IP、區段、Port、App、規則、Bytes、Session(威脅顯示威脅名稱/嚴重度)
+ *   - 規則名稱可點時(ruleLinkable)送出 open-rule,由頁面開安全規則抽屜
  *   - 支援 IP 對照表(GIpLabel)與連到 Log 明細查詢(/firewall/search)
  *   - 虛擬捲動(2026-11-17):固定列高 + table-layout: fixed,只渲染可見列;原本每秒整表 200 列重排 50–70ms,
  *     是真實流量下最後的掉幀來源(暫停 Log 表 95 fps、不暫停 23 fps)
@@ -39,6 +40,8 @@ const props = withDefaults(defineProps<{
   segments?: readonly WarroomSegment[];
   /** TS-4:威脅名稱是否可點開特徵碼說明抽屜 */
   sigLinkable?: (nameOrId: string) => boolean;
+  /** 規則名稱是否可點開安全規則抽屜(沒有 netops.pa-policy.read 時不傳或回 false) */
+  ruleLinkable?: (name: string) => boolean;
 }>(), { open: true });
 
 const emit = defineEmits<{
@@ -47,7 +50,10 @@ const emit = defineEmits<{
   (e: 'clearFocus'): void;
   (e: 'update:open', v: boolean): void;
   (e: 'open-signature', name: string): void;
+  (e: 'open-rule', name: string): void;
 }>();
+
+const ruleOf = (l: LiveLog): string => (typeof l.rule === 'string' ? l.rule : '');
 
 const isOpen = computed(() => props.open !== false);
 
@@ -264,7 +270,18 @@ function sessionOrThreat(l: LiveLog): string {
               <td>{{ segmentLabel(l.segment) }}</td>
               <td>{{ l.dport ?? '—' }}</td>
               <td>{{ l.app ?? '—' }}</td>
-              <td>{{ l.rule ?? '—' }}</td>
+              <td>
+                <button
+                  v-if="ruleOf(l) && ruleLinkable?.(ruleOf(l))"
+                  type="button"
+                  class="wr-logbar__rule"
+                  :title="`${ruleOf(l)}（檢視安全規則）`"
+                  @click="emit('open-rule', ruleOf(l))"
+                >
+                  {{ ruleOf(l) }}
+                </button>
+                <span v-else>{{ ruleOf(l) || '—' }}</span>
+              </td>
               <td>{{ typeof l.bytes === 'number' ? fmtNum(l.bytes) : '—' }}</td>
               <td>
                 <button
@@ -453,6 +470,27 @@ tr:hover td {
   text-align: left;
   cursor: pointer;
   text-decoration: underline dotted rgba(245, 176, 58, 0.55);
+}
+.wr-logbar__rule {
+  display: inline-block;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #3ea8ff;
+  font: inherit;
+  line-height: 23px;
+  vertical-align: top;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
+  cursor: pointer;
+  text-decoration: underline dotted rgba(62, 168, 255, 0.55);
+}
+.wr-logbar__rule:hover {
+  color: #8cc9ff;
+  text-decoration: underline solid #8cc9ff;
 }
 .wr-logbar__sig:hover {
   color: #ffd685;

@@ -12,8 +12,10 @@ import { fmtNum } from '@/api/format';
 import { collectorView, fmtBps, logSource } from '@/composables/paLive';
 import { useLiveTop } from '@/composables/useLiveTop';
 import { usePaSignatureDrawer } from '@/composables/usePaSignatureDrawer';
+import { usePolicyRuleDrawer } from '@/composables/usePolicyRuleDrawer';
 import { useWarroom } from '@/composables/useWarroom';
 import { useWarroomAi } from '@/composables/useWarroomAi';
+import PolicyRuleDrawer from '@/components/policies/PolicyRuleDrawer.vue';
 import SignatureDrawer from '@/components/signatures/SignatureDrawer.vue';
 import AiPanel from '@/components/warroom/AiPanel.vue';
 import EventFeed, { readFeedOpen } from '@/components/warroom/EventFeed.vue';
@@ -36,6 +38,18 @@ async function openSignature(nameOrId: string) {
   if (r !== 'ok' && r !== 'stale' && !sigDrawer.open && sigDrawer.notice) {
     toast.info(sigDrawer.notice);
   }
+}
+
+/** 跨頁安全規則抽屜:Log 表、即時排行點規則名稱(需 netops.pa-policy.read;找不到 / 沒有快照時以提示說明) */
+const ruleDrawer = usePolicyRuleDrawer();
+async function openRule(name: string) {
+  const r = await ruleDrawer.show(name);
+  if (r !== 'ok' && r !== 'stale' && ruleDrawer.notice) {
+    toast.info(ruleDrawer.notice);
+  }
+}
+function onRuleDrawerToggle(v: boolean) {
+  if (!v) ruleDrawer.close();
 }
 
 const legendOpen = ref(readLegendOpen());
@@ -263,8 +277,10 @@ const kpiCpu = computed(() => {
         :sources="w.nodes.value.sources"
         :segments="w.nodes.value.segments"
         :sig-linkable="sigDrawer.linkable"
+        :rule-linkable="ruleDrawer.linkable"
         @clear-focus="w.toggleFocus(null)"
         @open-signature="openSignature"
+        @open-rule="openRule"
       />
     </div>
 
@@ -280,7 +296,9 @@ const kpiCpu = computed(() => {
       :loading="rk.loading.value"
       :source="rkSource"
       :sig-linkable="sigDrawer.linkable"
+      :rule-linkable="ruleDrawer.linkable"
       @open-signature="openSignature"
+      @open-rule="openRule"
     />
 
     <!-- 系統狀態收摺抽屜(原 Live.vue 收集器狀態、測試區暫停開關、PA 精準查詢) -->
@@ -295,6 +313,7 @@ const kpiCpu = computed(() => {
 
     <!-- TS-4:跨頁威脅特徵碼說明抽屜 -->
     <SignatureDrawer :drawer="sigDrawer" />
+    <PolicyRuleDrawer :open="ruleDrawer.open" :policy="ruleDrawer.policy" @update:open="onRuleDrawerToggle" />
   </div>
 </template>
 

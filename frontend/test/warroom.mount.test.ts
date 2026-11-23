@@ -36,6 +36,7 @@ const mocks = vi.hoisted(() => ({
   liveSetControl: vi.fn(),
   liveStreamUrl: vi.fn(() => '/api/netops/pa-live/stream'),
   liveProbeStream: vi.fn(),
+  policyGet: vi.fn(),
   perms: new Set<string>(['netops.pa-live.ai', 'netops.pa-live.manage']),
 }));
 
@@ -62,6 +63,11 @@ vi.mock('@/api/paLive', async (orig) => {
       probeStream: mocks.liveProbeStream,
     },
   };
+});
+
+vi.mock('@/api/paPolicy', async (orig) => {
+  const real = await orig<typeof import('@/api/paPolicy')>();
+  return { ...real, paPolicyApi: { ...real.paPolicyApi, get: mocks.policyGet } };
 });
 
 vi.mock('@/api/gateway', async (orig) => ({
@@ -677,6 +683,44 @@ describe('Live.vue 戰情室頁面整合掛載', () => {
     expect(sys.props('modelValue')).toBe(false);
     await btns.find((b) => b.text().includes('系統狀態'))!.trigger('click');
     expect(sys.props('modelValue')).toBe(true);
+    w.unmount();
+  });
+
+  it('Log 表點規則名稱開安全規則抽屜;沒有 netops.pa-policy.read 時只顯示文字(需求方 2026-11-23)', async () => {
+    // 沒有權限:規則名稱不可點
+    const w0 = mount(Live, { global: { plugins: [ui], stubs: { teleport: true, RouterLink: true } } });
+    await flushPromises();
+    expect(w0.find('#lb').text()).toContain('block-geo');
+    expect(w0.find('button.wr-logbar__rule').exists()).toBe(false);
+    w0.unmount();
+
+    mocks.perms.add('netops.pa-policy.read');
+    mocks.policyGet.mockImplementation(async (name: string) => ({
+      available: true,
+      fetchedAt: '2026-11-23T00:30:00Z',
+      hash: 'h',
+      versionId: null,
+      stale: false,
+      hitsFetchedAt: null,
+      ruleCount: 1,
+      status: { collectorEnabled: true, state: 'ok', message: null, lastRunAt: null, lastOkAt: null, trigger: null, mgmtCpu: null, durationMs: null, refreshCooldownSec: 0 },
+      rule: {
+        position: 7, name, uuid: null, type: 'universal', tags: [], groupTag: null, fromZones: ['untrust'], toZones: ['dmz'],
+        sources: ['any'], sourceUsers: [], sourceDevices: [], negateSource: false, destinations: ['any'], destinationDevices: [],
+        negateDestination: false, applications: ['any'], services: ['any'], categories: [], action: 'deny', profileGroup: null,
+        profiles: {}, logStart: false, logEnd: true, logSetting: null, schedule: null, disabled: false, description: '',
+        hits: { hitCount: 1, lastHit: null, firstHit: null, lastReset: null, created: null, modified: null },
+        expanded: { sources: [], destinations: [], services: [], applications: [] },
+      },
+    }));
+    const w = mount(Live, { global: { plugins: [ui], stubs: { teleport: true, RouterLink: true } } });
+    await flushPromises();
+    const btn = w.findAll('button.wr-logbar__rule').find((b) => b.text() === 'block-geo');
+    expect(btn).toBeTruthy();
+    await btn!.trigger('click');
+    await flushPromises();
+    expect(mocks.policyGet).toHaveBeenCalledWith('block-geo');
+    expect(w.text()).toContain('#7 block-geo');
     w.unmount();
   });
 });

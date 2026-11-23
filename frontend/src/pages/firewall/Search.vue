@@ -8,6 +8,7 @@
  *   type=THREAT 查威脅 log(需求方 2026-11-13 決定),可再用威脅名稱、嚴重度;國家可分來源 / 目的(srcCountry / dstCountry)。
  *   時段明細抽屜的威脅類會帶 type=THREAT、threat、severity(useSlice.openInSearch;C7);無法套用的條件(不認得的類型等)提示「未套用」(AGENT §5)。
  *   AC5:威脅結果每列有「AI 說明」(按鈕權限 netops.pa-search.ai),明細對話框也有;期間是這次查詢的期間(ThreatAiDialog)。
+ *   規則欄與明細對話框可點規則名稱開安全規則抽屜(usePolicyRuleDrawer;需 netops.pa-policy.read,否則只顯示文字)。
  *   版面是最小可用版(類型、威脅名稱、嚴重度、來源 / 目的國家欄位與威脅欄位),樣式之後交 Gemini。
  */
 import { computed, onMounted, reactive, ref, shallowRef, watch } from 'vue';
@@ -30,13 +31,21 @@ import { cameFromApp, ignoredThreatCond as threatCondOf, isPorts, isSearchType, 
 import { useJob } from '@/composables/useJob';
 import { ipNameOf, ipNameTitle } from '@/composables/ipNames';
 import DateRangeField from '@/components/DateRangeField.vue';
+import PolicyRuleDrawer from '@/components/policies/PolicyRuleDrawer.vue';
 import SignatureDrawer from '@/components/signatures/SignatureDrawer.vue';
 import ThreatAiDialog from '@/components/ThreatAiDialog.vue';
 import { usePaSignatureDrawer } from '@/composables/usePaSignatureDrawer';
+import type { UsePaPolicyOptions } from '@/composables/usePaPolicy';
+import { usePolicyRuleDrawer } from '@/composables/usePolicyRuleDrawer';
 import { UI } from '@/api/perms';
 import { coverageText } from '@/composables/dateRange';
 import type { Coverage } from '@/api/pa';
 import { toast } from '@/ui';
+
+const props = defineProps<{
+  /** 元件測試用注入選項;正式頁面不傳入,使用真實後端與權限 */
+  ruleDrawerOptions?: UsePaPolicyOptions;
+}>();
 
 const PAGE_SIZE = 50;
 const route = useRoute();
@@ -241,6 +250,23 @@ function openSignatureFromDetail(nameOrId: string) {
   void openSignature(nameOrId);
 }
 
+// ---------- 規則名稱點開安全規則抽屜(找不到 / 沒有快照時不開抽屜,以提示說明原因) ----------
+const ruleDrawer = usePolicyRuleDrawer(props.ruleDrawerOptions);
+async function openRule(name: string) {
+  const r = await ruleDrawer.show(name);
+  if (r !== 'ok' && r !== 'stale' && ruleDrawer.notice) {
+    toast.info(ruleDrawer.notice);
+  }
+  return r;
+}
+async function openRuleFromDetail(name: string) {
+  // 取得規則、抽屜開啟後才關掉明細(不疊兩層彈窗);找不到 / 沒有快照時明細保留,只顯示提示
+  if ((await openRule(name)) === 'ok') detail.value = null;
+}
+function onRuleDrawerToggle(v: boolean) {
+  if (!v) ruleDrawer.close();
+}
+
 const pad = (n: number) => String(n).padStart(2, '0');
 const localMinute = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 
@@ -399,6 +425,18 @@ const asRow = (r: unknown) => r as PaLogRow;
           </button>
           <span v-else>{{ asRow(row).threat || '—' }}</span>
         </template>
+        <template #cell-rule="{ row }">
+          <button
+            v-if="ruleDrawer.linkable(asRow(row).rule)"
+            type="button"
+            class="sig-link"
+            :title="`檢視安全規則：${asRow(row).rule}`"
+            @click.stop="openRule(asRow(row).rule)"
+          >
+            {{ asRow(row).rule }}
+          </button>
+          <span v-else>{{ asRow(row).rule || '—' }}</span>
+        </template>
         <template #cell-ai="{ row }">
           <GButton v-if="asRow(row).threat" size="sm" variant="ghost" icon="sparkles" :aria-label="`AI 說明威脅 ${asRow(row).threat}`" @click.stop="explainThreat(asRow(row))">說明</GButton>
           <span v-else class="faint xs">—</span>
@@ -422,6 +460,15 @@ const asRow = (r: unknown) => r as PaLogRow;
         >
           特徵碼說明
         </GButton>
+        <GButton
+          v-if="detail?.rule && ruleDrawer.linkable(detail.rule)"
+          variant="secondary"
+          icon="shield"
+          :title="`檢視安全規則：${detail.rule}`"
+          @click="detail?.rule && openRuleFromDetail(detail.rule)"
+        >
+          規則內容
+        </GButton>
         <GButton v-if="canThreatAi && result?.type === 'THREAT' && detail?.threat" variant="primary" icon="sparkles" @click="detail && explainThreat(detail)">AI 說明這個威脅</GButton>
         <GButton @click="detail = null">關閉</GButton>
       </template>
@@ -429,6 +476,7 @@ const asRow = (r: unknown) => r as PaLogRow;
 
     <ThreatAiDialog v-if="canThreatAi && result" v-model:open="threatAiOpen" :name="threatAi?.name ?? ''" :severity="threatAi?.severity ?? ''" :from="result.from" :to="result.to" />
     <SignatureDrawer :drawer="sigDrawer" />
+    <PolicyRuleDrawer :open="ruleDrawer.open" :policy="ruleDrawer.policy" @update:open="onRuleDrawerToggle" />
   </div>
 </template>
 

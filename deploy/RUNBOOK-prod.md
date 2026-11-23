@@ -370,13 +370,13 @@ sudo mv /srv/giga-netops/restore/papolicy /srv/giga-netops/restore/pa-signature 
 
 核對備份內容(唯讀):`tar -tzf <檔案> | grep -E "warroom/"` 應有 `warroom/warroom.json` 與 `warroom/history/*`,不應有 `warroom/ai-hourly.json`。
 
-## 8. PA 安全規則與威脅特徵碼收集器(PR、TS;預設關閉)
+## 8. PA 安全規則與威脅特徵碼收集器(PR、TS)
 
-`netops-pa` 的兩個唯讀收集器,**預設都不開**(`deploy/netops-prod.env.example` 的 `PA_POLICY_ENABLED=0`、`PA_SIGNATURE_ENABLED=0`;`deploy-prod` 不會自動開)。沒開時畫面「防火牆 › 安全規則」「威脅特徵碼」顯示「沒有快照」,屬預期。設定欄位與預設值見 `docs/API.md` §13.4、§14.7。
+`netops-pa` 的兩個唯讀收集器。**正式區 2026-11-20 起兩個都已開啟**(主機 3 `netops.env` 設 `PA_POLICY_ENABLED=1`、`PA_SIGNATURE_ENABLED=1`;TS-Q10 需求方 2026-11-23 決定一起開;**M1:沿用 `pa_api_key`,不換專用 Key**;TS-Q6 仍未定)。範本 `deploy/netops-prod.env.example` 預設為 0,`deploy-prod` 不會自動開;其他環境要用時照下列「開啟前 / 開啟時」。沒開時畫面「防火牆 › 安全規則」「威脅特徵碼」顯示「沒有快照」,屬預期。設定欄位與預設值見 `docs/API.md` §13.4、§14.7。
 
 **開啟前**:
-1. **PA API 帳號權限**:兩個收集器都只送 Operational Requests 的唯讀 op,沿用輪詢的 Key(`pa_api_key`;專用 Key 尚未接 Docker secret)。若 PA API 帳號之後要降級成「只傳 Log」角色,收集器會停,降級前先照 `docs/HANDOFF.md`「PA API 帳號降級前要做」逐項確認。PA 的 Operational Requests 權限無法限制指令,Key 能讀整份 running config(含密碼雜湊、PSK),程式端靠指令白名單限制(ARCHITECTURE D22)。
-2. **GigaItApp「服務與路由」**發佈新路由草稿(`pa-policies`、`pa-policy-*`、`ip-name-range-lookups`、`pa-signatures`、`pa-signature-*`、AI `explanations` 的新 kind)並分配選單「安全規則」「威脅特徵碼」權限;RBAC 節點由 `rbac-prod` 套用(`deploy/gateway-rbac.yaml`)。正式區威脅特徵碼何時開(TS-Q10)與 PA API 帳號降級後的做法(TS-Q6)**未定**。
+1. **PA API 帳號權限**:兩個收集器都只送 Operational Requests 的唯讀 op,沿用輪詢的 Key(`pa_api_key`;M1 需求方 2026-11-23 決定不改用專用 Key)。若 PA API 帳號之後要降級成「只傳 Log」角色,收集器會停,降級前先照 `docs/HANDOFF.md`「PA API 帳號降級前要做」逐項確認。PA 的 Operational Requests 權限無法限制指令,Key 能讀整份 running config(含密碼雜湊、PSK),程式端靠指令白名單限制(ARCHITECTURE D22)。
+2. **GigaItApp「服務與路由」**發佈新路由草稿(`pa-policies`、`pa-policy-*`、`ip-name-range-lookups`、`pa-signatures`、`pa-signature-*`、AI `explanations` 的新 kind)並分配選單「安全規則」「威脅特徵碼」權限;RBAC 節點由 `rbac-prod` 套用(`deploy/gateway-rbac.yaml`)。正式區兩個收集器何時開(TS-Q10)已決定一起開(11-20 起運作);PA API 帳號降級後的做法(TS-Q6)**未定**。
 
 **開啟時**:在主機 3 `netops.env` 加 `PA_POLICY_ENABLED=1` 或 `PA_SIGNATURE_ENABLED=1`(需求方 / 維運自己改,AI 不碰機密檔),重跑 `deploy-prod`。**改 `netops-pa` 的設定或 compose 會重建 `netops-pa`,PA-560 的 Syslog 連線會斷,要請網通在場、部署後對 Syslog Server Profile 重新 Commit**;部署後確認心跳 `syslogOkAt` 與 TRAFFIC 流量恢復(`deploy/ci-netops-pa.sh` 在 `pa-collector/`、compose 段、`netops.env` 都沒變時不重建)。
 

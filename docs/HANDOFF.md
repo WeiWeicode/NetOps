@@ -4,6 +4,21 @@
 
 > 2026-11-23:WR-1 / PR / TS 累積的待寫文件已由 docs MR(`docs/pr-ts-docs`)補齊:API.md §10.3、§11、§12、§13、§14,PA-LIVE-PLAN §4,ARCHITECTURE D22,IMPL-PLAN、PROJECT-MAP、`deploy/RUNBOOK-prod.md` §7–§8,DevelopmentProcess 四份紀錄;下列各段「下一步」裡的「docs MR」項目以此為準(合併後視為完成)。
 
+## 2026-11-23:正式區收集器現況與決定
+
+- docs MR !177(WR-1 / PR / TS 文件)已合併 develop(11-23 08:33)。
+- 正式區推版已完成:main pipeline 1269 的 `build-prod`、`rbac-prod`、`deploy-prod` 在 11-20 成功(deploy-prod 11:58)。網通已重新 Commit Syslog,`syslogOkAt` 與流量有恢復(需求方確認)。
+- 正式區 GigaItApp「服務與路由」新路由草稿已發佈(PR 與 TS 的路由),「威脅特徵碼」選單權限照 TS-Q9 分配(需求方確認)。
+- 正式區「AI 每日摘要」11-21 起有內容(需求方確認)。
+- TS 補驗、PR 補驗:需求方測試全部正常(11-20 段下一步 3、11-19 段下一步 3)。
+- **TS-Q10 決定:兩個收集器一起開**。實際上主機 3 `/srv/giganexus/deploy/netops.env` 在 11-20 11:56 已設 `PA_POLICY_ENABLED=1`、`PA_SIGNATURE_ENABLED=1`,netops-pa 11-20 11:57 隨 deploy-prod 重建後一直運作:安全規則每 30 分鐘讀到 165 條;特徵碼基準版本 9174-10361(弱點 25,460、間諜軟體 9,566),11-22 18:27 讀到新版本 9177-10371(弱點 25,469),netops-api 11-23 02:37 寫入 `pa-signature/` 差異。11-20 段「`PA_SIGNATURE_ENABLED` 維持 0」與 11-19 段「`PA_POLICY_ENABLED` 維持 0」已不符現況,已在原文後加註(11-23 更正),原文不刪。
+- **M1 決定:不改用專用 Key**,經需求方與網通討論,兩個收集器維持沿用輪詢的 `pa_api_key`。
+- 注意:`netops.env` 第 25、27 行 `PA_POLICY_ENABLED=1` 重複,目前無影響;改 `netops.env` 會讓下次部署重建 netops-pa、斷 Syslog,等下次本來就要重建時再清。輪詢偶有 `interfaces` / `dataplane` `Session timed out` 部分失敗,不影響收集器。
+- 剩下待辦:
+  1. TS-Q6(PA API 帳號降級後怎麼辦):降級前 Claude 帶需求方確認權限,見「PA API 帳號降級前要做」。
+  2. 跨頁規則抽屜畫面(`usePolicyRuleDrawer` 邏輯已有):需求方說開工才做。
+  3. PA 弱點例外清單 22,766 vs NetOps 25,460:請網通確認計算範圍。
+
 ## 2026-11-20 收工:威脅特徵碼(TS)TS-1 ~ TS-4 測試區完成並驗收,推正式區
 
 **接手方式**:新討論串說「從 `NetOps/docs/HANDOFF.md`「2026-11-20 收工」接手」。計畫書 `docs/THREAT-SIGNATURE-PLAN.md`(§9 待決 Q6、Q10);審查 `docs/reviews/2026-11-20-ts-3-ts-4.md`;驗收 `docs/test-reports/2026-11-20-ts-acceptance.md`(!171)、`2026-11-20-ts-fix-1-acceptance.md`(!173)。
@@ -30,7 +45,7 @@
 
 1. **推正式區**:需求方合併 develop → main MR → 手動 `deploy-prod`、`rbac-prod`。
    - develop 比 main 多了 `pa-collector/`(TS-1、ts-fix-1)→ **`deploy-prod` 會重建正式區 netops-pa,Syslog 會斷,要網通在場、部署後對 Syslog Server Profile 重新 Commit**;部署後確認 `syslogOkAt` 與流量恢復。
-   - 主機 3 `netops.env` **不加 `PA_SIGNATURE_ENABLED`(維持 0)**:正式區何時開是 TS-Q10(未定,建議與 PR 收集器一起開)。沒開時頁面顯示「沒有快照」是預期。
+   - 主機 3 `netops.env` **不加 `PA_SIGNATURE_ENABLED`(維持 0)**:正式區何時開是 TS-Q10(未定,建議與 PR 收集器一起開)。沒開時頁面顯示「沒有快照」是預期。(11-23 更正:11-20 已開,見最上段)
    - 正式區 GigaItApp「服務與路由」發佈新路由草稿(`pa-signatures`、`pa-signature-*`),選單「威脅特徵碼」權限分配照 TS-Q9。
 2. 確認正式區每日 AI 摘要:11-21 08:10 後流量總覽「AI 每日摘要」卡片有內容。
 3. 補驗(需求方):只有 `netops.pa-signature.read`、沒有 Log 明細權限的帳號看不到 IP;時段明細 / 戰情室開特徵碼抽屜;PA 下一次內容更新後的版本差異、戰情室新特徵提示列、「新特徵」篩選。
@@ -94,7 +109,7 @@
 
 ### 下一步(依序)
 
-1. 需求方合併 !158 → !159(develop → main),手動 `deploy-prod`、`rbac-prod`;主機 3 `netops.env` 不加 `PA_POLICY_ENABLED`(維持 0)。
+1. 需求方合併 !158 → !159(develop → main),手動 `deploy-prod`、`rbac-prod`;主機 3 `netops.env` 不加 `PA_POLICY_ENABLED`(維持 0)。(11-23 更正:11-20 已開,見最上段)
 2. 正式區 GigaItApp「服務與路由」發佈新路由草稿(pa-policies、pa-policy-versions、pa-policy-refreshes、ip-name-range-lookups、AI 判讀)。
 3. 補驗(需求方操作):物件展開(位址 / 服務群組)對照 PA Objects、viewer 匯出無姓名、PA GUI 條數(166 + 2)、手動重新整理 5 分鐘冷卻;!157 合併後重跑 AI 判讀確認 #135 不再誤報。
 4. 跨頁規則抽屜(Log 明細、戰情室點規則名稱開規則內容):邏輯 `usePolicyRuleDrawer` 已有,畫面未接。

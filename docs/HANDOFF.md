@@ -7,6 +7,11 @@
 ## 2026-11-23:正式區收集器現況與決定
 
 - docs MR !177(WR-1 / PR / TS 文件)已合併 develop(11-23 08:33)。
+- **11-23 戰情室頂列整併與跨頁規則抽屜(已上線)**:
+  - !179(戰情室頂列整併:方向切換套戰情室配色、系統狀態只留頂列一個、即時排行與 Log 明細查詢移入戰情室頂列、頁首只留「戰情室連線中」)、!180(Log 明細查詢、戰情室 Traffic Log 表與即時排行的規則名稱可點開安全規則抽屜)都已合併 develop;需求方在測試區自測正常。
+  - !181(develop → main)09:47 合併,main pipeline 1280 的 `deploy-prod` 09:54 成功,**只更新前端**,netops-pa 未重建(Syslog 未斷);`rbac-prod` 未跑(無權限 / 路由變更)。
+  - 需求方 2026-11-23 決定:規則抽屜找不到規則或無快照時維持跳出提示、不開抽屜(沿用 `usePolicyRuleDrawer`,與威脅特徵碼頁一致)。「跨頁規則抽屜」已從待辦移除。細節見 `WARROOM-DIRECTION-POLICY-PLAN.md` §3.3、`WARROOM-PLAN.md` §4。
+  - 觀察:develop pipeline 1275(docs commit d8f1a83)`check:frontend` 失敗,之後 1278 / 1279 通過,推測偶發;job log 未讀(token 無 Job Read 權限)。若再發生請需求方從 GitLab 介面看 job log。
 - 正式區推版已完成:main pipeline 1269 的 `build-prod`、`rbac-prod`、`deploy-prod` 在 11-20 成功(deploy-prod 11:58)。網通已重新 Commit Syslog,`syslogOkAt` 與流量有恢復(需求方確認)。
 - 正式區 GigaItApp「服務與路由」新路由草稿已發佈(PR 與 TS 的路由),「威脅特徵碼」選單權限照 TS-Q9 分配(需求方確認)。
 - 正式區「AI 每日摘要」11-21 起有內容(需求方確認)。
@@ -16,8 +21,7 @@
 - 注意:`netops.env` 第 25、27 行 `PA_POLICY_ENABLED=1` 重複,目前無影響;改 `netops.env` 會讓下次部署重建 netops-pa、斷 Syslog,等下次本來就要重建時再清。輪詢偶有 `interfaces` / `dataplane` `Session timed out` 部分失敗,不影響收集器。
 - 剩下待辦:
   1. TS-Q6(PA API 帳號降級後怎麼辦):降級前 Claude 帶需求方確認權限,見「PA API 帳號降級前要做」。
-  2. 跨頁規則抽屜畫面(`usePolicyRuleDrawer` 邏輯已有):需求方說開工才做。
-  3. PA 弱點例外清單 22,766 vs NetOps 25,460:請網通確認計算範圍。
+  2. PA 弱點例外清單 22,766 vs NetOps 25,460:請網通確認計算範圍。
 
 ## 2026-11-20 收工:威脅特徵碼(TS)TS-1 ~ TS-4 測試區完成並驗收,推正式區
 
@@ -112,7 +116,7 @@
 1. 需求方合併 !158 → !159(develop → main),手動 `deploy-prod`、`rbac-prod`;主機 3 `netops.env` 不加 `PA_POLICY_ENABLED`(維持 0)。(11-23 更正:11-20 已開,見最上段)
 2. 正式區 GigaItApp「服務與路由」發佈新路由草稿(pa-policies、pa-policy-versions、pa-policy-refreshes、ip-name-range-lookups、AI 判讀)。
 3. 補驗(需求方操作):物件展開(位址 / 服務群組)對照 PA Objects、viewer 匯出無姓名、PA GUI 條數(166 + 2)、手動重新整理 5 分鐘冷卻;!157 合併後重跑 AI 判讀確認 #135 不再誤報。
-4. 跨頁規則抽屜(Log 明細、戰情室點規則名稱開規則內容):邏輯 `usePolicyRuleDrawer` 已有,畫面未接。
+4. 跨頁規則抽屜(Log 明細、戰情室點規則名稱開規則內容):(11-23 已完成,!180,見最上段)
 5. 文件 docs MR:API.md(PR API、`verify` 事件、`ip-name-range-lookups`)、PA-LIVE-PLAN §4 新 Redis 鍵、ARCHITECTURE D22 補 PR-0 結論、`PA_POLICY_*` 設定、RUNBOOK-prod 還原清單補 `papolicy`、PROJECT-MAP(`usePaPolicyExport.ts`、`verify.ts`)。
 6. 正式區是否開規則收集、PA API 帳號降級前的權限確認(見下段「PA API 帳號降級前要做」)。
 

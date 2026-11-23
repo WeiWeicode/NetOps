@@ -2,6 +2,16 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。範圍:`frontend/`。
 
+## 2026-11-23 Log 明細查詢與戰情室點規則名稱開安全規則抽屜
+- 內容:Log 明細查詢的規則欄與明細對話框「規則內容」按鈕、戰情室 Traffic Log 表規則欄、即時排行抽屜的規則排行,都可點開同一個 `PolicyRuleDrawer`;沿用 `usePolicyRuleDrawer`:沒有 `netops.pa-policy.read` 或 PA 兩條內建預設規則(intrazone / interzone-default)只顯示純文字;找不到規則或沒有快照時不開抽屜,以提示顯示原因(需求方 2026-11-23 決定,與威脅特徵碼頁一致);Log 明細的明細對話框在規則抽屜開啟後才關。安全事件、時段明細抽屜不顯示規則名稱,未接。流量總覽的阻擋規則 / 規則命中排行維持跳 Log 明細查詢。
+- 檔案:`frontend/src/{components/warroom/RankingDrawer.vue,components/warroom/TrafficLogTable.vue,pages/firewall/Live.vue,pages/firewall/Search.vue}`、`frontend/test/{policyRuleDrawerPages.mount.test.ts,warroom.mount.test.ts}`(!180,依賴 !179)
+- 驗證:新增 `policyRuleDrawerPages.mount.test.ts` 與 Live.vue 接線測試;需求方測試區自測正常
+
+## 2026-11-23 戰情室頂列整併(方向切換配色、系統狀態、即時排行、Log 明細查詢)
+- 內容:全部 / 連入 / 連出切換在亮色主題改用戰情室深色面板配色(覆寫 `GSegmented` 用到的 token);移除頁首重複的「系統狀態」,只留戰情室頂列那一個;「即時排行」「Log 明細查詢」由頁首移進戰情室頂列(樣式同系統狀態,`wr-sys-btn`),頁首只留「戰情室連線中」徽章;頂列按鈕加 `focus-visible` 外框。
+- 檔案:`frontend/src/pages/firewall/Live.vue`、`frontend/test/warroom.mount.test.ts`(!179)
+- 驗證:新增掛載測試;需求方測試區自測正常
+
 ## 2026-11-20 威脅特徵碼前端(TS-2 邏輯、TS-3、TS-4、ts-fix-1)
 - 工作項目:TS-2 前端邏輯、TS-3、TS-4、ts-fix-1(`docs/THREAT-SIGNATURE-PLAN.md`;全部由 Gemini 撰寫、Claude 審查)
 - 內容:`api/paSignature.ts`、`composables/usePaSignature.ts`(清單、版本、命中、覆蓋、AI、`isDiffUnavailable` 等 `rebuilt` 判斷)、`usePaSignatureDrawer.ts`;頁面 `pages/firewall/Signatures.vue`(`/firewall/signatures`,五分頁:清單、版本差異、命中比對、規則覆蓋、AI 摘要)、`components/signatures/*`、`components/warroom/NewSignatureHitsBar.vue`;`SignatureDrawer` 由 `Live.vue`、`Events.vue`、`Search.vue`、`SliceDrawer.vue` 開啟;`useWarroom.ts` 的 `mergeNewSignatureHits`;`firstVersion` 為 `null` 顯示「未知」、`rebuilt` 顯示「這一版差異無法計算」、`since` 顯示「自 YYYY-MM-DD 起統計」;IP 名稱只依後端回傳與 `netops.ip-name.read`;ts-fix-1:查無抽屜顯示近 30 天命中。

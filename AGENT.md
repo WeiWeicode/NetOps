@@ -181,6 +181,7 @@ Claude 與 Gemini **都可以**做所有工作:規劃與技術文件、需求企
 - **原始 log 不存本機檔案、不進資料庫**,只存摘要與統計。例外(保留時間或範圍要改,先由需求方決定):
   - PA 即時 log 存進 `netops-redis`,**TRAFFIC 明細 1 小時、統計 1 天;其他類型 2 天**(2026-11-04 決定,ARCHITECTURE D21)。
   - **PA TRAFFIC 與威脅類(threat、url、data、wildfire)原始 log 存進 `netops-clickhouse`**:原始 TRAFFIC 30 天、威脅類 90 天、每小時彙總 13 個月、來源 IP 彙總 90 天;測試區 TTL 2–3 天只驗功能(需求方 2026-11-10 核准,ARCHITECTURE D27、手冊 `docs/PA-LOG-CLICKHOUSE-GUIDE.md` §12 CQ1、CQ2、CQ12)。decryption、globalprotect、userid 不進 ClickHouse。
+  - **AD(網域控制站)事件進 Redis / ClickHouse / NAS Parquet 為核准例外**(需求方 2026-11-20 AD1–AD10、2026-11-23 H1–H4,見 ARCHITECTURE D49 與 `docs/AD-AGENT-PLAN.md`):Redis Stream 2 天、`netops.ad_events` 正式區 90 天(測試區 3 天)與 `ad_heat_*` 彙總、NAS `ad-archive/`;由獨立小容器 `netops-ad-receiver` 只寫 Redis,`netops-ingest` 寫 ClickHouse 與歸檔,`netops-api` 唯讀。
   - **冷資料 Parquet 歸檔**到 NAS `/mnt/nas-docker/giga-netops/{env}/pa-archive/YYYY/`,只經 `netops-ingest` 寫入(D30);歸檔原始 log 還是只歸檔彙總,依 FTP 保留期限決定(CQ3,待確認)。
 - **不寫入關聯式資料庫**(D20):即時用 Redis,PA log 歷史用 ClickHouse(D27、D29),FTP 降為補漏與對帳(D33)。要再引入其他資料庫或擴大 ClickHouse 的範圍,先由需求方決定並改 ARCHITECTURE。
 - **轉送欄位例外**:PA log 欄位沿用舊版已在用的欄位,不新增;**例外是 `seqno`、`sessionid`**(補漏去重用,2026-11-10 核准,D28 / CQ9)。

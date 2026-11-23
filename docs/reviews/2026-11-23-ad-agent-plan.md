@@ -67,3 +67,17 @@
 ## 要 Gemini 修改計畫書的項目
 
 H1–H4 依需求方決定改寫;M1–M8、L1–L5 直接修正。修正請另開 `docs/` MR,MR 描述逐項對應本紀錄編號。
+
+## 需求方決定(2026-11-23)
+
+需求方原話:「H1=>同意用小容器 H2=>同意之後做 H3=>明文就可以,同意來源限制改寫在 Windows 防火牆。 H4=>同意 其他建議也補到文件」
+
+| 項目 | 決定 | 計畫書修正位置 |
+| --- | --- | --- |
+| H1 | 同意用小容器:AD 接收獨立成 `netops-ad-receiver`(暫名),只寫 Redis,不放進 `netops-pa`、不改 `pa-collector/`;埠號新增,須先在 Gateway `BACKEND-GUIDE` §3.3 登記 | AD4、§2 流程圖、§4.1、§8 AD-1 |
+| H2 | 同意之後做:AD-5(規則 8 / 9 / 10)等 V-c 偵測規則引擎完成後才做;`netops.alert.*`、`netops.detect.*`、`detect_alerts` 是 V-c 範圍、目前尚未存在 | AD9、§6.3、§7 第 4 點、§8 AD-5 |
+| H3 | 明文就可以(維持明文 HTTP,不加 TLS);同意來源限制改寫在主機 Windows 防火牆,刪除 `AD_ALLOWED_SOURCES` 的說法。「每台 DC 一把 Token、伺服器以 Token 對應 `computer` / `domain`」併入「其他建議」一併寫進計畫書 | AD4(標註「2026-11-23 審查補充」)、§4.1、§7 第 1 點 |
+| H4 | 同意:去重與補漏鍵加世代欄位 `log_epoch`;AD-2 完成標準加「DC 實測清除後 RecordID 是否重編」 | §1.2 AD6 / AD8、§3.3、§4.1 payload、§4.3.1 DDL / ORDER BY / 去重、§5、§8 AD-2 / AD-3 |
+| M1–M8、L1–L5 | 「其他建議也補到文件」:照本紀錄建議修正計畫書;M7 另新增 `ARCHITECTURE.md` **D49**,並於 `AGENT.md` §7.2 補 AD 核准例外 | §3.2、§3.3、§3.4、§4.2、§4.3.1、§5、§6.1、§8 與上述文件 |
+
+**已在本 MR(!183)修正計畫書。** 找不到依據、計畫書內標「未確認」的項目:`netops-ad-receiver` 的實作語言與映像、對外暴露方式、`bookmarks.json` 遺失時 `log_epoch` 的延續方式、FTP 補寫列的 `log_epoch` 判定、規則 10 是否支援維護中標記、DC 總台數與 4624 事件量。

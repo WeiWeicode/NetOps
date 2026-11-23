@@ -643,4 +643,40 @@ describe('Live.vue 戰情室頁面整合掛載', () => {
     expect(w.findAll('#lb tr').length).toBeGreaterThanOrEqual(2);
     w.unmount();
   });
+
+  it('系統狀態、即時排行、Log 明細查詢只在戰情室頂列,頁首只留連線狀態(需求方 2026-11-23)', async () => {
+    const RouterLinkStub = { name: 'RouterLink', props: ['to'], template: '<a :href="to"><slot /></a>' };
+    const w = mount(Live, {
+      global: { plugins: [ui], stubs: { teleport: true, RouterLink: RouterLinkStub } },
+    });
+    await flushPromises();
+
+    const pageActions = w.find('teleport-stub');
+    expect(pageActions.exists()).toBe(true);
+    expect(pageActions.text()).not.toContain('系統狀態');
+    expect(pageActions.text()).not.toContain('即時排行');
+    expect(pageActions.text()).not.toContain('Log 明細查詢');
+
+    const header = w.find('.wr-header');
+    const btns = header.findAll('button.wr-sys-btn');
+    expect(btns.filter((b) => b.text().includes('系統狀態')).length).toBe(1);
+    expect(btns.filter((b) => b.text().includes('即時排行')).length).toBe(1);
+    const link = header.find('a.wr-sys-btn');
+    expect(link.attributes('href')).toBe('/firewall/search');
+    expect(link.text()).toContain('Log 明細查詢');
+    // 方向篩選在頂列,套用戰情室樣式 class
+    expect(header.find('.g-seg.wr-dir').exists()).toBe(true);
+
+    // 即時排行按鈕開抽屜
+    const rank = w.findComponent({ name: 'RankingDrawer' });
+    expect(rank.props('modelValue')).toBe(false);
+    await btns.find((b) => b.text().includes('即時排行'))!.trigger('click');
+    expect(rank.props('modelValue')).toBe(true);
+    // 系統狀態按鈕開抽屜
+    const sys = w.findComponent({ name: 'SystemStatusDrawer' });
+    expect(sys.props('modelValue')).toBe(false);
+    await btns.find((b) => b.text().includes('系統狀態'))!.trigger('click');
+    expect(sys.props('modelValue')).toBe(true);
+    w.unmount();
+  });
 });

@@ -75,6 +75,8 @@ API 都掛在既有模組,權限沿用 `netops.pa-realtime.read`(AI 手動執行
 | `components/warroom/EventFeed.vue`、`TrafficLogTable.vue`、`LegendPanel.vue` | 右欄事件、底部 Log 表、左側可收摺說明 |
 | 元件測試 | 自己負責的元件 |
 
+**頂列配置(需求方 2026-11-23,!179)**:「系統狀態」「即時排行」「Log 明細查詢」三個入口只放在戰情室頂列(樣式一致);頁首(Teleport)只留「戰情室連線中」徽章,不重複放按鈕。全部 / 連入 / 連出方向切換在亮色主題也套用戰情室深色面板配色。
+
 注意:Canvas 動畫要在分頁不可見時暫停(`requestAnimationFrame` 本來就會)、粒子數設上限(建議 ≤ 1500),長時間掛在電視牆不可記憶體成長。需要新資料或狀態時寫在 MR 說明交給 Claude。
 
 ## 5. 批次與順序

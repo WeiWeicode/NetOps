@@ -93,6 +93,7 @@ netops-pa(pan-os-python,唯讀) ──► netops-redis(快照 JSON + 版本) ─
   - 新權限代碼(建議)`netops.pa-policy.read`(admin、viewer)、`netops.pa-policy.refresh`(admin);寫進 `deploy/gateway-rbac.yaml`,依 Gateway 規範登記。
 - **PR-3 前端邏輯(Opus)**:`api/paPolicy.ts`、`composables/usePaPolicy.ts`(含版本差異),以及規則圖資料 `composables/usePaPolicyViz.ts`(§3.5)。
 - **PR-4 頁面(Gemini)**:「防火牆 › 安全規則」頁,表格版面仿 PA GUI(編號、來源 / 目的分組欄、物件可展開、命中數與最後命中、停用規則淡色);「變更紀錄」分頁顯示版本差異;「排序檢查」分頁顯示 PR-5 結果;「規則圖」分頁(§3.5)。另:Log 明細與戰情室抽屜的規則名稱可點開規則內容(log 已有 `rule` 欄位)。
+- **跨頁規則抽屜(已接畫面,2026-11-23,!180)**:Log 明細查詢(表格規則名稱、明細視窗「規則內容」按鈕)、戰情室 Traffic Log 表、即時排行的規則排行可點開 `PolicyRuleDrawer`,邏輯沿用 `usePolicyRuleDrawer`。沒有 `netops.pa-policy.read` 與 PA 兩條內建預設規則(intrazone / interzone-default)顯示純文字。安全事件、時段明細抽屜不顯示規則名稱,未接;流量總覽的阻擋規則 / 規則命中排行維持跳 Log 明細查詢。**需求方 2026-11-23 決定:找不到規則或無快照時維持跳出提示、不開抽屜**(與威脅特徵碼頁一致)。
 - **PR-5 排序檢查與 AI 判讀(Opus)**:分兩層,**先用程式算、再讓 AI 解釋**,避免 AI 對 168 條規則自行比對而漏判或誤判。
   1. **程式檢查(確定性)**,每項都標出相關規則編號:
      - **遮蔽(shadowed)**:後面的規則條件完全被前面某條涵蓋(zone、位址展開後的 CIDR、使用者、應用、服務都是子集),永遠不會命中。

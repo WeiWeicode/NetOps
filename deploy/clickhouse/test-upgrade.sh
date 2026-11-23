@@ -26,7 +26,11 @@ sh "$DIR/apply-schema.sh" test "$C" >/dev/null || fail "apply-schema.sh 第 2 �
 N=$(ck --query "SELECT count() FROM system.columns WHERE database = 'netops' AND table = 'pa_traffic_hourly_src' AND name IN ('bytes_sent', 'bytes_recv')")
 [ "$N" = 2 ] || fail "pa_traffic_hourly_src 上傳 / 下載欄位 $N / 2"
 MV=$(ck --query "SELECT count() FROM system.tables WHERE database = 'netops' AND engine = 'MaterializedView'")
-[ "$MV" = 8 ] || fail "物化檢視 $MV 個(應為 8:hourly_app、hourly_src、熱力圖 6 個)"
+[ "$MV" = 11 ] || fail "物化檢視 $MV 個(應為 11:hourly_app、hourly_src、PA 熱力圖 6 個、AD 熱力圖 3 個)"
+# AD-1:migrations/005 的 AD 表要建好,TTL 佔位符有代入(測試區 3 天)
+for t in ad_events ad_heat_5m ad_heat_1h ad_heat_1d; do
+  ck --query "SELECT engine_full FROM system.tables WHERE database = 'netops' AND name = '$t'" | grep -q 'toIntervalDay(3)' || fail "netops.$t 不存在或 TTL 不是 3 天"
+done
 ck --query "SELECT create_table_query FROM system.tables WHERE database = 'netops' AND name = 'pa_traffic_hourly_src_mv'" | grep -q bytes_recv \
   || fail "pa_traffic_hourly_src_mv 沒有改成新的查詢(migrations/003 沒執行?)"
 

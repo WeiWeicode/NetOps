@@ -25,8 +25,14 @@ export class FakeIngestRedis implements IngestRedis {
   /** readNew 沒有資料時呼叫(測試用來推進時間或中止) */
   onIdle: (() => void) | null = null;
 
+  /** AD 的 Stream(AD-1)第一次用到時才建立:既有 PA 測試逐一檢查 streams 時不受影響 */
+  stream(t: IngestType): Stream {
+    let s = this.streams.get(t);
+    if (!s) this.streams.set(t, (s = { entries: [], added: 0, maxDeleted: '0-0', group: null }));
+    return s;
+  }
   add(t: IngestType, rec: Record<string, unknown> | string, ms = 1_762_740_000_000): string {
-    const s = this.streams.get(t)!;
+    const s = this.stream(t);
     const id = `${ms}-${this.seq++}`;
     s.entries.push({ id, data: typeof rec === 'string' ? rec : JSON.stringify(rec) });
     s.added++;
@@ -34,19 +40,19 @@ export class FakeIngestRedis implements IngestRedis {
   }
   /** 模擬 XTRIM MINID:刪掉 ID 小於 minId 的條目(不管 group 讀過沒有) */
   trim(t: IngestType, minId: string) {
-    const s = this.streams.get(t)!;
+    const s = this.stream(t);
     for (const e of s.entries) if (compareId(e.id, minId) < 0 && compareId(e.id, s.maxDeleted) > 0) s.maxDeleted = e.id;
     s.entries = s.entries.filter((e) => compareId(e.id, minId) >= 0);
   }
 
   async ensureGroup(t: IngestType) {
-    const s = this.streams.get(t)!;
+    const s = this.stream(t);
     if (s.group) return false;
     s.group = { lastDelivered: '0-0', read: 0, pending: new Set() };
     return true;
   }
   async readPending(t: IngestType, after: string, count: number): Promise<RawEntry[]> {
-    const s = this.streams.get(t)!;
+    const s = this.stream(t);
     const ids = [...s.group!.pending].filter((id) => compareId(id, after) > 0).sort(compareId).slice(0, count);
     return ids.map((id) => ({ id, data: s.entries.find((e) => e.id === id)?.data ?? null }));
   }
@@ -57,7 +63,7 @@ export class FakeIngestRedis implements IngestRedis {
     }
     const out: Partial<Record<IngestType, RawEntry[]>> = {};
     for (const t of types) {
-      const s = this.streams.get(t)!;
+      const s = this.stream(t);
       const g = s.group!;
       const rows = s.entries.filter((e) => compareId(e.id, g.lastDelivered) > 0).slice(0, count);
       if (!rows.length) continue;
@@ -74,12 +80,12 @@ export class FakeIngestRedis implements IngestRedis {
       this.failAck--;
       throw new Error('connect ECONNREFUSED');
     }
-    const g = this.streams.get(t)!.group!;
+    const g = this.stream(t).group!;
     for (const id of ids) g.pending.delete(id);
     (this.acked[t] ??= []).push(...ids);
   }
   async detectGap(t: IngestType) {
-    const s = this.streams.get(t)!;
+    const s = this.stream(t);
     if (!s.group) return null;
     const pend = [...s.group.pending].sort(compareId);
     const r = gapFrom(
@@ -102,7 +108,7 @@ export class FakeIngestRedis implements IngestRedis {
 }
 
 export class FakeClickHouse implements ClickHouseWriter {
-  tables: Record<TableKey, Record<string, unknown>[]> = { traffic: [], threat: [] };
+  tables: Record<TableKey, Record<string, unknown>[]> = { traffic: [], threat: [], ad: [] };
   tokens = new Set<string>();
   calls: { table: TableKey; rows: number; token: string }[] = [];
   /** 接下來幾次 insert 拋暫時性錯誤 */

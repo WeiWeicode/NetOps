@@ -1,6 +1,7 @@
 #!/bin/sh
 # 主機 2(測試區 WSL)準備 PA log 冷歸檔的 NAS 目錄(C4,手冊 docs/PA-LOG-CLICKHOUSE-GUIDE.md §8.1):本人執行。
-#   在主機 2 的 WSL:sudo sh deploy/host2-setup-pa-archive.sh
+#   在主機 2 的 WSL:sudo sh deploy/host2-setup-pa-archive.sh        (PA:pa-archive)
+#                    sudo sh deploy/host2-setup-pa-archive.sh ad     (AD 事件:ad-archive,AD-1;docs/AD-AGENT-PLAN.md AD7)
 # 沿用附件服務的 NAS 掛載(//10.10.130.31/docker-folder → /mnt/nas-docker,cifs uid / gid 1000、檔案 0640、目錄 0750;
 # giga-file-service file-api/deploy/host2-mount-nas.sh 建立),本腳本不經手 NAS 帳密、不改掛載。產生:
 #   /mnt/nas-docker/giga-netops/<env>/pa-archive                        歸檔目錄(netops-ingest 以 uid 1000 寫入)
@@ -12,7 +13,9 @@ set -eu
 MNT=/mnt/nas-docker
 ENV_NAME=${GW_ENV:-test}
 case "$ENV_NAME" in test|prod) ;; *) echo "GW_ENV 只能是 test / prod:$ENV_NAME" >&2; exit 2 ;; esac
-DIR="$MNT/giga-netops/$ENV_NAME/pa-archive"
+KIND=${1:-pa}
+case "$KIND" in pa|ad) ;; *) echo "種類只能是 pa 或 ad:$KIND" >&2; exit 2 ;; esac
+DIR="$MNT/giga-netops/$ENV_NAME/$KIND-archive"
 
 U1000="$(getent passwd 1000 | cut -d: -f1)"
 [ -n "$U1000" ] || { echo "找不到 uid 1000 的使用者(netops-ingest 以 uid 1000 寫入)" >&2; exit 1; }
@@ -34,4 +37,8 @@ case "$G" in "1000 d"???r?x*) echo "群組 1000 可讀取目錄($G)" ;; *) echo 
 ls -la "$DIR"
 echo "完成。之後的 develop 部署(CI)會重建 netops-ingest 與 netops-clickhouse;已部署時手動重建:"
 echo "  docker compose --env-file /srv/giganexus/deploy/netops.env -f deploy/docker-compose.yml up -d --wait --force-recreate netops-clickhouse netops-ingest"
-echo "隔天 02:30 起 $DIR/<年>/ 會出現 pa_traffic_<日期>.parquet、pa_threat_<日期>.parquet 與 .sha256;狀態看 netops:ingest:heartbeat 的 archive* 欄位。"
+if [ "$KIND" = ad ]; then
+  echo "隔天 02:30 起 $DIR/<年>/ 會出現 ad_events_<日期>.parquet 與 .sha256;狀態看 netops:ingest:heartbeat 的 adArchive* 欄位。"
+else
+  echo "隔天 02:30 起 $DIR/<年>/ 會出現 pa_traffic_<日期>.parquet、pa_threat_<日期>.parquet 與 .sha256;狀態看 netops:ingest:heartbeat 的 archive* 欄位。"
+fi

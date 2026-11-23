@@ -384,3 +384,7 @@ sudo mv /srv/giga-netops/restore/papolicy /srv/giga-netops/restore/pa-signature 
 - 規則:收集器每 30 分鐘讀一次(管理平面 CPU > 50% 不讀);Redis `netops:pa:policy:*` 有快照、畫面「快照時間」更新。
 - 特徵碼:收集器每 30 分鐘只讀 `show system info`,內容版本變動才讀全清單(TS-0 測試區實測弱點約 2.5 萬筆、間諜軟體約 1 萬筆,11.6 MB、2.4 秒);`netops-api` 約 10 分鐘內在資料目錄寫入基準版本 `pa-signature/index.json`(第一次讀到的清單當基準,不算新增)。
 - 兩者都有 NAS 每日備份與還原方式(§7)。
+
+## 9. AD 事件接收(AD-1,`netops-ad-receiver`)
+
+步驟寫在 **`deploy/RUNBOOK-ad.md`**(§3 是主機 3):合併到 `main` 前先 `sudo sh host3-set-ad-secrets.sh add GSMC-DC1 gsmc.com.tw`(Compose 需要 `ad_agent_tokens`,`deploy-prod` 也會檢查);portproxy `10.10.130.122:51295 → 127.0.0.1:51295`、防火牆只放行 DC IP(`10.10.130.3`);`netops.env` `NETOPS_AD_RECEIVER=1` 後重跑 `deploy-prod`。`netops-ad-receiver` 以 `--no-deps --force-recreate` 啟動,**不重建 `netops-pa`**(D49 / H1)。

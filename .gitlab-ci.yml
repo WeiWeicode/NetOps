@@ -77,6 +77,8 @@ check:ingest-int:
     - N="netops-int-$CI_JOB_ID"; L="/tmp/$N.log"; T="$(mktemp -d)"; echo "$T" > "/tmp/$N.path"; mkdir "$T/s"
     # C4:冷歸檔的「NAS」目錄(測試寫入,ClickHouse 唯讀掛在 user_files/archive,同 Compose);容器內 uid 101 要讀得到
     - mkdir -m 755 "$T/a"
+    # AD-1:AD 事件的「NAS」ad-archive(ClickHouse 唯讀掛在 user_files/ad-archive,同 Compose)
+    - mkdir -m 755 "$T/ad"
     - find /tmp -maxdepth 1 -name 'netops-int-*.log' -mtime +3 -delete 2>/dev/null || true
     - NETOPS_SECRETS_DIR="$T/s" sh deploy/host2-set-clickhouse-secrets.sh >/dev/null
     # 容器內 uid 101 要讀得到帳號檔(一次性密碼;主機上的正式檔是 101:101 / 400)
@@ -92,6 +94,7 @@ check:ingest-int:
       -v "$D/users.d/profiles.xml:/etc/clickhouse-server/users.d/zz-netops-profiles.xml:ro"
       -v "$T/s/clickhouse/netops-users.xml:/etc/clickhouse-server/users.d/zz-netops-users.xml:ro"
       -v "$T/a:/var/lib/clickhouse/user_files/archive:ro"
+      -v "$T/ad:/var/lib/clickhouse/user_files/ad-archive:ro"
       "$CH_IMAGE" >/dev/null
     - docker run -d --name "$N-redis" --network "$N-net" -p 127.0.0.1::6379 redis:7.4-alpine >/dev/null
     - for i in $(seq 1 60); do docker exec "$N-ch" wget -qO- http://127.0.0.1:8123/ping >/dev/null 2>&1 && break; sleep 1; done
@@ -107,6 +110,8 @@ check:ingest-int:
     - export INT_CLICKHOUSE_READER_PASSWORD_FILE="$T/s/ch_reader_password"
     # C4:冷歸檔與冷明細(netops_cold 讀 file())
     - export INT_CLICKHOUSE_COLD_PASSWORD_FILE="$T/s/ch_cold_password" INT_ARCHIVE_DIR="$T/a"
+    # AD-1:AD 事件接收、寫入、Parquet(test/integration/ad.int.test.ts)
+    - export INT_AD_ARCHIVE_DIR="$T/ad"
     # npm Token 只給 npm ci(測試碼與相依套件的 script 讀不到;資安審查 L5)
     - (cd backend && GITLAB_NPM_TOKEN="$(cat "$NPM_TOKEN_FILE")" npm ci --no-audit --no-fund)
     - (cd backend && npm run test:int) > "$L.test" 2>&1 && R=0 || R=$?; cat "$L.test" >> "$L"; tail -n 120 "$L.test"; rm -f "$L.test"; test "$R" = 0
@@ -149,6 +154,9 @@ deploy-api-test:
     - test -f "$NETOPS_SECRETS_DIR/ch_reader_password" || { echo "缺少 ch_reader_password(先在主機 2 執行 deploy/host2-set-clickhouse-secrets.sh)" >&2; exit 1; }
     # C4:冷明細與歸檔讀回核對(netops_cold;同一支腳本在 C1 已產生)
     - test -f "$NETOPS_SECRETS_DIR/ch_cold_password" || { echo "缺少 ch_cold_password(先在主機 2 執行 deploy/host2-set-clickhouse-secrets.sh)" >&2; exit 1; }
+    # AD-1:DC Token 對應表。Compose 定義了這個 secret,缺檔時 compose 指令可能失敗 → 在判斷 netops-pa 之前先擋(避免誤判成要重建 netops-pa)
+    #   至少要有一台 DC(只 init 時 netops-ad-receiver 會啟動失敗,部署到一半才失敗)
+    - grep -Eq '^[^#[:space:]]' "$NETOPS_SECRETS_DIR/ad_agent_tokens" 2>/dev/null || { echo "缺少 ad_agent_tokens 或還沒有任何 DC(先在主機 2 執行 sudo sh deploy/host2-set-ad-secrets.sh add GSMC-DC1 gsmc.com.tw,deploy/RUNBOOK-ad.md §2)" >&2; exit 1; }
     - export IMAGE_TAG=$CI_COMMIT_SHORT_SHA RELEASE_SHA=$CI_COMMIT_SHORT_SHA COMPOSE_ENV_FILES="$NETOPS_ENV_FILE"
     - export GITLAB_NPM_TOKEN="$(cat "$NPM_TOKEN_FILE")"
     - C="docker compose -f deploy/docker-compose.yml"
@@ -209,6 +217,12 @@ deploy-api-test:
         [ "$i" = 30 ] && { echo "FAIL netops-ingest 心跳不是這次部署的或狀態異常:$HB" >&2; $C logs --tail 20 netops-ingest >&2; exit 1; }
         sleep 2
       done
+    # AD 事件(AD-1):寫入狀態只顯示不擋部署(adState、adArchiveState:nas-missing = 還沒執行 deploy/host2-setup-pa-archive.sh ad)
+    - echo "INFO AD 寫入:$($C exec -T netops-redis redis-cli hmget netops:ingest:heartbeat adState read:ad inserted:ad adArchiveState adLastError | paste -sd ' ' -)"
+    # AD 事件接收(AD-1,D49 / H1):netops-ad-receiver(netops-api 同映像)。--no-deps:不動 netops-redis 與 netops-pa(PA Syslog 不中斷)
+    #   對應表至少要有一台 DC 才會啟動(deploy/host2-set-ad-secrets.sh add)
+    - $C up -d --no-deps --wait --force-recreate netops-ad-receiver || { $C logs --tail 20 netops-ad-receiver >&2; echo "FAIL netops-ad-receiver 不健康(DC Token 對應表?deploy/RUNBOOK-ad.md §2)" >&2; exit 1; }
+    - echo "OK   netops-ad-receiver"
     # 冒煙測試:健康檢查(/healthz、/readyz 不進 giga-observe 監控)。
     #   原本另打一次不帶內部 Token 的 /v1/ping 確認回 401,但每次部署都在 giga-observe 留一筆 401(2026-11-09 驗收 §4.5),
     #   改由單元測試涵蓋(backend/test/unit/app.test.ts「缺少 Token 回 401 NETOPS_INTERNAL_TOKEN_INVALID」)
@@ -343,7 +357,7 @@ deploy-prod:
       if [ "$BAD" = 1 ]; then echo "FAIL NETOPS_PA_TLS_HOST_DIR=$TLSR 指到 PA CA 目錄或含 ca.key,不可掛進 netops-pa" >&2; exit 1; fi
       echo "OK   PA 憑證目錄 $TLSR"
     # 機密檔(host3-set-secrets.sh、host3-set-clickhouse-secrets.sh、host3-set-pa-secrets.sh 產生;第一段也要有:compose 的 secrets 定義指向這些檔)
-    - for f in gw_api_key monitor_api_key ftp_password qdrant_api_key ch_reader_password ch_cold_password ch_writer_password pa_api_key pa_http_token clickhouse/netops-users.xml; do test -f "$NETOPS_SECRETS_DIR/$f" || { echo "缺少機密 $f(主機 3 依 deploy/RUNBOOK-prod.md §2 執行 host3-set-*.sh)" >&2; exit 1; }; done
+    - for f in gw_api_key monitor_api_key ftp_password qdrant_api_key ch_reader_password ch_cold_password ch_writer_password pa_api_key pa_http_token ad_agent_tokens clickhouse/netops-users.xml; do test -f "$NETOPS_SECRETS_DIR/$f" || { echo "缺少機密 $f(主機 3 依 deploy/RUNBOOK-prod.md §2 執行 host3-set-*.sh;ad_agent_tokens 見 deploy/RUNBOOK-ad.md §3)" >&2; exit 1; }; done
     # PA log 管線開關(第一段 0;第二段 C6 改 1):只認 netops.env 的 NETOPS_PA_PIPELINE
     - PIPE="$(sed -n 's/^NETOPS_PA_PIPELINE=//p' "$NETOPS_ENV_FILE" | tail -n 1)"; PIPE="${PIPE:-0}"
     - case "$PIPE" in 0|1) echo "NETOPS_PA_PIPELINE=$PIPE" ;; *) echo "FAIL NETOPS_PA_PIPELINE 只能是 0 或 1:$PIPE" >&2; exit 1 ;; esac
@@ -419,6 +433,19 @@ deploy-prod:
       else
         echo "INFO NETOPS_PA_PIPELINE=0:不啟動 netops-clickhouse / netops-ingest / netops-pa(PA 總覽、安全事件、明細在第二段前無法使用)"
       fi
+    # 4b. AD 事件接收(AD-1):只認 netops.env 的 NETOPS_AD_RECEIVER=1(第一台 DC 試裝前由需求方改,deploy/RUNBOOK-ad.md §3);
+    #     --no-deps:不動 netops-redis 與 netops-pa。寫進 ClickHouse 靠 netops-ingest(NETOPS_PA_PIPELINE=1)
+    - ADR="$(sed -n 's/^NETOPS_AD_RECEIVER=//p' "$NETOPS_ENV_FILE" | tail -n 1)"; ADR="${ADR:-0}"
+    - |
+      case "$ADR" in
+        1)
+          $C up -d --no-build --no-deps --wait --force-recreate netops-ad-receiver || { $C logs --tail 20 netops-ad-receiver >&2; echo "FAIL netops-ad-receiver 不健康(DC Token 對應表?)" >&2; exit 1; }
+          [ "$PIPE" = 1 ] || echo "WARN NETOPS_PA_PIPELINE=0:AD 事件只留在 Redis(2 天),不會寫進 ClickHouse"
+          echo "OK   netops-ad-receiver" ;;
+        # 0:已在執行的也停掉並移除(關閉對外入口;資安審查 L1)
+        0) $C rm -sf netops-ad-receiver >/dev/null 2>&1 || true; echo "INFO NETOPS_AD_RECEIVER=0:不啟動(已執行的停止)netops-ad-receiver" ;;
+        *) echo "FAIL NETOPS_AD_RECEIVER 只能是 0 或 1:$ADR" >&2; exit 1 ;;
+      esac
     # 5. 冒煙測試(健康檢查不進 giga-observe 監控)
     - $C exec -T netops-api wget -qO- http://127.0.0.1:51292/healthz
     - $C exec -T netops-api wget -qO- http://127.0.0.1:51292/readyz

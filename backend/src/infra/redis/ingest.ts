@@ -3,6 +3,7 @@
  * 鍵只在這裡組(AGENT.md §7.2);log Stream 的鍵格式與 index.ts、pa-collector/netops_pa/keys.py 相同。
  *
  *   netops:pa:log:{type}        既有 Stream(netops-pa 寫);新增 consumer group ch-writer(本服務讀 + ACK)
+ *   netops:ad:log:events        AD 事件 Stream(AD-1;netops-ad-receiver 寫,docs/AD-AGENT-PLAN.md §4.2);同一個 group ch-writer
  *   netops:ingest:heartbeat     Hash,本服務狀態(整個換新,不設 TTL;停止時 updatedAt 停在最後時間)
  *   netops:ingest:gaps          List,偵測到的缺口(JSON,最新在前,最多 GAPS_MAX 筆),給 C3 的 FTP 補漏與對帳
  *   netops:ingest:gapbase       Hash,每種類型已回報過的遺失筆數(缺口判斷的基準,見 gapFrom)
@@ -11,9 +12,12 @@
  */
 import { Redis } from 'ioredis';
 
-/** 寫進 ClickHouse 的類型(ARCHITECTURE D27):decryption、globalprotect、userid 不進 ClickHouse */
+/** 寫進 ClickHouse 的 PA 類型(ARCHITECTURE D27):decryption、globalprotect、userid 不進 ClickHouse */
 export const INGEST_TYPES = ['traffic', 'threat', 'url', 'data', 'wildfire'] as const;
-export type IngestType = (typeof INGEST_TYPES)[number];
+/** AD 事件(AD-1,ARCHITECTURE D49):另一個 Writer 處理,失敗時不卡住 PA 寫入 */
+export const AD_TYPES = ['ad'] as const;
+export type PaIngestType = (typeof INGEST_TYPES)[number];
+export type IngestType = PaIngestType | (typeof AD_TYPES)[number];
 
 export const GROUP = 'ch-writer';
 /** 單一容器、單一 consumer(同 D9 的理由:待處理清單與去重 token 才穩定) */
@@ -21,7 +25,7 @@ export const CONSUMER = 'ingest-1';
 export const GAPS_MAX = 200;
 
 export const INGEST_KEYS = {
-  log: (t: IngestType) => `netops:pa:log:${t}`,
+  log: (t: IngestType) => (t === 'ad' ? 'netops:ad:log:events' : `netops:pa:log:${t}`),
   heartbeat: 'netops:ingest:heartbeat',
   gaps: 'netops:ingest:gaps',
   /** 每種類型已回報過的遺失筆數(缺口判斷的基準,見 gapFrom) */

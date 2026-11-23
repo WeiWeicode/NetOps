@@ -22,6 +22,9 @@
 # 冷資料 Parquet 歸檔(C4):netops-ingest 每天 02:30 匯出前一天到 NAS(NETOPS_ARCHIVE_HOST_DIR,預設 /mnt/nas-docker/giga-netops/<GW_ENV>/pa-archive;
 #   目錄與標記檔由 deploy/host2-setup-pa-archive.sh 建立),netops-clickhouse 唯讀掛載同一目錄給冷明細查詢(file(),帳號 netops_cold)。
 #   NETOPS_ARCHIVE_ENABLED=0 時不歸檔、冷明細回 409。NAS 晚於容器掛上時,netops-ingest 與 netops-clickhouse 要重建(CI 部署每次都會)
+# AD 事件即時收集(AD-1,ARCHITECTURE D49、docs/AD-AGENT-PLAN.md):netops-ad-receiver(netops-api 同映像、不同進入點)收 DC Agent 的事件與心跳,
+#   只寫 netops-redis;netops-ingest 寫 ClickHouse netops.ad_events,冷歸檔到 NAS ad-archive(NETOPS_AD_ARCHIVE_HOST_DIR)。
+#   機密 ad_agent_tokens(DC Token 對應表,只含雜湊)由 deploy/host2-set-ad-secrets.sh 產生;主機設定見 deploy/RUNBOOK-ad.md
 # 知識庫 NAS 備份(ARCHITECTURE Q3):netops-kb-backup 每天打包資料目錄的 knowledge/ 與 warroom/(網段設定與歷史,排除 ai-hourly.json;SEGMENT-SETTINGS-PLAN §7 Q7)到 NAS(deploy/kb-backup/backup.sh;目錄與標記檔由 deploy/host2-setup-kb-backup.sh 建立)
 name: giganexus-netops-${GW_ENV:?GW_ENV 必須設定(test / prod)}
 
@@ -193,6 +196,8 @@ services:
         bind: { create_host_path: false }
       # NAS 沒掛上時 Docker 會建本機空目錄(ClickHouse 照常啟動,冷明細回 404);寫入不受影響
       - ${NETOPS_ARCHIVE_HOST_DIR:-/mnt/nas-docker/giga-netops/${GW_ENV}/pa-archive}:/var/lib/clickhouse/user_files/archive:ro
+      # AD 事件歸檔(AD-1):歸檔後讀回核對列數(netops_cold);目錄與標記檔由 deploy/host2-setup-pa-archive.sh ad 建立
+      - ${NETOPS_AD_ARCHIVE_HOST_DIR:-/mnt/nas-docker/giga-netops/${GW_ENV}/ad-archive}:/var/lib/clickhouse/user_files/ad-archive:ro
     # 關閉前讓背景合併與緩衝寫完
     stop_grace_period: 60s
     healthcheck:
@@ -256,9 +261,16 @@ services:
       INGEST_ARCHIVE_MAX_MB: ${NETOPS_ARCHIVE_MAX_MB:-}
       CLICKHOUSE_COLD_USER: netops_cold
       CLICKHOUSE_COLD_PASSWORD_FILE: /run/secrets/ch_cold_password
+      # AD 事件(AD-1):Stream netops:ad:log:events 由另一個寫入迴圈寫 netops.ad_events(失敗不卡住 PA;心跳欄位 adState、read:ad…);
+      #   冷歸檔開啟時每天 02:30 起把前一天匯出成 ad_events_YYYY-MM-DD.parquet 到 /archive-ad(心跳 adArchiveState)
+      #   NETOPS_TTL_AD_DAYS:ad_events 保留天數(重試範圍;不設 = 正式區 90、測試區 3,要和 apply-schema.sh 一致)
+      INGEST_AD_ARCHIVE_DIR: /archive-ad
+      NETOPS_TTL_AD_DAYS: ${NETOPS_TTL_AD_DAYS:-}
     volumes:
       # NAS 歸檔目錄(只掛自己的目錄,不掛整個 /mnt/nas-docker);沒有標記檔 .giga-netops-archive 時不寫入
       - ${NETOPS_ARCHIVE_HOST_DIR:-/mnt/nas-docker/giga-netops/${GW_ENV}/pa-archive}:/archive
+      # AD 事件歸檔(AD-1;同樣要有標記檔才寫)
+      - ${NETOPS_AD_ARCHIVE_HOST_DIR:-/mnt/nas-docker/giga-netops/${GW_ENV}/ad-archive}:/archive-ad
       # 匯出暫存(WSL 磁碟;一天約 0.2–0.4 GB,完成後刪除)。映像預先建立目錄(node 擁有),volume 第一次掛載時沿用擁有者
       - netops_ingest_staging:/var/lib/netops-ingest/staging
     secrets: [ch_writer_password, ftp_password, ch_cold_password]
@@ -342,6 +354,47 @@ services:
       - "127.0.0.1:51294:51294"
     networks: [pa-ingress, netops-internal]
 
+  # AD 事件接收(AD-1,ARCHITECTURE D49、docs/AD-AGENT-PLAN.md §4.1):DC Agent 以明文 HTTP 送 POST /ad/v1/logs、/ad/v1/heartbeat,
+  #   每台 DC 一把 Token(X-NetOps-Ad-Token),由 Token 核對 computer / domain;依水位去重後只寫 netops-redis(H1:和 netops-pa 分開,
+  #   改這個服務不會重建 netops-pa、不影響 PA Syslog)。和 netops-api 同一個映像、不同進入點;不是 Gateway 上游(D24)
+  #   port 只綁 WSL 的 127.0.0.1:51295(Gateway BACKEND-GUIDE §3.3 登記);Windows 以 portproxy 帶進來,Windows 防火牆只放行 DC 的 IP
+  #   (H3:容器看到的是 Docker 閘道,不做 AD_ALLOWED_SOURCES;步驟見 deploy/RUNBOOK-ad.md)
+  #   機密(NETOPS_SECRETS_DIR,uid 1000 可讀;deploy/host2-set-ad-secrets.sh):ad_agent_tokens(DC Token 對應表,只含 SHA-256)
+  #   改了對應表(新增 / 作廢 DC)要重建這個服務才會生效:docker compose … up -d --force-recreate netops-ad-receiver
+  netops-ad-receiver:
+    image: ${NETOPS_IMAGE_PREFIX:-giganexus}/netops-api:${IMAGE_TAG:-dev}
+    command: ["node", "dist/src/ad-receiver/main.js"]
+    restart: unless-stopped
+    init: true
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: ${NETOPS_AD_RECEIVER_MEM_LIMIT:-192m}
+    memswap_limit: ${NETOPS_AD_RECEIVER_MEM_LIMIT:-192m}
+    logging: *pa-logging
+    depends_on:
+      netops-redis:
+        condition: service_healthy
+    environment:
+      GW_ENV: ${GW_ENV}
+      RELEASE_SHA: ${RELEASE_SHA:-dev}
+      REDIS_URL: redis://netops-redis:6379/0
+      AD_AGENT_TOKENS_FILE: /run/secrets/ad_agent_tokens
+      # 單批上限 4 MB:V8 heap 留給幾個同時進來的請求,低於容器上限
+      NODE_OPTIONS: --max-old-space-size=128
+    secrets: [ad_agent_tokens]
+    # 映像的 HEALTHCHECK 是 netops-api 的 /healthz(51292),這裡換掉
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:51295/healthz').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    ports:
+      - "127.0.0.1:51295:51295"
+    networks: [ad-ingress, netops-internal]
+
   # 知識庫與網段設定每日備份到 NAS(唯讀掛載資料目錄;不連網路)。NAS 晚於容器掛載時需重建容器(--force-recreate,CI 部署每次都會)
   netops-kb-backup:
     image: ${NETOPS_IMAGE_PREFIX:-giganexus}/netops-kb-backup:${IMAGE_TAG:-dev}
@@ -416,6 +469,9 @@ secrets:
   # 冷明細與歸檔讀回核對(C4,netops_cold;同一支腳本在 C1 已產生)
   ch_cold_password:
     file: ${NETOPS_SECRETS_DIR}/ch_cold_password
+  # DC Token 對應表(AD-1;deploy/host2-set-ad-secrets.sh 產生,只含 Token 的 SHA-256)。Compose 載入時就要有這個檔(所有服務共用設定)
+  ad_agent_tokens:
+    file: ${NETOPS_SECRETS_DIR}/ad_agent_tokens
   # 建置用:GitLab npm Registry 讀取 Token(環境變數 GITLAB_NPM_TOKEN;CI 由主機機密檔讀入)
   npm_token:
     environment: GITLAB_NPM_TOKEN
@@ -446,3 +502,5 @@ networks:
   pa-ingress:
   # netops-ingest 連 FTP 補漏用(C3;只有 netops-ingest 在這個網路)
   ingest-egress:
+  # netops-ad-receiver 接收 DC Agent 用(AD-1;published port 需要非 internal 網路;和 netops-pa 的 pa-ingress 分開)
+  ad-ingress:

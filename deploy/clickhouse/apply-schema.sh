@@ -5,24 +5,32 @@
 # 以容器內 default 帳號(只允許容器本機連線,deploy/clickhouse/users.d/default.xml)執行,不需要密碼。
 # TTL 依部署區(手冊 §10.3、決策 CQ2 / CQ12):測試區全部 3 天;正式區 TRAFFIC 30 天、威脅類 90 天、App 彙總 13 個月、來源彙總 90 天。
 # 熱力圖彙總(V-a,D34 / V1、X4):正式區 5 分鐘 1 年、每小時與每天 5 年;測試區 3 天。
+# AD 事件(AD-1,D49 / AD7):ad_events 正式區 90 天、測試區 3 天;ad_heat_5m / 1h / 1d 同 PA 熱力圖(migrations/005)。
 set -eu
 ENV="${1:?用法:apply-schema.sh <test|prod> <容器名稱>}"
 CONTAINER="${2:?缺少容器名稱}"
 case "$ENV" in
-  test) T_TRAFFIC='3 DAY'; T_THREAT='3 DAY'; T_APP='3 DAY'; T_SRC='3 DAY'; T_H5='3 DAY'; T_H1='3 DAY'; T_HD='3 DAY' ;;
-  prod) T_TRAFFIC='30 DAY'; T_THREAT='90 DAY'; T_APP='13 MONTH'; T_SRC='90 DAY'; T_H5='1 YEAR'; T_H1='5 YEAR'; T_HD='5 YEAR' ;;
+  test) T_TRAFFIC='3 DAY'; T_THREAT='3 DAY'; T_APP='3 DAY'; T_SRC='3 DAY'; T_H5='3 DAY'; T_H1='3 DAY'; T_HD='3 DAY'; T_AD='3 DAY' ;;
+  prod) T_TRAFFIC='30 DAY'; T_THREAT='90 DAY'; T_APP='13 MONTH'; T_SRC='90 DAY'; T_H5='1 YEAR'; T_H1='5 YEAR'; T_HD='5 YEAR'; T_AD='90 DAY' ;;
   *) echo "部署區只能是 test 或 prod:$ENV" >&2; exit 2 ;;
 esac
 DIR="$(dirname "$0")"
 ch() { docker exec -i "$CONTAINER" clickhouse-client "$@"; }
 
-sed -e "s/{{TTL_TRAFFIC}}/$T_TRAFFIC/" -e "s/{{TTL_THREAT}}/$T_THREAT/" \
-    -e "s/{{TTL_HOURLY_APP}}/$T_APP/" -e "s/{{TTL_HOURLY_SRC}}/$T_SRC/"     -e "s/{{TTL_HEAT_5M}}/$T_H5/" -e "s/{{TTL_HEAT_1H}}/$T_H1/" -e "s/{{TTL_HEAT_1D}}/$T_HD/" "$DIR/schema.sql" | ch --multiquery
+# TTL 佔位符代入(schema.sql 與 migrations/ 共用;AD-1 起 migrations/ 也可以用佔位符)
+subst() {
+  sed -e "s/{{TTL_TRAFFIC}}/$T_TRAFFIC/" -e "s/{{TTL_THREAT}}/$T_THREAT/" \
+      -e "s/{{TTL_HOURLY_APP}}/$T_APP/" -e "s/{{TTL_HOURLY_SRC}}/$T_SRC/" -e "s/{{TTL_HEAT_5M}}/$T_H5/" -e "s/{{TTL_HEAT_1H}}/$T_H1/" -e "s/{{TTL_HEAT_1D}}/$T_HD/" \
+      -e "s/{{TTL_AD_RAW}}/$T_AD/" "$1"
+}
+subst "$DIR/schema.sql" | ch --multiquery
 
-# 已建立的表改欄位(C2 起):migrations/*.sql 依檔名順序每次執行,每個檔都要可重複執行(ADD COLUMN IF NOT EXISTS 等)
+# 已建立的表改欄位(C2 起)與新增的表(C4、AD-1):migrations/*.sql 依檔名順序每次執行,每個檔都要可重複執行(IF NOT EXISTS 等)
 for m in "$DIR"/migrations/*.sql; do
   [ -f "$m" ] || continue
-  ch --multiquery < "$m" || { echo "migration 失敗:$(basename "$m")" >&2; exit 1; }
+  # 佔位符沒代入完就停(拼錯的佔位符會變成 SQL 語法錯誤,先給清楚的訊息)
+  if subst "$m" | grep -q '{{'; then echo "migration 有未代入的佔位符:$(basename "$m")" >&2; exit 1; fi
+  subst "$m" | ch --multiquery || { echo "migration 失敗:$(basename "$m")" >&2; exit 1; }
 done
 
 # 已存在的表:TTL 和部署區設定不同時才改(只改中繼資料,既有資料不重算:materialize_ttl_after_modify=0)
@@ -42,5 +50,9 @@ modify pa_traffic_hourly_src hour "$T_SRC"
 modify pa_heat_5m bucket "$T_H5"
 modify pa_heat_1h bucket "$T_H1"
 modify pa_heat_1d bucket "$T_HD"
+modify ad_events event_time "$T_AD"
+modify ad_heat_5m bucket "$T_H5"
+modify ad_heat_1h bucket "$T_H1"
+modify ad_heat_1d bucket "$T_HD"
 
 ch --query "SELECT name, total_rows, formatReadableSize(total_bytes) AS size, extract(engine_full, 'TTL [^S]*') AS ttl FROM system.tables WHERE database = 'netops' AND engine LIKE '%MergeTree' ORDER BY name FORMAT PrettyCompactMonoBlock"

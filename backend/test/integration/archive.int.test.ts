@@ -165,8 +165,8 @@ describe('C4 歸檔(真 ClickHouse)', () => {
     await a.tick(signal);
     assert.equal(a.status.state, 'ok', JSON.stringify(a.status));
     const m = await cold.manifest([addDays(TODAY, -2), D]);
-    // 原始表 2 種 + 彙總表 5 種,各 2 天
-    assert.equal(m.filter((x) => x.status === 'ok').length, ARCHIVE_KIND_LIST.length * 2);
+    // 原始表 2 種 + 彙總表 5 種,各 2 天(只數 PA 的種類:同一天 ad.int.test.ts 也會寫 AD 的 manifest,AD-1)
+    assert.equal(m.filter((x) => x.status === 'ok' && ARCHIVE_KIND_LIST.includes(x.kind)).length, ARCHIVE_KIND_LIST.length * 2);
     assert.equal(await redis.get('netops:cold:lock'), null);
   });
 

@@ -330,6 +330,14 @@ mod tests {
             s,
             &ev(4768, &[("Status", "0x0"), ("TicketEncryptionType", "23")])
         ));
+        // 前導零十六進位格式(審查 Low 4)
+        assert!(f.accept(
+            s,
+            &ev(
+                4768,
+                &[("Status", "0x0"), ("TicketEncryptionType", "0x00000017")]
+            )
+        ));
         // 4768 失敗不論加密類型都收
         assert!(f.accept(
             s,
@@ -446,9 +454,19 @@ mod tests {
         );
         // 預設關:不收
         assert!(!off.accept(s, &rc4));
-        // 開啟:0x17 與 0x18 收
+        // 開啟:0x17 與 0x18 收(含前導零 0x00000017;審查 Low 4)
         assert!(on.accept(s, &rc4));
         assert!(on.accept(s, &rc4_exp));
+        assert!(on.accept(
+            s,
+            &ev(
+                4769,
+                &[
+                    ("ServiceName", "MSSQLSvc/sql01"),
+                    ("TicketEncryptionType", "0x00000017"),
+                ]
+            )
+        ));
         // AES(0x11 / 0x12)與缺欄位:不收
         assert!(!on.accept(
             s,
@@ -516,6 +534,20 @@ mod tests {
             assert!(!off.accept(s, &attack), "預設關不應收 {guid}");
             assert!(on.accept(s, &attack), "開啟應收 {guid}");
         }
+        // Windows 常見 %%{...} / %{...} 與大寫 GUID 格式(審查 Low 4)
+        assert!(on.accept(
+            s,
+            &ev(
+                4662,
+                &[
+                    ("SubjectUserName", "alice"),
+                    (
+                        "Properties",
+                        "%%7688\n\t\t%{1131F6AD-9C07-11D1-F79F-00C04FC2DCD2}"
+                    )
+                ]
+            )
+        ));
         // DC$ 電腦帳號正常複寫:不收
         assert!(!on.accept(
             s,

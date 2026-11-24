@@ -67,14 +67,21 @@ const stored = (day: string) => JSON.parse(fs.readFileSync(path.join(t.dataDir, 
 const range = 'from=2026-11-01T00:00:00%2B08:00&to=2026-11-02T23:59:00%2B08:00';
 
 describe('核心邏輯與舊版相容', () => {
-  it('adlog.js 保留舊版 server/lib 全部事件與異動鍵(AD-6 只做向後相容擴充)', async () => {
+  it('adlog.js 保留舊版 server/lib 全部事件與異動鍵值(僅明列 AD-6 §9.2 規格例外)', async () => {
     const oldMod = await legacy('adlog.js');
     const newMod = await import('../../src/modules/ad/core/adlog.js');
-    for (const k of Object.keys(oldMod.SECURITY_EVENTS)) {
+    // 需求方規格 AD-6 §9.2 明列改名例外(與 4724 管理員重設區分)
+    const ALLOWED_RENAMES: Record<string, string> = {
+      '4723': '使用者自行變更密碼',
+    };
+    for (const [k, oldVal] of Object.entries(oldMod.SECURITY_EVENTS)) {
       assert.ok(k in newMod.SECURITY_EVENTS, `SECURITY_EVENTS 遺漏舊鍵 ${k}`);
+      const expected = ALLOWED_RENAMES[k] ?? oldVal;
+      assert.equal(newMod.SECURITY_EVENTS[k as unknown as keyof typeof newMod.SECURITY_EVENTS], expected, `SECURITY_EVENTS[${k}] 值不可未經核准改動`);
     }
-    for (const k of Object.keys(oldMod.ACCOUNT_CHANGES)) {
+    for (const [k, oldVal] of Object.entries(oldMod.ACCOUNT_CHANGES)) {
       assert.ok(k in newMod.ACCOUNT_CHANGES, `ACCOUNT_CHANGES 遺漏舊鍵 ${k}`);
+      assert.equal(newMod.ACCOUNT_CHANGES[k as unknown as keyof typeof newMod.ACCOUNT_CHANGES], oldVal, `ACCOUNT_CHANGES[${k}] 值不可改動`);
     }
     assert.deepEqual(newMod.CHANNELS, oldMod.CHANNELS);
   });

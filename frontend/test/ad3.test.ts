@@ -67,6 +67,7 @@ describe('adEvents 純函式(AD-3)', () => {
     expect(fieldValidationError(err, 'name')).toBe('IP 對照表沒有符合的使用者姓名(requestId req-12345678)');
     expect(fieldValidationError(err, 'other')).toBe('');
     expect(isClickHouseUnavailable(new ApiError(503, 'NETOPS_CLICKHOUSE_UNAVAILABLE', 'ch down', null))).toBe(true);
+    expect(isClickHouseUnavailable(new ApiError(503, 'NETOPS_FTP_NOT_CONFIGURED', 'other 503', null))).toBe(false);
     expect(isRedisUnavailable(new ApiError(424, 'NETOPS_REDIS_UNAVAILABLE', 'redis down', null))).toBe(true);
   });
 });

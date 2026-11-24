@@ -20,9 +20,9 @@ export function fieldValidationError(e: unknown, field: string): string {
   return `${hit.message}${e.requestId ? `(requestId ${e.requestId.slice(0, 12)})` : ''}`;
 }
 
-/** 判斷錯誤是否為 ClickHouse 不可用(503 NETOPS_CLICKHOUSE_UNAVAILABLE) */
+/** 判斷錯誤是否為 ClickHouse 不可用(僅看錯誤碼 NETOPS_CLICKHOUSE_UNAVAILABLE,避免誤判其他 503;審查 Low 5) */
 export const isClickHouseUnavailable = (e: unknown): boolean =>
-  e instanceof ApiError && (e.status === 503 || e.code === 'NETOPS_CLICKHOUSE_UNAVAILABLE');
+  e instanceof ApiError && e.code === 'NETOPS_CLICKHOUSE_UNAVAILABLE';
 
 /** 判斷錯誤是否為 Redis 不可用(424 NETOPS_REDIS_UNAVAILABLE) */
 export const isRedisUnavailable = (e: unknown): boolean =>

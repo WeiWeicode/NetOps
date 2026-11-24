@@ -73,6 +73,7 @@ export class FakeAdReceiverRedis implements AdReceiverRedis {
     this.agentEvents.unshift(...agentEvents);
   }
   async watermarks(computer: string) {
+    this.check();
     const out: Record<string, { logEpoch: number; lastRecordId: number }> = {};
     for (const [f, v] of this.hwm.get(computer) ?? []) {
       const [channel, epoch] = f.split(':') as [string, string];

@@ -108,7 +108,7 @@ export function buildAdReceiverApp(deps: AdReceiverDeps): FastifyInstance {
     req.dc = dc;
   });
 
-  /** Redis 呼叫:失敗標成 RedisUnavailable(回 503 讓 Agent 重送);其他例外是程式錯誤,回 500(code review M3) */
+  /** Redis 呼叫(寫入與讀水位):失敗標成 RedisUnavailable(回 503 讓 Agent 重送);其他例外是程式錯誤,回 500(code review M3) */
   const redisCall = async <T>(fn: () => Promise<T>): Promise<T> => {
     try {
       return await fn();
@@ -130,7 +130,7 @@ export function buildAdReceiverApp(deps: AdReceiverDeps): FastifyInstance {
       }
       if (e instanceof RedisUnavailable) {
         // Redis 斷線等:回 503,Agent 不移動水位、退避後重送同一批
-        warn('redis', 'Redis 寫入失敗', { requestId: req.id, computer: dc.computer, error: e.message });
+        warn('redis', 'Redis 存取失敗', { requestId: req.id, computer: dc.computer, error: e.message });
         return send(reply, req, 503, 'NETOPS_AD_UNAVAILABLE', '暫時無法接收,請稍後重送');
       }
       warn('internal', '非預期錯誤', { requestId: req.id, computer: dc.computer, error: String((e as Error)?.message ?? e).slice(0, 200) });
@@ -150,9 +150,11 @@ export function buildAdReceiverApp(deps: AdReceiverDeps): FastifyInstance {
   app.post('/ad/v1/heartbeat', { bodyLimit: HEARTBEAT_BODY_LIMIT }, async (req, reply) =>
     handle(req, reply, async (dc, body) => {
       const hb = parseHeartbeat(body, dc, now());
+      // 水位讀不到時回 503,不可回空的 channels:bookmarks.json 遺失的 Agent 會把 {} 當成「後端沒有紀錄」而從世代 0 重讀
+      // (需求方 2026-11-24 同意回報錯誤,取代 code review L8)。先讀水位再寫心跳:失敗時什麼都沒寫,
+      // Agent 重送的 Watchdog 事件不會在 netops:ad:agent-events 重複
+      const channels = await redisCall(() => deps.redis.watermarks(dc.computer));
       await redisCall(() => deps.redis.writeHeartbeat(dc.computer, hb.fields, hb.agentEvents));
-      // 水位只是參考資訊:讀不到時心跳仍算成功(不讓 Agent 重送;code review L8)
-      const channels = await deps.redis.watermarks(dc.computer).catch(() => ({}));
       return { ok: true, serverTime: hb.fields.updatedAt, channels, requestId: req.id };
     }),
   );

@@ -235,6 +235,16 @@ describe('AD-6 關鍵欄位解析(沿用 ad_events 既有欄位)', () => {
       assert.equal(isIssue(ev as never), true, `高風險 ${id} 應標為 isIssue`);
     }
   });
+
+  it('非 Security 通道即使 EventID 撞號也不走 Security 欄位解析與 Security isIssue(審查 Low 2)', () => {
+    const sys = parseOne('System', 4697, 'Information', '帳戶名稱:\t\tnot-sec\n服務名稱:\t\tFooSvc');
+    assert.equal(sys.actor, undefined);
+    assert.equal(sys.target, undefined);
+    assert.equal(isIssue(sys as never), false);
+    const dns = parseOne('DNS_Server', 1100, 'Information', '帳戶名稱:\t\tnot-sec');
+    assert.equal(dns.account, undefined);
+    assert.equal(isIssue(dns as never), false);
+  });
 });
 
 describe('AD-6 FTP 對帳不受影響(只算 v3 的 23 種)', () => {

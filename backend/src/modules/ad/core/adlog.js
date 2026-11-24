@@ -360,7 +360,7 @@ export function toEvent(cols, map, channel) {
     channel,
     message: message.slice(0, 3000),
   }
-  if (channel === 'Security' || /^4[67]\d\d$|^5136$|^110[024]$/.test(String(ev.eventId))) {
+  if (channel === 'Security') {
     ev.account = field(message, ['帳戶名稱', 'Account Name', '目標帳戶名稱'])
     ev.domain = field(message, ['帳戶網域', 'Account Domain'])
     ev.ip = field(message, ['來源網路位址', 'Source Network Address', '用戶端位址', 'Client Address']).replace(/^::ffff:/i, '')

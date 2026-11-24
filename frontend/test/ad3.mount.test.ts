@@ -472,6 +472,130 @@ describe('畫面 3:AD 明細查詢(Search.vue)', () => {
     expect(w.text()).toContain('登入失敗');
     w.unmount();
   });
+
+  it('資料來源徽章:回應頂層 source === ftp 時不顯示徽章(表格與明細彈窗皆隱藏)', async () => {
+    apiMocks.days.mockResolvedValue(sampleDays('ftp'));
+    apiMocks.search.mockResolvedValueOnce({
+      items: [
+        {
+          time: '2026-11-23T08:05:00+08:00',
+          eventId: 4625,
+          level: 'audit_failure' as const,
+          levelText: 'Audit Failure',
+          provider: 'Sec',
+          computer: 'GSMC-DC1',
+          recordId: '201',
+          channel: 'Security',
+          message: 'FTP 直接讀取事件',
+          account: 'alice',
+          domain: 'GSMC',
+          ip: '10.10.1.50',
+          workstation: 'PC-50',
+          reason: '密碼錯誤',
+          actor: '',
+          target: '',
+          group: '',
+          privileged: false,
+          dcDomain: 'gsmc.com.tw',
+          source: 'ftp' as const,
+          logEpoch: 0,
+        },
+      ],
+      total: 1,
+      page: 1,
+      pageSize: 50,
+      scanned: 10,
+      source: 'ftp' as const,
+    });
+
+    const { default: Search } = await import('@/pages/ad/Search.vue');
+    const w = mount(Search, { global: { plugins: [ui], provide, stubs } });
+    await flushPromises();
+    await w.find('form').trigger('submit');
+    await flushPromises();
+
+    expect(w.text()).toContain('FTP 直接讀取事件');
+    expect(w.text()).not.toContain('資料來源');
+    expect(w.text()).not.toContain('FTP 補寫');
+    expect(w.text()).not.toContain('⚡ 即時');
+
+    // 點擊該列開啟明細彈窗,也不顯示「FTP 補寫」
+    await w.find('tbody tr').trigger('click');
+    await flushPromises();
+    expect(w.text()).not.toContain('FTP 補寫');
+    w.unmount();
+  });
+
+  it('資料來源徽章:回應頂層 source === clickhouse 時依列顯示「即時」與「FTP 補寫」', async () => {
+    apiMocks.days.mockResolvedValue(sampleDays('clickhouse'));
+    apiMocks.agents.mockResolvedValue({ items: [sampleAgent()], summary: { total: 1, ok: 1, stale: 0, offline: 0, unknown: 0, wrapRisk: 0 }, staleSec: 90, offlineSec: 180, source: 'clickhouse' });
+    apiMocks.search.mockResolvedValueOnce({
+      items: [
+        {
+          time: '2026-11-24T08:05:00+08:00',
+          eventId: 4625,
+          level: 'audit_failure' as const,
+          levelText: 'Audit Failure',
+          provider: 'Sec',
+          computer: 'GSMC-DC1',
+          recordId: '301',
+          channel: 'Security',
+          message: 'Agent 即時事件',
+          account: 'alice',
+          domain: 'GSMC',
+          ip: '10.10.1.50',
+          workstation: '',
+          reason: '',
+          actor: '',
+          target: '',
+          group: '',
+          privileged: false,
+          dcDomain: 'gsmc.com.tw',
+          source: 'agent' as const,
+          logEpoch: 0,
+        },
+        {
+          time: '2026-11-24T08:01:00+08:00',
+          eventId: 4625,
+          level: 'audit_failure' as const,
+          levelText: 'Audit Failure',
+          provider: 'Sec',
+          computer: 'GSMC-DC1',
+          recordId: '302',
+          channel: 'Security',
+          message: 'ClickHouse FTP 補寫事件',
+          account: 'bob',
+          domain: 'GSMC',
+          ip: '10.10.1.51',
+          workstation: '',
+          reason: '',
+          actor: '',
+          target: '',
+          group: '',
+          privileged: false,
+          dcDomain: 'gsmc.com.tw',
+          source: 'ftp' as const,
+          logEpoch: 0,
+        },
+      ],
+      total: 2,
+      page: 1,
+      pageSize: 50,
+      scanned: 10,
+      source: 'clickhouse' as const,
+    });
+
+    const { default: Search } = await import('@/pages/ad/Search.vue');
+    const w = mount(Search, { global: { plugins: [ui], provide, stubs } });
+    await flushPromises();
+    await w.find('form').trigger('submit');
+    await flushPromises();
+
+    expect(w.text()).toContain('資料來源');
+    expect(w.text()).toContain('⚡ 即時');
+    expect(w.text()).toContain('FTP 補寫');
+    w.unmount();
+  });
 });
 
 describe('畫面 4:AD › FTP Log 檔案「ClickHouse 對帳與補漏」卡片(ReconCard + Files.vue)', () => {

@@ -7,7 +7,7 @@
  */
 import { computed, onMounted, reactive, ref, shallowRef, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { AD_EXPORT_MAX, AD_LEVEL, AD_SEARCH_MAX_DAYS, ad, adLog, type AdDays, type AdEventQuery, type AdEventRow } from '@/api/ad';
+import { AD_EXPORT_MAX, AD_LEVEL, AD_SEARCH_MAX_DAYS, ad, adLog, type AdDays, type AdEventQuery, type AdEventRow, type AdEventSearchResponse } from '@/api/ad';
 import { describeError, download } from '@/api/gateway';
 import { fmtNum, fmtTime } from '@/api/format';
 import { collectDcOptions, fieldValidationError, isClickHouseUnavailable, isDcToken } from '@/composables/adEvents';
@@ -52,7 +52,9 @@ const formError = computed(() => {
 // ---------- 查詢 ----------
 /** 送出時的條件(換頁、匯出都用這組,避免改了表單沒按查詢就混用) */
 const applied = shallowRef<AdEventQuery | null>(null);
-const result = shallowRef<{ items: AdEventRow[]; total: number; scanned: number } | null>(null);
+const result = shallowRef<AdEventSearchResponse | null>(null);
+/** 回應頂層 source === 'ftp' 時為直接讀 FTP 檔,不顯示「即時 / FTP 補寫」徽章 */
+const showSourceBadge = computed(() => (result.value?.source ? result.value.source !== 'ftp' : isClickHouse.value));
 const page = ref(1);
 const loading = ref(false);
 const error = ref<Error | null>(null);
@@ -167,7 +169,7 @@ onMounted(async () => {
   }
 });
 
-const columns = [
+const columns = computed(() => [
   { key: 'time', label: '時間', width: '165px' },
   { key: 'computer', label: 'DC', width: '125px', hideSm: true },
   { key: 'channel', label: '記錄', width: '96px', hideSm: true },
@@ -175,9 +177,9 @@ const columns = [
   { key: 'level', label: '等級', width: '96px' },
   { key: 'account', label: '帳號', width: '130px', hideSm: true },
   { key: 'ip', label: '來源 IP', width: '190px', hideSm: true },
-  { key: 'source', label: '資料來源', width: '105px', hideSm: true },
+  ...(showSourceBadge.value ? [{ key: 'source', label: '資料來源', width: '105px', hideSm: true }] : []),
   { key: 'message', label: '訊息' },
-];
+]);
 const asRow = (r: unknown) => r as AdEventRow;
 const rows = computed(() => (result.value?.items ?? []).map((e, i) => ({ ...e, _k: `${e.computer}|${e.channel}|${e.recordId}|${i}` })));
 </script>
@@ -263,7 +265,8 @@ const rows = computed(() => (result.value?.items ?? []).map((e, i) => ({ ...e, _
           <GIpLabel :ip="asRow(row).ip" inline />
         </template>
         <template #cell-source="{ row }">
-          <GSourceBadge :source="asRow(row).source === 'agent' ? 'agent' : 'ftp'" :live="false" />
+          <GSourceBadge v-if="showSourceBadge" :source="asRow(row).source === 'agent' ? 'agent' : 'ftp'" :live="false" />
+          <span v-else />
         </template>
         <template #cell-message="{ row }">
           <span class="msg small">{{ asRow(row).message.split('\n')[0] }}</span>
@@ -284,11 +287,13 @@ const rows = computed(() => (result.value?.items ?? []).map((e, i) => ({ ...e, _
           <dd>{{ chName(detail.channel) }}</dd>
           <dt>等級</dt>
           <dd>{{ AD_LEVEL[detail.level]?.label ?? detail.levelText }}</dd>
-          <dt>資料來源</dt>
-          <dd>
-            <GSourceBadge :source="detail.source === 'agent' ? 'agent' : 'ftp'" />
-            <span v-if="detail.logEpoch != null" class="xs muted"> (世代 {{ detail.logEpoch }})</span>
-          </dd>
+          <template v-if="showSourceBadge">
+            <dt>資料來源</dt>
+            <dd>
+              <GSourceBadge :source="detail.source === 'agent' ? 'agent' : 'ftp'" />
+              <span v-if="detail.logEpoch != null" class="xs muted"> (世代 {{ detail.logEpoch }})</span>
+            </dd>
+          </template>
           <dt>來源</dt>
           <dd>{{ detail.provider }}</dd>
           <dt>主機</dt>

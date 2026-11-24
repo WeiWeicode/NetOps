@@ -19,6 +19,7 @@ import type { AdStatusRedis } from '../../src/infra/redis/ad-status.js';
 import { loadAd } from '../../src/config.js';
 import { agentState, groupAgentEvents, toAgentStatus } from '../../src/modules/ad/agents.js';
 import { adContext, adContextFromSummary } from '../../src/modules/ad/core/ad-ai.js';
+import { adEmptyHint } from '../../src/modules/ai/service.js';
 import { compareAd, filesFor, ftpCounts } from '../../src/modules/ad/reconcile.js';
 import { dcKey, extraFilter } from '../../src/modules/ad/source.js';
 import { anchorKey, decide, segmentEpochs, splitSegments, type CsvRow, type EpochContext } from '../../src/ingest/ad-epoch.js';
@@ -144,6 +145,14 @@ describe('AI 文字:adContext 改用 adContextFromSummary 後輸出不變', () =
     assert.equal(a, b);
     assert.match(a, /共 1 筆,列前 25 筆|共 1 筆，列前 25 筆/);
     assert.equal(adContext([], days as never, '2026/11/20', '2026/11/20'), '');
+  });
+
+  it('無 AD 事件提示依資料來源調整措辭(審查 L3)', () => {
+    const ch = adEmptyHint('clickhouse');
+    assert.ok(!ch.evidence.includes('FTP 同步'), ch.evidence);
+    assert.match(ch.evidence, /DC Agent/);
+    const ftp = adEmptyHint('ftp');
+    assert.match(ftp.evidence, /FTP 同步/);
   });
 });
 

@@ -133,9 +133,9 @@ export const DAILY_RUN_STATE: Record<DailyRunState, { label: string; tone: strin
   'gave-up': { label: '今天已停止重試', tone: 'danger' },
 };
 
-/** 只取指定類型(例如 AD 頁只看 ad);only 省略 = 全部 */
-export function dailyCategories(s: DailySyncStatus | null | undefined, only?: string[]): DailySyncStatus['categories'] {
-  return (s?.categories ?? []).filter((c) => !only || only.includes(c.key));
+/** 篩選顯示的類型(only:只取指定類型,如 AD 頁 ['ad'];exclude:排除指定類型,如防火牆頁 ['ad']) */
+export function dailyCategories(s: DailySyncStatus | null | undefined, only?: string[], exclude?: string[]): DailySyncStatus['categories'] {
+  return (s?.categories ?? []).filter((c) => (!only || only.includes(c.key)) && (!exclude || !exclude.includes(c.key)));
 }
 
 /** 表頭的日期(取第一個類型的日期;各類型相同,新的在前) */

@@ -531,9 +531,12 @@ describe('AD 路由(clickhouse 來源)', () => {
   });
 
   it('總覽、明細查 ClickHouse;附 names 欄位;computer 條件;source 標示', async () => {
+    reader.calls.length = 0;
     const ov = await t.call({ url: '/v1/ad/overview?from=2026-11-23' });
     assert.equal(ov.statusCode, 200, ov.body);
     assert.equal(ov.json().source, 'clickhouse');
+    assert.equal(ov.json().days, 1);
+    assert.ok(!reader.calls.includes('days'), 'overview 改由 hours 算天數,不額外呼叫 reader.days()(審查 L2)');
     assert.ok('names' in ov.json());
     const ev = await t.call({ url: '/v1/ad/events?from=2026-11-23T00:00:00%2B08:00&to=2026-11-23T23:59:00%2B08:00&computer=GSMC-DC1&pageSize=10&page=2' });
     assert.equal(ev.statusCode, 200, ev.body);

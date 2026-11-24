@@ -173,8 +173,10 @@ export function createChAdSource(reader: AdChReader): AdQuerySource {
     overview: (from, to) =>
       via(async () => {
         const [fromMs, toMs] = dayRangeMs(from, to);
-        const [summary, days] = await Promise.all([reader.overview(fromMs, toMs, 30), reader.days()]);
-        return { summary, days: days.filter((d) => d.day >= from && d.day <= to).length };
+        const summary = await reader.overview(fromMs, toMs, 30);
+        // 由 overview 已查回的 hours 計算不重複日期,不必多掃一次全表 reader.days()(審查 L2)
+        const days = new Set(summary.hours.map((h) => h.hour.slice(0, 10))).size;
+        return { summary, days };
       }),
     search: (from, to, q, offset, limit) =>
       via(async () => {

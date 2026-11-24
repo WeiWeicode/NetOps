@@ -17,6 +17,7 @@
 6. [API 設計、V-d 視覺化與偵測規則引擎](#6-api-設計v-d-視覺化與偵測規則引擎)
 7. [安全與權限規範](#7-安全與權限規範)
 8. [工作分批與完成標準(AD-1 ~ AD-5)](#8-工作分批與完成標準ad-1--ad-5)
+9. [AD-6 擴充收集的事件範圍(2026-11-24)](#9-ad-6-擴充收集的事件範圍2026-11-24)
 
 ---
 
@@ -451,5 +452,75 @@ SETTINGS non_replicated_deduplication_window = 1000;
 | **AD-1** | `feature/ad-1-collector-ingest` | **獨立接收容器 + ClickHouse DDL + Ingest 寫入與冷歸檔**:<br/>1. 新增獨立小容器 `netops-ad-receiver`(**不放進 `netops-pa`、不改 `pa-collector/`**;埠號新增,需先在 Gateway `BACKEND-GUIDE` §3.3 登記後再定):`POST /ad/v1/logs`、`/ad/v1/heartbeat`,每台 DC 專屬 Token、核對 `computer` / `domain`,只寫 Redis `netops:ad:log:events`、`netops:ad:heartbeat:{computer}`、`netops:ad:computers`;Compose 服務與 env 範本一併新增(來源限制由主機 Windows 防火牆處理,不做 `AD_ALLOWED_SOURCES`)。<br/>2. `deploy/clickhouse/`:新增 `ad_events`(含 `log_epoch`)、`ad_heat_5m` / `1h` / `1d` 與 3 個 MV(`schema.sql` + migration、`apply-schema.sh` 加 `{{TTL_AD_RAW}}`)。<br/>3. `netops-ingest`:Consumer Group 批次解析(`adlog.js`)寫入 `ad_events`、每日 02:30 匯出 `ad-archive/YYYY/ad_events_YYYY-MM-DD.parquet`。<br/>4. 主機機密腳本補每台 DC 的 Token 與對應表 | **Gemini** 實作<br/>**Claude** 審查(含敏感變更:DDL、Compose、env 範本) | • 接收容器單元測試通過(依實作語言用 `pytest` + `ruff` 或 `backend` 的 `npm test`;含 Token 驗證、payload `computer` / `domain` 與 Token 不一致拒收、Payload 上限測試)<br/>• `backend` 單元測試與 `test:int`(真 Redis + ClickHouse 寫入、MV 聚合、Parquet 歸檔核對、**重送同一批與 ingest 重啟重讀無重複**)通過<br/>• **部署只重建 `netops-ad-receiver` 時 `netops-pa` 不重啟、PA Syslog 不中斷**(測試區驗證)<br/>• Claude 審查無 Critical / High |
 | **AD-2** | `feature/ad-2-rust-agent` | **Rust AD Agent + Watchdog 雙服務與安裝腳本**:<br/>1. `ad-agent/`:Windows Event Log 增量讀取(`Security` 白名單 + `System` + `Directory Service` + `DNS Server`)、`bookmarks.json` 水位續傳、Security Log 容量與 `wrapRisk` 檢查。<br/>2. 本機具名管道 `get_status`、`NetOpsAdWatchdog` 每 15 秒看守(逾時 / 停滯 > 90 秒強制 Kill + 重啟 + 上報 `hung`;服務被停自動拉起)。<br/>3. `Install-NetOpsAdAgent.ps1`(含 `-Pause` / `-Resume`、**簽章或雜湊驗證**)/ `Uninstall-NetOpsAdAgent.ps1` 與單元測試。<br/>4. `log_epoch` 世代偵測與 `bookmarks.json` 寫入;`host2-windows` Runner 的 Rust Windows 建置 CI job(敏感變更) | **Gemini** 實作<br/>**Claude** 審查(安全與資源看守) | • `cargo test`、`cargo clippy` 通過(含 Bookmark 續傳、EventID 過濾、Watchdog 逾時判定與冷卻邏輯、**後端 503 時不誤殺**、`ERROR_SERVICE_ALREADY_RUNNING` 處理、`log_epoch` 加 1 測試)<br/>• 測試機 / DC 實測:強制凍結或結束 Agent 行程,Watchdog 能在 90 秒內重啟並上報後端;常駐記憶體 < 20 MB<br/>• **DC 實測「清除 Security Log 後 `RecordID` 是否從 1 重新編號」並記錄在測試報告**(H4);同時實測 `include_user_logon_4624` 開啟時的事件量(L4) |
 | **AD-3** | `feature/ad-3-api-reconcile` | **AD 查詢切換 ClickHouse + DC 狀態 API + FTP 對帳補漏**:<br/>1. `netops-api`:`GET /v1/ad/agents`、升級 `/v1/ad/days`、`/v1/ad/overview`、`/v1/ad/events`、`/v1/ad/events/export` 支援 `NETOPS_AD_SOURCE=clickhouse` 並結合 IP 對照表 `names`(AC3);AI 問答 AD 來源支援 ClickHouse。<br/>2. 每日 08:10 AD FTP 對帳與 `netops-ingest` 自動補漏(`/v1/ad/reconcile`、`/v1/ad/backfill`)。<br/>3. 前端 `AD 事件總覽` 頂部新增「DC Agent 即時狀態列」、`AD 明細查詢` 支援 DC 篩選與名稱顯示、`AD › FTP Log 檔案` 新增對帳補漏卡片 | **Gemini** 實作<br/>**Claude** 審查 | • `backend` 與 `frontend` 測試、型別檢查、OpenAPI 必填欄位檢查全部通過<br/>• 對帳補漏整合測試證明 FTP 補寫不會產生重複 `(computer, channel, log_epoch, record_id)`,且對帳 `count()` 只比 CSV 涵蓋的同一組 EventID(M1)<br/>• 測試比對 CSV 補寫列與 Agent 寫入列的時間精度 / 時區 / `Message` 格式差異;補漏後 `ad_heat_*` 沒有重複計數(M3) |
+| **AD-6**(2026-11-24 新增) | `feature/ad-6-event-ids` | **擴充 Agent 收集的事件範圍**(§9):Agent 過濾規則與設定開關、`adlog.js` 事件名稱與欄位解析、`RUNBOOK-ad.md` 稽核原則前提、GSMC-DC1 事件量實測。從 AD-3 分支(含 Gemini 審查修正)堆疊,在 AD-4 之前 | **Gemini** 實作<br/>**Claude** 審查(含 `deploy/` 敏感變更) | 見 §9.5 |
 | **AD-4** | `feature/ad-4-vd-viz-ai` | **V-d 熱力圖 AD 指標、分析儀表板 AD 視角與 AI 解讀**:<br/>1. 後端:`GET /v1/ad/heatmap`、`GET /v1/ad/slice`(熱/冷自動路由)、`GET /v1/ad/slices/{id}`、`GET /v1/ad/insight`;`POST /v1/ai/explanations` 支援 `ad-insight`、`ad-slice`、`ad-events`。<br/>2. 前端:解鎖熱力圖 `metric=ad` 與 `SliceDrawer` AD 欄位;解鎖 `Insight.vue`「AD 網域」Tab 圖表與 AI 摘要面板 | **Gemini** 實作<br/>**Claude** 審查 | • 熱力圖與時段明細熱/冷路由整合測試通過<br/>• 前端元件掛載測試(`vitest`)與 `vite build` 通過,四種主題風格與 `prefers-reduced-motion` 正常 |
 | **AD-5** | `feature/ad-5-vd-detect-docs` | **【前置:V-c 偵測規則引擎完成後才做】V-d 偵測規則(規則 8、9、10)與全專案文件同步**:<br/>0. **開工前提(2026-11-23 審查 H2,需求方同意)**:V-c 的規則引擎、`detect_alerts`、告警頁與 `netops.alert.*` / `netops.detect.*` 權限已實作並登記;V-c 本身仍等網段清單(X11)。<br/>1. `netops-ingest`:每分鐘執行規則 8(`AD_BRUTE_FORCE_ACCOUNT`、`AD_PASSWORD_SPRAY`)、規則 9(`AD_ACCOUNT_LOCKOUT`、`AD_PRIVILEGED_CHANGE`、`AD_OFF_HOURS_PRIV_LOGON`)、規則 10(`AD_AGENT_HEALTH`),掛在 V-c 的引擎上。<br/>2. 偵測設定頁與告警頁支援 AD 規則門檻調整與點擊告警開啟 AD 時段明細。<br/>3. 同步更新 `docs/IMPL-PLAN.md`、`docs/API.md`、`docs/PA-LIVE-PLAN.md` §4、`docs/PROJECT-MAP.md` 與 `docs/test-reports/`(`AGENT.md` §7.2 與 `ARCHITECTURE.md` 的決策已在 D49 先行完成,不在此批) | **Gemini** 實作<br/>**Claude** 審查 | • 規則 8、9、10「剛好超過 / 剛好未超過門檻」與 30 分鐘冷卻測試全部通過<br/>• 文件與架構完整同步,測試報告齊備 |
+
+---
+
+## 9. AD-6 擴充收集的事件範圍(2026-11-24)
+
+> 需求方 2026-11-24 提出擴充清單,依 Claude 建議寫入本計畫(原話「依建議先寫到計劃書」),由 Gemini 實作、Claude 審查。本節是 §1.2 AD5「收集的 Channel 與事件範圍」的擴充;AD5 原本的範圍不變。
+
+### 9.1 現況(AD-2 `ad-agent/src/filter.rs`)
+
+- **Security 全收**:FTP v3 的 23 種(4625、4771、4740、4767、4720、4722、4725、4726、4724、4738、4781、4728、4729、4732、4733、4756、4757、4727、4731、4754、4704、4794、1102)。
+- **Security 有條件收**:4672(排除電腦帳號與系統帳號)、4776 與 4768(只收失敗 `Status ≠ 0x0`)、4624(`include_user_logon_4624` 開啟才收,真人帳號、不分登入類型)。
+- **System、Directory Service、DNS Server 整個通道全收**。所以 104、7045、41、1074、6006、6008(System)、1864、2042、1645、2887、2889、1388、1988、2092(Directory Service)、4000、4004、4015(DNS Server)**已經收到**,AD-6 只補事件名稱與說明,不改 Agent。
+
+### 9.2 新增:量小,預設收
+
+| Event ID | 名稱 | 說明 |
+| --- | --- | --- |
+| 4723 | 使用者自行變更密碼 | 和 4724(管理員重設)區分 |
+| 4697 | 安裝服務 | 和 System 7045 互相佐證;DC 上出現要留意 |
+| 4698 / 4699 / 4700 / 4701 / 4702 | 排程工作 建立 / 刪除 / 啟用 / 停用 / 更新 | 持久化手法 |
+| 4719 | 系統稽核原則被變更 | 防禦規避 |
+| 1100 | 事件記錄服務被關閉 | 防禦規避 |
+| 1104 | Security Log 已滿 | 和 `wrapRisk` 呼應 |
+| 4741 / 4742 / 4743 | 電腦帳號 建立 / 變更 / 刪除 | 機器帳號濫用、RBCD、noPac |
+| 4765 / 4766 | 新增 SID History 成功 / 失敗 | 正常不會出現 |
+| 4780 | AdminSDHolder 套用到管理員帳號 | 特權帳號佐證 |
+| 4735 / 4737 / 4755 | 安全群組變更(本機 / 全域 / 通用) | 補齊群組生命週期 |
+| 4730 / 4734 / 4758 | 安全群組刪除(全域 / 本機 / 通用) | 同上 |
+| 4739 | 網域原則變更 | 密碼原則被改 |
+| 4713 | Kerberos 原則變更 | 票券時效被改 |
+| 4706 / 4707 / 4716 | 信任關係 建立 / 移除 / 修改 | 三個網域之間的信任 |
+| 4616 | 系統時間被變更 | **排除** `LOCAL SERVICE`(`S-1-5-19`,W32Time 正常校時) |
+| 4624 登入類型 10 | RDP 登入成功 | **預設收**(真人帳號);類型 3 維持 `include_user_logon_4624` 控制,預設關 |
+
+### 9.3 新增:量大,設定開關、預設關
+
+GSMC-DC1 實測事件量後,由需求方決定是否開啟。開關放在 Agent 設定檔(和 `include_user_logon_4624` 同一處)。
+
+| 開關 | Event ID | 只收的條件 |
+| --- | --- | --- |
+| `include_kerberos_weak_tgs` | 4769 | `TicketEncryptionType` 為 `0x17` 或 `0x18`;**排除** `ServiceName` 以 `$` 結尾與 `krbtgt` |
+| `include_dcsync_4662` | 4662 | `Properties` 含複寫權限 GUID `1131f6aa-9c07-11d1-f79f-00c04fc2dcd2`、`1131f6ad-9c07-11d1-f79f-00c04fc2dcd2`、`89e95b76-444d-4c62-991a-0facbeda640c` 之一,**且** `SubjectUserName` 不以 `$` 結尾(DC 之間正常複寫用 `DC$` 帳號) |
+| `include_gpo_change_5136` | 5136 | `ObjectClass` 為 `groupPolicyContainer`,或 `ObjectDN` 含 `CN=AdminSDHolder` |
+
+另外 **4768 改為「失敗或 `TicketEncryptionType = 0x17`」**(預設收,量小)。
+
+### 9.4 不收(決定)
+
+- **4776 成功**:量大;盤點 NTLM 使用改用 NTLM Operational 記錄(8004),另立專案。
+- **4770 票券更新**:量大、價值低,4768 + 4769 已足夠。
+- **4688 程序建立、5145 檔案分享存取、4673 / 4674**:量大,不在本計畫。
+
+### 9.5 AD-6 範圍與完成標準
+
+1. **Agent**(`ad-agent/src/filter.rs`、設定檔解析):加入 §9.2 預設收的 ID 與條件、§9.3 三個開關(預設 `false`)、4768 條件調整、4624 類型 10 預設收。過濾維持記憶體 `HashSet` 與純函式(§3.3)。
+2. **後端**(`backend/src/modules/ad/core/adlog.js` 等):新增事件的中文名稱、說明與關鍵欄位解析(例如 `TicketEncryptionType`、`ServiceName`、`TaskName`、`ServiceFileName`、`ObjectDN`、`AttributeLDAPDisplayName`、`SidHistory`、信任網域名稱);§9.1 已收但沒有名稱的 System / Directory Service / DNS 事件補名稱。前端若有自己的事件名稱對照表,一併補。
+   - 沿用 `ad_events` 既有欄位;**需要新欄位或改 MV(例如 `priv_changes` 要納入 4719、4765、4766)時停下回報**,屬 migration 敏感變更,由需求方決定。
+   - **FTP 對帳不受影響**:對帳只算 v3 的 23 種,要有測試證明新增的 ID 不會進對帳的 `count()`。
+3. **`deploy/RUNBOOK-ad.md` 新增一節「稽核原則前提」**(IT 在 DC GPO 設定,AI 不執行):
+   - 進階稽核原則子類別:Kerberos Service Ticket Operations(4769)、Kerberos Authentication Service(4768)、Other Object Access Events(4698–4702)、Security System Extension(4697)、Audit Policy Change(4719)、Authentication Policy Change(4713、4706、4707、4716)、Computer Account Management(4741–4743)、User Account Management(4723、4765、4766、4780)、Security Group Management(4730–4758)、Directory Service Access(4662)、Directory Service Changes(5136)、Security State Change(4616)。
+   - 4662、5136 另外要在網域根目錄、`CN=Policies,CN=System`、`CN=AdminSDHolder,CN=System` 設 SACL。
+   - Security Log 上限建議至少 1–4 GB,開啟 §9.3 開關後用 Agent 的 `coverageHours` 觀察覆寫時間。
+   - 查核方式:`auditpol /get /category:*` 的預期輸出。
+4. **GSMC-DC1 實測**(`RUNBOOK-ad.md` §7.2 補步驟):量 §9.2 與 §9.3 每個開關各自的每小時事件量,寫進測試報告;依結果重算 §4.3 容量估算。
+5. **完成標準**:
+   - `cargo test`、`cargo clippy -- -D warnings`、腳本測試通過;每個新 ID 與每個開關的「收 / 不收」邊界都有測試(含 4616 排除 `LOCAL SERVICE`、4662 排除 `$` 帳號、4769 排除 `krbtgt`)。
+   - `backend` typecheck、`npm test`、`test:int` 通過;對帳不含新 ID 的測試通過。
+   - 測試報告 `docs/test-reports/YYYY-MM-DD-ad-6.md`;Claude 審查無 Critical / High。
+6. **告警規則**(1102、104、4719、1100、4697、4765、4766 紅燈等)**不在 AD-6**,併入 AD-5(等 V-c)。

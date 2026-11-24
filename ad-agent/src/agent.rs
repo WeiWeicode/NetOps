@@ -408,6 +408,7 @@ impl<S: EventSource, T: Transport> Agent<S, T> {
         let mut bytes = 0usize;
         let mut full = false;
         let mut reset = false;
+        let mut has_more = false;
         let n = self.cfg.channels.len();
         for i in 0..n {
             if full {
@@ -468,6 +469,7 @@ impl<S: EventSource, T: Transport> Agent<S, T> {
                     continue;
                 }
             };
+            let raw_len = raws.len();
             let mut through = mark.last_record_id;
             for raw in raws {
                 let ev = match parse_event_xml(&raw.xml) {
@@ -506,6 +508,9 @@ impl<S: EventSource, T: Transport> Agent<S, T> {
                 }
                 through = ev.record_id;
             }
+            if raw_len >= capacity || through < newest {
+                has_more = true;
+            }
             if through > mark.last_record_id {
                 marks.push((c, mark.log_epoch, through));
             }
@@ -524,6 +529,10 @@ impl<S: EventSource, T: Transport> Agent<S, T> {
                     self.bookmarks.ack(c, e, t);
                 }
                 self.save_bookmarks();
+                // 尚未追上最新 RecordID(或讀滿 capacity)時不等下一個週期,避免雜訊事件多時永遠追不上(審查 M3)
+                if has_more {
+                    self.next_collect_ms = now_ms;
+                }
             }
             return None;
         }

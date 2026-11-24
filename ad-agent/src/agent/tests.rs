@@ -734,3 +734,30 @@ fn 覆寫中途假newest小於水位_二次確認正常時不得觸發換世代(
     });
     assert!(!has_reset, "覆寫中途假資料不應發出 log_record_id_reset");
 }
+
+#[test]
+fn 整批全被過濾且尚未追上水位時立即接續掃描() {
+    // 預設 max_batch_events=500、batch_interval_ms=4000:1..=600 是被過濾的 4624,601 是 4625(審查 M3)
+    let d = tempfile::tempdir().unwrap();
+    let (src, be) = (Source::default(), Backend::default());
+    seed(d.path(), Channel::Security, 0, 0);
+    for r in 1..=600 {
+        src.push(Channel::Security, r, T0, 4624);
+    }
+    src.push(Channel::Security, 601, T0, 4625);
+    let mut a = agent(d.path(), &src, &be, vec![Channel::Security], T0);
+    // 第 1 秒:讀滿 500 筆全過濾,水位前進到 500,不送 HTTP,且 next_collect_ms 重設為 T0
+    a.step(T0);
+    assert_eq!(
+        a.bookmarks().get(Channel::Security).unwrap().last_record_id,
+        500
+    );
+    assert!(be.0.lock().unwrap().logs.is_empty());
+    // 第 2 秒(未滿 4 秒週期):應立即接續讀完 501..=601 並送出 601
+    a.step(T0 + 1_000);
+    assert_eq!(sent_ids(&be, 0), vec![(601, 0)]);
+    assert_eq!(
+        a.bookmarks().get(Channel::Security).unwrap().last_record_id,
+        601
+    );
+}

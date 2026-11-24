@@ -342,6 +342,14 @@ describe('ad-rows:Stream → ad_events 欄位', () => {
     );
   });
 
+  it('ad_domain 保留到 253 字(DNS 名稱上限,與 Token 對應表、payload 一致;Gemini 審查 L1)', () => {
+    const label = 'a'.repeat(63);
+    const domain = `${label}.${label}.${label}.${'b'.repeat(61)}`; // 253 字
+    assert.equal(domain.length, 253);
+    assert.equal(toAdRow(streamJson({ domain }), RECV, { badTime: false })!.ad_domain, domain);
+    assert.equal(toAdRow(streamJson({ domain: `${domain}x` }), RECV, { badTime: false })!.ad_domain, domain);
+  });
+
   it('4728 加入特權群組:actor / target / group、privileged = 1', () => {
     const r = toAdRow(streamJson({ eventId: 4728, level: 'Audit Success', message: msg4728('admin1', '王小明', 'Domain Admins') }), RECV, { badTime: false })!;
     assert.deepEqual([r.actor, r.target, r.group_name, r.privileged, r.is_issue, r.src_ip, r.level], ['admin1', '王小明', 'Domain Admins', 1, 1, '::', 'audit_success']);

@@ -75,7 +75,7 @@
    sudo sh host3-set-ad-secrets.sh add GSMC-DC1 gsmc.com.tw     # Token 在主機 3 重新產生,不沿用測試區
    ```
    `deploy-prod` 也會檢查 `ad_agent_tokens` 存在(和其他機密一起)。
-2. **NAS**:`sudo sh host2-setup-pa-archive.sh ad`(主機 3 也可用;`/mnt/nas-docker` 在主機 3 是 `docker-backup` 分享,先確認位置,同 RUNBOOK-prod.md §4.2 第 1 步)。
+2. **NAS**:`sudo GW_ENV=prod sh host2-setup-pa-archive.sh ad`(**一定要帶 `GW_ENV=prod`**:沒帶時腳本預設 `test`,會建到 `giga-netops/test/ad-archive`;比照 RUNBOOK-prod.md §4.2 第 2 步)(主機 3 也可用;`/mnt/nas-docker` 在主機 3 是 `docker-backup` 分享,先確認位置,同 RUNBOOK-prod.md §4.2 第 1 步)。
 3. **ClickHouse schema**:`NETOPS_PA_PIPELINE=1` 時 `deploy-prod` 會執行 `apply-schema.sh prod`(`ad_events` 90 天、`ad_heat_5m` 1 年、`1h` / `1d` 5 年)。要先手動套用:
    ```bash
    C="docker compose --env-file /srv/giganexus/deploy/netops.env -f deploy/docker-compose.yml"

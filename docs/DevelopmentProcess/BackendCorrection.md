@@ -2,6 +2,14 @@
 
 > `backend/`、`deploy/` 的修改;新紀錄加在最上方,格式見 `AGENT.md` §11。
 
+## 2026-11-24 AD 測試區驗收修正:`deploy/RUNBOOK-ad.md` 切換步驟與手動 `up` 指令
+- 工作項目:AD 測試區驗收修正(`docs/test-reports/2026-11-24-ad-acceptance.md` §3、§5;Gemini 修正,待 Claude 審查)
+- 內容:
+  - §8.1 環境檔路徑由不存在的 `/srv/giga-netops/test/.env` 改為 `/srv/giganexus/deploy/netops.env`,套用與回復 `ftp` 皆改為在 GitLab 重跑最近一次 `develop` pipeline 的 `deploy-api-test`(確認日誌 `OK   netops-pa 沒有變更,沿用原容器`),並補上正式區(主機 3 `/srv/giganexus/deploy/netops.env`、`deploy-prod`,會不會重建 `netops-pa` 以 CI 日誌為準)。
+  - §4、§7.1 第 2 步一併移除不帶 `IMAGE_TAG` 的手動 `docker compose ... up` 指令(避免落回 `netops-api:dev`),改為透過 CI pipeline 重跑套用。
+- 檔案:`deploy/RUNBOOK-ad.md`
+- 驗證:全文搜尋確認已無 `/srv/giga-netops/` 路徑與不帶 `IMAGE_TAG` 的手動 `up -d` 指令
+
 ## 2026-11-24 AD-2 / AD-3 審查修正(!186、!187)
 - 工作項目:AD-2(!186)、AD-3(!187)Gemini 審查修正
 - 內容:!186(AD-2):`Install-NetOpsAdAgent.ps1` 升級既有服務改用 CIM `Win32_Service.Change`(驗證 `ReturnValue == 0`),避免 PowerShell 5.1 吞掉含空白路徑雙引號;`winlog.rs` `log_info` 改用反向 `EvtQueryReverseDirection` 讀最新 `EventRecordID` 且 `agent.rs` 換世代前二次確認;`agent.rs` 整批事件皆被過濾且尚未追上水位時立即接續掃描;`RUNBOOK-ad.md` §7.2 事件名稱修正為 `agent_service_stopped`、`2026-11-23-ad-2.md` 標註 `watermarks()` 已解決。!187(AD-3):`ad-epoch.ts` / `ad-backfill.ts` 改以迴圈算 min/max 防 20 萬列以上 `RangeError`;`source.ts` / `ad-reader.ts` 將 `computer` / `dcDomain` 正規化(與 FTP 一致)且全走 `query_params`;`routes.ts` `dcDomain` 上限 128 → 253;`createChAdSource.overview` 改由 `hours` 算天數不額外掃描 `reader.days()`;`ai/service.ts` 無 AD 事件提示依來源調整措辭。

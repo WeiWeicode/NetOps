@@ -33,9 +33,29 @@
 - 測試(子任務回報):後端單元 597、整合測試由 CI 跑真 ClickHouse 通過;cargo 58、clippy 0 警告、腳本 68;前端 358(未改)。
 - CSV 補寫列和 Agent 列只有 `level_text` 不同(CSV 中文「稽核失敗」、Agent 英文 `Audit Failure`)。
 
+### Gemini 審查 !186、!187(11-24 收工後):有條件通過,合併前要修
+
+收工後 5h 額度已達 92%,修正未派工。額度重置後**先修 AD-2、merge 進 AD-3,再修 AD-3**(同一個目錄一次只能有一個子任務寫程式;Gemini 前端也在 `NetOps/` 目錄時要錯開)。
+
+**!186(AD-2,`feature/ad-2-rust-agent`)**:
+- M1:`ad-agent/scripts/Install-NetOpsAdAgent.ps1` 約 244–246 行 `Register-AdAgentService` 升級分支用 `sc.exe config binPath=`,PowerShell 5.1 不會跳脫內嵌雙引號,路徑有空白時升級失敗或寫成未加引號的服務路徑。改用 CIM `Win32_Service.Change`(驗證 `ReturnValue -eq 0`)或跳脫為 `\"`;`Test-AgentScripts.ps1` 補測試。
+- M2:`ad-agent/src/winlog.rs` 約 252–255 行用 `oldest + count - 1` 估 `newest_record_id`(兩次非原子 `EvtGetLogInfo`),Security Log 覆寫時可能小於水位,`agent.rs` 約 378 行 `detect_reset` 會誤把 `log_epoch` + 1、全量重灌。改用反向 `EvtQuery` 讀最新 1 筆的 `EventRecordID`,或至少觸發前用它二次確認;補測試。
+- M3:`ad-agent/src/agent.rs` 約 390、437–445 行 `collect`:讀滿 500 筆全被過濾時沒有把 `next_collect_ms` 設成 `now_ms`,要等 4 秒週期,吞吐上限約 125 筆 / 秒。改為還沒追上 `newest_record_id`(或讀滿)時立即接續;補測試。
+- L1:`RUNBOOK-ad.md` §7.2 第 5 步事件名稱改成 `agent_service_stopped`(`agent_restarted` 只用於 `cause = hung`)。
+- L3:`docs/test-reports/2026-11-23-ad-2.md` §4、§5 的「`watermarks()` 回 `{}`」改標已由 `9ed7a9c`、`ad71a82` 解決。
+- L2(過濾前就 `EvtFormatMessage`):先不改,GSMC-DC1 實測 CPU 偏高再改。
+
+**!187(AD-3,`feature/ad-3-api-reconcile`)**:
+- M1:`backend/src/ingest/ad-backfill.ts` 約 207–208 行、`backend/src/ingest/ad-epoch.ts` 約 97–98 行 `Math.min(...arr)` / `Math.max(...arr)`,超過約 10 萬筆會 `RangeError`(`AD_ROWS_MAX` 是 50 萬)。改 `for` 迴圈;補大筆數測試。
+- M2:`backend/src/modules/ad/source.ts` 約 155–168 行 `createChAdSource`、`backend/src/infra/clickhouse/ad-reader.ts` 約 134–135 行 `adWhere`:`computer` / `dcDomain` 沒有正規化(ftp 來源有 `dcKey()`、小寫),clickhouse 來源傳 `gsmc-dc1` 或完整網域會查 0 筆。兩種來源行為一致;補測試。
+- L1:`backend/src/modules/ad/routes.ts` 約 50 行 `dcDomain` `maxLength` 128 → 253。
+- L2:`createChAdSource.overview` 另呼叫全表 `reader.days()` 算天數,改用 `hours` 的不重複日期。
+- L3:`backend/src/modules/ai/service.ts` 約 460 行無 AD 事件提示固定寫「從 FTP 同步」,依來源調整。
+- AD-3 修正會進 `feature/ad-3-api-reconcile`;Gemini 的前端分支若已開,之後要 merge 這些修正。
+
 ### 下一步(依序)
 
-1. **Gemini 審查**(需求方指派):!184 複審、!186、!187。!187 重點:世代判定規則、Compose 與 env 範本(敏感變更)。
+1. **Gemini 審查**:!186、!187 已審(上一節,待修);!184 複審。
 2. **Gemini 做前端**:從 `feature/ad-3-api-reconcile` 開 `feature/ad-3-frontend`,照 !187「後續」段做 4 個畫面(DC 狀態列、總覽 IP 名稱、明細查詢 DC 篩選、對帳補漏卡片)。完成後由 Claude 審查。
 3. **!184 合併前**(需求方):照 `RUNBOOK-ad.md` §2 在主機 2 產 GSMC-DC1 的 Token、建 NAS 歸檔目錄、套 ClickHouse schema、設定 portproxy 與防火牆 → 主串唯讀確認資料表 → 合併 → 看 develop 部署 pipeline,確認 `netops-pa` 沒有重啟。之後依序合併 !186、!187。
 4. **AD-2 實測**(!186 合併後):

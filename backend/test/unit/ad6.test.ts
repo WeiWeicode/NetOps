@@ -214,14 +214,26 @@ describe('AD-6 關鍵欄位解析(沿用 ad_events 既有欄位)', () => {
     assert.equal(gpoRow.is_issue, 1);
   });
 
-  it('4735 / 4730 群組變更與刪除設 group / target / privileged', () => {
-    const grp = parseOne(
+  it('4735 / 4730 群組變更與刪除設 group / target / privileged;isIssue 只保留高風險 ID(審查 M3)', () => {
+    const privGrp = parseOne(
       'Security',
       4737,
       'Audit Success',
       '已變更已啟用安全性的全域群組。\n主體:\n\t帳戶名稱:\t\tadmin\n群組:\n\t群組名稱:\t\tDomain Admins',
     );
-    assert.deepEqual([grp.actor, grp.group, grp.target, grp.privileged], ['admin', 'Domain Admins', 'Domain Admins', true]);
+    assert.deepEqual([privGrp.actor, privGrp.group, privGrp.target, privGrp.privileged, isIssue(privGrp as never)], ['admin', 'Domain Admins', 'Domain Admins', true, true]);
+
+    // 4723、4742、一般群組變更 / 刪除(4730 / 4734 / 4758 / 4735 / 4737 / 4755):只記錄、不算需要注意
+    for (const id of [4723, 4742, 4730, 4734, 4758, 4735, 4737, 4755]) {
+      const ev = parseOne('Security', id, 'Audit Success', '已變更。\n主體:\n\t帳戶名稱:\t\talice\n群組:\n\t群組名稱:\t\tSales');
+      assert.equal(isIssue(ev as never), false, `${id} 不應標為 isIssue`);
+    }
+
+    // 需求方決定的 20 個高風險 ID 皆須為 isIssue
+    for (const id of [4697, 4698, 4699, 4700, 4701, 4702, 4719, 4765, 4766, 4780, 4616, 1100, 1104, 4662, 5136, 4706, 4707, 4716, 4713, 4739]) {
+      const ev = parseOne('Security', id, 'Audit Success', '事件內容');
+      assert.equal(isIssue(ev as never), true, `高風險 ${id} 應標為 isIssue`);
+    }
   });
 });
 

@@ -481,16 +481,17 @@ export function parseAdCsv(text, fileName) {
 /* ───────── 統計 ───────── */
 
 const ISSUE = new Set(['warning', 'error', 'critical', 'audit_failure'])
+// 需求方 2026-11-24 決定（AD-6 M3）：只保留既有與高風險 ID；4723 / 4742 / 群組屬性變更與刪除（4730 / 4734 / 4758 / 4735 / 4737 / 4755）只記錄、不算需要注意（涉及特權群組仍依 privileged 標記）
 const SECURITY_ISSUE_IDS = new Set([
-  1100, 1102, 1104, 4616, 4625, 4662, 4697, 4698, 4699, 4700, 4701, 4702, 4706, 4707, 4713, 4716, 4719, 4723, 4730, 4734, 4735, 4737, 4739, 4740, 4742, 4755, 4758, 4765, 4766, 4771, 4780, 5136,
+  1100, 1102, 1104, 4616, 4625, 4662, 4697, 4698, 4699, 4700, 4701, 4702, 4706, 4707, 4713, 4716, 4719, 4739, 4740, 4765, 4766, 4771, 4780, 5136,
 ])
 const SYSTEM_ISSUE_IDS = new Set([104, 7045])
 export const isIssue = (e) =>
   ISSUE.has(e.level) ||
-  SECURITY_ISSUE_IDS.has(e.eventId) ||
-  (e.channel === 'System' && SYSTEM_ISSUE_IDS.has(e.eventId)) ||
-  Boolean(ACCOUNT_CHANGES[e.eventId]) ||
-  ((e.eventId === 4768 || e.eventId === 4769) && /弱加密/i.test(String(e.reason ?? '')))
+  Boolean(e.privileged) ||
+  ((!e.channel || e.channel === 'Security') &&
+    (SECURITY_ISSUE_IDS.has(e.eventId) || Boolean(ACCOUNT_CHANGES[e.eventId]) || ((e.eventId === 4768 || e.eventId === 4769) && /弱加密/i.test(String(e.reason ?? ''))))) ||
+  (e.channel === 'System' && SYSTEM_ISSUE_IDS.has(e.eventId))
 
 /** 訊息的第一行（去掉數字讓同類訊息歸在一起） */
 const msgKey = (m) => String(m).split('\n')[0].slice(0, 120)

@@ -54,10 +54,11 @@ describe('adEvents 純函式(AD-3)', () => {
     expect(isDcToken('bad space', 64)).toBe(false);
     expect(isDcToken('a'.repeat(65), 64)).toBe(false);
     expect(isDcToken('a'.repeat(253), 253)).toBe(true);
-    expect(collectDcOptions(['GSMC-DC2', 'GSMC-DC1'], [['GSMC-DC1', 'GSC-DC3'], undefined])).toEqual([
+    expect(collectDcOptions(['GSMC-DC2', 'GSMC-DC1'], [['GSMC-DC1', 'GSC-DC3'], undefined], 'LEGACY-DC9')).toEqual([
       { label: 'GSC-DC3', value: 'GSC-DC3' },
       { label: 'GSMC-DC1', value: 'GSMC-DC1' },
       { label: 'GSMC-DC2', value: 'GSMC-DC2' },
+      { label: 'LEGACY-DC9', value: 'LEGACY-DC9' },
     ]);
   });
 

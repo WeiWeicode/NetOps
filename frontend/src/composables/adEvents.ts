@@ -28,10 +28,15 @@ export const isClickHouseUnavailable = (e: unknown): boolean =>
 export const isRedisUnavailable = (e: unknown): boolean =>
   e instanceof ApiError && (e.status === 424 || e.code === 'NETOPS_REDIS_UNAVAILABLE');
 
-/** 從 agents 或 days 彙整 DC 下拉選項(去重排序) */
-export function collectDcOptions(agentComputers: readonly string[], dayComputers: readonly (readonly string[] | undefined)[]): { label: string; value: string }[] {
+/** 從 agents、days 與目前值(例:網址帶入的 computer)彙整 DC 下拉選項(去重排序;審查 Low 4) */
+export function collectDcOptions(
+  agentComputers: readonly string[],
+  dayComputers: readonly (readonly string[] | undefined)[],
+  current = '',
+): { label: string; value: string }[] {
   const set = new Set<string>();
   for (const c of agentComputers) if (c.trim()) set.add(c.trim());
   for (const list of dayComputers) if (list) for (const c of list) if (c.trim()) set.add(c.trim());
+  if (current.trim()) set.add(current.trim());
   return [...set].sort((a, b) => a.localeCompare(b)).map((c) => ({ label: c, value: c }));
 }

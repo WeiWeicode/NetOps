@@ -24,7 +24,7 @@ const meta = shallowRef<AdDays | null>(null);
 const agentComputers = ref<string[]>([]);
 const isClickHouse = computed(() => meta.value?.source === 'clickhouse');
 const dcOptions = computed(() =>
-  isClickHouse.value ? collectDcOptions(agentComputers.value, (meta.value?.days ?? []).map((d) => d.computers)) : [],
+  isClickHouse.value ? collectDcOptions(agentComputers.value, (meta.value?.days ?? []).map((d) => d.computers), form.computer) : [],
 );
 const form = reactive<Record<Key, string> & { from: string; to: string; issueOnly: boolean }>({
   from: '',

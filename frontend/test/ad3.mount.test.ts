@@ -402,13 +402,21 @@ describe('畫面 3:AD 明細查詢(Search.vue)', () => {
     w.unmount();
   });
 
-  it('ftp 模式:DC 欄位提供自由文字輸入', async () => {
+  it('ftp 模式:DC 欄位提供自由文字輸入;clickhouse 模式網址帶入未知 DC 仍納入下拉選項(審查 Low 4)', async () => {
     apiMocks.days.mockResolvedValue(sampleDays('ftp'));
     const { default: Search } = await import('@/pages/ad/Search.vue');
     const w = mount(Search, { global: { plugins: [ui], provide, stubs } });
     await flushPromises();
     expect(w.find('input[placeholder="GSMC-DC1"]').exists()).toBe(true);
     w.unmount();
+
+    mockRoute.query = { computer: 'URL-DC9' };
+    apiMocks.days.mockResolvedValue(sampleDays('clickhouse'));
+    apiMocks.agents.mockResolvedValue({ items: [sampleAgent()], summary: { total: 1, ok: 1, stale: 0, offline: 0, unknown: 0, wrapRisk: 0 }, staleSec: 90, offlineSec: 180, source: 'clickhouse' });
+    const w2 = mount(Search, { global: { plugins: [ui], provide, stubs } });
+    await flushPromises();
+    expect(w2.text()).toContain('URL-DC9');
+    w2.unmount();
   });
 });
 

@@ -35,7 +35,8 @@ const form = reactive<Record<Key, string> & { from: string; to: string; issueOnl
 const channelOptions = computed(() => Object.entries(meta.value?.channels ?? {}).map(([value, label]) => ({ label, value })));
 const levelOptions = Object.entries(AD_LEVEL).map(([value, l]) => ({ label: l.label, value }));
 const chName = (c: string) => meta.value?.channels[c] ?? c;
-const evName = (e: AdEventRow) => (e.channel === 'Security' ? (meta.value?.securityEvents[String(e.eventId)] ?? '') : '');
+const evName = (e: AdEventRow) =>
+  meta.value?.channelEvents?.[e.channel]?.[String(e.eventId)] ?? (e.channel === 'Security' ? (meta.value?.securityEvents[String(e.eventId)] ?? '') : '');
 
 const formError = computed(() => {
   if (!form.from || !form.to) return '請選擇時間';

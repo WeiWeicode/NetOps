@@ -141,6 +141,12 @@ const sampleDays = (source: 'clickhouse' | 'ftp'): AdDays => ({
   import: { running: false, lastSyncAt: '2026-11-24T08:10:00+08:00', lastSyncError: '' },
   channels: { Security: '安全性', System: '系統', Directory_Service: '目錄服務', DNS_Server: 'DNS 伺服器' },
   securityEvents: { '4625': '登入失敗', '4740': '帳戶被鎖定' },
+  channelEvents: {
+    Security: { '4625': '登入失敗', '4740': '帳戶被鎖定' },
+    System: { '7045': '系統安裝新服務', '104': '系統事件記錄被清除' },
+    Directory_Service: { '2889': '用戶端執行未簽署的 LDAP 繫結' },
+    DNS_Server: { '4015': 'DNS 伺服器發生嚴重的 Active Directory 錯誤' },
+  },
 });
 
 const sampleOverview = (source: 'clickhouse' | 'ftp'): AdOverview => ({
@@ -417,6 +423,54 @@ describe('畫面 3:AD 明細查詢(Search.vue)', () => {
     await flushPromises();
     expect(w2.text()).toContain('URL-DC9');
     w2.unmount();
+  });
+
+  it('AD-6 channelEvents:明細查詢顯示 System / Directory_Service / DNS_Server 事件中文名稱(審查 M1)', async () => {
+    apiMocks.days.mockResolvedValue(sampleDays('clickhouse'));
+    apiMocks.agents.mockResolvedValue({ items: [sampleAgent()], summary: { total: 1, ok: 1, stale: 0, offline: 0, unknown: 0, wrapRisk: 0 }, staleSec: 90, offlineSec: 180, source: 'clickhouse' });
+    const row = (channel: string, eventId: number, recordId: string) => ({
+      time: '2026-11-24T09:00:00+08:00',
+      eventId,
+      level: 'warning' as const,
+      levelText: 'Warning',
+      provider: 'p',
+      computer: 'GSMC-DC1',
+      recordId,
+      channel,
+      message: `msg-${eventId}`,
+      account: '',
+      domain: '',
+      ip: '',
+      workstation: '',
+      reason: '',
+      actor: '',
+      target: '',
+      group: '',
+      privileged: false,
+      dcDomain: 'gsmc.com.tw',
+      source: 'agent' as const,
+      logEpoch: 0,
+    });
+    apiMocks.search.mockResolvedValueOnce({
+      items: [row('System', 7045, '1'), row('Directory_Service', 2889, '2'), row('DNS_Server', 4015, '3'), row('Security', 4625, '4')],
+      total: 4,
+      page: 1,
+      pageSize: 50,
+      scanned: 4,
+      source: 'clickhouse',
+    });
+
+    const { default: Search } = await import('@/pages/ad/Search.vue');
+    const w = mount(Search, { global: { plugins: [ui], provide, stubs } });
+    await flushPromises();
+    await w.find('form').trigger('submit');
+    await flushPromises();
+
+    expect(w.text()).toContain('系統安裝新服務');
+    expect(w.text()).toContain('用戶端執行未簽署的 LDAP 繫結');
+    expect(w.text()).toContain('DNS 伺服器發生嚴重的 Active Directory 錯誤');
+    expect(w.text()).toContain('登入失敗');
+    w.unmount();
   });
 });
 

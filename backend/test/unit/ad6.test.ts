@@ -271,6 +271,11 @@ describe('AD-6 FTP 對帳不受影響(只算 v3 的 23 種)', () => {
       assert.equal(body.channelEvents.System['7045'], '系統安裝新服務');
       assert.equal(body.channelEvents.Directory_Service['2889'], '用戶端執行未簽署的 LDAP 繫結');
       assert.equal(body.channelEvents.DNS_Server['4015'], 'DNS 伺服器發生嚴重的 Active Directory 錯誤');
+      // OpenAPI 描述與 x-gherkin 包含 channelEvents(審查 M2)
+      const spec = t.app.swagger() as unknown as { paths: Record<string, { get: Record<string, unknown> }> };
+      const op = spec.paths['/v1/ad/days']!.get;
+      assert.match(String(op.description), /channelEvents/);
+      assert.match(String(op['x-gherkin']), /而且 回應含 channelEvents/);
     } finally {
       await t.close();
     }

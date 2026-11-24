@@ -151,11 +151,17 @@ const adRoutes: FastifyPluginAsync<AdRouteOptions> = async (app, { ad, source, s
         operationId: 'netops.ad.days',
         summary: 'AD 已有資料的日期',
         description:
-          '有資料的 AD 事件日期(新的在前)與每天的筆數,附同步狀態、記錄類別與常見 Security 事件名稱。source 為資料來源(NETOPS_AD_SOURCE):ftp 時 days 含匯入的檔案(files、importedAt);clickhouse 時 days 含 agent / ftp 筆數與 computers,並附 agents(DC Agent 狀態摘要,Redis 無法使用時為 null)。ClickHouse 無法使用回 503 NETOPS_CLICKHOUSE_UNAVAILABLE。',
+          '有資料的 AD 事件日期(新的在前)與每天的筆數,附同步狀態、記錄類別、常見 Security 事件名稱(securityEvents)與各記錄類別事件中文名稱對照表(channelEvents:Security / System / Directory_Service / DNS_Server)。source 為資料來源(NETOPS_AD_SOURCE):ftp 時 days 含匯入的檔案(files、importedAt);clickhouse 時 days 含 agent / ftp 筆數與 computers,並附 agents(DC Agent 狀態摘要,Redis 無法使用時為 null)。ClickHouse 無法使用回 503 NETOPS_CLICKHOUSE_UNAVAILABLE。',
         tags: ['AD 事件'],
         'x-permission': 'netops.ad.read',
-        'x-gherkin': ['場景: 列出已匯入的日期', '  當 呼叫 GET /api/netops/ad/days', '  那麼 回應 200', '  而且 回應含 source、days、channels、securityEvents'].join('\n'),
-        response: { 200: looseObject('{ source, days, import, channels, securityEvents, agents? }') },
+        'x-gherkin': [
+          '場景: 列出已匯入的日期',
+          '  當 呼叫 GET /api/netops/ad/days',
+          '  那麼 回應 200',
+          '  而且 回應含 source、days、channels、securityEvents',
+          '  而且 回應含 channelEvents',
+        ].join('\n'),
+        response: { 200: looseObject('{ source, days, import, channels, securityEvents, channelEvents, agents? }') },
       },
     },
     async () => {

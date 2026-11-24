@@ -23,6 +23,12 @@ struct RawConfig {
     initial_lookback_minutes: u32,
     #[serde(default)]
     include_user_logon_4624: bool,
+    #[serde(default)]
+    include_kerberos_weak_tgs: bool,
+    #[serde(default)]
+    include_dcsync_4662: bool,
+    #[serde(default)]
+    include_gpo_change_5136: bool,
     #[serde(default = "d_batch_interval")]
     batch_interval_sec: u64,
     #[serde(default = "d_max_batch")]
@@ -64,8 +70,14 @@ pub struct Config {
     pub log_dir: PathBuf,
     /// 第一次啟動往回讀幾分鐘(M8,預設 60)
     pub initial_lookback_minutes: u32,
-    /// 4624 真人帳號登入(AD5,預設關閉)
+    /// 4624 真人帳號登入(含類型 3;AD5 / §9.2 預設關閉,類型 10 RDP 預設收)
     pub include_user_logon_4624: bool,
+    /// 4769 Kerberos 弱加密 TGS(0x17 / 0x18;§9.3 預設關閉,量大先實測)
+    pub include_kerberos_weak_tgs: bool,
+    /// 4662 DCSync 複寫權限(§9.3 預設關閉,量大先實測)
+    pub include_dcsync_4662: bool,
+    /// 5136 GPO / AdminSDHolder 變更(§9.3 預設關閉,量大先實測)
+    pub include_gpo_change_5136: bool,
     pub batch_interval_sec: u64,
     pub max_batch_events: usize,
     pub heartbeat_interval_sec: u64,
@@ -195,6 +207,9 @@ impl Config {
                 .unwrap_or_else(|| base_dir.join("logs")),
             initial_lookback_minutes: raw.initial_lookback_minutes,
             include_user_logon_4624: raw.include_user_logon_4624,
+            include_kerberos_weak_tgs: raw.include_kerberos_weak_tgs,
+            include_dcsync_4662: raw.include_dcsync_4662,
+            include_gpo_change_5136: raw.include_gpo_change_5136,
             batch_interval_sec: raw.batch_interval_sec,
             max_batch_events: raw.max_batch_events,
             heartbeat_interval_sec: raw.heartbeat_interval_sec,
@@ -235,10 +250,28 @@ mod tests {
         assert_eq!(c.server_url, "http://10.10.130.124:51295");
         assert_eq!(c.domain, "gsmc.com.tw");
         assert!(!c.include_user_logon_4624);
+        assert!(!c.include_kerberos_weak_tgs);
+        assert!(!c.include_dcsync_4662);
+        assert!(!c.include_gpo_change_5136);
         assert_eq!(c.initial_lookback_minutes, 60);
         assert_eq!(c.channels.len(), 4);
         assert_eq!(c.token, TOKEN);
         assert!(!format!("{c:?}").contains(TOKEN), "Debug 不可印出 Token");
+    }
+
+    #[test]
+    fn ad6三個開關可個別開啟() {
+        let d = tempfile::tempdir().unwrap();
+        write_token(d.path(), TOKEN);
+        let c = Config::parse(
+            &base("include_kerberos_weak_tgs = true\ninclude_dcsync_4662 = true\ninclude_gpo_change_5136 = true\n"),
+            d.path(),
+        )
+        .unwrap();
+        assert!(!c.include_user_logon_4624);
+        assert!(c.include_kerberos_weak_tgs);
+        assert!(c.include_dcsync_4662);
+        assert!(c.include_gpo_change_5136);
     }
 
     #[test]

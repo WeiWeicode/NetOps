@@ -177,7 +177,7 @@ fn settings(dir: &std::path::Path, channels: Vec<Channel>) -> AgentSettings {
         channels,
         state_dir: dir.to_path_buf(),
         initial_lookback_minutes: 60,
-        include_user_logon_4624: false,
+        filter: FilterOptions::default(),
         batch_interval_ms: 4_000,
         heartbeat_interval_ms: 15_000,
         max_batch_events: 500,

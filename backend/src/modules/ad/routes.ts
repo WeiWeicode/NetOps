@@ -10,7 +10,7 @@ import { toCsv } from '../../shared/csv.js';
 import { dayRangeQuery, looseObject, TIME } from '../../shared/schemas.js';
 import { dayOut, dayRange, logTimeOut, timeIn, validation } from '../../shared/time.js';
 import { groupAgentEvents, summarizeAgents, toAgentStatus } from './agents.js';
-import { CHANNELS, SECURITY_EVENTS } from './core/adlog.js';
+import { CHANNEL_EVENTS, CHANNELS, SECURITY_EVENTS } from './core/adlog.js';
 import type { AdFilter, AdImporter } from './importer.js';
 import type { AdOutEvent, AdQuery, AdQuerySource } from './source.js';
 
@@ -170,6 +170,7 @@ const adRoutes: FastifyPluginAsync<AdRouteOptions> = async (app, { ad, source, s
         import: { running: st.running, lastSyncAt: st.lastSyncAt, lastSyncError: st.lastSyncError ? '同步失敗,詳見 FTP Log 檔案頁' : '' },
         channels: CHANNELS,
         securityEvents: SECURITY_EVENTS,
+        channelEvents: CHANNEL_EVENTS,
       };
     },
   );

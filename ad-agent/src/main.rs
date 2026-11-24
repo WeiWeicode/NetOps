@@ -41,12 +41,15 @@ fn main() {
         match netops_ad_agent::config::Config::load(&config) {
             Ok(c) => {
                 println!(
-                    "OK computer={} domain={} server={} channels={} include_user_logon_4624={}",
+                    "OK computer={} domain={} server={} channels={} include_user_logon_4624={} include_kerberos_weak_tgs={} include_dcsync_4662={} include_gpo_change_5136={}",
                     c.computer,
                     c.domain,
                     c.server_url,
                     c.channels.len(),
-                    c.include_user_logon_4624
+                    c.include_user_logon_4624,
+                    c.include_kerberos_weak_tgs,
+                    c.include_dcsync_4662,
+                    c.include_gpo_change_5136
                 );
                 return;
             }

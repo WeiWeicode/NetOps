@@ -13,7 +13,11 @@ token_file = "secrets/ad_agent.token"
 # state_dir = "state"                    # bookmarks.json、watchdog-events.json
 # log_dir = "logs"                       # agent.log、watchdog.log(各 5 MB,保留 1 個舊檔)
 # initial_lookback_minutes = 60          # 第一次啟動往回讀幾分鐘(M8)
-# include_user_logon_4624 = false        # 4624 真人帳號登入(AD5;事件量大,實測後由需求方決定)
+# --- 以下四個為高事件量開關(AD5 / AD-6 §9.3),預設皆 false,務必先在 GSMC-DC1 逐一實測事件量再由需求方決定是否開啟 ---
+# include_user_logon_4624 = false        # 4624 全部真人帳號登入(含類型 3 網路登入;量大,先實測。類型 10 RDP 登入已預設收)
+# include_kerberos_weak_tgs = false      # 4769 Kerberos 弱加密 TGS(0x17 / 0x18,排除 *$ 與 krbtgt;量大,先實測)
+# include_dcsync_4662 = false            # 4662 DCSync 複寫權限(三個複寫 GUID 且非 *$;需設網域根目錄 SACL,量大,先實測)
+# include_gpo_change_5136 = false        # 5136 GPO / AdminSDHolder 變更(需設 SACL,量大,先實測)
 # batch_interval_sec = 4                 # 3–5 秒一批(AD6)
 # max_batch_events = 500                 # 一批最多幾筆(接收端上限 1,000)
 # heartbeat_interval_sec = 15

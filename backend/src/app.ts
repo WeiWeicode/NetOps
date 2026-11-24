@@ -24,7 +24,7 @@ import { createChAdSource, createFtpAdSource, type AdQuerySource } from './modul
 import { createAdChReader, type AdChReader } from './infra/clickhouse/ad-reader.js';
 import { connectAdStatusRedis, type AdStatusRedis } from './infra/redis/ad-status.js';
 import { connectAdBackfillQueue, type AdBackfillQueue } from './infra/redis/ad-backfill.js';
-import { ACCOUNT_CHANGES, SECURITY_EVENTS } from './modules/ad/core/adlog.js';
+import { ACCOUNT_CHANGES, CHANNEL_EVENTS, SECURITY_EVENTS } from './modules/ad/core/adlog.js';
 import adFtpRoutes from './modules/ftp/ad-routes.js';
 import ftpRoutes from './modules/ftp/routes.js';
 import kbRoutes from './modules/kb/routes.js';
@@ -338,7 +338,12 @@ export async function buildApp(
   await app.register(insightRoutes, { svc: insightSvc });
   await app.register(paEventRoutes, { events, ch });
   // AD-3:查詢來源(NETOPS_AD_SOURCE)、DC Agent 狀態、FTP 對帳與補漏
-  const adReader = deps.ad?.reader !== undefined ? deps.ad.reader : config.clickhouse ? createAdChReader(config.clickhouse, fetch, { securityEvents: SECURITY_EVENTS, accountChanges: ACCOUNT_CHANGES }) : null;
+  const adReader =
+    deps.ad?.reader !== undefined
+      ? deps.ad.reader
+      : config.clickhouse
+        ? createAdChReader(config.clickhouse, fetch, { securityEvents: SECURITY_EVENTS, channelEvents: CHANNEL_EVENTS, accountChanges: ACCOUNT_CHANGES })
+        : null;
   if (config.ad.source === 'clickhouse' && !adReader) throw new Error('NETOPS_AD_SOURCE=clickhouse 需要 ClickHouse 設定');
   const adSource: AdQuerySource = config.ad.source === 'clickhouse' && adReader ? createChAdSource(adReader) : createFtpAdSource(ad);
   const adStatus = deps.ad?.status !== undefined ? deps.ad.status : config.redisUrl ? connectAdStatusRedis(config.redisUrl) : null;

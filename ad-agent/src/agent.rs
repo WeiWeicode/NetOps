@@ -8,7 +8,7 @@
 
 use crate::bookmark::{Bookmarks, Mark, ResetInfo, ServerMark, resolve_initial};
 use crate::channel::Channel;
-use crate::filter::EventFilter;
+use crate::filter::{EventFilter, FilterOptions};
 use crate::parser::parse_event_xml;
 use crate::status::{SharedStatus, iso_ms};
 use serde_json::{Map, Value, json};
@@ -117,7 +117,7 @@ pub struct AgentSettings {
     pub channels: Vec<Channel>,
     pub state_dir: PathBuf,
     pub initial_lookback_minutes: u32,
-    pub include_user_logon_4624: bool,
+    pub filter: FilterOptions,
     pub batch_interval_ms: i64,
     pub heartbeat_interval_ms: i64,
     pub max_batch_events: usize,
@@ -131,7 +131,12 @@ impl AgentSettings {
             channels: c.channels.clone(),
             state_dir: c.state_dir.clone(),
             initial_lookback_minutes: c.initial_lookback_minutes,
-            include_user_logon_4624: c.include_user_logon_4624,
+            filter: FilterOptions {
+                include_user_logon_4624: c.include_user_logon_4624,
+                include_kerberos_weak_tgs: c.include_kerberos_weak_tgs,
+                include_dcsync_4662: c.include_dcsync_4662,
+                include_gpo_change_5136: c.include_gpo_change_5136,
+            },
             batch_interval_ms: c.batch_interval_sec as i64 * 1000,
             heartbeat_interval_ms: c.heartbeat_interval_sec as i64 * 1000,
             max_batch_events: c.max_batch_events,
@@ -211,7 +216,7 @@ impl<S: EventSource, T: Transport> Agent<S, T> {
         now_ms: i64,
     ) -> Result<Self, String> {
         let (bookmarks, warn) = Bookmarks::load(&cfg.state_dir)?;
-        let filter = EventFilter::new(cfg.include_user_logon_4624);
+        let filter = EventFilter::new(cfg.filter);
         let mut a = Self {
             cfg,
             source,

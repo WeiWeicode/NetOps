@@ -50,6 +50,8 @@ const decode = (buf: Buffer) => (buf[0] === 0xff && buf[1] === 0xfe ? buf.toStri
 
 const errText = (e: unknown) => {
   const x = e as { code?: unknown; message?: string; name?: string };
+  // FTP 錯誤的訊息含 FTP 路徑與主機回應:工作狀態只寫固定文字(資安審查 L3)
+  if (typeof x?.code === 'string' && x.code.startsWith('NETOPS_FTP_')) return 'FTP 讀取失敗,請稍後重新送出';
   if (typeof x?.code === 'string' && x.code.startsWith('NETOPS_')) return String(x.message ?? x.code).slice(0, 200);
   if (typeof x?.code === 'number') return `ClickHouse 錯誤(code ${x.code})`;
   return `補漏失敗(${x?.name ?? 'Error'})`;
@@ -61,8 +63,6 @@ export interface AdBackfillDeps {
   q: AdBackfillCh;
   ftp: Ftp;
   queue: AdBackfillQueue;
-  /** 接收端水位(netops:ad:recv:hwm:{computer}:欄位 channel:epoch → RecordID) */
-  watermarks: (computer: string) => Promise<Record<string, string>>;
   log: Log;
   signal: AbortSignal;
   rules: { adDir: string; ttlDays: number };
@@ -80,23 +80,17 @@ interface Item {
 export async function backfillGroup(
   key: { computer: string; channel: string },
   items: Item[],
-  deps: Pick<AdBackfillDeps, 'ch' | 'q' | 'watermarks'> & { jobId: string; domain: string; now: number; dcName: string },
+  deps: Pick<AdBackfillDeps, 'ch' | 'q'> & { jobId: string; domain: string; now: number; dcName: string },
 ): Promise<Omit<AdBackfillCounts, 'read' | 'invalid'>> {
   const c = { skipped: 0, inserted: 0, waitingAgent: 0, ambiguous: 0 };
   const { q } = deps;
   const name = deps.dcName;
   const rids = items.map((x) => x.row.rid);
-  const [keys, epochs, hwmRaw] = await Promise.all([q.keysInRange(name, key.channel, Math.min(...rids), Math.max(...rids)), q.agentEpochs(name, key.channel), deps.watermarks(name)]);
-  // 有效水位:接收端水位與 ClickHouse Agent 最大 RecordID 取大
+  const [keys, epochs] = await Promise.all([q.keysInRange(name, key.channel, Math.min(...rids), Math.max(...rids)), q.agentEpochs(name, key.channel)]);
+  // 有效水位:ClickHouse 已寫入的 Agent 最大 RecordID(程式碼審查 M2)。不採信 Redis 接收端水位:
+  //   它在收到時就前進(事件可能還在 Stream),而且 netops-redis 沒有 ACL,竄改後會讓缺口永遠補不回來(資安審查 M1)
   const watermark = new Map<number, number>();
   for (const e of epochs) watermark.set(e.epoch, Math.max(watermark.get(e.epoch) ?? 0, e.maxRid));
-  for (const [f, v] of Object.entries(hwmRaw)) {
-    const i = f.lastIndexOf(':');
-    if (f.slice(0, i) !== key.channel) continue;
-    const epoch = Number(f.slice(i + 1));
-    const rid = Number(v);
-    if (Number.isSafeInteger(epoch) && Number.isSafeInteger(rid)) watermark.set(epoch, Math.max(watermark.get(epoch) ?? 0, rid));
-  }
   const anchors = new Map<string, number>();
   const exists = new Set<string>();
   for (const k of keys) {
@@ -188,8 +182,9 @@ export async function runAdBackfill(job: AdBackfillJob, deps: AdBackfillDeps): P
               c.invalid++;
               continue;
             }
-            // 同一天新舊檔名(Security.csv 與 Security_GSMC-DC1.csv)可能重複:同 DC、記錄、RecordID、時間只算一次
-            const dup = `${k}|${rid}|${t}`;
+            // 同一天新舊檔名(Security.csv 與 Security_GSMC-DC1.csv)可能重複:同 DC、記錄、RecordID 只算一次
+            //(和 AD 匯入器 importer.ts 的去重鍵相同,對帳的 FTP 筆數才會一致;程式碼審查 M4)
+            const dup = `${k}|${rid}`;
             if (seen.has(dup)) {
               c.read--;
               continue;

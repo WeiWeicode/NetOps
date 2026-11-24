@@ -2,6 +2,12 @@
 
 > `backend/`、`deploy/` 的修改;新紀錄加在最上方,格式見 `AGENT.md` §11。
 
+## 2026-11-24 AD 查詢切換 ClickHouse、DC Agent 狀態、FTP 對帳與補漏(AD-3 後端)
+- 工作項目:AD-3(`docs/AD-AGENT-PLAN.md` §5、§6.1、§8;ARCHITECTURE D49;需求方 2026-11-24 D1–D5;前端交 Gemini)
+- 內容:`NETOPS_AD_SOURCE=ftp|clickhouse`(未設定 ftp):AD 總覽、明細、匯出、AI 問答經 `modules/ad/source.ts` 切換,ClickHouse 端 SQL 重現 `summarizeAd`(`infra/clickhouse/ad-reader.ts`,唯讀、query_params);明細新增 `computer`、`dcDomain`、`name` 條件,總覽與明細附 `names`;匯出加 DC 網域、來源名稱、資料來源欄。新增 `GET /v1/ad/agents`(心跳白名單整理,ok / stale / offline)、`/v1/ad/reconciliations`、`/v1/ad/backfills(/:id)`(路徑同 PA,D4)。`netops-ingest` 新增 AD FTP 補漏(`ingest/ad-backfill.ts`),世代判定「CSV 分段錨定 + 水位保護」(`ingest/ad-epoch.ts`,D1),未裝 Agent 的 DC 世代 0 全量寫入(D2)。`adContext` 拆出 `adContextFromSummary`(輸出不變)。Compose:netops-api 加 `NETOPS_AD_SOURCE`、`NETOPS_TTL_AD_DAYS`,netops-ingest 加 `FTP_AD_DIR`;env 範本註解;`RUNBOOK-ad.md` §8。不需要新 migration、不需要新權限代碼。
+- 檔案:`backend/src/modules/ad/{source,agents,reconcile,recon-routes,routes}.ts`、`backend/src/modules/ad/core/ad-ai.js`、`backend/src/infra/clickhouse/{ad-reader,ad-backfill}.ts`、`backend/src/infra/redis/{ad-status,ad-backfill}.ts`、`backend/src/ingest/{ad-epoch,ad-backfill,ad-rows,main,config}.ts`、`backend/src/{app,config}.ts`、`backend/src/modules/ai/{service,index}.ts`、`deploy/docker-compose.yml`、`deploy/*.env.example`、`deploy/RUNBOOK-ad.md`
+- 驗證:見 `docs/test-reports/2026-11-24-ad-3.md`
+
 ## 2026-11-23 AD 事件接收容器與 ClickHouse 寫入(AD-1)
 - 工作項目:AD-1(`docs/AD-AGENT-PLAN.md` §8;ARCHITECTURE D49、審查 H1–H4、M2)
 - 內容:新增 `netops-ad-receiver`(`backend/src/ad-receiver/`,netops-api 同映像另一個進入點,port 51295 只發佈 127.0.0.1):每台 DC 一把 Token(對應表只存 SHA-256)、核對 `computer` / `domain`、預設拒絕(只有 `/healthz` 免 Token)、每台 DC 每分鐘 120 個請求、單批 1,000 筆 / 4 MB;Redis Lua 依 `(computer, channel, log_epoch)` 水位去重後才寫 Stream `netops:ad:log:events`。`netops-ingest` 加第二個 Writer(只讀 AD Stream,失敗不卡住 PA)寫 `netops.ad_events`、第二個 Archiver 每天 02:30 匯出 `ad-archive/YYYY/ad_events_YYYY-MM-DD.parquet`。ClickHouse `migrations/005-ad1-ad-events.sql`(`ad_events`、`ad_heat_5m` / `1h` / `1d`、3 個 MV);`apply-schema.sh` 的 TTL 佔位符也代入 migrations(`{{TTL_AD_RAW}}`)。Compose、CI(測試區每次只重建 receiver、`--no-deps`;正式區 `NETOPS_AD_RECEIVER` 開關)、`host2/3-set-ad-secrets.sh`、`host2-setup-pa-archive.sh ad`、`deploy/RUNBOOK-ad.md`。**不改 `pa-collector/`,不重建 `netops-pa`**。

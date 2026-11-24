@@ -306,7 +306,7 @@ export function createAdChReader(cfg: ClickHouseConfig, fetchImpl: Fetch = fetch
                   formatDateTime(min(event_time), '%Y/%m/%d %H:%i:%s') AS first, formatDateTime(max(event_time), '%Y/%m/%d %H:%i:%s') AS last,
                   substringUTF8(splitByChar('\\n', argMax(message, (event_time, record_id)))[1], 1, 120) AS sample,
                   arraySort(groupUniqArray(computer)) AS computers, max(is_issue) AS issue
-           FROM ${T} WHERE ${where} GROUP BY channel, event_id, level, provider ORDER BY n DESC LIMIT 2000`,
+           FROM ${T} WHERE ${where} GROUP BY channel, event_id, level, provider ORDER BY n DESC, channel, event_id, level, provider LIMIT 5000`,
           params,
         ),
         keyTop('account', ''),
@@ -333,7 +333,8 @@ export function createAdChReader(cfg: ClickHouseConfig, fetchImpl: Fetch = fetch
         if (!reasonKeys.length) return new Map<string, KeyN[]>();
         const bag = paramBag();
         const { where: w2 } = adWhere({ fromMs, toMs }, bag, false);
-        const list = bag.p(`[${reasonKeys.map((k) => `'${k.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`).join(',')}]`, 'Array(String)');
+        // 每個原因一個 String 參數(不自己組陣列字面值,避免跳脫問題;資安審查 M2)
+        const list = `(${reasonKeys.map((k) => bag.p(k, 'String')).join(', ')})`;
         const r = await rows<{ reason: string; key: string; n: number }>(
           `SELECT reason, ${col} AS key, count() AS n FROM ${T} WHERE ${w2} AND ${fail} AND ${col} != '' AND reason IN ${list} GROUP BY reason, key ORDER BY reason, n DESC, key LIMIT 5 BY reason`,
           bag.params,

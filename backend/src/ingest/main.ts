@@ -15,7 +15,6 @@ import { connectBackfillQueue } from '../infra/redis/backfill.js';
 import { backfillLoop } from './backfill.js';
 import { adBackfillLoop } from './ad-backfill.js';
 import { connectAdBackfillQueue } from '../infra/redis/ad-backfill.js';
-import { connectAdStatusRedis } from '../infra/redis/ad-status.js';
 import { createAdBackfillCh } from '../infra/clickhouse/ad-backfill.js';
 import { AD_ARCHIVE_KIND_LIST, createArchiveWriterClient, createColdFileClient } from '../infra/clickhouse/archive.js';
 import { connectColdLock } from '../infra/redis/cold-lock.js';
@@ -180,15 +179,13 @@ async function main(): Promise<void> {
   log('info', cfg.ftp ? 'FTP 補漏已啟用' : '沒有設定 FTP_HOST,不執行 FTP 補漏');
   // AD FTP 補漏(AD-3):同一個 FTP 設定(FTP_AD_DIR),和 PA 補漏各自一次一個工作
   const adBackfillQueue = cfg.ftp ? connectAdBackfillQueue(cfg.redisUrl) : null;
-  const adStatus = cfg.ftp ? connectAdStatusRedis(cfg.redisUrl) : null;
   const adBackfill =
-    adBackfillQueue && adStatus && cfg.ftp
+    adBackfillQueue && cfg.ftp
       ? adBackfillLoop({
           ch,
           q: createAdBackfillCh(cfg.clickhouse),
           ftp: createFtp(cfg.ftp),
           queue: adBackfillQueue,
-          watermarks: (c) => adStatus.watermarks(c),
           log,
           signal: stop.signal,
           rules: { adDir: cfg.ftp.adDir, ttlDays: cfg.adTtlDays },
@@ -219,7 +216,6 @@ async function main(): Promise<void> {
   await backfillQueue?.close();
   await adBackfill;
   await adBackfillQueue?.close();
-  await adStatus?.close();
   await archiving;
   await coldLock?.close();
   await beat();

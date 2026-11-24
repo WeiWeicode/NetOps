@@ -75,6 +75,7 @@ const adReconRoutes: FastifyPluginAsync<{ recon: AdReconciler | null; queue: AdB
         description: '比對這一天每個 (DC, 記錄) 的 FTP CSV 筆數(已匯入的 AD 資料,不讀 FTP)與 ClickHouse ad_events 筆數,回傳結果。日子不在保留期間內回 400;ClickHouse 無法使用回 503 NETOPS_CLICKHOUSE_UNAVAILABLE。',
         tags: ['FTP Log 檔案'],
         'x-permission': 'netops.ftp.write',
+        'x-audit-level': 'meta',
         'x-gherkin': ['場景: 立即對帳', '  當 呼叫 POST /api/netops/ad/reconciliations 帶 day "2026-11-23"', '  那麼 回應 200', '  而且 status 為 ok、gap、excess、pending 或 ftp-error'].join('\n'),
         body: { type: 'object', required: ['day'], additionalProperties: false, properties: { day: DAY } },
         response: { 200: looseObject('AdReconDay') },

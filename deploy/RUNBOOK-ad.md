@@ -405,3 +405,6 @@ C="docker compose --env-file /srv/giganexus/deploy/netops.env -f deploy/docker-c
   - `ambiguous`:判斷不出 Event Log 世代(DC 的 Security Log 被清除重編號、清除前後又沒有對得上的 Agent 列),**不寫入**;記 warn。需要時由需求方決定是否人工處理。
 - 未裝 Agent 的 DC:FTP 資料全量寫入 ClickHouse(世代 0;需求方 D2)。
 - 補漏只寫缺的列,`ad_heat_*` 由物化檢視自然累加(不要重建分桶);冷歸檔偵測到列數變了會自動重新歸檔。
+- 前提(補漏的世代判定與日期依此計算):**DC 的時區是台北時間**(CSV 的 `TimeCreated` 沒有時區,以 +08:00 解析);**Token 對應表的 `computer` 寫大寫主機短名**(例 `GSMC-DC1`,不寫 FQDN):補漏與對帳以「主機名第一段、大寫」對應 DC,未裝 Agent 的 DC 補寫列也用這個寫法,之後裝 Agent 時兩者才會是同一台。
+- 補漏的水位只採信 ClickHouse 已寫入的 Agent 列(不採信 Redis 接收端水位:事件可能還在 Stream,且 `netops-redis` 沒有 ACL)。
+- `NETOPS_AD_SOURCE=ftp` 時,只要 `netops-api` 有 ClickHouse 設定,每日對帳與自動補漏仍會執行並寫入 `ad_events`(切換前先把資料補齊);不想寫入時設 `NETOPS_RECON_AUTO_BACKFILL=0`(同時關閉 PA 自動補漏)。

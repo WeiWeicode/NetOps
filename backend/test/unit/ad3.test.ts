@@ -187,6 +187,12 @@ describe('FTP 補寫世代判定(D1)', () => {
       ],
     );
   });
+  it('RecordID 與時間小幅倒序不切段(程式碼審查 H1);清除後重新編號才切', () => {
+    assert.equal(splitSegments([row(5, 1_000_002), row(6, 1_000_001), row(7, 1_000_003)]).length, 1);
+    assert.equal(splitSegments([row(5, 1_000_002), row(6, 3)]).length, 2);
+    // 小的記錄(RecordID 只有幾千)清除後從 1 開始
+    assert.equal(splitSegments([row(5, 4000), row(6, 4001), row(7, 1)]).length, 2);
+  });
   it('錨定:段內有 Agent 列對得上就用它的世代(一天中段清除:兩段各自錨定)', () => {
     const rows = [row(100, 500), row(101, 501), row(200, 1), row(201, 2)];
     const s = segmentEpochs(rows, ctx({ anchors: new Map([[anchorKey(501, 101, 4625), 3], [anchorKey(2, 201, 4625), 4]]) }));
@@ -324,7 +330,7 @@ async function run(rows: FakeRow[], j: AdBackfillJob, hwm: Record<string, string
   const { ch, q } = fakeCh(rows);
   const { queue, jobs } = fakeQueue();
   jobs.set(j.id, j);
-  await runAdBackfill(j, { ch: ch as never, q, ftp, queue, watermarks: async () => hwm, log: () => undefined, signal: new AbortController().signal, rules: { adDir: AD_DIR, ttlDays: 3 }, now: () => NOW });
+  await runAdBackfill(j, { ch: ch as never, q, ftp, queue, log: () => undefined, signal: new AbortController().signal, rules: { adDir: AD_DIR, ttlDays: 3 }, now: () => NOW });
   return jobs.get(j.id)!;
 }
 const keys = (rows: FakeRow[]) => rows.map((r) => `${r.computer}|${r.channel}|${r.epoch}|${r.rid}`);

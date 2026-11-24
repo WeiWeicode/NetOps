@@ -122,6 +122,8 @@ export function createAdReconciler({
   /** 自動補漏:'yyyy/MM/dd(對帳日)|yyyy/MM/dd(今天)' 已送過 */
   const autoSent = new Set<string>();
   let lastRun = 0;
+  /** 每個對帳日最近一次自動補漏(工作 id 與送出時的缺口筆數) */
+  const lastAuto = new Map<string, { id: string; gapSum: number }>();
 
   const today = () => taipeiText(now()).slice(0, 10);
   function window(): string[] {
@@ -168,9 +170,18 @@ export function createAdReconciler({
         log.info({ day, gaps: rec.gaps }, '[AD 對帳] 有缺口');
         const key = `${day}|${t}`;
         if (!autoBackfill || autoSent.has(key)) continue;
+        // 上一次自動補漏還在跑,或做完什麼都沒補、缺口也沒變(剩下的是 waiting-agent / ambiguous):不重送(程式碼審查 M5)
+        const gapSum = rec.items.reduce((a, x) => a + Math.max(0, x.diff), 0);
+        const prev = lastAuto.get(day);
+        if (prev && queue) {
+          const pj = await queue.get(prev.id).catch(() => null);
+          if (pj && (pj.state === 'queued' || pj.state === 'running')) continue;
+          if (pj?.state === 'done' && pj.inserted === 0 && prev.gapSum === gapSum) continue;
+        }
         const r = await backfill(day, AD_AUTO_BACKFILL_OWNER);
         if (typeof r === 'object') {
           autoSent.add(key);
+          lastAuto.set(day, { id: r.id, gapSum });
           log.info({ day, id: r.id, scope: r.scope.length }, '[AD 對帳] 自動送出補漏');
         } else if (r === 'busy') log.warn({ day }, '[AD 對帳] 補漏佇列已滿,下一輪再送');
       } catch (err) {
@@ -179,6 +190,8 @@ export function createAdReconciler({
     }
     // 換日後清掉舊的記錄
     for (const k of autoSent) if (!k.endsWith(`|${t}`)) autoSent.delete(k);
+    const keep = new Set(window());
+    for (const d of lastAuto.keys()) if (!keep.has(d)) lastAuto.delete(d);
   }
 
   return { reconcile, window, backfill, run };

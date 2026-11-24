@@ -5,11 +5,13 @@
  *   1. 分段:依 (時間, RecordID) 排序,RecordID 變小的地方切段;一段 = 一個實體 Event Log 世代(清除重編號後是新的一段)。
  *   2. 錨定:段內有任何一列在 ClickHouse 找得到 Agent 列「RecordID、時間(秒)、EventID 都相同」→ 該段的世代 = 那筆 Agent 列的 log_epoch。
  *   3. 沒有錨點的段:
- *      - 這台 DC 這個記錄完全沒有 Agent 資料(沒有 Agent 列、也沒有接收端水位)→ 世代 0,全部可補(D2:未裝 Agent 的 DC)。
+ *      - 這台 DC 這個記錄在 ClickHouse 完全沒有 Agent 列 → 世代 0,全部可補(D2:未裝 Agent 的 DC)。
  *      - 有 Agent 資料:取段開始之前最近一筆 Agent 列(prev);段的最小 RecordID > prev 的 RecordID(同一世代 RecordID 隨時間遞增)→ prev 的世代。
  *        沒有 prev 時取段結束之後最早一筆 Agent 列(next);段的最大 RecordID < next 的 RecordID → next 的世代(Agent 安裝前的同一份 log)。
  *        都不成立(中間被清除重編號、無法確定)→ ambiguous,不寫(D1)。
- *   4. 水位保護:世代 e 是該記錄目前最新的世代時,只補 RecordID ≤ H(e) 的列,H(e) = max(接收端水位, ClickHouse 該世代 Agent 最大 RecordID);
+ *   4. 水位保護:世代 e 是該記錄目前最新的世代時,只補 RecordID ≤ H(e) 的列,H(e) = ClickHouse 該世代 Agent 已寫入的最大 RecordID
+ *      (不用接收端水位:它在收到時就前進,事件可能還在 Stream,先補會重複;netops-redis 沒有 ACL,竄改後缺口永遠補不回來
+ *       (程式碼審查 M2、資安審查 M1)。同一個 Stream 依序寫入,ClickHouse 有 X 就表示 X 之前收到的都已寫入;Redis 遺失的事件也因此能由 FTP 補回);
  *      更大的列 Agent 之後還會送(接收端不知道 FTP 補寫過,先補會重複),標 waiting,隔天對帳再看(D1、D5)。
  *      e 比目前世代舊時 Agent 已換世代,不會再送舊世代 → 不受水位限制。
  */
@@ -28,7 +30,7 @@ export interface AgentRef {
 }
 
 export interface EpochContext {
-  /** 這台 DC 這個記錄有沒有任何 Agent 資料(ClickHouse Agent 列或接收端水位) */
+  /** 這台 DC 這個記錄在 ClickHouse 有沒有 Agent 列 */
   hasAgent: boolean;
   /** 錨點:`${rid}|${t}|${eventId}` → Agent 列的世代 */
   anchors: Map<string, number>;
@@ -36,7 +38,7 @@ export interface EpochContext {
   prevAgent: (t: number) => AgentRef | null;
   /** 段結束(Unix 秒)之後最早一筆 Agent 列 */
   nextAgent: (t: number) => AgentRef | null;
-  /** 世代 → 有效水位 H(e)(接收端水位與 ClickHouse Agent 最大 RecordID 取大) */
+  /** 世代 → 有效水位 H(e)(ClickHouse Agent 已寫入的最大 RecordID) */
   watermark: Map<number, number>;
 }
 
@@ -51,17 +53,29 @@ export interface Segment {
 
 export const anchorKey = (rid: number, t: number, eventId: number) => `${rid}|${t}|${eventId}`;
 
-/** 依 (時間, RecordID) 排序後在 RecordID 變小處切段 */
+/** RecordID 與事件時間的小幅倒序容許量(寫入順序 ≠ 產生時間;程式碼審查 H1) */
+export const REORDER_TOLERANCE = 10_000;
+
+/**
+ * 依 (時間, RecordID) 排序後切段。RecordID 是寫入順序、時間是事件產生時間,忙碌的記錄常有小幅倒序,不能一變小就切:
+ * 只有「比段內最大值小超過 REORDER_TOLERANCE」或「小於段內最小值的一半」(清除後從 1 重新編號)才視為新的一段
+ */
 export function splitSegments(rows: readonly CsvRow[]): CsvRow[][] {
   const sorted = [...rows].sort((a, b) => a.t - b.t || a.rid - b.rid);
   const out: CsvRow[][] = [];
   let cur: CsvRow[] = [];
+  let min = Infinity;
+  let max = -Infinity;
   for (const r of sorted) {
-    if (cur.length && r.rid < cur[cur.length - 1]!.rid) {
+    if (cur.length && r.rid < max && (max - r.rid > REORDER_TOLERANCE || r.rid < min / 2)) {
       out.push(cur);
       cur = [];
+      min = Infinity;
+      max = -Infinity;
     }
     cur.push(r);
+    min = Math.min(min, r.rid);
+    max = Math.max(max, r.rid);
   }
   if (cur.length) out.push(cur);
   return out;
@@ -93,7 +107,7 @@ export function decide(row: CsvRow, epoch: number | null, ctx: Pick<EpochContext
   return row.rid <= h ? { kind: 'write', epoch } : { kind: 'waiting', epoch };
 }
 
-/** 目前最新的世代(水位與 Agent 列的世代取最大;沒有 Agent 資料為 null) */
+/** 目前最新的世代(Agent 列的世代取最大;沒有 Agent 列為 null) */
 export function currentEpochOf(watermark: Map<number, number>): number | null {
   return watermark.size ? Math.max(...watermark.keys()) : null;
 }

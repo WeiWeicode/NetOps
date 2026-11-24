@@ -89,7 +89,7 @@ async function backfill(dc: string, content: string, hwm: Record<string, string>
   const id = `00000000-0000-4000-8000-${String(++n).padStart(12, '0')}`;
   const job: AdBackfillJob = { id, day: DAY, files: [`${AD_DIR}/${YMD}/Security_${dc}.csv`], scope: [{ computer: dc, channel: 'Security' }], state: 'running', createdBy: 'it', createdAt: '', startedAt: null, finishedAt: null, read: 0, skipped: 0, inserted: 0, waitingAgent: 0, ambiguous: 0, invalid: 0, error: null };
   jobs.set(id, job);
-  await runAdBackfill(job, { ch, q, ftp, queue: qu, watermarks: async () => hwm, log: () => undefined, signal: new AbortController().signal, rules: { adDir: AD_DIR, ttlDays: 3 }, now: () => NOW });
+  await runAdBackfill(job, { ch, q, ftp, queue: qu, log: () => undefined, signal: new AbortController().signal, rules: { adDir: AD_DIR, ttlDays: 3 }, now: () => NOW });
   return jobs.get(id)!;
 }
 
@@ -172,11 +172,14 @@ describe('AD ClickHouse 總覽 = summarizeAd(同一份事件)', () => {
       mk(5, 4720, t(5, 0), 'Audit Success', '已建立使用者帳戶。\r\n\r\n主體:\r\n\t帳戶名稱:\t\tadmin\r\n\r\n新帳戶:\r\n\t帳戶名稱:\t\tov-new'),
       mk(6, 4672, t(6, 0), 'Audit Success', '指派給新登入的特殊權限。\r\n\r\n主體:\r\n\t帳戶名稱:\t\tov-admin'),
       mk(7, 4672, t(7, 0), 'Audit Success', '指派給新登入的特殊權限。\r\n\r\n主體:\r\n\t帳戶名稱:\t\tPC-01$'),
+      // 原因含單引號與反斜線:總覽「每個原因前 5 名」的查詢不能壞(資安審查 M2)
+      mk(8, 4625, t(8, 0), 'Audit Failure', "帳戶登入失敗。\r\n\r\n登入失敗的帳戶:\r\n\t帳戶名稱:\t\tov-c\r\n\r\n失敗資訊:\r\n\t失敗原因:\t\tit's a \ test\r\n\r\n網路資訊:\r\n\t來源網路位址:\t10.77.0.3"),
     ];
     await ch.insert('ad', rows, `it3:${DCO}:ov`);
     const fromMs = Date.parse(`${D2}T22:00:00+08:00`);
     const toMs = fromMs + 3600_000;
     const ov = await reader.overview(fromMs, toMs, 30);
+    assert.ok(ov.failReasons.some((x) => x.key === "it's a \ test" && x.ips.length === 1), JSON.stringify(ov.failReasons));
     const { rows: evs } = await reader.search({ fromMs, toMs }, 0, 1000);
     // 這一小時只能有本測試的事件(其他整合測試不寫前天 22 點);若有別的資料,比對仍用同一份 evs
     const js = summarizeAd(evs as never, 30) as typeof ov;

@@ -450,11 +450,8 @@ export function createAiService(deps: {
 
     // AD 事件記錄:AD 相關問題整段帶入;問題有 IP 時,AD 事件中出現該 IP 才帶入
     // AD-3:來源依 NETOPS_AD_SOURCE(adSource);ClickHouse 無法使用時以 error 事件結束(不改查 FTP)
-    let adHit = false;
-    if (!adQ) for (const ip of cond.ips) if (!ip.includes('/') && (await adSrc.hasIp(dFrom, dTo, ip))) {
-      adHit = true;
-      break;
-    }
+    const adHit = !adQ && (await Promise.all(cond.ips.filter((ip) => !ip.includes('/')).map((ip) => adSrc.hasIp(dFrom, dTo, ip)))).some(Boolean);
+    if (closed()) return;
     if (adQ || adHit) {
       const accounts = [...new Set([...accountsIn(question), ...(adOnly && !accountsIn(question).length ? accountsIn(lastUser) : [])])];
       const { text: adText, total: adTotal } = await adSrc.aiContext(dFrom, dTo, { ips: cond.ips.filter((ip) => !ip.includes('/')), eventIds, accounts, full: adQ });

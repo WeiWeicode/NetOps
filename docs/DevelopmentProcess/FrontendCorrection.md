@@ -2,6 +2,14 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。範圍:`frontend/`。
 
+## 2026-11-24 AD 測試區驗收修正(防火牆 FTP 頁移除 AD 列、ftp 來源隱藏 AD 徽章)
+- 工作項目:AD 測試區驗收修正(`docs/test-reports/2026-11-24-ad-acceptance.md` §3、§5;Gemini 修正,待 Claude 審查)
+- 內容:
+  - 防火牆 › FTP Log 檔案頁(`/netops/firewall/files`):`dailyCategories` 與 `DailySyncCard` 新增 `exclude` 屬性,防火牆頁傳入 `:exclude="['ad']"` 移除「每日自動同步」表格的「AD 事件」列與副標字樣;後端不動,AD 頁(`only: ['ad']`)不受影響。
+  - AD › Log 明細查詢(`Search.vue`):回應頂層 `source === 'ftp'` 時不顯示「資料來源」欄與「即時 / FTP 補寫」徽章(表格與明細彈窗皆隱藏);`clickhouse` 來源照舊顯示。
+- 檔案:`frontend/src/{composables/ftpFiles.ts,components/DailySyncCard.vue,pages/firewall/Files.vue,pages/ad/Search.vue}`、`frontend/test/{dailySync.mount.test.ts,ad3.mount.test.ts}`
+- 驗證:`frontend/` `npm run typecheck`、`npm test`(47 檔 / 379 通過 / 0 失敗)、`npm run build` 通過
+
 ## 2026-11-24 AD-3 前端 Claude 審查修正(!189)
 - 工作項目:AD-3 前端審查修正(`docs/reviews/2026-11-24-ad-gemini-fix-fe-ad6.md` !189 M1–M2、Low 1–6)
 - 內容:

@@ -6,7 +6,7 @@
  *   有管理權限(UI.paFilesManage)可同步新檔案、分析 / 重新分析選取、取消分析、刪除分析結果(只刪本系統摘要,FTP 唯讀)。
  *   只有 TRAFFIC 目錄(FTP_LOG_DIR)與各類型 log 目錄的檔案可以勾選;其他目錄只能瀏覽(後端一定會略過,analyzableDir)。
  *   同步與分析在背景執行:分析中每 2 秒查詢進度,結束時重新載入清單。
- *   「每日自動同步」卡片(AC1):每天對帳後自動匯入解密、GlobalProtect、User-ID 與 AD,顯示 FTP 保留期限內每天是否已匯入。
+ *   「每日自動同步」卡片(AC1):每天對帳後自動匯入解密、GlobalProtect 與 User-ID(AD 僅於 AD 網域 › FTP Log 檔案顯示),顯示 FTP 保留期限內每天是否已匯入。
  */
 import { computed, onMounted, ref, shallowRef, watch } from 'vue';
 import { useRoute } from 'vue-router';
@@ -262,8 +262,8 @@ const columns = computed(() => [
     <GAlert v-if="syncError" tone="warning" title="上次同步失敗,清單與分析結果可能不完整">{{ syncError }}</GAlert>
     <GAlert v-else-if="syncNote" tone="info" title="部分檔案留待下次同步">{{ syncNote }}</GAlert>
 
-    <!-- 對帳後每日同步(AC1):解密 / GlobalProtect / User-ID / AD 在保留期限內每天的匯入狀態 -->
-    <DailySyncCard :status="status?.daily" />
+    <!-- 對帳後每日同步(AC1):防火牆頁只看解密 / GlobalProtect / User-ID,排除 AD(AD 僅於 AD 網域 › FTP Log 檔案顯示) -->
+    <DailySyncCard :status="status?.daily" :exclude="['ad']" />
 
     <!-- 分析進度(TRAFFIC 與其他類型 log 各一個匯入程式) -->
     <GCard v-if="showProgress && status" padding="sm">

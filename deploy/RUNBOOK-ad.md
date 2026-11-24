@@ -99,11 +99,11 @@
 | 換 Token(遺失、外洩) | `sudo sh deploy/host2-set-ad-secrets.sh rotate <COMPUTER>` | 不用改 |
 | 作廢 DC(汰換) | `sudo sh deploy/host2-set-ad-secrets.sh revoke <COMPUTER>` | 從 `-RemoteAddress` 拿掉該 IP |
 
-對應表改完要**只重建 `netops-ad-receiver`** 才生效(其他 DC 斷線幾秒,Agent 會重送;`netops-pa` 不受影響):
+對應表改完要**重建 `netops-ad-receiver`** 才生效(其他 DC 斷線幾秒,Agent 會重送;`netops-pa` 不受影響):
 
-```bash
-docker compose --env-file /srv/giganexus/deploy/netops.env -f deploy/docker-compose.yml up -d --no-deps --wait --force-recreate netops-ad-receiver
-```
+- **測試區**:在 GitLab 重跑最近一次 `develop` pipeline 的 `deploy-api-test`,日誌確認 `OK   netops-pa 沒有變更,沿用原容器` 與 `OK   netops-ad-receiver`。
+- **正式區**:等下一次 `deploy-prod`,或由 Maintainer 在 GitLab 重跑最近一次 `main` pipeline 的 `deploy-prod`;會不會重建 `netops-pa` 以 CI 日誌為準。
+- 不要在主機手動執行不帶 `IMAGE_TAG` 的 `docker compose ... up` 指令(少了 CI 設的 `IMAGE_TAG`,映像會落回 `netops-api:dev`)。
 
 作廢後清掉 Redis 的狀態(計畫 §4.2 L3;第一版不提供管理 API):
 
@@ -163,11 +163,7 @@ C="docker compose --env-file /srv/giganexus/deploy/netops.env -f deploy/docker-c
    sudo sh deploy/host2-set-ad-secrets.sh add <VM> workgroup
    ```
    正常:`list` 會多一行 `<VM> workgroup`。
-2. 對應表改了要只重建接收容器(`netops-pa` 不受影響,§4):
-   ```bash
-   docker compose --env-file /srv/giganexus/deploy/netops.env -f deploy/docker-compose.yml up -d --no-deps --wait --force-recreate netops-ad-receiver
-   ```
-   正常:`netops-ad-receiver` Healthy。失敗停下回報。
+2. 對應表改了要重建接收容器(同 §4):在 GitLab 重跑最近一次 `develop` pipeline 的 `deploy-api-test`(不要在主機手動執行不帶 `IMAGE_TAG` 的 `docker compose ... up`),日誌確認 `OK   netops-pa 沒有變更,沿用原容器` 與 `OK   netops-ad-receiver`。失敗停下回報。
 3. VM 經 Default Switch NAT 連到主機 2,來源會是 `10.10.130.124`(同 `:9443` 的做法)。**測試期間**把它加進防火牆規則(主機 2 系統管理員 PowerShell):
    ```powershell
    Set-NetFirewallRule -DisplayName "NetOps AD Agent 51295" -RemoteAddress 10.10.130.3,10.10.130.124
@@ -402,15 +398,25 @@ C="docker compose --env-file /srv/giganexus/deploy/netops.env -f deploy/docker-c
 
 > 依據:`docs/AD-AGENT-PLAN.md` §5、§6.1;需求方 2026-11-24 D1–D5。**AI 不執行本節的主機指令**。
 
-### 8.1 切換步驟(測試區;正式區等 AD Agent 與正式區 ClickHouse 上線後同樣做法)
+### 8.1 切換步驟(測試區與正式區)
+
+**測試區(主機 2)**
 
 1. 先確認 ClickHouse 已有 AD 資料:畫面「AD › FTP Log 檔案」的對帳卡片(或 `GET /api/netops/ad/reconciliations`)昨天有 `ch` 筆數;`netops-api` 已設 `CLICKHOUSE_URL`(測試區已設)。
-2. 主機 `.env`(測試區 `/srv/giga-netops/test/.env`)加一行 `NETOPS_AD_SOURCE=clickhouse`。
-3. **只重建 `netops-api`**:`docker compose --env-file <.env> -f deploy/docker-compose.yml up -d --no-deps netops-api`。
-   - `NETOPS_AD_SOURCE`、`NETOPS_TTL_AD_DAYS` 只有 `netops-api` 的 environment 引用,**改這兩個設定不會讓 `netops-pa` 重建,Syslog 不會斷**。
-   - ⚠ **不要用不帶服務名稱的 `docker compose up -d`**:若同一次也改了 `netops-pa` 用到的設定,`netops-pa` 會被重建,PA-560 的 Syslog 連線會斷,要網通在場重新 Commit(`deploy/RUNBOOK-prod.md` §8)。
+2. 編輯主機 2 環境檔 **`/srv/giganexus/deploy/netops.env`**(CI 的 `NETOPS_ENV_FILE`),新增或修改一行 `NETOPS_AD_SOURCE=clickhouse`。
+3. 套用設定:在 GitLab **重跑最近一次 `develop` pipeline 的 `deploy-api-test`**。
+   - `NETOPS_AD_SOURCE`、`NETOPS_TTL_AD_DAYS` 只有 `netops-api` 的 environment 引用,改這兩個設定不會讓 `netops-pa` 重建;日誌要看到 **`OK   netops-pa 沒有變更,沿用原容器`**。
+   - 不要在主機手動執行 `docker compose ... up` 指令(少了 CI 設的 `IMAGE_TAG`,映像會落回 `netops-api:dev`)。
 4. 確認:`GET /api/netops/ad/days` 的 `source` 為 `clickhouse`;AD 事件總覽有今天的資料。
-5. 回復:`.env` 刪掉這行(或改 `ftp`),同第 3 步只重建 `netops-api`。
+5. 改回 `ftp`:從 `/srv/giganexus/deploy/netops.env` 刪掉 `NETOPS_AD_SOURCE` 那一行(或改為 `NETOPS_AD_SOURCE=ftp`),同樣在 GitLab 重跑最近一次 `develop` pipeline 的 `deploy-api-test`,並確認日誌有 `OK   netops-pa 沒有變更,沿用原容器`。
+
+**正式區(主機 3;等 AD Agent 與正式區 ClickHouse 上線後)**
+
+1. 確認條件同測試區第 1 步。
+2. 編輯主機 3 環境檔 **`/srv/giganexus/deploy/netops.env`**,新增或修改一行 `NETOPS_AD_SOURCE=clickhouse`。
+3. 套用設定:等下一次 `deploy-prod`,或由 Maintainer 在 GitLab 重跑最近一次 `main` pipeline 的 `deploy-prod`;會不會重建 `netops-pa` 以 CI 日誌為準(`OK   netops-pa 沒有變更,沿用原容器` 或 `WARN netops-pa 已重建`)。
+4. 確認同測試區第 4 步。
+5. 改回 `ftp`:從主機 3 `/srv/giganexus/deploy/netops.env` 刪掉該行(或改為 `NETOPS_AD_SOURCE=ftp`),同樣等下一次 `deploy-prod` 或由 Maintainer 重跑 `main` pipeline 的 `deploy-prod`(會不會重建 `netops-pa` 以 CI 日誌為準)。
 
 ### 8.2 每日對帳與補漏的判讀
 

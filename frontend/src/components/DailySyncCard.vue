@@ -2,7 +2,7 @@
 /**
  * 對帳後每日同步(IMPL-PLAN AC1;docs/API.md §5.4):每天自動對帳後,從 FTP 匯入解密、GlobalProtect、User-ID 與 AD。
  * 顯示今天這一輪的狀態,以及 FTP 保留期限內每個類型每一天的匯入狀態(格子:已匯入 / 處理中 / 失敗 / 尚無檔案)。
- * 防火牆 › FTP Log 檔案顯示全部類型;AD 網域 › FTP Log 檔案只顯示 AD(only = ['ad'])。
+ * 防火牆 › FTP Log 檔案排除 AD(exclude = ['ad']);AD 網域 › FTP Log 檔案只顯示 AD(only = ['ad'])。
  * 連續 2 天以上 FTP 沒有檔的類型(stale)標「中斷」並提示 PA 匯出可能中斷;這些類型不擋當天完成(驗收報告 §3.2)。
  * 資料由頁面輪詢的匯入進度帶入(GET /ftp/pa/status、/ftp/ad/status 的 daily),本元件不自己呼叫 API。
  */
@@ -15,9 +15,11 @@ const props = defineProps<{
   status: DailySyncStatus | null | undefined;
   /** 只顯示這些類型(省略 = 全部) */
   only?: string[];
+  /** 排除這些類型(例如防火牆頁排除 ['ad']) */
+  exclude?: string[];
 }>();
 
-const cats = computed(() => dailyCategories(props.status, props.only));
+const cats = computed(() => dailyCategories(props.status, props.only, props.exclude));
 const days = computed(() => dailyDays(cats.value));
 const latest = computed(() => dailyLatest(cats.value));
 const errors = computed(() => dailyErrors(cats.value));
@@ -31,8 +33,10 @@ const staleHint = computed(() => {
 const run = computed(() => (props.status ? DAILY_RUN_STATE[props.status.state] : null));
 const subtitle = computed(() => {
   const s = props.status;
-  if (!s?.enabled) return '自動對帳後從 FTP 匯入解密、GlobalProtect、User-ID 與 AD 事件';
-  const what = props.only?.length === 1 && props.only[0] === 'ad' ? ' AD 事件' : '解密、GlobalProtect、User-ID 與 AD 事件';
+  const isAdOnly = props.only?.length === 1 && props.only[0] === 'ad';
+  const hasNoAd = !!props.exclude?.includes('ad');
+  const what = isAdOnly ? ' AD 事件' : hasNoAd ? '解密、GlobalProtect 與 User-ID' : '解密、GlobalProtect、User-ID 與 AD 事件';
+  if (!s?.enabled) return `自動對帳後從 FTP 匯入${what}`;
   return `每天 ${s.at ?? ''} 對帳後自動匯入${what};FTP 只保留 ${s.retentionDays} 天,請在期限內確認都已匯入`;
 });
 const legend = Object.values(DAILY_DAY_STATE);

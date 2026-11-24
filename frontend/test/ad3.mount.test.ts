@@ -279,14 +279,14 @@ describe('畫面 1 & 2:AD 事件總覽(DC Agent 狀態列 + GIpLabel)', () => {
     expect(w2.text()).toContain('事件總數');
     w2.unmount();
 
-    // 503 ClickHouse 錯誤:顯示錯誤卡片與 requestId,不顯示成空總覽
+    // 503 ClickHouse 錯誤:只顯示單一錯誤卡片(不與 GAlert 重複)與 requestId,不顯示成空總覽(審查 Low 2)
     apiMocks.overview.mockRejectedValue(new ApiError(503, 'NETOPS_CLICKHOUSE_UNAVAILABLE', 'AD 事件資料庫暫時無法使用', 'req-ch-503'));
     const w3 = mount(Events, { global: { plugins: [ui], provide, stubs } });
     await flushPromises();
     await vi.advanceTimersByTimeAsync(350);
     await flushPromises();
     expect(w3.text()).toContain('AD 事件資料庫暫時無法使用');
-    expect(w3.text()).toContain('req-ch-503');
+    expect(w3.text().match(/req-ch-503/g)?.length).toBe(1);
     expect(w3.text()).not.toContain('這段期間沒有事件');
     w3.unmount();
   });

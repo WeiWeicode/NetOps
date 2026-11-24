@@ -294,7 +294,6 @@ const asChange = (r: unknown) => r as AdOverview['accountChanges'][number];
       </GEmpty>
     </GCard>
     <GCard v-else-if="loadError && !summary">
-      <GAlert v-if="isClickHouseUnavailable(loadError)" tone="danger" :title="loadErrorTitle">{{ describeError(loadError) }}</GAlert>
       <GEmpty tone="danger" icon="activity" :title="loadErrorTitle" :description="describeError(loadError)">
         <GButton icon="refresh" @click="load">重試</GButton>
       </GEmpty>

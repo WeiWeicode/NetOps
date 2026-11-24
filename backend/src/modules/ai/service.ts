@@ -16,6 +16,7 @@ import type { Ftp, FtpStream } from '../../infra/ftp/index.js';
 import { LlmError, type ChatMessage, type Llm } from '../../infra/llm/index.js';
 import { accountsIn, eventIdsIn, isAdQuestion } from '../ad/core/ad-ai.js';
 import type { AdImporter } from '../ad/importer.js';
+import { createFtpAdSource, type AdQuerySource } from '../ad/source.js';
 import { notesForAi } from '../kb/core/ai-notes.js';
 import type { KbService } from '../kb/service.js';
 import type { EventImporter } from '../pa-events/importer.js';
@@ -151,11 +152,20 @@ export const EXPLAIN_SLICE_WAIT_MS = 180_000;
 /** 等時段明細工作時每次等多久 */
 const SLICE_POLL_MS = 2_000;
 
+/** 無 AD 事件時的提示文字(依 NETOPS_AD_SOURCE 調整;審查 L3) */
+export function adEmptyHint(kind: 'ftp' | 'clickhouse'): { label: string; evidence: string } {
+  return kind === 'clickhouse'
+    ? { label: '這段時間沒有 AD 事件記錄', evidence: '## AD 事件記錄\n（這段時間沒有 AD 事件記錄，請確認 DC Agent 連線狀態或時間範圍）' }
+    : { label: '這段時間沒有已匯入的 AD 事件記錄', evidence: '## AD 事件記錄\n（這段時間沒有已匯入的 AD 事件記錄，請到「AD 事件記錄」頁從 FTP 同步）' };
+}
+
 export function createAiService(deps: {
   llm: Llm | null;
   traffic: TrafficImporter;
   events: EventImporter;
   ad: AdImporter;
+  /** AD 事件的查詢來源(AD-3,NETOPS_AD_SOURCE);未給時用 ad(FTP 匯入) */
+  adSource?: Pick<AdQuerySource, 'kind' | 'aiContext' | 'hasIp'>;
   kb: KbService;
   vector: VectorSearch;
   ftp: Ftp;
@@ -172,6 +182,7 @@ export function createAiService(deps: {
   explain?: ExplainSources;
 }) {
   const { traffic, events, ad, kb, vector, ftp } = deps;
+  const adSrc = deps.adSource ?? createFtpAdSource(ad);
   const source: AiSource = deps.source ?? 'ftp';
   /** ClickHouse 來源(未建立時 ch-source 的 need() 回 503) */
   const chOf = (): ChAiSource => {
@@ -445,12 +456,16 @@ export function createAiService(deps: {
     }
 
     // AD 事件記錄:AD 相關問題整段帶入;問題有 IP 時,AD 事件中出現該 IP 才帶入
-    const adHit = !adQ && cond.ips.some((ip) => !ip.includes('/') && ad.search(dFrom, dTo, { ip }).rows.length > 0);
+    // AD-3:來源依 NETOPS_AD_SOURCE(adSource);ClickHouse 無法使用時以 error 事件結束(不改查 FTP)
+    const adHit = !adQ && (await Promise.all(cond.ips.filter((ip) => !ip.includes('/')).map((ip) => adSrc.hasIp(dFrom, dTo, ip)))).some(Boolean);
+    if (closed()) return;
     if (adQ || adHit) {
       const accounts = [...new Set([...accountsIn(question), ...(adOnly && !accountsIn(question).length ? accountsIn(lastUser) : [])])];
-      const adText = ad.adContext(dFrom, dTo, { ips: cond.ips.filter((ip) => !ip.includes('/')), eventIds, accounts, full: adQ });
-      s.send('ad', { label: adText ? `AD 事件記錄 ${dFrom}${dTo !== dFrom ? ` ~ ${dTo}` : ''}` : '這段時間沒有已匯入的 AD 事件記錄', total: adText ? ad.eventsInRange(dFrom, dTo).length : 0 });
-      evidence = [evidence, adText || '## AD 事件記錄\n（這段時間沒有已匯入的 AD 事件記錄，請到「AD 事件記錄」頁從 FTP 同步）'].filter(Boolean).join('\n\n');
+      const { text: adText, total: adTotal } = await adSrc.aiContext(dFrom, dTo, { ips: cond.ips.filter((ip) => !ip.includes('/')), eventIds, accounts, full: adQ });
+      if (closed()) return;
+      const empty = adEmptyHint(adSrc.kind);
+      s.send('ad', { label: adText ? `AD 事件記錄 ${dFrom}${dTo !== dFrom ? ` ~ ${dTo}` : ''}` : empty.label, total: adText ? adTotal : 0 });
+      evidence = [evidence, adText || empty.evidence].filter(Boolean).join('\n\n');
     }
 
     const kbNotes = await notes({ ips: cond.ips, text: `${question}\n${evidence}`, query: question });

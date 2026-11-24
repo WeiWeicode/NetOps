@@ -95,3 +95,73 @@ export function toAdRow(data: string, receivedMs: number, issues: RowIssues): Ro
     source: 'agent',
   };
 }
+
+/** FTP CSV 的時間 'yyyy/MM/dd HH:mm:ss'(core/adlog.js toEvent 的格式,DC 本地時間 = 台灣時間)→ Unix 秒;不合法回 null */
+export function csvTimeSec(v: unknown): number | null {
+  const m = /^(\d{4})\/(\d{2})\/(\d{2}) (\d{2}):(\d{2}):(\d{2})$/.exec(typeof v === 'string' ? v : '');
+  if (!m) return null;
+  const [, y, mo, d, h, mi, s] = m.map(Number) as number[];
+  const utc = Date.UTC(y!, mo! - 1, d!, h!, mi!, s!);
+  const check = new Date(utc);
+  if (check.getUTCMonth() !== mo! - 1 || check.getUTCDate() !== d! || check.getUTCHours() !== h! || check.getUTCMinutes() !== mi! || s! > 59) return null;
+  return Math.floor((utc - 8 * 3600_000) / 1000);
+}
+
+/** FTP CSV 一筆(core/adlog.js parseAdCsv + enrichEvent 的結果)要的欄位 */
+export interface CsvAdEvent {
+  time: string;
+  eventId: number;
+  level: string;
+  levelText?: string;
+  provider?: string;
+  recordId: string;
+  channel: string;
+  message?: string;
+  account?: string;
+  ip?: string;
+  workstation?: string;
+  reason?: string;
+  actor?: string;
+  target?: string;
+  group?: string;
+  privileged?: boolean;
+}
+
+/**
+ * AD-3 FTP 補漏:CSV 一筆 → netops.ad_events 一列(source = 'ftp')。欄位解析和 Agent 列用同一套(adlog.js),
+ * computer / ad_domain 用 Agent 的寫法(呼叫端依 DC 名稱對應好);log_epoch 由 ad-epoch.ts 判定。時間或 RecordID 不合法回 null。
+ * 和 Agent 列的已知差異(測試報告記錄):level_text 是 DC 語系的中文(「稽核失敗」),Agent 是英文(Audit Failure);received_at 是補寫時間。
+ */
+export function csvToAdRow(ev: CsvAdEvent, ctx: { computer: string; domain: string; epoch: number; receivedMs: number }): Row | null {
+  const t = csvTimeSec(ev.time);
+  const recordId = String(ev.recordId ?? '').trim();
+  if (t === null || !RECORD_ID.test(recordId) || !(AD_CHANNELS as readonly string[]).includes(ev.channel)) return null;
+  const eventId = uint32(ev.eventId);
+  if (eventId === null || eventId > 65_535) return null;
+  const rawIp = text(ev.ip, 100);
+  return {
+    event_time: taipeiText(t * 1000),
+    received_at: new Date(ctx.receivedMs).toISOString(),
+    computer: text(ctx.computer, 64),
+    ad_domain: text(ctx.domain, 128),
+    channel: ev.channel,
+    event_id: eventId,
+    log_epoch: ctx.epoch,
+    record_id: recordId,
+    level: text(ev.level, 32),
+    level_text: text(ev.levelText, 64),
+    provider: text(ev.provider),
+    account: text(ev.account),
+    actor: text(ev.actor),
+    target: text(ev.target),
+    group_name: text(ev.group),
+    privileged: ev.privileged ? 1 : 0,
+    is_issue: isIssue(ev) ? 1 : 0,
+    src_ip: ip(rawIp),
+    src_ip_raw: rawIp,
+    workstation: text(ev.workstation),
+    reason: text(ev.reason),
+    message: text(ev.message, 3000),
+    source: 'ftp',
+  };
+}

@@ -18,6 +18,13 @@ import { createStore, type Store } from './infra/store/index.js';
 import { createFtp, type Ftp } from './infra/ftp/index.js';
 import { createAdImporter } from './modules/ad/importer.js';
 import adRoutes from './modules/ad/routes.js';
+import adReconRoutes from './modules/ad/recon-routes.js';
+import { createAdReconciler } from './modules/ad/reconcile.js';
+import { createChAdSource, createFtpAdSource, type AdQuerySource } from './modules/ad/source.js';
+import { createAdChReader, type AdChReader } from './infra/clickhouse/ad-reader.js';
+import { connectAdStatusRedis, type AdStatusRedis } from './infra/redis/ad-status.js';
+import { connectAdBackfillQueue, type AdBackfillQueue } from './infra/redis/ad-backfill.js';
+import { ACCOUNT_CHANGES, SECURITY_EVENTS } from './modules/ad/core/adlog.js';
 import adFtpRoutes from './modules/ftp/ad-routes.js';
 import ftpRoutes from './modules/ftp/routes.js';
 import kbRoutes from './modules/kb/routes.js';
@@ -114,6 +121,8 @@ export async function buildApp(
     chNow?: () => number;
     /** FTP 補漏佇列(C3);測試注入 */
     backfillQueue?: BackfillQueue | null;
+    /** AD-3:AD 的 ClickHouse 查詢、DC Agent 心跳、AD 補漏佇列;測試注入(null = 不使用) */
+    ad?: { reader?: AdChReader | null; status?: AdStatusRedis | null; backfillQueue?: AdBackfillQueue | null; now?: () => number };
     /** 熱力圖與時段明細(V-a);測試注入假實作。冷資料(C4 前)沒有實作,冷路由回 409 */
     heat?: { reader?: HeatReader | null; cold?: ColdSlice | null; coldLock?: ColdLock | null; now?: () => number; syncMs?: number };
     /** PA 精準查詢(C5);測試注入,null = 沒有 Redis */
@@ -277,8 +286,11 @@ export async function buildApp(
   });
   // AC7:AI 每日摘要在 registerAi 建立(下面);對帳每一輪、每日同步之後在背景觸發,不等 AI 回答(AI 主機無法使用不影響對帳與同步)
   let aiDaily: { kick(): void } | null = null;
+  // AD-3:AD 對帳在每日同步(含 AD 匯入)之後;錯誤只寫日誌
+  let adRecon: { run(): Promise<void> } | null = null;
   const afterRecon = async () => {
     await daily.run();
+    await adRecon?.run().catch((err) => app.log.warn({ err: (err as Error).name }, '[AD 對帳] 失敗'));
     aiDaily?.kick();
   };
   // 對帳發現缺口時自動送補漏(需求方 2026-11-13 決定;NETOPS_RECON_AUTO_BACKFILL=0 關閉)
@@ -325,7 +337,31 @@ export async function buildApp(
   const insightSvc = createInsightService({ heat: heatReader, cache, recon, log: app.log, now: deps.heat?.now });
   await app.register(insightRoutes, { svc: insightSvc });
   await app.register(paEventRoutes, { events, ch });
-  await app.register(adRoutes, { ad });
+  // AD-3:查詢來源(NETOPS_AD_SOURCE)、DC Agent 狀態、FTP 對帳與補漏
+  const adReader = deps.ad?.reader !== undefined ? deps.ad.reader : config.clickhouse ? createAdChReader(config.clickhouse, fetch, { securityEvents: SECURITY_EVENTS, accountChanges: ACCOUNT_CHANGES }) : null;
+  if (config.ad.source === 'clickhouse' && !adReader) throw new Error('NETOPS_AD_SOURCE=clickhouse 需要 ClickHouse 設定');
+  const adSource: AdQuerySource = config.ad.source === 'clickhouse' && adReader ? createChAdSource(adReader) : createFtpAdSource(ad);
+  const adStatus = deps.ad?.status !== undefined ? deps.ad.status : config.redisUrl ? connectAdStatusRedis(config.redisUrl) : null;
+  if (adStatus) app.addHook('onClose', async () => adStatus.close());
+  const adQueue = deps.ad?.backfillQueue !== undefined ? deps.ad.backfillQueue : config.redisUrl ? connectAdBackfillQueue(config.redisUrl) : null;
+  if (adQueue) app.addHook('onClose', async () => adQueue.close());
+  const adReconciler =
+    adReader && config.ftp
+      ? createAdReconciler({
+          ad,
+          reader: adReader,
+          queue: adQueue,
+          log: app.log,
+          adDir: config.ftp.adDir,
+          ftpRetentionDays: config.ftpRetentionDays,
+          ttlDays: config.ad.ttlDays,
+          autoBackfill: config.reconAutoBackfill,
+          now: deps.ad?.now,
+        })
+      : null;
+  adRecon = adReconciler;
+  await app.register(adRoutes, { ad, source: adSource, status: adStatus, heartbeat: { staleSec: config.ad.heartbeatStaleSec, offlineSec: config.ad.heartbeatOfflineSec }, now: deps.ad?.now });
+  await app.register(adReconRoutes, { recon: adReconciler, queue: adQueue });
   await app.register(adFtpRoutes, { ad, daily: daily.status });
   const kb = createKbService(app.store.kb, app.log);
   await app.register(kbRoutes, { kb });
@@ -385,6 +421,7 @@ export async function buildApp(
     traffic,
     events,
     ad,
+    adSource,
     kb,
     ftp,
     paStore: app.store.pa,

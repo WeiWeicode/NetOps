@@ -60,6 +60,8 @@ export async function createTestApp({
   warroomNow?: () => number;
   /** AC3 日誌內容檢查 */
   logStream?: NonNullable<Parameters<typeof buildApp>[1]>['logStream'];
+  /** AD-3:AD 的 ClickHouse 查詢、DC Agent 心跳、AD 補漏佇列 */
+  ad?: NonNullable<Parameters<typeof buildApp>[1]>['ad'];
 } = {}): Promise<TestApp> {
   const { publicKey, privateKey } = await generateKeyPair('ES256');
   const jwk = { ...(await exportJWK(publicKey)), kid: 'test', alg: 'ES256', use: 'sig' };

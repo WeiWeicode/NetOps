@@ -2,6 +2,18 @@
 
 > `backend/`、`deploy/` 的修改;新紀錄加在最上方,格式見 `AGENT.md` §11。
 
+## 2026-11-24 AD-2 / AD-3 審查修正(!186、!187)
+- 工作項目:AD-2(!186)、AD-3(!187)Gemini 審查修正
+- 內容:!186(AD-2):`Install-NetOpsAdAgent.ps1` 升級既有服務改用 CIM `Win32_Service.Change`(驗證 `ReturnValue == 0`),避免 PowerShell 5.1 吞掉含空白路徑雙引號;`winlog.rs` `log_info` 改用反向 `EvtQueryReverseDirection` 讀最新 `EventRecordID` 且 `agent.rs` 換世代前二次確認;`agent.rs` 整批事件皆被過濾且尚未追上水位時立即接續掃描;`RUNBOOK-ad.md` §7.2 事件名稱修正為 `agent_service_stopped`、`2026-11-23-ad-2.md` 標註 `watermarks()` 已解決。!187(AD-3):`ad-epoch.ts` / `ad-backfill.ts` 改以迴圈算 min/max 防 20 萬列以上 `RangeError`;`source.ts` / `ad-reader.ts` 將 `computer` / `dcDomain` 正規化(與 FTP 一致)且全走 `query_params`;`routes.ts` `dcDomain` 上限 128 → 253;`createChAdSource.overview` 改由 `hours` 算天數不額外掃描 `reader.days()`;`ai/service.ts` 無 AD 事件提示依來源調整措辭。
+- 檔案:`ad-agent/scripts/{Install-NetOpsAdAgent.ps1,tests/Test-AgentScripts.ps1}`、`ad-agent/src/{winlog,agent,agent/tests}.rs`、`deploy/RUNBOOK-ad.md`、`docs/test-reports/2026-11-23-ad-2.md`、`backend/src/ingest/{ad-epoch,ad-backfill}.ts`、`backend/src/modules/ad/{source,routes}.ts`、`backend/src/infra/clickhouse/ad-reader.ts`、`backend/src/modules/ai/service.ts`、`backend/test/{unit/ad3.test.ts,integration/ad3.int.test.ts}`
+- 驗證:AD-2 `build-release.ps1 -TestOnly`(clippy 0 警告、cargo 60 通過、腳本 76 通過);AD-3 backend `typecheck`、`build`、`npm test` 與 CI `check:ingest-int`
+
+## 2026-11-24 AD 查詢切換 ClickHouse、DC Agent 狀態、FTP 對帳與補漏(AD-3 後端)
+- 工作項目:AD-3(`docs/AD-AGENT-PLAN.md` §5、§6.1、§8;ARCHITECTURE D49;需求方 2026-11-24 D1–D5;前端交 Gemini)
+- 內容:`NETOPS_AD_SOURCE=ftp|clickhouse`(未設定 ftp):AD 總覽、明細、匯出、AI 問答經 `modules/ad/source.ts` 切換,ClickHouse 端 SQL 重現 `summarizeAd`(`infra/clickhouse/ad-reader.ts`,唯讀、query_params);明細新增 `computer`、`dcDomain`、`name` 條件,總覽與明細附 `names`;匯出加 DC 網域、來源名稱、資料來源欄。新增 `GET /v1/ad/agents`(心跳白名單整理,ok / stale / offline)、`/v1/ad/reconciliations`、`/v1/ad/backfills(/:id)`(路徑同 PA,D4)。`netops-ingest` 新增 AD FTP 補漏(`ingest/ad-backfill.ts`),世代判定「CSV 分段錨定 + 水位保護」(`ingest/ad-epoch.ts`,D1),未裝 Agent 的 DC 世代 0 全量寫入(D2)。`adContext` 拆出 `adContextFromSummary`(輸出不變)。Compose:netops-api 加 `NETOPS_AD_SOURCE`、`NETOPS_TTL_AD_DAYS`,netops-ingest 加 `FTP_AD_DIR`;env 範本註解;`RUNBOOK-ad.md` §8。不需要新 migration、不需要新權限代碼。
+- 檔案:`backend/src/modules/ad/{source,agents,reconcile,recon-routes,routes}.ts`、`backend/src/modules/ad/core/ad-ai.js`、`backend/src/infra/clickhouse/{ad-reader,ad-backfill}.ts`、`backend/src/infra/redis/{ad-status,ad-backfill}.ts`、`backend/src/ingest/{ad-epoch,ad-backfill,ad-rows,main,config}.ts`、`backend/src/{app,config}.ts`、`backend/src/modules/ai/{service,index}.ts`、`deploy/docker-compose.yml`、`deploy/*.env.example`、`deploy/RUNBOOK-ad.md`
+- 驗證:見 `docs/test-reports/2026-11-24-ad-3.md`
+
 ## 2026-11-23 AD 事件接收容器與 ClickHouse 寫入(AD-1)
 - 工作項目:AD-1(`docs/AD-AGENT-PLAN.md` §8;ARCHITECTURE D49、審查 H1–H4、M2)
 - 內容:新增 `netops-ad-receiver`(`backend/src/ad-receiver/`,netops-api 同映像另一個進入點,port 51295 只發佈 127.0.0.1):每台 DC 一把 Token(對應表只存 SHA-256)、核對 `computer` / `domain`、預設拒絕(只有 `/healthz` 免 Token)、每台 DC 每分鐘 120 個請求、單批 1,000 筆 / 4 MB;Redis Lua 依 `(computer, channel, log_epoch)` 水位去重後才寫 Stream `netops:ad:log:events`。`netops-ingest` 加第二個 Writer(只讀 AD Stream,失敗不卡住 PA)寫 `netops.ad_events`、第二個 Archiver 每天 02:30 匯出 `ad-archive/YYYY/ad_events_YYYY-MM-DD.parquet`。ClickHouse `migrations/005-ad1-ad-events.sql`(`ad_events`、`ad_heat_5m` / `1h` / `1d`、3 個 MV);`apply-schema.sh` 的 TTL 佔位符也代入 migrations(`{{TTL_AD_RAW}}`)。Compose、CI(測試區每次只重建 receiver、`--no-deps`;正式區 `NETOPS_AD_RECEIVER` 開關)、`host2/3-set-ad-secrets.sh`、`host2-setup-pa-archive.sh ad`、`deploy/RUNBOOK-ad.md`。**不改 `pa-collector/`,不重建 `netops-pa`**。

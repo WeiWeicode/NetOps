@@ -13,6 +13,9 @@ import { COUNTERS, sleep, Writer } from './writer.js';
 import { createFtp } from '../infra/ftp/index.js';
 import { connectBackfillQueue } from '../infra/redis/backfill.js';
 import { backfillLoop } from './backfill.js';
+import { adBackfillLoop } from './ad-backfill.js';
+import { connectAdBackfillQueue } from '../infra/redis/ad-backfill.js';
+import { createAdBackfillCh } from '../infra/clickhouse/ad-backfill.js';
 import { AD_ARCHIVE_KIND_LIST, createArchiveWriterClient, createColdFileClient } from '../infra/clickhouse/archive.js';
 import { connectColdLock } from '../infra/redis/cold-lock.js';
 import { archiveHeartbeatFields, archiveLoop, Archiver } from './archive.js';
@@ -174,6 +177,20 @@ async function main(): Promise<void> {
   const backfillQueue = cfg.ftp ? connectBackfillQueue(cfg.redisUrl) : null;
   const backfill = backfillQueue && cfg.ftp ? backfillLoop({ ch, ftp: createFtp(cfg.ftp), queue: backfillQueue, log, signal: stop.signal, rules: { logDir: cfg.ftp.logDir, pattern: cfg.ftp.pattern } }) : Promise.resolve();
   log('info', cfg.ftp ? 'FTP 補漏已啟用' : '沒有設定 FTP_HOST,不執行 FTP 補漏');
+  // AD FTP 補漏(AD-3):同一個 FTP 設定(FTP_AD_DIR),和 PA 補漏各自一次一個工作
+  const adBackfillQueue = cfg.ftp ? connectAdBackfillQueue(cfg.redisUrl) : null;
+  const adBackfill =
+    adBackfillQueue && cfg.ftp
+      ? adBackfillLoop({
+          ch,
+          q: createAdBackfillCh(cfg.clickhouse),
+          ftp: createFtp(cfg.ftp),
+          queue: adBackfillQueue,
+          log,
+          signal: stop.signal,
+          rules: { adDir: cfg.ftp.adDir, ttlDays: cfg.adTtlDays },
+        })
+      : Promise.resolve();
   const archiving = archiver && adArchiver ? archiveLoop([archiver, adArchiver], stop.signal, log) : Promise.resolve();
   log('info', cfg.archive ? '冷歸檔已啟用' : 'NETOPS_ARCHIVE_ENABLED 不是 1,不執行冷歸檔', cfg.archive ? { keepDays: cfg.archive.keepDays, alertDays: cfg.archive.alertDays } : {});
 
@@ -197,6 +214,8 @@ async function main(): Promise<void> {
   clearInterval(timer);
   await backfill;
   await backfillQueue?.close();
+  await adBackfill;
+  await adBackfillQueue?.close();
   await archiving;
   await coldLock?.close();
   await beat();

@@ -30,7 +30,7 @@ const props = withDefaults(
 );
 
 const manage = computed(() => can(UI.adFilesManage));
-const { list, loading, error, unavailable, runningDay, submittingKey, jobs, jobError, load, runDay, startBackfill } = useAdReconcile(props.pollMs);
+const { list, loading, error, unavailable, runningDay, submittingKey, jobs, jobError, dayError, load, runDay, startBackfill } = useAdReconcile(props.pollMs);
 
 const days = computed(() => list.value?.items ?? []);
 const expanded = ref<Record<string, boolean>>({});
@@ -156,6 +156,7 @@ onMounted(() => void load());
           </template>
         </div>
         <p v-else-if="latestJobErrOf(d)" class="xs c-danger job-note">無法查詢補漏進度:{{ describeError(latestJobErrOf(d)) }}</p>
+        <p v-if="dayError[d.day]" class="xs c-danger job-note">重新對帳失敗:{{ describeError(dayError[d.day]) }}</p>
 
         <!-- 展開:DC × 記錄明細 -->
         <div v-if="expanded[d.day]" class="day-items">

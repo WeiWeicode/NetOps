@@ -175,6 +175,70 @@ describe('useAdReconcile 補漏工作輪詢與錯誤工具', () => {
     expect(api.reconJob).toHaveBeenCalledTimes(2);
     scope.stop();
   });
+
+  it('載入時已完成的補漏工作不自動重新對帳;進行中轉完成若重對帳失敗記於 dayError;防重疊請求與空 day(審查 M1、Low 1)', async () => {
+    const doneJob = {
+      id: 'j-done',
+      day: '2026-11-23',
+      files: ['Security_GSMC-DC1.csv'],
+      scope: [{ computer: 'GSMC-DC1', channel: 'Security' }],
+      state: 'done' as const,
+      createdBy: 'admin',
+      createdAt: '2026-11-24T01:00:00+08:00',
+      startedAt: '2026-11-24T01:00:01+08:00',
+      finishedAt: '2026-11-24T01:00:05+08:00',
+      read: 10,
+      skipped: 8,
+      inserted: 2,
+      waitingAgent: 0,
+      ambiguous: 0,
+      invalid: 0,
+      error: null,
+    };
+    api.reconList.mockResolvedValue({
+      window: { from: '2026-11-22', to: '2026-11-23' },
+      items: [{ day: '2026-11-23', checkedAt: '2026-11-24T08:00:00+08:00', status: 'ok', ftpFiles: 1, gaps: 0, excess: 0, items: [], backfills: ['j-done'] }],
+    });
+    api.reconJob.mockResolvedValueOnce(doneJob);
+
+    const scope = effectScope();
+    const rec = scope.run(() => useAdReconcile(2_000))!;
+    await rec.load();
+    await flushPromises();
+    // 載入時工作已是 done:只顯示結果,不打 POST /ad/reconciliations
+    expect(rec.jobs.value['j-done']?.state).toBe('done');
+    expect(api.reconRun).not.toHaveBeenCalled();
+
+    // 進行中輪詢遇到頁面恢復可見不發重疊請求;空 day 完成不打 runDay('')
+    let resolveSlow!: (v: typeof doneJob) => void;
+    api.reconJob.mockImplementationOnce(
+      () =>
+        new Promise((r) => {
+          resolveSlow = r;
+        }),
+    );
+    const p1 = rec.pollJob('j-slow', '');
+    setHidden(true);
+    setHidden(false);
+    // j-slow 仍在進行中,恢復可見不可重複呼叫 adRecon.job
+    expect(api.reconJob).toHaveBeenCalledTimes(2);
+    resolveSlow({ ...doneJob, id: 'j-slow', day: '', state: 'done' });
+    await p1;
+    await flushPromises();
+    expect(api.reconRun).not.toHaveBeenCalled();
+
+    // 觀察到 running → done 後自動 runDay 失敗時,錯誤記入 dayError(不吞掉)
+    api.reconJob
+      .mockResolvedValueOnce({ ...doneJob, id: 'j-run', state: 'running' })
+      .mockResolvedValueOnce({ ...doneJob, id: 'j-run', state: 'done' });
+    api.reconRun.mockRejectedValueOnce(new ApiError(403, 'FORBIDDEN', '沒有寫入權限', 'req-recon-403'));
+    await rec.pollJob('j-run', '2026-11-23');
+    await vi.advanceTimersByTimeAsync(2_000);
+    await flushPromises();
+    expect(api.reconRun).toHaveBeenCalledWith('2026-11-23');
+    expect(rec.dayError.value['2026-11-23']).toBeInstanceOf(ApiError);
+    scope.stop();
+  });
 });
 
 describe('GSourceBadge 支援 AD 資料來源與原有 PA 熱冷標記', () => {

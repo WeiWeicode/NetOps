@@ -484,6 +484,48 @@ describe('畫面 4:AD › FTP Log 檔案「ClickHouse 對帳與補漏」卡片(R
     w.unmount();
   });
 
+  it('進頁面時已有 done 工作不呼叫 POST /ad/reconciliations;自動重新對帳失敗顯示於該日(審查 M1)', async () => {
+    const doneJob = {
+      id: 'job-existing',
+      day: '2026-11-23',
+      files: ['Security_GSMC-DC1.csv'],
+      scope: [{ computer: 'GSMC-DC1', channel: 'Security' }],
+      state: 'done' as const,
+      createdBy: 'admin',
+      createdAt: '2026-11-24T08:00:00+08:00',
+      startedAt: '2026-11-24T08:00:01+08:00',
+      finishedAt: '2026-11-24T08:00:05+08:00',
+      read: 50,
+      skipped: 48,
+      inserted: 2,
+      waitingAgent: 0,
+      ambiguous: 0,
+      invalid: 0,
+      error: null,
+    };
+    apiMocks.reconList.mockResolvedValue({ items: [{ ...sampleDay, backfills: ['job-existing'] }], window: { from: '2026-11-22', to: '2026-11-23' } });
+    apiMocks.reconJob.mockResolvedValueOnce(doneJob);
+
+    const { default: ReconCard } = await import('@/pages/ad/ReconCard.vue');
+    const w = mount(ReconCard, { global: { plugins: [ui], stubs } });
+    await flushPromises();
+    expect(w.text()).toContain('補寫 2');
+    expect(apiMocks.reconRun).not.toHaveBeenCalled();
+
+    // 若本頁送出新補漏完成後自動重新對帳失敗,錯誤與 requestId 必須顯示在該日
+    apiMocks.reconBackfill.mockResolvedValueOnce({ ...doneJob, id: 'job-new', state: 'running', finishedAt: null });
+    apiMocks.reconJob.mockResolvedValueOnce({ ...doneJob, id: 'job-new', state: 'done' });
+    apiMocks.reconRun.mockRejectedValueOnce(new ApiError(503, 'NETOPS_CLICKHOUSE_UNAVAILABLE', 'ClickHouse 暫時無法使用', 'req-auto-503'));
+    const bfBtn = w.findAll('.day-actions button').find((b) => b.text().includes('補漏'));
+    await bfBtn!.trigger('click');
+    await flushPromises();
+    await vi.advanceTimersByTimeAsync(2_000);
+    await flushPromises();
+    expect(w.text()).toContain('重新對帳失敗');
+    expect(w.text()).toContain('req-auto-503');
+    w.unmount();
+  });
+
   it('409 補漏錯誤回報 toast;window null 顯示空狀態;無管理權限隱藏按鈕', async () => {
     apiMocks.reconList.mockResolvedValue({ items: [sampleDay], window: { from: '2026-11-22', to: '2026-11-23' } });
     apiMocks.reconBackfill.mockRejectedValueOnce(new ApiError(409, 'NETOPS_RECON_PENDING', '尚未匯入', 'req-409'));

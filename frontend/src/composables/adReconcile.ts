@@ -65,9 +65,16 @@ export function useAdReconcile(pollMs = BACKFILL_POLL_MS) {
   /** 每個工作 id 的最新狀態 */
   const jobs = ref<Record<string, AdBackfillJob>>({});
   const jobError = ref<Record<string, Error | null>>({});
+  /** 補漏完成後自動重新對帳失敗的錯誤(依日期顯示,不靜默吞掉;審查 M1) */
+  const dayError = ref<Record<string, Error | null>>({});
 
   let timers = new Map<string, ReturnType<typeof setTimeout>>();
   let activeIds = new Set<string>();
+  /** 本頁實際觀察到 queued / running 的工作:只有這些轉成 done 才自動重新對帳(審查 M1) */
+  let observedInProgress = new Set<string>();
+  /** 每個工作目前的輪詢序號與進行中旗標,防止頁面恢復可見時重疊請求(審查 Low 1) */
+  let jobSeq = new Map<string, number>();
+  let inFlightJobs = new Set<string>();
   let disposed = false;
 
   const isHidden = () => typeof document !== 'undefined' && document.hidden;
@@ -100,12 +107,13 @@ export function useAdReconcile(pollMs = BACKFILL_POLL_MS) {
   async function load() {
     loading.value = true;
     error.value = null;
+    dayError.value = {};
     try {
       const { from, to } = defaultReconRange();
       const r = await adRecon.list(from, to);
       if (disposed) return;
       list.value = r;
-      // 自動追蹤最近一次工作狀態(若頁面載入時後端已有進行中的工作)
+      // 載入時只查一次最近工作狀態供顯示;若本來就是 done 不觸發重新對帳(審查 M1)
       for (const d of r.items) {
         const latest = d.backfills[0];
         if (latest && !jobs.value[latest]) void pollJob(latest, d.day);
@@ -119,40 +127,58 @@ export function useAdReconcile(pollMs = BACKFILL_POLL_MS) {
 
   async function runDay(day: string): Promise<AdReconDay> {
     runningDay.value = day;
+    dayError.value = { ...dayError.value, [day]: null };
     try {
       const updated = await adRecon.run(day);
       if (!disposed) updateDayRow(updated);
       return updated;
+    } catch (e) {
+      if (!disposed) dayError.value = { ...dayError.value, [day]: e as Error };
+      throw e;
     } finally {
       if (runningDay.value === day) runningDay.value = '';
     }
   }
 
   async function pollJob(id: string, day: string): Promise<void> {
-    if (disposed) return;
+    if (disposed || inFlightJobs.has(id)) return;
     clearJobTimer(id);
     activeIds.add(id);
+    inFlightJobs.add(id);
+    const seq = (jobSeq.get(id) ?? 0) + 1;
+    jobSeq.set(id, seq);
     try {
       const j = await adRecon.job(id);
-      if (disposed) return;
+      if (disposed || jobSeq.get(id) !== seq) return;
       jobs.value = { ...jobs.value, [id]: j };
       jobError.value = { ...jobError.value, [id]: null };
       if (j.state === 'done' || j.state === 'failed') {
+        const wasObservedRunning = observedInProgress.has(id);
+        observedInProgress.delete(id);
         activeIds.delete(id);
-        // 完成後重新對帳這一天,更新差異與筆數
-        if (j.state === 'done') void runDay(day).catch(() => undefined);
-      } else if (!isHidden()) {
-        timers.set(
-          id,
-          setTimeout(() => void pollJob(id, day), pollMs),
-        );
+        // 只有本頁觀察到 queued / running → done 的工作且日期非空,才自動重新對帳;失敗顯示於該日(審查 M1、Low 1)
+        const targetDay = day || j.day || '';
+        if (j.state === 'done' && wasObservedRunning && targetDay) {
+          void runDay(targetDay).catch(() => {
+            // 錯誤已由 runDay 寫入 dayError[targetDay] 顯示於該日
+          });
+        }
+      } else {
+        observedInProgress.add(id);
+        if (!isHidden()) {
+          timers.set(
+            id,
+            setTimeout(() => void pollJob(id, day), pollMs),
+          );
+        }
       }
     } catch (e) {
-      if (disposed) return;
+      if (disposed || jobSeq.get(id) !== seq) return;
       jobError.value = { ...jobError.value, [id]: e as Error };
       // 404 工作已過期或不存在 → 停止輪詢
       if (e instanceof ApiError && e.status === 404) {
         activeIds.delete(id);
+        observedInProgress.delete(id);
         return;
       }
       if (!isHidden()) {
@@ -161,6 +187,8 @@ export function useAdReconcile(pollMs = BACKFILL_POLL_MS) {
           setTimeout(() => void pollJob(id, day), pollMs),
         );
       }
+    } finally {
+      inFlightJobs.delete(id);
     }
   }
 
@@ -177,6 +205,7 @@ export function useAdReconcile(pollMs = BACKFILL_POLL_MS) {
       }
       if (j.state === 'queued' || j.state === 'running') {
         activeIds.add(j.id);
+        observedInProgress.add(j.id);
         if (!isHidden()) {
           timers.set(
             j.id,
@@ -208,10 +237,12 @@ export function useAdReconcile(pollMs = BACKFILL_POLL_MS) {
     disposed = true;
     clearAllTimers();
     activeIds.clear();
+    observedInProgress.clear();
+    inFlightJobs.clear();
     if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisibilityChange);
   }
 
   if (getCurrentScope()) onScopeDispose(stop);
 
-  return { list, loading, error, unavailable, runningDay, submittingKey, jobs, jobError, load, runDay, startBackfill, pollJob, stop };
+  return { list, loading, error, unavailable, runningDay, submittingKey, jobs, jobError, dayError, load, runDay, startBackfill, pollJob, stop };
 }

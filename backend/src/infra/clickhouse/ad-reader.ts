@@ -18,6 +18,7 @@ const FAIL_IDS = [4625, 4771, 4740];
 /** core/adlog.js ACCOUNT_CHANGES 的事件(改一邊要同步;migrations/005 的 MV 也用同一份) */
 export const ACCOUNT_CHANGE_IDS = [4720, 4722, 4725, 4726, 4724, 4738, 4781, 4767, 4741, 4743, 4727, 4731, 4754, 4728, 4729, 4732, 4733, 4756, 4757, 4704, 4794];
 const IMPORTANT_CHANGE_IDS = [4720, 4726, 4724, 4794];
+/* 排行同次數時:summarizeAd 依「新的在前」的事件順序先遇到的排前面 = 最近一次發生較晚的排前面,SQL 用 max((event_time, record_id)) DESC 對齊 */
 
 export interface AdChFilter {
   fromMs: number;
@@ -291,7 +292,7 @@ export function createAdChReader(cfg: ClickHouseConfig, fetchImpl: Fetch = fetch
       const top = Math.max(1, Math.min(topN, 100));
       const fail = `event_id IN [${FAIL_IDS.join(',')}]`;
       const keyTop = (col: string, extra: string) =>
-        rows<{ key: string; n: number }>(`SELECT ${col} AS key, count() AS n FROM ${T} WHERE ${where} AND ${fail} AND ${col} != '' ${extra} GROUP BY key ORDER BY n DESC, key LIMIT ${top}`, params);
+        rows<{ key: string; n: number }>(`SELECT ${col} AS key, count() AS n FROM ${T} WHERE ${where} AND ${fail} AND ${col} != '' ${extra} GROUP BY key ORDER BY n DESC, max((event_time, record_id)) DESC, key LIMIT ${top}`, params);
       const [lv, hours, groups, failAccounts, failIps, failReasons, changes, changeCounts, privLogons] = await Promise.all([
         rows<{ channel: string; level: string; n: number; tmin: string; tmax: string }>(
           `SELECT channel, level, count() AS n, formatDateTime(min(event_time), '%Y/%m/%d %H:%i:%s') AS tmin, formatDateTime(max(event_time), '%Y/%m/%d %H:%i:%s') AS tmax FROM ${T} WHERE ${where} GROUP BY channel, level`,
@@ -323,7 +324,7 @@ export function createAdChReader(cfg: ClickHouseConfig, fetchImpl: Fetch = fetch
           params,
         ),
         rows<{ key: string; n: number }>(
-          `SELECT actor AS key, count() AS n FROM ${T} WHERE ${where} AND event_id = 4672 AND actor != '' AND NOT match(actor, '(?i)(\\\\$$|^(SYSTEM|LOCAL SERVICE|NETWORK SERVICE)$)') GROUP BY key ORDER BY n DESC, key LIMIT ${top}`,
+          `SELECT actor AS key, count() AS n FROM ${T} WHERE ${where} AND event_id = 4672 AND actor != '' AND NOT match(actor, '(?i)(\\\\$$|^(SYSTEM|LOCAL SERVICE|NETWORK SERVICE)$)') GROUP BY key ORDER BY n DESC, max((event_time, record_id)) DESC, key LIMIT ${top}`,
           params,
         ),
       ]);
@@ -336,7 +337,7 @@ export function createAdChReader(cfg: ClickHouseConfig, fetchImpl: Fetch = fetch
         // 每個原因一個 String 參數(不自己組陣列字面值,避免跳脫問題;資安審查 M2)
         const list = `(${reasonKeys.map((k) => bag.p(k, 'String')).join(', ')})`;
         const r = await rows<{ reason: string; key: string; n: number }>(
-          `SELECT reason, ${col} AS key, count() AS n FROM ${T} WHERE ${w2} AND ${fail} AND ${col} != '' AND reason IN ${list} GROUP BY reason, key ORDER BY reason, n DESC, key LIMIT 5 BY reason`,
+          `SELECT reason, ${col} AS key, count() AS n FROM ${T} WHERE ${w2} AND ${fail} AND ${col} != '' AND reason IN ${list} GROUP BY reason, key ORDER BY reason, n DESC, max((event_time, record_id)) DESC, key LIMIT 5 BY reason`,
           bag.params,
         );
         const m = new Map<string, KeyN[]>();

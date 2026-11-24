@@ -328,7 +328,7 @@ C="docker compose --env-file /srv/giganexus/deploy/netops.env -f deploy/docker-c
    ```bash
    $C exec -T netops-redis redis-cli lrange netops:ad:agent-events 0 4
    ```
-   正常:有 `agent_restarted`(`source` = `watchdog`,`cause` = `stopped`)。**90 秒內沒有回到 Running 停下回報**;不要重複測試超過 5 次 / 10 分鐘(會進入 10 分鐘冷卻,上報 `agent_start_failed`)。
+   正常:有 `agent_service_stopped`(`source` = `watchdog`,`cause` = `stopped`)。**90 秒內沒有回到 Running 停下回報**;不要重複測試超過 5 次 / 10 分鐘(會進入 10 分鐘冷卻,上報 `agent_start_failed`)。
 6. **Agent 記憶體 / CPU**(安裝後 1 小時、24 小時各量一次):
    ```powershell
    $p = Get-Process -Id (Get-CimInstance Win32_Service -Filter "Name='NetOpsAdAgent'").ProcessId; $p | Select-Object Id, @{n='WorkingSetMB';e={[math]::Round($_.WorkingSet64/1MB,1)}}, @{n='PrivateMB';e={[math]::Round($_.PrivateMemorySize64/1MB,1)}}, @{n='CpuSec';e={[math]::Round($_.CPU,1)}}, StartTime

@@ -134,5 +134,7 @@ export interface GDrawerEmits {
   (e: 'update:modelValue', v: boolean): void;
 }
 export interface GSourceBadgeProps {
-  source: SliceSource;
+  source: SliceSource | 'agent' | 'ftp';
+  /** 表格列內多筆重複顯示時傳 false,避免每個儲存格建立 ARIA live region */
+  live?: boolean;
 }

@@ -13,10 +13,11 @@ import { adFtp } from '@/api/ftp';
 import { can, describeError } from '@/api/gateway';
 import { fmtNum, fmtTime } from '@/api/format';
 import { NETOPS, UI } from '@/api/perms';
-import { reasonQuery } from '@/composables/adEvents';
+import { isClickHouseUnavailable, reasonQuery } from '@/composables/adEvents';
 import { daysBetween } from '@/composables/dates';
 import { usePolling } from '@/composables/usePolling';
 import { confirm, toast } from '@/ui';
+import AgentBar from './AgentBar.vue';
 
 const MAX_DAYS = 92;
 const POLL_MS = 2000;
@@ -40,10 +41,13 @@ async function loadDays() {
   }
 }
 const dayList = computed(() => meta.value?.days ?? []);
+const isClickHouse = computed(() => meta.value?.source === 'clickhouse');
 const minDay = computed(() => dayList.value.at(-1)?.day ?? '');
 const maxDay = computed(() => dayList.value[0]?.day ?? '');
 const chName = (c: string) => meta.value?.channels[c] ?? c;
 const evName = (g: AdEventGroup) => g.name || (g.channel === 'Security' ? (meta.value?.securityEvents[String(g.eventId)] ?? '') : '');
+const metaErrorTitle = computed(() => (isClickHouseUnavailable(metaError.value) ? 'AD 事件資料庫暫時無法使用' : '無法取得已有資料的日期'));
+const loadErrorTitle = computed(() => (isClickHouseUnavailable(loadError.value) ? 'AD 事件資料庫暫時無法使用' : '無法載入 AD 事件總覽'));
 
 // ---------- 總覽 ----------
 const summary = shallowRef<AdOverview | null>(null);
@@ -87,10 +91,11 @@ onBeforeUnmount(() => clearTimeout(debounce));
 const periodDays = computed(() => (summary.value ? daysBetween(summary.value.from, summary.value.to) : 0));
 const missingDays = computed(() => (summary.value ? Math.max(0, periodDays.value - summary.value.days) : 0));
 
-/** 期間內 Security 記錄是空的(匯出排程沒有權限或 DC 沒開稽核);多台 DC 時加總 */
+/** 期間內 Security 記錄是空的(匯出排程或 Agent 沒有權限 / DC 沒開稽核);ClickHouse 來源看 summary.byChannel,FTP 來源看 files */
 const securityEmpty = computed(() => {
+  if (isClickHouse.value) return !!summary.value && summary.value.total > 0 && (summary.value.byChannel.Security ?? 0) === 0;
   const inRange = dayList.value.filter((d) => d.day >= range.from && d.day <= range.to);
-  return inRange.length > 0 && inRange.every((d) => d.files.filter((f) => f.channel === 'Security').reduce((a, f) => a + (f.rows ?? 0), 0) === 0);
+  return inRange.length > 0 && inRange.every((d) => (d.files ?? []).filter((f) => f.channel === 'Security').reduce((a, f) => a + (f.rows ?? 0), 0) === 0);
 });
 
 const kpi = computed(() => {
@@ -248,24 +253,28 @@ const asChange = (r: unknown) => r as AdOverview['accountChanges'][number];
       <GButton v-if="manage" variant="primary" icon="download" :loading="syncing" @click="sync">從 FTP 同步</GButton>
     </Teleport>
 
+    <AgentBar v-if="isClickHouse" :fallback-summary="meta?.agents ?? null" />
+
     <GCard padding="sm">
       <div class="filters">
         <GInput v-model="range.from" type="date" label="開始日期" class="date" />
         <GInput v-model="range.to" type="date" label="結束日期" class="date" />
         <p class="small muted hint">
           <template v-if="summary?.timeMin">資料時間 {{ fmtTime(summary.timeMin) }} ~ {{ fmtTime(summary.timeMax) }}</template>
-          <template v-if="maxDay"> · 已匯入 {{ minDay }} ~ {{ maxDay }}({{ dayList.length }} 天)</template>
+          <template v-if="maxDay">
+            · {{ isClickHouse ? '已有資料' : '已匯入' }} {{ minDay }} ~ {{ maxDay }}({{ dayList.length }} 天<template v-if="isClickHouse">,含即時</template>)
+          </template>
         </p>
       </div>
       <p v-if="rangeError" class="small c-danger err">{{ rangeError }}</p>
     </GCard>
 
-    <GAlert v-if="metaError" tone="danger" title="無法取得已匯入的日期">{{ describeError(metaError) }}</GAlert>
-    <GAlert v-if="meta?.import.lastSyncError" tone="warning" title="上次同步失敗,資料可能不完整">
+    <GAlert v-if="metaError" tone="danger" :title="metaErrorTitle">{{ describeError(metaError) }}</GAlert>
+    <GAlert v-if="!isClickHouse && meta?.import.lastSyncError" tone="warning" title="上次同步失敗,資料可能不完整">
       {{ meta.import.lastSyncError }}
     </GAlert>
-    <GAlert v-if="missingDays" tone="warning" :title="`期間 ${periodDays} 天,只有 ${summary?.days} 天有匯入資料`">
-      其餘日期沒有資料不代表沒有事件;請到「FTP Log 檔案」確認是否已匯入。
+    <GAlert v-if="missingDays" tone="warning" :title="`期間 ${periodDays} 天,只有 ${summary?.days} 天有資料`">
+      其餘日期沒有資料不代表沒有事件;請到「FTP Log 檔案」確認是否已匯入或對帳補漏。
     </GAlert>
     <GAlert v-if="securityEmpty" tone="warning" title="這段期間的 Security(安全性)記錄是空的">
       登入成功 / 失敗、帳號鎖定、密碼變更、群組異動都記錄在 Security,目前無法分析。請檢查 DC 的匯出排程帳號是否有讀取 Security 記錄的權限(Event Log Readers
@@ -273,15 +282,19 @@ const asChange = (r: unknown) => r as AdOverview['accountChanges'][number];
     </GAlert>
 
     <GCard v-if="meta && !dayList.length">
-      <GEmpty icon="inbox" title="尚未匯入 AD 事件記錄" description="到「FTP Log 檔案」從 FTP /AD_Log_Backup 同步每日匯出檔" />
+      <GEmpty
+        icon="inbox"
+        :title="isClickHouse ? '尚無 AD 事件資料' : '尚未匯入 AD 事件記錄'"
+        :description="isClickHouse ? '確認 DC Agent 已啟動回報,或到「FTP Log 檔案」執行補漏' : '到「FTP Log 檔案」從 FTP /AD_Log_Backup 同步每日匯出檔'"
+      />
     </GCard>
     <GCard v-else-if="metaError && !meta">
-      <GEmpty tone="danger" icon="activity" title="無法取得已匯入的日期" :description="describeError(metaError)">
+      <GEmpty tone="danger" icon="activity" :title="metaErrorTitle" :description="describeError(metaError)">
         <GButton icon="refresh" @click="refresh">重試</GButton>
       </GEmpty>
     </GCard>
     <GCard v-else-if="loadError && !summary">
-      <GEmpty tone="danger" icon="activity" title="無法載入 AD 事件總覽" :description="describeError(loadError)">
+      <GEmpty tone="danger" icon="activity" :title="loadErrorTitle" :description="describeError(loadError)">
         <GButton icon="refresh" @click="load">重試</GButton>
       </GEmpty>
     </GCard>
@@ -407,8 +420,9 @@ const asChange = (r: unknown) => r as AdOverview['accountChanges'][number];
           <ul class="ranks">
             <li v-for="x in sec.rows" :key="x.key">
               <button type="button" :disabled="!canSearch" @click="toSearch({ [sec.key]: x.key })">
-                <span class="ellipsis">{{ x.key }}</span
-                ><span class="num c-danger">{{ fmtNum(x.n) }}</span>
+                <GIpLabel v-if="sec.key === 'ip'" :ip="x.key" inline class="ip-key" />
+                <span v-else class="ellipsis">{{ x.key }}</span>
+                <span class="num c-danger">{{ fmtNum(x.n) }}</span>
               </button>
             </li>
           </ul>
@@ -422,7 +436,13 @@ const asChange = (r: unknown) => r as AdOverview['accountChanges'][number];
                 ><span class="num c-danger">{{ fmtNum(x.n) }}</span>
               </button>
               <p v-if="x.ips?.length || x.accounts?.length" class="xs muted sub">
-                <template v-if="x.ips?.length">IP {{ x.ips.map((i) => `${i.key}(${i.n})`).join('、') }}</template>
+                <template v-if="x.ips?.length">
+                  IP
+                  <span v-for="(i, idx) in x.ips" :key="i.key" class="reason-ip">
+                    <template v-if="idx > 0">、</template>
+                    <GIpLabel :ip="i.key" inline />({{ fmtNum(i.n) }})
+                  </span>
+                </template>
                 <template v-if="x.accounts?.length"><br />帳號 {{ x.accounts.map((a) => `${a.key}(${a.n})`).join('、') }}</template>
               </p>
             </li>
@@ -520,6 +540,15 @@ const asChange = (r: unknown) => r as AdOverview['accountChanges'][number];
 .sub {
   margin: 0 6px 4px;
   line-height: 1.5;
+}
+.ip-key {
+  min-width: 0;
+  flex: 1;
+}
+.reason-ip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 2px;
 }
 @media (max-width: 760px) {
   .date {

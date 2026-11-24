@@ -2,6 +2,31 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。範圍:`frontend/`。
 
+## 2026-11-24 AD-3 前端 Claude 審查修正(!189)
+- 工作項目:AD-3 前端審查修正(`docs/reviews/2026-11-24-ad-gemini-fix-fe-ad6.md` !189 M1–M2、Low 1–6)
+- 內容:
+  - M1 / Low 1(`adReconcile.ts`、`ReconCard.vue`):載入時已完成的補漏工作只顯示結果不打 `POST /ad/reconciliations`,僅本頁觀察到 `queued` / `running` → `done` 且 `day` 非空才自動重新對帳;自動重新對帳失敗寫入 `dayError` 顯示於該日(不再 `.catch(() => undefined)` 吞掉);輪詢加上進行中與序號保護防重疊請求。
+  - M2(`ad3.mount.test.ts`):補齊匯出 422(`NETOPS_EXPORT_TOO_LARGE`)與補漏 409 三種錯誤碼(`NETOPS_RECON_PENDING` / `NETOPS_BACKFILL_NOTHING` / `NETOPS_BACKFILL_BUSY`)的錯誤碼與顯示文字斷言。
+  - Low 2(`Events.vue`):503 錯誤卡片移除重複 `GAlert`,僅留 `GEmpty` 與重試按鈕。
+  - Low 3(`GSourceBadge.vue`、`viz-types.ts`、`Search.vue`):新增 `live` 屬性(表格列傳 `false` 不建立 `role="status"` live region)、FTP 補寫改用獨立 `.is-ftp` 樣式並同步 `GSourceBadgeProps`。
+  - Low 4(`Search.vue`、`adEvents.ts`):`collectDcOptions` 納入目前 `form.computer`,網址帶入未知 DC 不再顯示空白。
+  - Low 5(`adEvents.ts`):`isClickHouseUnavailable` 改以 `code === 'NETOPS_CLICKHOUSE_UNAVAILABLE'` 判斷,避免誤判其他 503。
+  - Low 6(`docs/test-reports/2026-11-24-ad-3-frontend.md`):刪除暫時字句並更新測試數。
+- 檔案:`frontend/src/{composables/adReconcile.ts,composables/adEvents.ts,pages/ad/ReconCard.vue,pages/ad/Events.vue,pages/ad/Search.vue,ui/components/GSourceBadge.vue,ui/charts/viz-types.ts}`、`frontend/test/{ad3.test.ts,ad3.mount.test.ts}`、`docs/test-reports/2026-11-24-ad-3-frontend.md`
+- 驗證:`frontend/` `npm run typecheck`、`npm test`(47 檔 / 374 通過 / 0 失敗)、`npm run build` 通過
+
+## 2026-11-24 AD-3 前端畫面(DC Agent 即時狀態列、總覽 IP 名稱、明細 DC / 名稱篩選、ClickHouse 對帳與補漏)
+- 工作項目:AD-3 前端(`docs/AD-AGENT-PLAN.md` §6.1、§8;依賴 !184、!186、!187;Gemini 實作,待 Claude 審查)
+- 內容:
+  - `api/ad.ts`:補齊 `source`、`agents`、`names`、`computer` / `dcDomain` / `name`、`ad.agents()` 與 `adRecon.{list,run,backfill,job}` 型別與呼叫。
+  - `ui/components/GSourceBadge.vue`:擴充支援 AD 資料來源 `agent`(⚡ 即時)與 `ftp`(FTP 補寫),保留 PA 熱 / 冷標記相容。
+  - `composables/adAgents.ts` + `pages/ad/AgentBar.vue` + `pages/ad/Events.vue`:`source === 'clickhouse'` 時於總覽頁頂部顯示 DC Agent 即時狀態列(30 秒輪詢、頁面隱藏停止、離開清除;ok / stale / offline / unknown、`wrapRisk`、`restarts24h`、展開 Watchdog 事件純文字插值不用 `v-html`;424 不擋總覽);總覽 `failIps` 與 `failReasons[].ips` 以 `GIpLabel` 顯示名稱;503 顯示錯誤不當空總覽。
+  - `composables/adEvents.ts` + `pages/ad/Search.vue`:新增 DC(clickhouse 下拉、ftp 自填)、DC 網域(上限 253 字對齊後端)、姓名 / 部門 / 設備(`400 VALIDATION_FAILED` `name` 欄位錯誤顯示於輸入框下)篩選;表格新增 DC、來源 IP(`GIpLabel`)、資料來源(`GSourceBadge`),明細彈窗同步補上 `dcDomain`、`logEpoch` 與 `GIpLabel`;匯出帶新條件並處理 422。
+  - `composables/adReconcile.ts` + `pages/ad/ReconCard.vue` + `pages/ad/Files.vue`:新增「ClickHouse 對帳與補漏」卡片(展開 DC × 記錄、`UI.adFilesManage` 控制立即對帳與補漏、2 秒工作輪詢隱藏停止並保留本頁工作結果、`waitingAgent` / `ambiguous` 說明、409 / 424 錯誤提示、503 不影響原 FTP 檔案清單)。
+  - `mock/ad.ts`:補齊本機 `MOCK=admin` 的 AD-3 假資料。
+- 檔案:`frontend/src/{api/ad.ts,composables/adAgents.ts,composables/adEvents.ts,composables/adReconcile.ts,pages/ad/AgentBar.vue,pages/ad/Events.vue,pages/ad/Search.vue,pages/ad/ReconCard.vue,pages/ad/Files.vue,ui/components/GSourceBadge.vue}`、`frontend/mock/ad.ts`、`frontend/test/{ad3.test.ts,ad3.mount.test.ts}`
+- 驗證:見 `docs/test-reports/2026-11-24-ad-3-frontend.md`(`vue-tsc`、`vitest` 47 檔 372 通過、`vite build` 通過、本機 dev server 四畫面實機截圖 0 console error)
+
 ## 2026-11-23 Log 明細查詢與戰情室點規則名稱開安全規則抽屜
 - 內容:Log 明細查詢的規則欄與明細對話框「規則內容」按鈕、戰情室 Traffic Log 表規則欄、即時排行抽屜的規則排行,都可點開同一個 `PolicyRuleDrawer`;沿用 `usePolicyRuleDrawer`:沒有 `netops.pa-policy.read` 或 PA 兩條內建預設規則(intrazone / interzone-default)只顯示純文字;找不到規則或沒有快照時不開抽屜,以提示顯示原因(需求方 2026-11-23 決定,與威脅特徵碼頁一致);Log 明細的明細對話框在規則抽屜開啟後才關。安全事件、時段明細抽屜不顯示規則名稱,未接。流量總覽的阻擋規則 / 規則命中排行維持跳 Log 明細查詢。
 - 檔案:`frontend/src/{components/warroom/RankingDrawer.vue,components/warroom/TrafficLogTable.vue,pages/firewall/Live.vue,pages/firewall/Search.vue}`、`frontend/test/{policyRuleDrawerPages.mount.test.ts,warroom.mount.test.ts}`(!180,依賴 !179)

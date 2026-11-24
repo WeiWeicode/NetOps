@@ -340,11 +340,11 @@ describe('AD-6 關鍵欄位解析(沿用 ad_events 既有欄位)', () => {
     assert.equal(old4624.reason, '');
     assert.equal(new4624.reason, '登入類型 10（RDP 遠端互動）');
 
-    // 3. 帳號異動含「目標帳戶名稱」:新版優先取目標帳戶名稱而非重複取主體帳戶名稱
+    // 3. 帳號異動含「目標帳戶名稱」:新版與舊版皆正確抽出目標帳戶名稱 bob(無非預期回歸)
     const msgTarget = '帳戶變更。\n主體:\n\t帳戶名稱:\t\tadmin\n目標:\n\t目標帳戶名稱:\t\tbob';
     const oldChg = parseOld(4738, 'Audit Success', msgTarget);
     const newChg = parseOne('Security', 4738, 'Audit Success', msgTarget);
-    assert.equal(oldChg.target, 'admin');
+    assert.equal(oldChg.target, 'bob');
     assert.equal(newChg.target, 'bob');
   });
 });

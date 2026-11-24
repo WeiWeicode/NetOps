@@ -552,6 +552,10 @@ describe('AD 路由(clickhouse 來源)', () => {
     assert.equal(bad.statusCode, 400);
     const noName = await t.call({ url: '/v1/ad/events?from=2026-11-23T00:00:00%2B08:00&to=2026-11-23T23:59:00%2B08:00&name=nobody' });
     assert.equal(noName.statusCode, 400);
+    // dcDomain 上限對齊 DNS 253 字元(審查 L1)
+    const d200 = `${'a'.repeat(60)}.${'b'.repeat(60)}.${'c'.repeat(60)}.example.com`;
+    assert.equal((await t.call({ url: `/v1/ad/events?from=2026-11-23T00:00:00%2B08:00&to=2026-11-23T23:59:00%2B08:00&dcDomain=${d200}` })).statusCode, 200);
+    assert.equal((await t.call({ url: `/v1/ad/events?from=2026-11-23T00:00:00%2B08:00&to=2026-11-23T23:59:00%2B08:00&dcDomain=${'a'.repeat(254)}` })).statusCode, 400);
   });
 
   it('匯出加 DC 網域、來源 IP 名稱、資料來源欄', async () => {

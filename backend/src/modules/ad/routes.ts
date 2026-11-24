@@ -47,7 +47,7 @@ const filterProps = {
   ip: { type: 'string', maxLength: 100 },
   issueOnly: { type: 'boolean', description: '只看需要注意的事件' },
   computer: { type: 'string', maxLength: 64, pattern: '^[\\w.-]*$', description: 'DC 主機名(例 GSMC-DC1;不分大小寫、忽略網域後段)' },
-  dcDomain: { type: 'string', maxLength: 128, pattern: '^[\\w.-]*$', description: 'DC 所屬網域(例 gsmc.com.tw)' },
+  dcDomain: { type: 'string', maxLength: 253, pattern: '^[\\w.-]*$', description: 'DC 所屬網域(例 gsmc.com.tw)' },
   name: { type: 'string', maxLength: 100, description: 'IP 對照表的使用者姓名、部門或設備名稱(包含),換成來源 IP 範圍後查' },
 };
 

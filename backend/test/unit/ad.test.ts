@@ -66,9 +66,17 @@ after(async () => t.close());
 const stored = (day: string) => JSON.parse(fs.readFileSync(path.join(t.dataDir, 'adlogs', `${day}.json`), 'utf8'));
 const range = 'from=2026-11-01T00:00:00%2B08:00&to=2026-11-02T23:59:00%2B08:00';
 
-describe('核心邏輯與舊版相同', () => {
-  it('adlog.js 與舊版 server/lib 逐字相同', () => {
-    assert.equal(text(path.resolve(here, '../../src/modules/ad/core/adlog.js')), text(path.join(LEGACY, 'adlog.js')));
+describe('核心邏輯與舊版相容', () => {
+  it('adlog.js 保留舊版 server/lib 全部事件與異動鍵(AD-6 只做向後相容擴充)', async () => {
+    const oldMod = await legacy('adlog.js');
+    const newMod = await import('../../src/modules/ad/core/adlog.js');
+    for (const k of Object.keys(oldMod.SECURITY_EVENTS)) {
+      assert.ok(k in newMod.SECURITY_EVENTS, `SECURITY_EVENTS 遺漏舊鍵 ${k}`);
+    }
+    for (const k of Object.keys(oldMod.ACCOUNT_CHANGES)) {
+      assert.ok(k in newMod.ACCOUNT_CHANGES, `ACCOUNT_CHANGES 遺漏舊鍵 ${k}`);
+    }
+    assert.deepEqual(newMod.CHANNELS, oldMod.CHANNELS);
   });
 });
 

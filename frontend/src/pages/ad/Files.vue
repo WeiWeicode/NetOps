@@ -18,6 +18,7 @@ import { AD_STATE, securityEmptyDays } from '@/composables/ftpFiles';
 import { useJob } from '@/composables/useJob';
 import { usePolling } from '@/composables/usePolling';
 import { confirm, toast } from '@/ui';
+import ReconCard from './ReconCard.vue';
 
 const POLL_MS = 2000;
 const manage = computed(() => can(UI.adFilesManage));
@@ -193,6 +194,8 @@ const channelsText = (d: AdDay) => d.files.map((f) => `${AD_CHANNEL[f.channel] ?
     <GAlert v-if="status?.running" tone="info" title="同步 / 匯入進行中">在背景執行,完成後自動重新列出清單。</GAlert>
     <!-- 對帳後每日同步(AC1):只看 AD -->
     <DailySyncCard :status="status?.daily" :only="['ad']" />
+    <!-- ClickHouse 對帳與補漏(AD-3):503 不影響原本的 FTP 檔案清單 -->
+    <ReconCard />
     <GAlert v-if="emptySecurity.length" tone="warning" :title="`${emptySecurity.join('、')} 的 Security 檔案沒有事件`">
       通常是 DC 的 Security 記錄容量太小、前一天的事件在匯出前就被覆蓋;請看 DC 上 <code>C:\ADLogBackup\Backup-Execution.log</code> 的 WARN(v3
       匯出程式會記錄最舊事件的時間),並加大 Security 記錄上限。

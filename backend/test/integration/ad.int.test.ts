@@ -142,6 +142,35 @@ describe('AD 接收端:Lua 水位去重(真 Redis)', () => {
     assert.ok(hb.updatedAt);
     assert.equal(JSON.parse((await r1.lindex(AD_KEYS.agentEvents, 0))!).computer, DC);
   });
+
+  it('心跳讀水位失敗(真 Redis WRONGTYPE)回 503,不回空的 channels、不寫心跳與 Watchdog 事件', async () => {
+    const a = app();
+    const key = AD_KEYS.hwm(DC);
+    const backup = `${key}:it-backup`;
+    // 前一個測試已建立水位;這裡不依賴它:有才備份
+    const had = (await r1.exists(key)) === 1;
+    if (had) await r1.rename(key, backup);
+    const hb0 = await r1.hgetall(AD_KEYS.heartbeat(DC));
+    const ev0 = await r1.llen(AD_KEYS.agentEvents);
+    try {
+      await r1.set(key, 'not-a-hash');
+      const r = await a.inject({
+        method: 'POST',
+        url: '/ad/v1/heartbeat',
+        headers: { 'content-type': 'application/json', 'x-netops-ad-token': TOKEN },
+        payload: JSON.stringify({ computer: DC, domain: 'it.local', agentVersion: '0.1.1', watchdogEvents: [{ type: 'agent_restarted', cause: 'hung' }] }),
+      });
+      assert.equal(r.statusCode, 503);
+      assert.equal(r.json().code, 'NETOPS_AD_UNAVAILABLE');
+      assert.equal(r.json().channels, undefined);
+      assert.doesNotMatch(r.body, /WRONGTYPE/);
+      assert.deepEqual(await r1.hgetall(AD_KEYS.heartbeat(DC)), hb0);
+      assert.equal(await r1.llen(AD_KEYS.agentEvents), ev0);
+    } finally {
+      await r1.del(key);
+      if (had) await r1.rename(backup, key);
+    }
+  });
 });
 
 describe('AD 寫入 ClickHouse(真 ClickHouse,migrations/005)', () => {

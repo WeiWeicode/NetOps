@@ -276,6 +276,36 @@ describe('netops-ad-receiver:心跳', () => {
     assert.equal(JSON.parse(redis.agentEvents[0]!).event.cause, 'hung');
   });
 
+  it('讀水位失敗回 503 NETOPS_AD_UNAVAILABLE,不回空的 channels、不寫心跳與 Watchdog 事件;恢復後照常', async () => {
+    const { post, logsBody, redis } = setup();
+    await post('/ad/v1/logs', logsBody([agentEvent(7)]));
+    const body = {
+      computer: 'GSMC-DC1',
+      domain: 'gsmc.com.tw',
+      reportedAt: '2026-11-20T13:05:15.000+08:00',
+      agent: { pid: 4120 },
+      watchdogEvents: [{ type: 'agent_restarted', cause: 'hung', previousPid: 1, pid: 2 }],
+    };
+    const before = { ...redis.heartbeats.get('GSMC-DC1') };
+    const logStart = logs.length;
+    redis.fail = 1; // 第一個 Redis 呼叫(讀水位)失敗
+    const r = await post('/ad/v1/heartbeat', body);
+    assert.equal(r.statusCode, 503);
+    const j = r.json();
+    assert.equal(j.code, 'NETOPS_AD_UNAVAILABLE');
+    assert.equal(j.channels, undefined, '錯誤回應不帶 channels');
+    assert.equal(typeof j.requestId, 'string');
+    assert.doesNotMatch(r.body, /Connection is closed/);
+    assert.deepEqual(redis.heartbeats.get('GSMC-DC1'), before, '心跳沒有寫入');
+    assert.equal(redis.agentEvents.length, 0, 'Watchdog 事件沒有寫入(Agent 重送時不重複)');
+    assert.ok(logs.slice(logStart).some((l) => l.level === 'warn' && l.msg === 'Redis 存取失敗' && l.extra?.computer === 'GSMC-DC1'), '這次心跳有記 Redis 錯誤');
+    // Agent 下一次心跳(同樣內容)成功
+    const ok = await post('/ad/v1/heartbeat', body);
+    assert.equal(ok.statusCode, 200);
+    assert.deepEqual(ok.json().channels, { Security: { logEpoch: 0, lastRecordId: 7 } });
+    assert.equal(redis.agentEvents.length, 1);
+  });
+
   it('心跳欄位格式錯誤回 400', async () => {
     const { post } = setup();
     const base = { computer: 'GSMC-DC1', domain: 'gsmc.com.tw' };
@@ -310,6 +340,14 @@ describe('ad-rows:Stream → ad_events 欄位', () => {
       [r.event_time, r.received_at, r.computer, r.ad_domain, r.channel, r.event_id, r.log_epoch, r.record_id, r.level, r.level_text, r.account, r.src_ip, r.src_ip_raw, r.workstation, r.reason, r.is_issue, r.privileged, r.source],
       ['2026-11-20 13:05:12', '2026-11-20T05:05:20.000Z', 'GSMC-DC1', 'gsmc.com.tw', 'Security', 4625, 0, '98765432', 'audit_failure', 'Audit Failure', 'john', '::ffff:10.10.112.13', '10.10.112.13', 'PC-john', '不明的使用者名稱或錯誤密碼。', 1, 0, 'agent'],
     );
+  });
+
+  it('ad_domain 保留到 253 字(DNS 名稱上限,與 Token 對應表、payload 一致;Gemini 審查 L1)', () => {
+    const label = 'a'.repeat(63);
+    const domain = `${label}.${label}.${label}.${'b'.repeat(61)}`; // 253 字
+    assert.equal(domain.length, 253);
+    assert.equal(toAdRow(streamJson({ domain }), RECV, { badTime: false })!.ad_domain, domain);
+    assert.equal(toAdRow(streamJson({ domain: `${domain}x` }), RECV, { badTime: false })!.ad_domain, domain);
   });
 
   it('4728 加入特權群組:actor / target / group、privileged = 1', () => {

@@ -73,7 +73,7 @@ export function toAdRow(data: string, receivedMs: number, issues: RowIssues): Ro
     event_time: taipeiText(ok ? t : receivedMs),
     received_at: new Date(receivedMs).toISOString(),
     computer,
-    ad_domain: text(r.domain, 128),
+    ad_domain: text(r.domain, 253), // 與 Token 對應表、payload 的 DNS 名稱上限 253 一致(Gemini 審查 L1)
     channel,
     event_id: eventId,
     log_epoch: logEpoch,

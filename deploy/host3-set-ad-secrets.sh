@@ -1,6 +1,6 @@
 #!/bin/sh
 # 主機 3(正式區 WSL)產生 / 作廢 DC Agent 的 Token(AD-1):本人執行(AGENT.md §7.5)。
-#   在主機 3 的 WSL:sudo sh host3-set-ad-secrets.sh <init|add|rotate|revoke|list|show> …   (與 host2-set-ad-secrets.sh 放在同一個目錄)
+#   在主機 3 的 WSL:sudo sh host3-set-ad-secrets.sh <init|add|rotate|revoke|list|show|forget> …   (與 host2-set-ad-secrets.sh 放在同一個目錄)
 # 做法與路徑同 host2-set-ad-secrets.sh;Token 在主機 3 重新隨機產生(不沿用測試區)。另在 netops.env 補 NETOPS_AD_RECEIVER=0
 # (deploy-prod 只在 1 時啟動 netops-ad-receiver;第一台 DC 試裝前由需求方改 1,deploy/RUNBOOK-ad.md §3)。
 set -eu

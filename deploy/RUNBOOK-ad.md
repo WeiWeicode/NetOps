@@ -75,7 +75,7 @@
    sudo sh host3-set-ad-secrets.sh add GSMC-DC1 gsmc.com.tw     # Token 在主機 3 重新產生,不沿用測試區
    ```
    `deploy-prod` 也會檢查 `ad_agent_tokens` 存在(和其他機密一起)。
-2. **NAS**:`sudo sh host2-setup-pa-archive.sh ad`(主機 3 也可用;`/mnt/nas-docker` 在主機 3 是 `docker-backup` 分享,先確認位置,同 RUNBOOK-prod.md §4.2 第 1 步)。
+2. **NAS**:`sudo GW_ENV=prod sh host2-setup-pa-archive.sh ad`(**一定要帶 `GW_ENV=prod`**:沒帶時腳本預設 `test`,會建到 `giga-netops/test/ad-archive`;比照 RUNBOOK-prod.md §4.2 第 2 步)(主機 3 也可用;`/mnt/nas-docker` 在主機 3 是 `docker-backup` 分享,先確認位置,同 RUNBOOK-prod.md §4.2 第 1 步)。
 3. **ClickHouse schema**:`NETOPS_PA_PIPELINE=1` 時 `deploy-prod` 會執行 `apply-schema.sh prod`(`ad_events` 90 天、`ad_heat_5m` 1 年、`1h` / `1d` 5 年)。要先手動套用:
    ```bash
    C="docker compose --env-file /srv/giganexus/deploy/netops.env -f deploy/docker-compose.yml"
@@ -117,6 +117,8 @@ $C exec -T netops-redis redis-cli del netops:ad:heartbeat:<COMPUTER> netops:ad:r
 
 - **Redis 沒有 AOF(只有 RDB 快照,`noeviction`)**:`netops-redis` 當機或重啟時,快照之後的 Stream 與水位會遺失;Agent 已收到 200 的事件不會重送,ingest 的缺口偵測也看不到。這段事件要靠 **AD-3 的 FTP 每日對帳補漏**補回(AD-3 設計時確認涵蓋)。
 - **每台 DC 每分鐘最多 120 個請求**(超過回 429,Agent 退避後重送同一批,不掉資料)。Token 外洩時可限制灌入量,但持有 Token 的人仍能偽造該台 DC 的事件與心跳(需求方已接受的剩餘風險,計畫 §7);送一筆極大的 RecordID 也會讓該台之後的正常事件被當成重複(要 `redis-cli del netops:ad:recv:hwm:<COMPUTER>` 並換 Token)。
+- **心跳讀不到 Redis 水位時回 503 `NETOPS_AD_UNAVAILABLE`**(不回空的 `channels`,需求方 2026-11-24):這時心跳也不寫入,畫面上該台 DC 會變成「停止更新」,但 Agent 其實還在送事件。持續發生時查 `netops-ad-receiver` 日誌的「Redis 存取失敗」與 `redis-cli type netops:ad:recv:hwm:<COMPUTER>`(應為 `hash`)。
+- 水位 Hash 有 TTL(30 天):DC 停送超過 30 天後水位過期,心跳回空的 `channels`;此時若 DC 上的 `bookmarks.json` 也遺失,Agent 會從世代 0 往回 60 分鐘重讀(之間的缺口由 AD-3 對帳補)。
 - 心跳內容(`data`)與 Watchdog 事件是 Agent 送來的任意 JSON,之後顯示在畫面時要當不可信資料(不用 `v-html`)。
 
 ## 6. 停用 / 回滾

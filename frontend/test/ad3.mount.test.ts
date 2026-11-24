@@ -372,12 +372,20 @@ describe('畫面 3:AD 明細查詢(Search.vue)', () => {
     expect(w.text()).toContain('⚡ 即時');
     expect(w.text()).toContain('FTP 補寫');
 
-    // 匯出 422 錯誤
-    gatewaySpies.download.mockRejectedValueOnce(new ApiError(422, 'NETOPS_EXPORT_TOO_LARGE', '超過匯出上限', 'req-exp-422'));
+    // 匯出 422 錯誤(斷言錯誤碼 NETOPS_EXPORT_TOO_LARGE 與顯示文字;審查 M2)
+    toastSpy.fromError.mockClear();
+    gatewaySpies.download.mockRejectedValueOnce(new ApiError(422, 'NETOPS_EXPORT_TOO_LARGE', '超過匯出上限 20,000 筆', 'req-exp-422'));
     const expBtn = w.findAll('button').find((b) => b.text().includes('匯出 CSV'));
     await expBtn!.trigger('click');
     await flushPromises();
-    expect(toastSpy.fromError).toHaveBeenCalled();
+    expect(toastSpy.fromError).toHaveBeenCalledTimes(1);
+    const [expErr, expTitle] = toastSpy.fromError.mock.calls[0]!;
+    expect(expErr).toBeInstanceOf(ApiError);
+    expect(expErr.status).toBe(422);
+    expect(expErr.code).toBe('NETOPS_EXPORT_TOO_LARGE');
+    expect(expErr.message).toContain('超過匯出上限');
+    expect(expErr.requestId).toBe('req-exp-422');
+    expect(expTitle).toBe('匯出失敗');
 
     // 400 name 欄位錯誤顯示在輸入框下
     apiMocks.search.mockRejectedValueOnce(new ApiError(400, 'VALIDATION_FAILED', '驗證失敗', 'req-name-400', [{ field: 'name', message: 'IP 對照表沒有符合的使用者姓名' }]));
@@ -526,17 +534,32 @@ describe('畫面 4:AD › FTP Log 檔案「ClickHouse 對帳與補漏」卡片(R
     w.unmount();
   });
 
-  it('409 補漏錯誤回報 toast;window null 顯示空狀態;無管理權限隱藏按鈕', async () => {
+  it('409 三種補漏錯誤碼回報對應標題與錯誤內容;window null 顯示空狀態;無管理權限隱藏按鈕(審查 M2)', async () => {
     apiMocks.reconList.mockResolvedValue({ items: [sampleDay], window: { from: '2026-11-22', to: '2026-11-23' } });
-    apiMocks.reconBackfill.mockRejectedValueOnce(new ApiError(409, 'NETOPS_RECON_PENDING', '尚未匯入', 'req-409'));
     const { default: ReconCard } = await import('@/pages/ad/ReconCard.vue');
     const w = mount(ReconCard, { global: { plugins: [ui], stubs } });
     await flushPromises();
 
-    const bfBtn = w.findAll('.day-actions button').find((b) => b.text().includes('補漏'));
-    await bfBtn!.trigger('click');
-    await flushPromises();
-    expect(toastSpy.fromError).toHaveBeenCalledWith(expect.any(ApiError), 'FTP 檔案尚未匯入');
+    const cases: [string, string, string, string][] = [
+      ['NETOPS_RECON_PENDING', '這一天 FTP 檔案尚未匯入', 'req-409-pend', 'FTP 檔案尚未匯入'],
+      ['NETOPS_BACKFILL_NOTHING', '目前沒有缺口需要補漏', 'req-409-none', '沒有需要補漏的項目'],
+      ['NETOPS_BACKFILL_BUSY', '補漏佇列已達上限,請稍後再試', 'req-409-busy', '補漏佇列已滿'],
+    ];
+    for (const [code, msg, reqId, expectedTitle] of cases) {
+      toastSpy.fromError.mockClear();
+      apiMocks.reconBackfill.mockRejectedValueOnce(new ApiError(409, code, msg, reqId));
+      const bfBtn = w.findAll('.day-actions button').find((b) => b.text().includes('補漏'));
+      await bfBtn!.trigger('click');
+      await flushPromises();
+      expect(toastSpy.fromError).toHaveBeenCalledTimes(1);
+      const [err, title] = toastSpy.fromError.mock.calls[0]!;
+      expect(err).toBeInstanceOf(ApiError);
+      expect(err.status).toBe(409);
+      expect(err.code).toBe(code);
+      expect(err.message).toBe(msg);
+      expect(err.requestId).toBe(reqId);
+      expect(title).toBe(expectedTitle);
+    }
     w.unmount();
 
     // window null

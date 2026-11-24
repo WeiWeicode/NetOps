@@ -2,6 +2,17 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。
 
+## 2026-11-24 AD-6 Claude 審查修正(!191)
+- 工作項目:AD-6 審查修正(`docs/reviews/2026-11-24-ad-gemini-fix-fe-ad6.md` !191 M1–M5、B2、Low 1–5;需求方 2026-11-24 決定 M3 / M4)
+- 內容:
+  - 合併修正後的 `origin/feature/ad-3-frontend`(!189),補齊前端 `api/ad.ts`、`Search.vue`、`Events.vue`、`mock/ad.ts` 的 `channelEvents` 顯示(M1)。
+  - `backend/src/modules/ad/routes.ts` 補齊 `GET /v1/ad/days` OpenAPI 描述與 `x-gherkin` 的 `channelEvents`(M2)。
+  - `adlog.js` 依需求方決定收斂 `SECURITY_ISSUE_IDS` 只留高風險 ID(4723 / 4742 / 一般群組變更與刪除只記錄不算 `isIssue`,特權群組維持 `privileged` 規則,M3);`toEvent` 的 Security 解析限定 `channel === 'Security'`(Low 2);5136 改以行首錨定 `lineField` 避免短標籤誤配並補真實中英文全文測試(Low 3);補 M4 新舊比對測試與報告紀錄;B2 `ad.test.ts` 改逐一比對舊鍵值並明列 4723 例外。
+  - `deploy/RUNBOOK-ad.md` §9.3 Security Log 上限改為 `4194240` KB / `4293918720` bytes 並註明請 IT 在 DC 確認(M5),§9.1 補 4776(`Credential Validation`)與 4704(`Authorization Policy Change`)(Low 1)。
+  - `ad-agent/src/filter.rs` 補 `0x00000017`、4662 大寫與 `%{...}` GUID 測試(Low 4);測試報告補記 4769 排除 `krbtgt/<REALM>`(Low 5)。
+- 檔案:`ad-agent/src/filter.rs`、`backend/src/modules/ad/{core/adlog.js,routes.ts}`、`backend/test/unit/{ad.test.ts,ad6.test.ts}`、`frontend/src/{api/ad.ts,pages/ad/Search.vue,pages/ad/Events.vue}`、`frontend/mock/ad.ts`、`frontend/test/ad3.mount.test.ts`、`deploy/RUNBOOK-ad.md`、`docs/test-reports/2026-11-24-ad-6.md`
+- 驗證:見 `docs/test-reports/2026-11-24-ad-6.md`
+
 ## 2026-11-24 AD-6 擴充 AD Agent 收集的事件範圍
 - 工作項目:AD-6(`docs/AD-AGENT-PLAN.md` §9;依賴 !184、!186、!187、!190)
 - 內容:

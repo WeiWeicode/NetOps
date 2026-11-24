@@ -95,6 +95,8 @@ struct Server {
     marks: Value,
     /// 有值時心跳直接回這個 body(模擬缺 channels、型別不符的回應)
     hb_body: Option<Value>,
+    /// 有值時心跳回這個狀態碼(例:接收端讀 Redis 水位失敗回 503)
+    hb_code: Option<u16>,
     logs: Vec<Value>,
     heartbeats: Vec<Value>,
     down: bool,
@@ -111,6 +113,13 @@ impl Transport for Backend {
         }
         if path == "/ad/v1/heartbeat" {
             g.heartbeats.push(body.clone());
+            if let Some(code) = g.hb_code {
+                return HttpResult::Status {
+                    code,
+                    body: Some(json!({ "code": "NETOPS_AD_UNAVAILABLE", "message": "暫時無法接收,請稍後重送" })),
+                    retry_after_sec: None,
+                };
+            }
             if let Some(b) = g.hb_body.clone() {
                 return HttpResult::Status {
                     code: 200,
@@ -646,4 +655,34 @@ fn 無法解析的事件略過並計數_隨心跳上報() {
     a.step(T0 + 15_000);
     let hb = be.0.lock().unwrap().heartbeats.last().unwrap().clone();
     assert_eq!(hb["agent"]["skippedEvents"], 1);
+}
+
+#[test]
+fn 心跳503時不決定起點_恢復後照後端世代接續() {
+    // 接收端讀 Redis 水位失敗回 503 NETOPS_AD_UNAVAILABLE(AD-1 2026-11-24 修正):Agent 不可當成「後端沒有紀錄」
+    let d = tempfile::tempdir().unwrap();
+    let (src, be) = (Source::default(), Backend::default());
+    for r in 4795..=4805 {
+        src.push(Channel::Security, r, T0 - 1_000, 4625);
+    }
+    be.0.lock().unwrap().hb_code = Some(503);
+    let mut a = agent(d.path(), &src, &be, vec![Channel::Security], T0);
+    for k in 0..40 {
+        a.step(T0 + k * 1_000);
+    }
+    assert!(a.bookmarks().get(Channel::Security).is_none());
+    assert!(be.0.lock().unwrap().logs.is_empty());
+    assert!(be.0.lock().unwrap().heartbeats.len() >= 2, "下一次心跳照常重試");
+    {
+        let mut g = be.0.lock().unwrap();
+        g.hb_code = None;
+        g.marks = json!({ "Security": { "logEpoch": 2, "lastRecordId": 4800 } });
+    }
+    for k in 40..60 {
+        a.step(T0 + k * 1_000);
+    }
+    assert_eq!(
+        sent_ids(&be, 0),
+        (4801..=4805).map(|r| (r, 2)).collect::<Vec<_>>()
+    );
 }

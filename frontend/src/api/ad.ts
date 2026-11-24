@@ -94,6 +94,8 @@ export interface AdDays {
   import: { running: boolean; lastSyncAt: string | null; lastSyncError: string };
   channels: Record<string, string>;
   securityEvents: Record<string, string>;
+  /** 各記錄類別的事件中文名稱對照表(Security / System / Directory_Service / DNS_Server;AD-6) */
+  channelEvents?: Record<string, Record<string, string>>;
 }
 
 export type AdLevel = 'info' | 'warning' | 'error' | 'critical' | 'audit_success' | 'audit_failure';

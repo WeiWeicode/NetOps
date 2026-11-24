@@ -37,6 +37,9 @@ param(
     [Parameter(ParameterSetName = 'Install')][string]$Computer = $env:COMPUTERNAME,
     [Parameter(ParameterSetName = 'Install')][string]$Domain,
     [Parameter(ParameterSetName = 'Install')][switch]$IncludeUserLogon4624,
+    [Parameter(ParameterSetName = 'Install')][switch]$IncludeKerberosWeakTgs,
+    [Parameter(ParameterSetName = 'Install')][switch]$IncludeDcsync4662,
+    [Parameter(ParameterSetName = 'Install')][switch]$IncludeGpoChange5136,
     [Parameter(ParameterSetName = 'Install')][switch]$ReplaceToken,
     [Parameter(ParameterSetName = 'Install')][switch]$RewriteConfig,
     [Parameter(ParameterSetName = 'Pause', Mandatory = $true)][switch]$Pause,
@@ -105,19 +108,26 @@ function New-AgentConfigText {
         [Parameter(Mandatory = $true)][string]$Url,
         [Parameter(Mandatory = $true)][string]$ComputerName,
         [Parameter(Mandatory = $true)][string]$DomainName,
-        [bool]$Include4624 = $false
+        [bool]$Include4624 = $false,
+        [bool]$IncludeKerberosWeakTgs = $false,
+        [bool]$IncludeDcsync4662 = $false,
+        [bool]$IncludeGpoChange5136 = $false
     )
     if (-not (Test-ServerUrl $Url)) { throw "ServerUrl 必須是 http://主機:埠(明文 HTTP):$Url" }
     if ($ComputerName -notmatch '^[A-Za-z0-9][A-Za-z0-9-]{0,62}$') { throw "Computer 格式錯誤:$ComputerName" }
     if ($DomainName -notmatch '^[A-Za-z0-9.-]{1,253}$') { throw "Domain 格式錯誤:$DomainName" }
-    $flag = if ($Include4624) { 'true' } else { 'false' }
+    $b = { param([bool]$v) if ($v) { 'true' } else { 'false' } }
     @(
         '# 由 Install-NetOpsAdAgent.ps1 產生;說明見 agent.toml.example'
         "server_url = `"$($Url.TrimEnd('/'))`""
         "computer = `"$ComputerName`""
         "domain = `"$($DomainName.ToLowerInvariant())`""
         'token_file = "secrets/ad_agent.token"'
-        "include_user_logon_4624 = $flag"
+        '# 以下四個為高事件量開關(AD5 / AD-6 §9.3),預設皆 false,務必先在 GSMC-DC1 逐一實測事件量再開啟'
+        "include_user_logon_4624 = $(& $b $Include4624)"
+        "include_kerberos_weak_tgs = $(& $b $IncludeKerberosWeakTgs)"
+        "include_dcsync_4662 = $(& $b $IncludeDcsync4662)"
+        "include_gpo_change_5136 = $(& $b $IncludeGpoChange5136)"
         ''
     ) -join "`r`n"
 }
@@ -333,7 +343,7 @@ function Install-FromStaged {
     if ($RewriteConfig -or -not (Test-Path -LiteralPath $config)) {
         if (-not $ServerUrl) { throw '第一次安裝(或 -RewriteConfig)需要 -ServerUrl,例:http://10.10.130.124:51295' }
         if (-not $Domain) { $Domain = (Get-CimInstance Win32_ComputerSystem).Domain }
-        Write-Utf8NoBom -Path $config -Text (New-AgentConfigText -Url $ServerUrl -ComputerName $Computer -DomainName $Domain -Include4624 $IncludeUserLogon4624.IsPresent)
+        Write-Utf8NoBom -Path $config -Text (New-AgentConfigText -Url $ServerUrl -ComputerName $Computer -DomainName $Domain -Include4624 $IncludeUserLogon4624.IsPresent -IncludeKerberosWeakTgs $IncludeKerberosWeakTgs.IsPresent -IncludeDcsync4662 $IncludeDcsync4662.IsPresent -IncludeGpoChange5136 $IncludeGpoChange5136.IsPresent)
         Write-Host "已寫入 $config"
     }
     $check = & $Staged --check-config --config $config 2>&1

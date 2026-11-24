@@ -45,7 +45,8 @@ const isClickHouse = computed(() => meta.value?.source === 'clickhouse');
 const minDay = computed(() => dayList.value.at(-1)?.day ?? '');
 const maxDay = computed(() => dayList.value[0]?.day ?? '');
 const chName = (c: string) => meta.value?.channels[c] ?? c;
-const evName = (g: AdEventGroup) => g.name || (g.channel === 'Security' ? (meta.value?.securityEvents[String(g.eventId)] ?? '') : '');
+const evName = (g: AdEventGroup) =>
+  g.name || meta.value?.channelEvents?.[g.channel]?.[String(g.eventId)] || (g.channel === 'Security' ? (meta.value?.securityEvents[String(g.eventId)] ?? '') : '');
 const metaErrorTitle = computed(() => (isClickHouseUnavailable(metaError.value) ? 'AD 事件資料庫暫時無法使用' : '無法取得已有資料的日期'));
 const loadErrorTitle = computed(() => (isClickHouseUnavailable(loadError.value) ? 'AD 事件資料庫暫時無法使用' : '無法載入 AD 事件總覽'));
 

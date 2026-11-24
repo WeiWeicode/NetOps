@@ -17,7 +17,7 @@ import { createAdChReader } from '../../src/infra/clickhouse/ad-reader.js';
 import { createAdBackfillCh } from '../../src/infra/clickhouse/ad-backfill.js';
 import { createClickHouseWriter } from '../../src/infra/clickhouse/index.js';
 import type { AdBackfillJob, AdBackfillQueue } from '../../src/infra/redis/ad-backfill.js';
-import { ACCOUNT_CHANGES, SECURITY_EVENTS, summarizeAd } from '../../src/modules/ad/core/adlog.js';
+import { ACCOUNT_CHANGES, CHANNEL_EVENTS, SECURITY_EVENTS, summarizeAd } from '../../src/modules/ad/core/adlog.js';
 import { runAdBackfill } from '../../src/ingest/ad-backfill.js';
 import { toAdRow } from '../../src/ingest/ad-rows.js';
 import { createFakeFtp } from '../fixtures/fake-ftp.js';
@@ -28,7 +28,7 @@ if (!/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/|$)/.test(CH_URL)) throw new E
 const cfg = { url: CH_URL, user: 'netops_writer', password: fs.readFileSync(process.env.INT_CLICKHOUSE_PASSWORD_FILE ?? '', 'utf8').trim() };
 const ch = createClickHouseWriter(cfg);
 const q = createAdBackfillCh(cfg);
-const reader = createAdChReader(cfg, fetch, { securityEvents: SECURITY_EVENTS, accountChanges: ACCOUNT_CHANGES });
+const reader = createAdChReader(cfg, fetch, { securityEvents: SECURITY_EVENTS, channelEvents: CHANNEL_EVENTS, accountChanges: ACCOUNT_CHANGES });
 
 const DAY_MS = 86_400_000;
 const pad = (n: number) => String(n).padStart(2, '0');
@@ -126,12 +126,24 @@ describe('AD FTP 補漏(真 ClickHouse)', () => {
     assert.equal(await dupCount(DC), 0);
   });
 
-  it('對帳 count() 只算 23 種 Security 事件(4672 不算)', async () => {
+  it('對帳 count() 只算 23 種 Security 事件(4672 與 AD-6 新增 ID 都不算)', async () => {
+    // 寫入多筆 AD-6 新增的 Security 事件(§9.2 / §9.3),驗證 reconCounts() 完全不計入
+    const ad6Rows = [
+      agentRow(DC, 201, '04:01:00', 4697, 0, '服務安裝\n服務名稱:\tTestSvc'),
+      agentRow(DC, 202, '04:02:00', 4719, 0, '系統稽核原則已變更'),
+      agentRow(DC, 203, '04:03:00', 4616, 0, '系統時間已變更'),
+      agentRow(DC, 204, '04:04:00', 4624, 0, '帳戶已成功登入\n登入類型:\t10'),
+      agentRow(DC, 205, '04:05:00', 4769, 0, 'Kerberos TGS\n票證加密類型:\t0x17'),
+      agentRow(DC, 206, '04:06:00', 4662, 0, 'DCSync\n屬性:\t{1131f6aa-9c07-11d1-f79f-00c04fc2dcd2}'),
+      agentRow(DC, 207, '04:07:00', 5136, 0, 'GPO\nDN:\tCN=AdminSDHolder'),
+      agentRow(DC, 208, '04:08:00', 1100, 0, '事件記錄服務已關閉'),
+    ];
+    await ch.insert('ad', ad6Rows, `it3:${DC}:ad6-extra`);
     const day = DAY;
     const fromMs = Date.parse(`${D}T00:00:00+08:00`);
     const r = (await reader.reconCounts(fromMs, fromMs + DAY_MS)).find((x) => x.computer === DC && x.channel === 'Security')!;
     assert.ok(r, `沒有 ${DC} 的對帳筆數(${day})`);
-    // ad_events:100、101(ftp)、102、103(4672)、104 → 對帳算 4 筆
+    // ad_events:100、101(ftp)、102、103(4672)、104 + 201..208(AD-6 新增 8 筆)→ 對帳仍只算 v3 23 種的 4 筆
     assert.deepEqual([r.n, r.agent, r.ftp], [4, 3, 1]);
   });
 

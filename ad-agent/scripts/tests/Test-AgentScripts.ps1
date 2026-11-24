@@ -118,9 +118,16 @@ $t = New-AgentConfigText -Url 'http://10.10.130.124:51295/' -ComputerName 'GSMC-
 Assert-True ($t -match '(?m)^server_url = "http://10\.10\.130\.124:51295"\r?$') 'server_url 去掉結尾斜線'
 Assert-True ($t -match '(?m)^domain = "gsmc\.com\.tw"\r?$') 'domain 轉小寫'
 Assert-True ($t -match '(?m)^include_user_logon_4624 = false\r?$') '4624 預設關閉'
+Assert-True ($t -match '(?m)^include_kerberos_weak_tgs = false\r?$') '4769 弱加密 TGS 預設關閉(AD-6 §9.3)'
+Assert-True ($t -match '(?m)^include_dcsync_4662 = false\r?$') '4662 DCSync 預設關閉(AD-6 §9.3)'
+Assert-True ($t -match '(?m)^include_gpo_change_5136 = false\r?$') '5136 GPO 變更預設關閉(AD-6 §9.3)'
+Assert-True ($t -match '高事件量開關') '設定檔含量大先實測註解(AD-6 §9.3)'
 Assert-True (-not ($t -match 'token\s*=')) '設定檔不含 Token 值'
-$t2 = New-AgentConfigText -Url 'http://h:1' -ComputerName 'DC2' -DomainName 'x.local' -Include4624 $true
+$t2 = New-AgentConfigText -Url 'http://h:1' -ComputerName 'DC2' -DomainName 'x.local' -Include4624 $true -IncludeKerberosWeakTgs $true -IncludeDcsync4662 $true -IncludeGpoChange5136 $true
 Assert-True ($t2 -match '(?m)^include_user_logon_4624 = true\r?$') '-IncludeUserLogon4624 開啟'
+Assert-True ($t2 -match '(?m)^include_kerberos_weak_tgs = true\r?$') '-IncludeKerberosWeakTgs 開啟'
+Assert-True ($t2 -match '(?m)^include_dcsync_4662 = true\r?$') '-IncludeDcsync4662 開啟'
+Assert-True ($t2 -match '(?m)^include_gpo_change_5136 = true\r?$') '-IncludeGpoChange5136 開啟'
 Assert-Throws { New-AgentConfigText -Url 'https://h:1' -ComputerName 'DC' -DomainName 'x' } '拒絕 https(需求方決定明文 HTTP)' '*http://*'
 Assert-Throws { New-AgentConfigText -Url 'http://u:p@h:1' -ComputerName 'DC' -DomainName 'x' } '拒絕帳密' '*http://*'
 Assert-Throws { New-AgentConfigText -Url 'http://h:1' -ComputerName 'DC 1' -DomainName 'x' } '拒絕錯誤的 computer' '*Computer*'

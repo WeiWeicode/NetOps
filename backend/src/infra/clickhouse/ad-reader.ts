@@ -236,6 +236,8 @@ export interface AdReaderOptions {
   maxSeconds?: number;
   /** 事件名稱(core/adlog.js SECURITY_EVENTS) */
   securityEvents?: Record<number, string>;
+  /** 各記錄類別的事件名稱(core/adlog.js CHANNEL_EVENTS;含 System / Directory_Service / DNS_Server) */
+  channelEvents?: Record<string, Record<number, string>>;
   /** 帳號 / 群組異動的動作說明(core/adlog.js ACCOUNT_CHANGES) */
   accountChanges?: Record<number, string>;
 }
@@ -248,6 +250,7 @@ export function createAdChReader(cfg: ClickHouseConfig, fetchImpl: Fetch = fetch
   const maxSeconds = Math.min(opts.maxSeconds ?? 25, 50);
   const headers = { 'X-ClickHouse-User': cfg.user, 'X-ClickHouse-Key': cfg.password, 'Content-Type': 'text/plain; charset=utf-8' };
   const SEC = opts.securityEvents ?? {};
+  const CH_EVENTS = opts.channelEvents ?? {};
   const ACTIONS = opts.accountChanges ?? {};
 
   async function rows<T>(sql: string, params: Record<string, Param> = {}): Promise<T[]> {
@@ -370,7 +373,7 @@ export function createAdChReader(cfg: ClickHouseConfig, fetchImpl: Fetch = fetch
         last: g.last,
         sample: g.sample,
         computers: g.computers ?? [],
-        name: g.channel === 'Security' ? (SEC[num(g.eventId)] ?? '') : '',
+        name: CH_EVENTS[g.channel]?.[num(g.eventId)] ?? (g.channel === 'Security' ? (SEC[num(g.eventId)] ?? '') : ''),
         issue: num(g.issue) === 1,
       }));
       const strip = ({ issue: _i, ...g }: AdGroup & { issue: boolean }): AdGroup => g;

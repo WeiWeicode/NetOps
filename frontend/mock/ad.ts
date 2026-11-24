@@ -122,13 +122,54 @@ const MOCK_AGENTS = () => {
 const MOCK_RECON_JOBS = new Map<string, Record<string, unknown>>();
 
 const CHANNELS = { Security: '安全性', System: '系統', Directory_Service: '目錄服務', DNS_Server: 'DNS 伺服器' };
-const SECURITY_EVENTS = {
+const SECURITY_EVENTS: Record<string, string> = {
+  '1100': '事件記錄服務被關閉',
+  '1102': '稽核記錄被清除',
+  '1104': 'Security Log 已滿',
+  '4616': '系統時間被變更',
+  '4624': '登入成功',
   '4625': '登入失敗',
-  '4740': '帳號鎖定',
-  '4720': '建立帳號',
-  '4728': '加入全域群組',
+  '4662': '目錄物件作業（DCSync 複寫權限）',
+  '4672': '特殊權限登入',
+  '4697': '安裝服務',
+  '4698': '建立排程工作',
+  '4719': '系統稽核原則被變更',
+  '4720': '建立使用者帳戶',
+  '4723': '使用者自行變更密碼',
+  '4728': '加入全域安全群組',
+  '4740': '帳戶被鎖定',
+  '4765': '新增 SID History 成功',
+  '4768': 'Kerberos TGT 要求',
+  '4769': 'Kerberos 服務票證要求',
   '4771': 'Kerberos 預先驗證失敗',
-  '4672': '特權登入',
+  '4776': 'NTLM 認證',
+  '5136': '目錄服務物件變更（GPO / AdminSDHolder）',
+};
+const CHANNEL_EVENTS: Record<string, Record<string, string>> = {
+  Security: SECURITY_EVENTS,
+  System: {
+    '41': '系統未正常關機即重新啟動（Kernel-Power）',
+    '104': '系統事件記錄被清除',
+    '1074': '系統正常關機或重新啟動',
+    '6006': '事件記錄服務已停止',
+    '6008': '系統發生非預期關機',
+    '7045': '系統安裝新服務',
+  },
+  Directory_Service: {
+    '1388': '偵測到 AD 複寫中的殘留物件（Lingering Object）',
+    '1645': 'AD 無法執行目錄複寫（SPN / 驗證問題）',
+    '1864': 'AD 複寫長期未同步',
+    '1988': 'AD 複寫因殘留物件而被封鎖',
+    '2042': 'AD 複寫超過邏輯刪除存留期（Tombstone）',
+    '2092': 'DC 無法成為 FSMO 操作主機（連線失敗）',
+    '2887': '未簽署或明文 LDAP 繫結彙總',
+    '2889': '用戶端執行未簽署的 LDAP 繫結',
+  },
+  DNS_Server: {
+    '4000': 'DNS 伺服器無法開啟 Active Directory',
+    '4004': 'DNS 伺服器無法完成 AD 區域列舉',
+    '4015': 'DNS 伺服器發生嚴重的 Active Directory 錯誤',
+  },
 };
 
 const imported = () => adDays.filter((d) => d.state === 'done' || d.state === 'changed' || d.state === 'orphan');
@@ -449,6 +490,7 @@ export function handleAd({ method, path, url, body, need, send, fail, sendFile }
       import: { running: adStatus.running, lastSyncAt: adStatus.lastSyncAt, lastSyncError: adStatus.lastSyncError ? '同步失敗,詳見 FTP Log 檔案頁' : '' },
       channels: CHANNELS,
       securityEvents: SECURITY_EVENTS,
+      channelEvents: CHANNEL_EVENTS,
     });
     return true;
   }

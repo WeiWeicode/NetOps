@@ -4,6 +4,62 @@
 
 > 2026-11-23:WR-1 / PR / TS 累積的待寫文件已由 docs MR(`docs/pr-ts-docs`)補齊:API.md §10.3、§11、§12、§13、§14,PA-LIVE-PLAN §4,ARCHITECTURE D22,IMPL-PLAN、PROJECT-MAP、`deploy/RUNBOOK-prod.md` §7–§8,DevelopmentProcess 四份紀錄;下列各段「下一步」裡的「docs MR」項目以此為準(合併後視為完成)。
 
+## 2026-11-24 收工:AD-1 ~ AD-3 後端都已開 MR,前端交 Gemini
+
+**接手方式**:新討論串說「從 `NetOps/docs/HANDOFF.md`「2026-11-24 收工」接手」,用主討論串協調模式(skill `coordinator`)。計畫書 `docs/AD-AGENT-PLAN.md`,決策 ARCHITECTURE D49。本段之後的「2026-11-23 收工」是前一天的紀錄。
+
+### 需求方 2026-11-24 決定(照做)
+
+- AD-1 接收容器讀 Redis 水位失敗時要回錯誤(原話「同意回報錯誤」):心跳回 `503 NETOPS_AD_UNAVAILABLE`,Agent 收到後不決定起點、等下一次心跳。
+- Gemini 審查 !184 的 M1、M2、L1、L2 在 AD-1 分支修正,不留給 AD-3。
+- **AD-3 只做後端,前端畫面交給 Gemini**(原話「開發到前端暫停，交給Gemini」)。
+- AD-3 設計:
+  - D1:FTP 補寫的世代判定用「CSV 分段錨定 + 水位保護」。CSV 在 RecordID 大幅下降處切段,每段用 RecordID + 時間 + EventID 對齊 Agent 列找出世代;對不出的段標 `ambiguous` 不寫入;只補 ClickHouse 已寫入的 Agent 最大 RecordID 以前的列,其餘標 `waiting-agent`,隔天再對。
+  - D2:還沒裝 Agent 的 DC,FTP 資料全量寫進 ClickHouse(世代 0)。
+  - D3:`NETOPS_AD_SOURCE` 沒設定時一律 `ftp`;測試區要切換由需求方改主機 `.env`。
+  - D4:路由和 PA 一致:`/v1/ad/reconciliations`、`/v1/ad/backfills(/:id)`。
+  - D5:Agent 長期離線時,`waiting-agent` 的列先不補,列為剩餘風險。
+- `netops.ad.read` 也綁在 PA 的 AI 按鈕上(只有 PA 權限的人也看得到 DC 狀態):**刻意的,不改**。
+
+### 已完成(三個 MR 都未合併,CI 都通過)
+
+| MR | 分支 | 最新 commit | 內容 |
+| --- | --- | --- | --- |
+| !184 | `feature/ad-1-collector-ingest` | `10c9c1d`(pipeline 1296 成功) | AD-1 接收容器、migration 005、ingest、歸檔;11-24 加 `9ed7a9c`(Redis 錯誤回 503)、`10c9c1d`(Gemini M1/M2/L1/L2)。Gemini 審查「有條件通過」,條件已修 |
+| !186 | `feature/ad-2-rust-agent` | `ad71a82`(pipeline 1298 成功) | AD-2 Rust Agent、Watchdog、安裝腳本、CI(`check:ad-agent` 分支手動、`build:ad-agent` 只在 `netops-ad-v*` tag);`deploy/RUNBOOK-ad.md` §7(測試 VM、GSMC-DC1 實測步驟);報告 `docs/test-reports/2026-11-23-ad-2.md`。已 merge 進 AD-1 的修正 |
+| !187 | `feature/ad-3-api-reconcile` | `f1b0626`(pipeline 1303 成功) | AD-3 後端:`/ad/agents`、AD 查詢切 ClickHouse 並附 `names`、AI 問答來源、FTP 對帳補漏;`RUNBOOK-ad.md` §8;報告 `docs/test-reports/2026-11-24-ad-3.md`。不需要新 migration、權限代碼或 Gateway 路由。**前端交接規格在 MR 描述「後續」段** |
+
+- 合併順序:!184 → !186 → !187 → Gemini 的前端 MR(三個依序堆疊)。
+- 測試(子任務回報):後端單元 597、整合測試由 CI 跑真 ClickHouse 通過;cargo 58、clippy 0 警告、腳本 68;前端 358(未改)。
+- CSV 補寫列和 Agent 列只有 `level_text` 不同(CSV 中文「稽核失敗」、Agent 英文 `Audit Failure`)。
+
+### 下一步(依序)
+
+1. **Gemini 審查**(需求方指派):!184 複審、!186、!187。!187 重點:世代判定規則、Compose 與 env 範本(敏感變更)。
+2. **Gemini 做前端**:從 `feature/ad-3-api-reconcile` 開 `feature/ad-3-frontend`,照 !187「後續」段做 4 個畫面(DC 狀態列、總覽 IP 名稱、明細查詢 DC 篩選、對帳補漏卡片)。完成後由 Claude 審查。
+3. **!184 合併前**(需求方):照 `RUNBOOK-ad.md` §2 在主機 2 產 GSMC-DC1 的 Token、建 NAS 歸檔目錄、套 ClickHouse schema、設定 portproxy 與防火牆 → 主串唯讀確認資料表 → 合併 → 看 develop 部署 pipeline,確認 `netops-pa` 沒有重啟。之後依序合併 !186、!187。
+4. **AD-2 實測**(!186 合併後):
+   - GitLab:`host2-windows` Runner 指派給 `giganexus/NetOps`;`netops-ad-v*` 設為 Protected tag(DC 只裝受保護 tag 產出的 exe)。
+   - 照 `RUNBOOK-ad.md` §7.1 在主機 2 Hyper-V 測試 VM 做清除記錄實測(期間防火牆暫時放行 `10.10.130.124`,步驟 14 改回);§7.2 在 GSMC-DC1 試裝、量 4624 事件量與 Agent 記憶體(9.5 MB 是修正前量的,要重量)。
+5. **測試區切到 ClickHouse**(!187 合併後,`RUNBOOK-ad.md` §8):主機 `.env` 加 `NETOPS_AD_SOURCE=clickhouse`,只重建 netops-api;不會重建 netops-pa。**不要用不帶服務名稱的 `docker compose up -d`**。
+6. **AD-4**(熱力圖 `metric=ad`、儀表板「AD 網域」Tab):分工待需求方決定(頁面先前的慣例是交 Gemini)。AD-5 等 V-c。
+7. **AD 系列 docs MR**(Sonnet 子任務統一寫):
+   - `API.md` §6:新增 `/ad/agents`、`/ad/reconciliations`、`/ad/backfills(/:id)`;明細新增 `computer`、`dcDomain`、`name` 條件,每筆新增 `dcDomain`、`source`、`logEpoch`,回應附 `names`;心跳 503 `NETOPS_AD_UNAVAILABLE`;註明 `netops.ad.read` 綁 PA AI 按鈕是刻意的。
+   - `AD-AGENT-PLAN.md` §4.2、§5 與 AD-3 列的分工欄(改成 Claude 後端、Gemini 前端)、ARCHITECTURE D49:實作語言、對外開放方式、去重做法、世代判定定案、水位只採信 ClickHouse、`NETOPS_AD_SOURCE` 預設 ftp、路由名稱。
+   - 心跳新增 `agent.skippedEvents`、`agent.sendRejectStreak`;管道 `get_status` 新增 `tickAgeMs`;DC 資料目錄 `installed.sha256`。
+   - `PROJECT-MAP`(`backend/src/ad-receiver/`、`netops-ad-receiver`、`ad-agent/`、migration 005、`RUNBOOK-ad.md`)、`IMPL-PLAN`、`DevelopmentProcess/NewFeatures.md`。
+   - 各批內容也列在 !184、!186、!187 的描述。
+
+### 待決 / 注意
+
+- 要不要接 RustIt 的 S1 簽章流程:需求方決定(目前安裝腳本只驗 SHA-256)。
+- 建議 `netops-redis` 加 ACL(AD-3 審查提出;補漏已改成不採信 Redis 水位),待排。
+- D5 剩餘風險:Agent 長期離線時,ClickHouse 會缺 `waiting-agent` 的事件。
+- `NETOPS_AD_SOURCE=ftp` 時,只要有 ClickHouse 設定仍會對帳並寫入 ClickHouse(刻意,切換前先補齊)。
+- Token 對應表的 DC 名稱要寫大寫主機短名(`RUNBOOK-ad.md` 已註明)。
+- 其餘(LocalSystem 執行、Redis 無 AOF、RecordID 跳號上限)同下方 11-23 段。
+- `GITLAB_TOKEN` 沒有 Job Read 權限,讀不到 job log,CI 個別筆數要從 GitLab 介面看。
+
 ## 2026-11-23 收工:AD 即時收集 AD-1 已開 MR,AD-2 做到一半
 
 **接手方式**:新討論串說「從 `NetOps/docs/HANDOFF.md`「2026-11-23 收工」接手」,用主討論串協調模式(skill `coordinator`)。計畫書 `docs/AD-AGENT-PLAN.md`,決策 ARCHITECTURE D49,審查 `docs/reviews/2026-11-23-ad-agent-plan.md`。

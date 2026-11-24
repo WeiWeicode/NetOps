@@ -5,21 +5,27 @@
  *   AD 事件總覽點選會帶 ?from=&to=&channel=&eventId=… 進來並自動查詢;網址條件只收白名單與格式正確的值(composables/searchQuery.ts)。
  *   期間最長 31 天。
  */
-import { computed, onMounted, reactive, ref, shallowRef } from 'vue';
+import { computed, onMounted, reactive, ref, shallowRef, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { AD_EXPORT_MAX, AD_LEVEL, AD_SEARCH_MAX_DAYS, ad, adLog, type AdDays, type AdEventQuery, type AdEventRow } from '@/api/ad';
 import { describeError, download } from '@/api/gateway';
 import { fmtNum, fmtTime } from '@/api/format';
+import { collectDcOptions, fieldValidationError, isClickHouseUnavailable, isDcToken } from '@/composables/adEvents';
 import { cameFromApp, isEventIds, localToIso, pickQuery, toLocalInput } from '@/composables/searchQuery';
 import { toast } from '@/ui';
 
 const PAGE_SIZE = 50;
-const KEYS = ['channel', 'level', 'eventId', 'account', 'ip', 'q'] as const;
+const KEYS = ['channel', 'level', 'eventId', 'account', 'ip', 'q', 'computer', 'dcDomain', 'name'] as const;
 type Key = (typeof KEYS)[number];
 const route = useRoute();
 const router = useRouter();
 
 const meta = shallowRef<AdDays | null>(null);
+const agentComputers = ref<string[]>([]);
+const isClickHouse = computed(() => meta.value?.source === 'clickhouse');
+const dcOptions = computed(() =>
+  isClickHouse.value ? collectDcOptions(agentComputers.value, (meta.value?.days ?? []).map((d) => d.computers)) : [],
+);
 const form = reactive<Record<Key, string> & { from: string; to: string; issueOnly: boolean }>({
   from: '',
   to: '',
@@ -36,6 +42,9 @@ const formError = computed(() => {
   if (form.from > form.to) return '開始時間不可晚於結束時間';
   if ((new Date(form.to).getTime() - new Date(form.from).getTime()) / 86_400_000 > AD_SEARCH_MAX_DAYS) return `期間最長 ${AD_SEARCH_MAX_DAYS} 天`;
   if (form.eventId.trim() && !isEventIds(form.eventId.trim())) return '事件 ID 請輸入數字,多個以逗號分隔';
+  if (form.computer.trim() && !isDcToken(form.computer.trim(), 64)) return 'DC 名稱只能包含英數、_、.、-,最長 64 字';
+  if (form.dcDomain.trim() && !isDcToken(form.dcDomain.trim(), 253)) return 'DC 網域只能包含英數、_、.、-,最長 253 字';
+  if (form.name.trim().length > 100) return '名稱條件最長 100 字';
   return '';
 });
 
@@ -46,6 +55,14 @@ const result = shallowRef<{ items: AdEventRow[]; total: number; scanned: number 
 const page = ref(1);
 const loading = ref(false);
 const error = ref<Error | null>(null);
+const nameError = ref('');
+const errorTitle = computed(() => (isClickHouseUnavailable(error.value) ? 'AD 事件資料庫暫時無法使用' : undefined));
+watch(
+  () => form.name,
+  () => {
+    if (nameError.value) nameError.value = '';
+  },
+);
 let seq = 0;
 /** 畫面上資料的頁碼(GTable 換頁時已先改了 page;失敗要還原,頁碼才與資料一致) */
 let shownPage = 1;
@@ -60,6 +77,7 @@ async function fetchPage(p: number) {
   const my = ++seq;
   loading.value = true;
   error.value = null;
+  nameError.value = '';
   try {
     const r = await adLog.search(applied.value, p, PAGE_SIZE);
     if (my !== seq) return;
@@ -67,7 +85,9 @@ async function fetchPage(p: number) {
     page.value = shownPage = r.page;
   } catch (e) {
     if (my === seq) {
-      error.value = e as Error;
+      const nf = fieldValidationError(e, 'name');
+      if (nf) nameError.value = nf;
+      else error.value = e as Error;
       if (result.value) page.value = shownPage;
     }
   } finally {
@@ -87,6 +107,7 @@ function search() {
 function reset() {
   for (const k of KEYS) form[k] = '';
   form.issueOnly = false;
+  nameError.value = '';
 }
 
 const exporting = ref(false);
@@ -111,11 +132,27 @@ const detailOpen = computed({ get: () => !!detail.value, set: (v) => !v && (deta
 onMounted(async () => {
   try {
     meta.value = await ad.days();
+    if (meta.value.source === 'clickhouse') {
+      ad.agents()
+        .then((r) => {
+          agentComputers.value = r.items.map((x) => x.computer);
+        })
+        .catch(() => undefined);
+    }
   } catch (e) {
-    toast.fromError(e, '無法取得 AD 記錄名稱與已匯入日期');
+    toast.fromError(e, '無法取得 AD 記錄名稱與已有資料日期');
   }
   const q = route.query;
-  Object.assign(form, pickQuery(q, KEYS, { eventId: isEventIds, level: (v) => v in AD_LEVEL }));
+  Object.assign(
+    form,
+    pickQuery(q, KEYS, {
+      eventId: isEventIds,
+      level: (v) => v in AD_LEVEL,
+      computer: (v) => isDcToken(v, 64),
+      dcDomain: (v) => isDcToken(v, 253),
+      name: (v) => v.length <= 100,
+    }),
+  );
   form.issueOnly = q.issueOnly === '1';
   const from = toLocalInput(q.from);
   if (from) {
@@ -130,11 +167,14 @@ onMounted(async () => {
 });
 
 const columns = [
-  { key: 'time', label: '時間', width: '170px' },
-  { key: 'channel', label: '記錄', width: '100px', hideSm: true },
-  { key: 'eventId', label: '事件', width: '170px' },
-  { key: 'level', label: '等級', width: '100px' },
-  { key: 'account', label: '帳號 / IP', width: '190px', hideSm: true },
+  { key: 'time', label: '時間', width: '165px' },
+  { key: 'computer', label: 'DC', width: '125px', hideSm: true },
+  { key: 'channel', label: '記錄', width: '96px', hideSm: true },
+  { key: 'eventId', label: '事件', width: '160px' },
+  { key: 'level', label: '等級', width: '96px' },
+  { key: 'account', label: '帳號', width: '130px', hideSm: true },
+  { key: 'ip', label: '來源 IP', width: '190px', hideSm: true },
+  { key: 'source', label: '資料來源', width: '105px', hideSm: true },
   { key: 'message', label: '訊息' },
 ];
 const asRow = (r: unknown) => r as AdEventRow;
@@ -148,11 +188,15 @@ const rows = computed(() => (result.value?.items ?? []).map((e, i) => ({ ...e, _
         <div class="filters">
           <GInput v-model="form.from" type="datetime-local" label="開始時間" class="dt" />
           <GInput v-model="form.to" type="datetime-local" label="結束時間" class="dt" />
+          <GSelect v-if="dcOptions.length" v-model="form.computer" label="DC" :options="dcOptions" placeholder="全部" class="sel" />
+          <GInput v-else v-model="form.computer" label="DC" placeholder="GSMC-DC1" clearable class="sm" />
+          <GInput v-model="form.dcDomain" label="DC 網域" placeholder="gsmc.com.tw" clearable class="sm" />
           <GSelect v-model="form.channel" label="記錄" :options="channelOptions" placeholder="全部" class="sel" />
           <GSelect v-model="form.level" label="等級" :options="levelOptions" placeholder="全部" class="sel" />
           <GInput v-model="form.eventId" label="事件 ID" placeholder="4625,4740" clearable class="sm" />
           <GInput v-model="form.account" label="帳號" placeholder="S094009" clearable class="sm" />
           <GInput v-model="form.ip" label="IP" clearable class="sm" />
+          <GInput v-model="form.name" label="姓名 / 部門 / 設備" placeholder="IP 對照表名稱" :error="nameError" clearable class="md" />
           <GInput v-model="form.q" label="關鍵字" placeholder="訊息內容" clearable class="md" />
         </div>
         <div class="filters">
@@ -174,9 +218,9 @@ const rows = computed(() => (result.value?.items ?? []).map((e, i) => ({ ...e, _
           <strong class="text">符合 {{ fmtNum(result.total) }} 筆</strong> · 期間內共 {{ fmtNum(result.scanned) }} 筆事件
           <span v-if="result.total > AD_EXPORT_MAX" class="c-warning"> · 超過匯出上限 {{ fmtNum(AD_EXPORT_MAX) }} 筆,請縮小時間或加條件</span>
         </template>
-        <template v-else-if="!loading">選擇時間與條件後按「查詢」</template>
+        <template v-else-if="!loading && !error">選擇時間與條件後按「查詢」</template>
       </div>
-      <GAlert v-if="error" tone="danger" class="pad-x">{{ describeError(error) }}</GAlert>
+      <GAlert v-if="error" tone="danger" :title="errorTitle" class="pad-x">{{ describeError(error) }}</GAlert>
       <GTable
         v-model:page="page"
         :loading="loading && !result"
@@ -187,12 +231,17 @@ const rows = computed(() => (result.value?.items ?? []).map((e, i) => ({ ...e, _
         dense
         clickable
         :columns="columns"
-        :empty-title="result ? '沒有符合的事件' : '尚未查詢'"
+        :empty-title="error ? '查詢失敗' : result ? '沒有符合的事件' : '尚未查詢'"
         @update:page="fetchPage"
         @row-click="(r) => (detail = asRow(r))"
       >
         <template #cell-time="{ row }">
           <span class="small num nowrap">{{ fmtTime(asRow(row).time) }}</span>
+        </template>
+        <template #cell-computer="{ row }">
+          <span class="small mono nowrap" :title="asRow(row).dcDomain ? `${asRow(row).computer}(${asRow(row).dcDomain})` : asRow(row).computer">
+            {{ asRow(row).computer }}
+          </span>
         </template>
         <template #cell-channel="{ row }">
           <span class="nowrap">{{ chName(asRow(row).channel) }}</span>
@@ -206,8 +255,14 @@ const rows = computed(() => (result.value?.items ?? []).map((e, i) => ({ ...e, _
         <template #cell-account="{ row }">
           <span class="who small">
             <GBadge v-if="asRow(row).privileged" tone="danger" variant="solid">特權</GBadge>
-            <span class="ellipsis">{{ [asRow(row).account, asRow(row).ip].filter(Boolean).join(' / ') }}</span>
+            <span class="ellipsis">{{ asRow(row).account || '—' }}</span>
           </span>
+        </template>
+        <template #cell-ip="{ row }">
+          <GIpLabel :ip="asRow(row).ip" inline />
+        </template>
+        <template #cell-source="{ row }">
+          <GSourceBadge :source="asRow(row).source === 'agent' ? 'agent' : 'ftp'" />
         </template>
         <template #cell-message="{ row }">
           <span class="msg small">{{ asRow(row).message.split('\n')[0] }}</span>
@@ -228,17 +283,27 @@ const rows = computed(() => (result.value?.items ?? []).map((e, i) => ({ ...e, _
           <dd>{{ chName(detail.channel) }}</dd>
           <dt>等級</dt>
           <dd>{{ AD_LEVEL[detail.level]?.label ?? detail.levelText }}</dd>
+          <dt>資料來源</dt>
+          <dd>
+            <GSourceBadge :source="detail.source === 'agent' ? 'agent' : 'ftp'" />
+            <span v-if="detail.logEpoch != null" class="xs muted"> (世代 {{ detail.logEpoch }})</span>
+          </dd>
           <dt>來源</dt>
           <dd>{{ detail.provider }}</dd>
           <dt>主機</dt>
-          <dd>{{ detail.computer }}(記錄編號 {{ detail.recordId }})</dd>
+          <dd>
+            {{ detail.computer }}<template v-if="detail.dcDomain"> ({{ detail.dcDomain }})</template>(記錄編號 {{ detail.recordId }})
+          </dd>
+          <template v-if="detail.ip">
+            <dt>來源 IP</dt>
+            <dd><GIpLabel :ip="detail.ip" inline /></dd>
+          </template>
           <template
             v-for="f in [
               ['帳號', detail.domain ? `${detail.domain}\\${detail.account}` : detail.account],
               ['執行者', detail.actor],
               ['對象', detail.target],
               ['群組', detail.group ? `${detail.group}${detail.privileged ? '(特權)' : ''}` : ''],
-              ['來源 IP', detail.ip],
               ['工作站', detail.workstation],
               ['原因', detail.reason],
             ] as const"

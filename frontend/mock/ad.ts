@@ -4,6 +4,123 @@
 import { adDays, adStatus } from './ftp.ts';
 import type { MockCtx } from './types.ts';
 
+const MOCK_NAMES: Record<string, { name: string; department: string; device: string; deviceType: string }> = {
+  '10.10.1.5': { name: '王小明', department: '資訊處', device: 'NB-IT05', deviceType: '筆電' },
+  '10.10.3.20': { name: '陳美玲', department: '財務部', device: 'PC-FIN20', deviceType: '桌機' },
+};
+
+const MOCK_AGENTS = () => {
+  const now = Date.now();
+  const iso = (ms: number) => new Date(ms).toISOString();
+  return {
+    items: [
+      {
+        computer: 'GSMC-DC1',
+        dcDomain: 'gsmc.com.tw',
+        state: 'ok',
+        updatedAt: iso(now - 12_000),
+        ageSec: 12,
+        reportedAt: iso(now - 13_000),
+        agentVersion: '0.1.0',
+        watchdogVersion: '0.1.0',
+        received: 48_320,
+        agent: {
+          pid: 4120,
+          serviceState: 'running',
+          startType: 'auto',
+          statusOk: true,
+          lastCollectTickAt: iso(now - 2_000),
+          lastSendOkAt: iso(now - 5_000),
+          lastError: '',
+          restarts24h: 0,
+          cpuPct: 0.4,
+          rssMb: 9.6,
+          pendingEvents: 0,
+          skippedEvents: 0,
+          sendRejectStreak: 0,
+        },
+        channels: {
+          Security: { lastRecordId: 985_412, logEpoch: 0, fileSizeMb: 122.4, maxSizeMb: 128, oldestEventAt: iso(now - 18.5 * 3600_000), coverageHours: 18.5, wrapRisk: true },
+          System: { lastRecordId: 45_210, logEpoch: 0, fileSizeMb: 14.2, maxSizeMb: 64, oldestEventAt: null, coverageHours: null, wrapRisk: null },
+          Directory_Service: { lastRecordId: 12_880, logEpoch: 0, fileSizeMb: 8.1, maxSizeMb: 64, oldestEventAt: null, coverageHours: null, wrapRisk: null },
+          DNS_Server: { lastRecordId: 8_310, logEpoch: 0, fileSizeMb: 5.5, maxSizeMb: 64, oldestEventAt: null, coverageHours: null, wrapRisk: null },
+        },
+        events: [
+          { type: 'agent_restarted', cause: 'hung', detail: '採集迴圈停滯 95 秒,已重新啟動', at: iso(now - 3 * 3600_000), receivedAt: iso(now - 3 * 3600_000 + 3_000) },
+        ],
+      },
+      {
+        computer: 'GSMC-DC2',
+        dcDomain: 'gsmc.com.tw',
+        state: 'stale',
+        updatedAt: iso(now - 125_000),
+        ageSec: 125,
+        reportedAt: iso(now - 126_000),
+        agentVersion: '0.1.0',
+        watchdogVersion: '0.1.0',
+        received: 31_045,
+        agent: {
+          pid: 3880,
+          serviceState: 'running',
+          startType: 'auto',
+          statusOk: true,
+          lastCollectTickAt: iso(now - 125_000),
+          lastSendOkAt: iso(now - 130_000),
+          lastError: '後端回應 HTTP 503 NETOPS_AD_UNAVAILABLE',
+          restarts24h: 1,
+          cpuPct: 0.6,
+          rssMb: 10.4,
+          pendingEvents: 12,
+          skippedEvents: 0,
+          sendRejectStreak: 0,
+        },
+        channels: {
+          Security: { lastRecordId: 612_004, logEpoch: 0, fileSizeMb: 64.0, maxSizeMb: 128, oldestEventAt: iso(now - 42 * 3600_000), coverageHours: 42.0, wrapRisk: false },
+        },
+        events: [
+          { type: 'agent_service_stopped', cause: 'stopped', detail: 'NetOpsAdAgent 服務停止,Watchdog 已恢復為自動啟動並拉起', at: iso(now - 5 * 3600_000), receivedAt: iso(now - 5 * 3600_000 + 2_000) },
+        ],
+      },
+      {
+        computer: 'GSC-DC1',
+        dcDomain: 'gsc.com.tw',
+        state: 'offline',
+        updatedAt: iso(now - 720_000),
+        ageSec: 720,
+        reportedAt: iso(now - 721_000),
+        agentVersion: '0.1.0',
+        watchdogVersion: '0.1.0',
+        received: 12_900,
+        agent: {
+          pid: null,
+          serviceState: 'stopped',
+          startType: 'manual',
+          statusOk: false,
+          lastCollectTickAt: iso(now - 720_000),
+          lastSendOkAt: iso(now - 730_000),
+          lastError: '',
+          restarts24h: 0,
+          cpuPct: null,
+          rssMb: null,
+          pendingEvents: null,
+          skippedEvents: 0,
+          sendRejectStreak: 0,
+        },
+        channels: {
+          Security: { lastRecordId: 210_110, logEpoch: 1, fileSizeMb: 50.0, maxSizeMb: 128, oldestEventAt: iso(now - 36 * 3600_000), coverageHours: 36.0, wrapRisk: false },
+        },
+        events: [],
+      },
+    ],
+    summary: { total: 3, ok: 1, stale: 1, offline: 1, unknown: 0, wrapRisk: 1 },
+    staleSec: 90,
+    offlineSec: 180,
+    source: 'clickhouse',
+  };
+};
+
+const MOCK_RECON_JOBS = new Map<string, Record<string, unknown>>();
+
 const CHANNELS = { Security: '安全性', System: '系統', Directory_Service: '目錄服務', DNS_Server: 'DNS 伺服器' };
 const SECURITY_EVENTS = {
   '4625': '登入失敗',
@@ -55,6 +172,7 @@ function overview(from: string, to: string) {
   return {
     from,
     to,
+    source: 'clickhouse',
     days: n,
     total,
     byChannel,
@@ -131,6 +249,7 @@ function overview(from: string, to: string) {
           { key: 'helpdesk', n: 8 * n },
         ]
       : [],
+    names: MOCK_NAMES,
   };
 }
 
@@ -161,11 +280,14 @@ function events(from: string, to: string) {
       time: `${t.getFullYear()}-${pad(t.getMonth() + 1)}-${pad(t.getDate())}T${pad(t.getHours())}:${pad(t.getMinutes())}:${pad(t.getSeconds())}+08:00`,
       ...k,
       provider: k.channel === 'Security' ? 'Microsoft-Windows-Security-Auditing' : 'Service Control Manager',
-      computer: 'GSMC-DC1',
+      computer: i % 3 === 0 ? 'GSMC-DC2' : 'GSMC-DC1',
+      dcDomain: 'gsmc.com.tw',
+      source: i % 5 === 0 ? 'ftp' : 'agent',
+      logEpoch: 0,
       recordId: String(100000 + i),
       account: k.channel === 'Security' ? ['S112009', 'guest', 'S113001'][i % 3]! : '',
       domain: k.channel === 'Security' ? 'GSMC' : '',
-      ip: k.eventId === 4625 ? '10.10.1.5' : '',
+      ip: k.eventId === 4625 ? (i % 2 === 0 ? '10.10.1.5' : '10.10.3.20') : '',
       workstation: k.eventId === 4625 ? 'PC01' : '',
       actor: k.eventId === 4728 ? 'GSMC\\admin' : '',
       target: k.eventId === 4728 ? 'svc-backup2' : '',
@@ -175,7 +297,81 @@ function events(from: string, to: string) {
   }).reverse();
 }
 
-export function handleAd({ method, path, url, need, send, fail, sendFile }: MockCtx): boolean {
+export function handleAd({ method, path, url, body, need, send, fail, sendFile }: MockCtx): boolean {
+  if (method === 'GET' && path === '/api/netops/ad/agents') {
+    if (!need('netops.ad.read')) return true;
+    send(200, MOCK_AGENTS());
+    return true;
+  }
+  if (method === 'GET' && path === '/api/netops/ad/reconciliations') {
+    if (!need('netops.ftp.read')) return true;
+    const days = imported().slice(0, 2);
+    const items = days.map((d, idx) => ({
+      day: d.day,
+      checkedAt: new Date().toISOString(),
+      status: idx === 0 ? 'gap' : 'ok',
+      ftpFiles: d.files.length,
+      gaps: idx === 0 ? 1 : 0,
+      excess: 0,
+      items: [
+        { computer: 'GSMC-DC1', channel: 'Security', ftp: 1240, ch: idx === 0 ? 1232 : 1240, chAgent: 1220, chFtp: idx === 0 ? 12 : 20, diff: idx === 0 ? 8 : 0, status: idx === 0 ? 'gap' : 'ok' },
+        { computer: 'GSMC-DC1', channel: 'System', ftp: 380, ch: 380, chAgent: 380, chFtp: 0, diff: 0, status: 'ok' },
+        { computer: 'GSMC-DC2', channel: 'Security', ftp: 890, ch: 890, chAgent: 870, chFtp: 20, diff: 0, status: 'ok' },
+      ],
+      backfills: [...MOCK_RECON_JOBS.values()].filter((j) => j.day === d.day).map((j) => String(j.id)),
+    }));
+    send(200, { items, window: days.length ? { from: days.at(-1)!.day, to: days[0]!.day } : null });
+    return true;
+  }
+  if (method === 'POST' && path === '/api/netops/ad/reconciliations') {
+    if (!need('netops.ftp.write')) return true;
+    const day = String((body as { day?: string } | undefined)?.day ?? '');
+    send(200, {
+      day,
+      checkedAt: new Date().toISOString(),
+      status: 'ok',
+      ftpFiles: 4,
+      gaps: 0,
+      excess: 0,
+      items: [{ computer: 'GSMC-DC1', channel: 'Security', ftp: 1240, ch: 1240, chAgent: 1220, chFtp: 20, diff: 0, status: 'ok' }],
+      backfills: [],
+    });
+    return true;
+  }
+  if (method === 'POST' && path === '/api/netops/ad/backfills') {
+    if (!need('netops.ftp.write')) return true;
+    const b = (body as { day?: string; scope?: { computer: string; channel: string }[] } | undefined) ?? {};
+    const id = `00000000-0000-4000-8000-${String(Date.now()).slice(-12)}`;
+    const job = {
+      id,
+      day: b.day ?? '',
+      files: ['Security_GSMC-DC1.csv'],
+      scope: b.scope?.length ? b.scope : [{ computer: 'GSMC-DC1', channel: 'Security' }],
+      state: 'done',
+      createdBy: 'T000001',
+      createdAt: new Date().toISOString(),
+      startedAt: new Date().toISOString(),
+      finishedAt: new Date().toISOString(),
+      read: 1240,
+      skipped: 1232,
+      inserted: 5,
+      waitingAgent: 2,
+      ambiguous: 1,
+      invalid: 0,
+      error: null,
+    };
+    MOCK_RECON_JOBS.set(id, job);
+    send(202, job);
+    return true;
+  }
+  if (method === 'GET' && path.startsWith('/api/netops/ad/backfills/')) {
+    if (!need('netops.ftp.read')) return true;
+    const id = path.slice('/api/netops/ad/backfills/'.length);
+    const job = MOCK_RECON_JOBS.get(id);
+    if (!job) return (fail(404, 'NETOPS_BACKFILL_NOT_FOUND', '找不到補漏工作'), true);
+    send(200, job);
+    return true;
+  }
   if (method === 'GET' && (path === '/api/netops/ad/events' || path === '/api/netops/ad/events/export')) {
     if (!need('netops.ad-log.read')) return true;
     const p = url.searchParams;
@@ -190,6 +386,8 @@ export function handleAd({ method, path, url, need, send, fail, sendFile }: Mock
       .map((x) => x.trim())
       .filter(Boolean);
     const q = (p.get('q') ?? '').toLowerCase();
+    const computer = (p.get('computer') ?? '').trim().split('.')[0]!.toUpperCase();
+    const dcDomain = (p.get('dcDomain') ?? '').trim().toLowerCase();
     const rows = all.filter(
       (e) =>
         (!p.get('channel') || e.channel === p.get('channel')) &&
@@ -197,12 +395,14 @@ export function handleAd({ method, path, url, need, send, fail, sendFile }: Mock
         (!ids.length || ids.includes(String(e.eventId))) &&
         (!p.get('account') || e.account.includes(p.get('account')!)) &&
         (!p.get('ip') || e.ip === p.get('ip')) &&
+        (!computer || e.computer.toUpperCase() === computer) &&
+        (!dcDomain || e.dcDomain.toLowerCase() === dcDomain) &&
         (!q || `${e.message} ${e.reason}`.toLowerCase().includes(q)) &&
         (p.get('issueOnly') !== 'true' || ['audit_failure', 'warning', 'error', 'critical'].includes(e.level)),
     );
     if (path.endsWith('/export')) {
       const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-      const head = ['時間', '記錄', '事件 ID', '等級', '來源', '主機', '帳號', '執行者', '對象', '群組', '來源 IP', '工作站', '原因', '訊息'];
+      const head = ['時間', '記錄', '事件 ID', '等級', '來源', '主機', '帳號', '執行者', '對象', '群組', '來源 IP', '工作站', '原因', '訊息', 'DC 網域', '來源 IP 名稱 / 部門', '資料來源'];
       const lines = rows.map((e) =>
         [
           e.time,
@@ -219,6 +419,9 @@ export function handleAd({ method, path, url, need, send, fail, sendFile }: Mock
           e.workstation,
           e.reason,
           e.message,
+          e.dcDomain,
+          MOCK_NAMES[e.ip] ? `${MOCK_NAMES[e.ip]!.name} / ${MOCK_NAMES[e.ip]!.department}` : '',
+          e.source === 'agent' ? 'Agent' : 'FTP',
         ]
           .map(esc)
           .join(','),
@@ -228,17 +431,20 @@ export function handleAd({ method, path, url, need, send, fail, sendFile }: Mock
     }
     const page = Math.max(1, Number(p.get('page')) || 1);
     const pageSize = Math.min(100, Math.max(1, Number(p.get('pageSize')) || 50));
-    send(200, { items: rows.slice((page - 1) * pageSize, page * pageSize), total: rows.length, page, pageSize, scanned: all.length });
+    send(200, { items: rows.slice((page - 1) * pageSize, page * pageSize), total: rows.length, page, pageSize, scanned: all.length, source: 'clickhouse', names: MOCK_NAMES });
     return true;
   }
   if (method === 'GET' && path === '/api/netops/ad/days') {
     if (!need('netops.ad.read')) return true;
     send(200, {
+      source: 'clickhouse',
+      agents: MOCK_AGENTS().summary,
       days: imported().map((d) => ({
         day: d.day,
         events: d.events ?? 0,
-        importedAt: d.importedAt,
-        files: d.files.map((f) => ({ name: f.name, channel: f.channel, rows: f.rows })),
+        agent: Math.round((d.events ?? 0) * 0.9),
+        ftp: Math.round((d.events ?? 0) * 0.1),
+        computers: ['GSMC-DC1', 'GSMC-DC2'],
       })),
       import: { running: adStatus.running, lastSyncAt: adStatus.lastSyncAt, lastSyncError: adStatus.lastSyncError ? '同步失敗,詳見 FTP Log 檔案頁' : '' },
       channels: CHANNELS,

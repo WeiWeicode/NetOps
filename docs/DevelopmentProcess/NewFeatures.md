@@ -2,6 +2,15 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。
 
+## 2026-11-24 AD-6 擴充 AD Agent 收集的事件範圍
+- 工作項目:AD-6(`docs/AD-AGENT-PLAN.md` §9;依賴 !184、!186、!187、!190)
+- 內容:
+  - Rust Agent(`ad-agent/`):擴充 Security 記憶體 `HashSet` 預設白名單(+27 種 §9.2 量小事件 + 4616 排除 `LOCAL SERVICE` / `S-1-5-19` + 4624 登入類型 10 真人帳號預設收);4768 改為「失敗或 `TicketEncryptionType = 0x17`」;新增三個 §9.3 預設 `false` 高量開關(`include_kerberos_weak_tgs` 4769、`include_dcsync_4662` 4662、`include_gpo_change_5136` 5136)於 `config.rs`、`agent.toml.example`、`Install-NetOpsAdAgent.ps1` 與 `--check-config`。
+  - 後端(`backend/src/modules/ad/core/adlog.js`、`ad-reader.ts`、`routes.ts`、`app.ts`):補齊 §9.2、§9.3 Security 事件中文名稱 / 說明與關鍵欄位解析(`TicketEncryptionType`、`ServiceName`、`TaskName`、`ServiceFileName`、`ObjectDN`、`AttributeLDAPDisplayName`、`SidHistory`、信任網域名稱、DCSync GUID、4624 登入類型等),並補 §9.1 System / Directory Service / DNS Server 事件名稱(`CHANNEL_EVENTS`,同步接進 ClickHouse `overview` 與 `GET /v1/ad/days`);沿用 `ad_events` 既有欄位,未改 schema / MV;FTP 對帳維持只算 v3 的 23 種。
+  - 手冊(`deploy/RUNBOOK-ad.md`):新增 §9「稽核原則前提」(進階稽核子類別、4662 / 5136 SACL、Security Log 1–4 GB、`auditpol /get /category:*` 預期輸出)並於 §7.2 補 §9.2 與逐一開關實測事件量步驟(屬 `deploy/` 敏感變更,待 Claude 審查)。
+- 檔案:`ad-agent/src/{filter.rs,config.rs,agent.rs,main.rs,agent/tests.rs}`、`ad-agent/agent.toml.example`、`ad-agent/scripts/{Install-NetOpsAdAgent.ps1,tests/Test-AgentScripts.ps1}`、`backend/src/modules/ad/{core/adlog.js,routes.ts}`、`backend/src/infra/clickhouse/ad-reader.ts`、`backend/src/app.ts`、`backend/test/{unit/ad.test.ts,unit/ad6.test.ts,integration/ad3.int.test.ts}`、`deploy/RUNBOOK-ad.md`、`docs/test-reports/2026-11-24-ad-6.md`
+- 驗證:見 `docs/test-reports/2026-11-24-ad-6.md`
+
 ## 2026-11-23 AD 事件即時接收(AD-1)
 - 工作項目:AD-1(`docs/AD-AGENT-PLAN.md`,ARCHITECTURE D49)
 - 內容:DC Agent(AD-2)用的接收端 `netops-ad-receiver`(`POST /ad/v1/logs`、`/ad/v1/heartbeat`,port 51295)與 AD 事件進 ClickHouse / Parquet 的資料層。查詢切換、FTP 對帳補漏在 AD-3;第一台試裝 DC `GSMC-DC1`(`gsmc.com.tw`、`10.10.130.3`)。主機設定 `deploy/RUNBOOK-ad.md`。

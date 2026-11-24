@@ -304,7 +304,7 @@ C="docker compose --env-file /srv/giganexus/deploy/netops.env -f deploy/docker-c
    ```powershell
    C:\Temp\netops-ad-agent\Install-NetOpsAdAgent.ps1 -SourceDir C:\Temp\netops-ad-agent -ExpectedSha256 <雜湊> -ServerUrl http://10.10.130.124:51295 -Domain gsmc.com.tw
    ```
-   正常:同 7.1 第 5 步(`OK computer=GSMC-DC1 domain=gsmc.com.tw … include_user_logon_4624=false`)。
+   正常:同 7.1 第 5 步(`OK computer=GSMC-DC1 domain=gsmc.com.tw … include_user_logon_4624=false include_kerberos_weak_tgs=false include_dcsync_4662=false include_gpo_change_5136=false`)。
 4. 確認送出(DC 日誌、主機 2 水位):
    ```powershell
    Get-Content C:\ProgramData\GigaNexus\NetOpsAdAgent\logs\agent.log -Tail 20
@@ -335,20 +335,37 @@ C="docker compose --env-file /srv/giganexus/deploy/netops.env -f deploy/docker-c
    ```
    記下 WorkingSet、Private、CpuSec 與 StartTime;兩次的 `CpuSec` 差 ÷ 經過秒數 = 平均 CPU 使用率。Watchdog 用同一個指令把 `NetOpsAdAgent` 換成 `NetOpsAdWatchdog`。
    完成標準:**常駐記憶體(WorkingSet)< 20 MB**;超過時停下回報。心跳裡也有 `agent.rssMb`(主機 2:`$C exec -T netops-redis redis-cli hget netops:ad:heartbeat:GSMC-DC1 data`)。
-7. **4624 事件量**(只讀,不打開 `include_user_logon_4624`;L4):
-   - 最近 1 小時:
+7. **4624 與 AD-6 事件量實測**(L4、AD-6 §9.5 第 4 點;先只讀量,再**逐一**開關實測):
+   - **步驟 A — 預設範圍(§9.2 預設收,四個高量開關皆 `false`)**:安裝新版 Agent 並確認 §9 稽核原則已套用後,在主機 2 查上班尖峰(08:00–09:30)與離峰各 1 小時的各 `event_id` 筆數:
+     ```bash
+     $C exec -T netops-clickhouse clickhouse-client --query "SELECT toStartOfHour(event_time) h, channel, event_id, count() c FROM netops.ad_events WHERE computer = 'GSMC-DC1' AND event_time >= now() - INTERVAL 1 DAY GROUP BY h, channel, event_id ORDER BY h DESC, c DESC"
+     ```
+     另查 DC 上最近 1 小時 / 1 分鐘的 4624 總量(只讀,不開啟 `include_user_logon_4624`;注意 4624 類型 10 RDP 已預設收):
      ```powershell
      (Get-WinEvent -LogName Security -FilterXPath "*[System[(EventID=4624) and TimeCreated[timediff(@SystemTime) <= 3600000]]]" -ErrorAction SilentlyContinue | Measure-Object).Count
      ```
-   - 最近 1 分鐘:
      ```powershell
      (Get-WinEvent -LogName Security -FilterXPath "*[System[(EventID=4624) and TimeCreated[timediff(@SystemTime) <= 60000]]]" -ErrorAction SilentlyContinue | Measure-Object).Count
      ```
-   - 對照:Agent 目前送的(4624 以外)每小時筆數(主機 2):
-     ```bash
-     $C exec -T netops-clickhouse clickhouse-client --query "SELECT toStartOfHour(event_time) h, count() FROM netops.ad_events WHERE computer = 'GSMC-DC1' AND event_time >= now() - INTERVAL 1 DAY GROUP BY h ORDER BY h"
-     ```
-   上班尖峰(08:00–09:30)與離峰各量一次。1 小時查詢超過 1 分鐘還沒結束就 Ctrl+C 停掉,改量 10 分鐘(`600000`)再換算。記下每分 / 每小時 4624 筆數,由需求方決定要不要開 `include_user_logon_4624`(要開時用 `-RewriteConfig -IncludeUserLogon4624` 重跑安裝,需要再輸入 `-ServerUrl` 與 `-Domain`)。
+     1 小時查詢超過 1 分鐘還沒結束就 Ctrl+C 停掉,改量 10 分鐘(`600000`)再換算。
+   - **步驟 B — §9.3 三個高量開關與 `include_user_logon_4624`(必須一個一個開,量完就關回 `false`,不可同時全開)**:
+     1. 只開 `include_kerberos_weak_tgs`(**4769** 弱加密 TGS):
+        - 重寫設定只開這一個(需要 `-ServerUrl`、`-Domain`):
+          ```powershell
+          C:\Temp\netops-ad-agent\Install-NetOpsAdAgent.ps1 -SourceDir C:\Temp\netops-ad-agent -ExpectedSha256 <雜湊> -ServerUrl http://10.10.130.124:51295 -Domain gsmc.com.tw -RewriteConfig -IncludeKerberosWeakTgs
+          ```
+        - 觀察 1 小時(尖峰優先),在主機 2 查 4769 每小時筆數與心跳 `coverageHours` / `wrapRisk`:
+          ```bash
+          $C exec -T netops-clickhouse clickhouse-client --query "SELECT toStartOfHour(event_time) h, count() FROM netops.ad_events WHERE computer = 'GSMC-DC1' AND event_id = 4769 AND event_time >= now() - INTERVAL 3 HOUR GROUP BY h ORDER BY h"
+          ```
+        - 記下每小時筆數與 `coverageHours` 後,**立刻改回全部 `false`**(執行不含任何 `-Include*` 參數的 `-RewriteConfig`)。
+     2. 只開 `include_dcsync_4662`(**4662** DCSync 複寫權限;前提:§9 已完成網域根目錄 SACL):
+        - 重寫設定只加 `-RewriteConfig -IncludeDcsync4662`,觀察 1 小時,在主機 2 將上面 SQL 的 `event_id = 4769` 改為 `event_id = 4662` 記錄筆數與 `coverageHours`,**量完改回全部 `false`**。
+     3. 只開 `include_gpo_change_5136`(**5136** GPO / AdminSDHolder 變更;前提:§9 已完成 `CN=Policies` 與 `CN=AdminSDHolder` SACL):
+        - 重寫設定只加 `-RewriteConfig -IncludeGpoChange5136`,觀察 1 小時,在主機 2 將上面 SQL 的 `event_id = 4769` 改為 `event_id = 5136` 記錄筆數與 `coverageHours`,**量完改回全部 `false`**。
+     4. 若要實測 `include_user_logon_4624`(**4624** 類型 3 等全部真人帳號):同樣單獨加 `-RewriteConfig -IncludeUserLogon4624` 量 1 小時(`event_id = 4624`),量完改回 `false`。
+     - 實測期間若 `coverageHours` 降到 `< 24` 小時(`wrapRisk: true`)或 Agent 記憶體超過 20 MB,立即改回全部 `false` 並回報。
+     - 全部實測數字填入 `docs/test-reports/YYYY-MM-DD-ad-6.md`,由需求方依容量重算結果決定正式開啟哪些開關。
 8. **Security Log 覆蓋健康度**(只讀):
    ```powershell
    Get-WinEvent -ListLog Security | Select-Object FileSize, MaximumSizeInBytes, RecordCount, LogMode
@@ -408,3 +425,91 @@ C="docker compose --env-file /srv/giganexus/deploy/netops.env -f deploy/docker-c
 - 前提(補漏的世代判定與日期依此計算):**DC 的時區是台北時間**(CSV 的 `TimeCreated` 沒有時區,以 +08:00 解析);**Token 對應表的 `computer` 寫大寫主機短名**(例 `GSMC-DC1`,不寫 FQDN):補漏與對帳以「主機名第一段、大寫」對應 DC,未裝 Agent 的 DC 補寫列也用這個寫法,之後裝 Agent 時兩者才會是同一台。
 - 補漏的水位只採信 ClickHouse 已寫入的 Agent 列(不採信 Redis 接收端水位:事件可能還在 Stream,且 `netops-redis` 沒有 ACL)。
 - `NETOPS_AD_SOURCE=ftp` 時,只要 `netops-api` 有 ClickHouse 設定,每日對帳與自動補漏仍會執行並寫入 `ad_events`(切換前先把資料補齊);不想寫入時設 `NETOPS_RECON_AUTO_BACKFILL=0`(同時關閉 PA 自動補漏)。
+
+## 9. AD-6:稽核原則前提(DC GPO 與 SACL 設定)
+
+> 對象:IT / 網域管理員(在 **Default Domain Controllers Policy** 或專用 DC GPO 設定)。**AI 只列步驟,不執行任何 DC 指令**。
+> 依據:`docs/AD-AGENT-PLAN.md` §9.2、§9.3、§9.5 第 3 點。未開啟對應子類別或 SACL 時,Windows 本身不會寫入該 Event ID,Agent 即使啟用過濾也收不到事件。
+
+### 9.1 進階稽核原則子類別(Default Domain Controllers Policy)
+
+在 GPO 路徑 `Computer Configuration → Policies → Windows Settings → Security Settings → Advanced Audit Policy Configuration → Audit Policies` 設定以下子類別,並確認同一個 GPO 的 `Security Options` 已啟用 **`Audit: Force audit policy subcategory settings (Windows Vista or later) to override audit policy category settings`**(避免舊式大類原則覆蓋子類別):
+
+| 大類(Category) | 子類別(Subcategory) | 建議設定 | 對應 Event ID |
+| --- | --- | --- | --- |
+| Account Logon | Kerberos Authentication Service | Success, Failure | `4768`(失敗或弱加密 `0x17`)、`4771` |
+| Account Logon | Kerberos Service Ticket Operations | Success, Failure | `4769`(§9.3 開關 `include_kerberos_weak_tgs`) |
+| Account Management | Computer Account Management | Success, Failure | `4741`、`4742`、`4743` |
+| Account Management | Security Group Management | Success, Failure | `4727`–`4735`、`4737`、`4754`–`4758` |
+| Account Management | User Account Management | Success, Failure | `4720`、`4722`、`4723`、`4724`、`4725`、`4726`、`4738`、`4740`、`4765`、`4766`、`4767`、`4780`、`4781`、`4794` |
+| DS Access | Directory Service Access | Success | `4662`(§9.3 開關 `include_dcsync_4662`;需另設 §9.2 SACL) |
+| DS Access | Directory Service Changes | Success | `5136`(§9.3 開關 `include_gpo_change_5136`;需另設 §9.2 SACL) |
+| Logon/Logoff | Logon | Success, Failure | `4624`(類型 10 預設收;類型 3 由開關控制)、`4625` |
+| Logon/Logoff | Special Logon | Success | `4672` |
+| Object Access | Other Object Access Events | Success, Failure | `4698`、`4699`、`4700`、`4701`、`4702`(排程工作) |
+| Policy Change | Audit Policy Change | Success, Failure | `4719`(系統稽核原則變更) |
+| Policy Change | Authentication Policy Change | Success, Failure | `4713`(Kerberos 原則)、`4706`、`4707`、`4716`(信任關係)、`4739`(網域原則) |
+| System | Security State Change | Success | `4616`(系統時間變更)、`1100`(事件記錄服務關閉) |
+| System | Security System Extension | Success | `4697`(安裝服務) |
+
+*(註:§9.4 不收的事件如 `4688` Process Creation、`5145` Detailed File Share 不必為本系統開啟。)*
+
+### 9.2 4662 與 5136 的目錄 SACL 設定(開啟對應 §9.3 開關前必做)
+
+只開 `Directory Service Access` / `Directory Service Changes` 稽核子類別還不會產生 `4662` / `5136`,必須在 Active Directory 物件上設定 SACL(使用「Active Directory 使用者及電腦」進階檢視或 `ADSI Edit` → 物件「內容 → 安全性 → 進階 → 稽核」):
+
+1. **DCSync 偵測(`4662`)— 網域根目錄**(例如 `DC=gsmc,DC=com,DC=tw`,三網域各設一次):
+   - 主體(Principal):`Everyone`
+   - 類型(Type):`Success`
+   - 套用到(Applies to):`This object only`
+   - 權限(Permissions):只勾選以下 3 項(避免勾選「全部讀取」導致事件爆炸):
+     - `Replicating Directory Changes`(`1131f6aa-9c07-11d1-f79f-00c04fc2dcd2`)
+     - `Replicating Directory Changes All`(`1131f6ad-9c07-11d1-f79f-00c04fc2dcd2`)
+     - `Replicating Directory Changes In Filtered Set`(`89e95b76-444d-4c62-991a-0facbeda640c`)
+2. **GPO 變更偵測(`5136`)— `CN=Policies,CN=System,DC=<網域>`**:
+   - 主體:`Everyone`、類型:`Success`、套用到:`This object and all descendant objects`
+   - 權限:`Write all properties`、`Create all child objects`、`Delete all child objects`(或限於 `groupPolicyContainer` 子物件)
+3. **AdminSDHolder 保護(`5136`)— `CN=AdminSDHolder,CN=System,DC=<網域>`**:
+   - 主體:`Everyone`、類型:`Success`、套用到:`This object only`
+   - 權限:`Write all properties`、`Modify permissions`、`Modify owner`
+
+### 9.3 Security Log 容量上限
+
+- 建議每台 DC 的 `Security` Event Log 上限調整為 **至少 1–4 GB**(依 DC 負荷調整;可在 DC GPO `Computer Configuration → Policies → Administrative Templates → Windows Components → Event Log Service → Security → Specify the maximum log file size (KB)` 設定 `1048576`–`4194304`,或在 DC 以系統管理員 PowerShell 執行 `wevtutil sl Security /ms:4294967296`)。
+- 啟用任何 §9.3 高量開關後,依 §7.2 第 7、8 步持續觀察心跳 `channels.Security.coverageHours` 與 `wrapRisk`,確保覆寫時間維持 **>= 24 小時**(`wrapRisk: false`),並留意是否出現事件 `1104`(Security Log 已滿)。
+
+### 9.4 查核指令與預期輸出
+
+在 DC 以系統管理員 PowerShell 執行 `gpupdate /force` 後,執行以下只讀指令確認實際套用的子類別:
+
+```powershell
+auditpol /get /category:*
+```
+
+預期輸出應包含以下項目(英文版 Windows;中文版對應繁體中文子類別名稱,狀態應為 `成功` / `成功與失敗`):
+
+```text
+System
+  Security State Change                   Success
+  Security System Extension               Success
+Logon/Logoff
+  Logon                                   Success and Failure
+  Special Logon                           Success
+Object Access
+  Other Object Access Events              Success and Failure
+DS Access
+  Directory Service Access                Success
+  Directory Service Changes               Success
+Account Management
+  Computer Account Management             Success and Failure
+  Security Group Management               Success and Failure
+  User Account Management                 Success and Failure
+Policy Change
+  Audit Policy Change                     Success and Failure
+  Authentication Policy Change            Success and Failure
+Account Logon
+  Kerberos Authentication Service         Success and Failure
+  Kerberos Service Ticket Operations      Success and Failure
+```
+
+確認 `No Auditing` 沒有出現在上表任一子類別後,即可依 §7.2 第 7 步在 `GSMC-DC1` 進行事件量實測。

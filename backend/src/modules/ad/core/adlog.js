@@ -214,6 +214,20 @@ function field(msg, labels, first = false) {
   return val
 }
 
+/** 行首錨定的「標籤: 值」（避免短標籤如 DN、類別、Class、值、Value 誤配子字串；審查 Low 3） */
+function lineField(msg, labels, first = false) {
+  const re = new RegExp(`(?:^|\\n)[ \\t]*(?:${labels.join('|')})[ \\t]*[:：][ \\t]*([^\\r\\n]*)`, 'gi')
+  let val = ''
+  for (const m of msg.matchAll(re)) {
+    const v = m[1].trim()
+    if (v && v !== '-' && v !== 'NULL SID' && !/^0x0$/i.test(v)) {
+      val = v
+      if (first) break
+    }
+  }
+  return val
+}
+
 /** 帳號 / 群組異動的事件 → 動作說明（與 migrations/005 ad_heat_*_mv 的 account_changes 保持一致；AD-6 新增異動事件是否納進 MV 須由需求方另核准 migration） */
 export const ACCOUNT_CHANGES = {
   4720: '建立帳號',
@@ -431,12 +445,12 @@ export function toEvent(cols, map, channel) {
       const rights = DCSYNC_GUID_NAMES.filter(([g]) => low.includes(g)).map(([, name]) => name)
       ev.reason = rights.length ? rights.join(', ') : field(message, ['屬性', 'Properties']) || ev.reason
     } else if (ev.eventId === 5136) {
-      // 5136 目錄服務物件變更（GPO / AdminSDHolder）：執行者、ObjectDN、AttributeLDAPDisplayName
-      ev.actor = field(message, ['帳戶名稱', 'Account Name'], true)
-      ev.target = field(message, ['物件 DN', 'Object DN', 'DN'])
-      const attr = field(message, ['LDAP 顯示名稱', 'LDAP Display Name', 'Attribute LDAP Display Name'])
-      const cls = field(message, ['類別', 'Class', 'Object Class'])
-      const val = field(message, ['值', 'Value'])
+      // 5136 目錄服務物件變更（GPO / AdminSDHolder）：行首錨定避免短標籤誤配（審查 Low 3）
+      ev.actor = lineField(message, ['帳戶名稱', 'Account Name'], true) || field(message, ['帳戶名稱', 'Account Name'], true)
+      ev.target = lineField(message, ['物件 DN', 'Object DN', 'DN'])
+      const attr = lineField(message, ['LDAP 顯示名稱', 'LDAP Display Name', 'Attribute LDAP Display Name'])
+      const cls = lineField(message, ['類別', 'Class', 'Object Class'])
+      const val = lineField(message, ['值', 'Value'])
       const parts = [attr, cls && `(${cls})`, val && `= ${val.slice(0, 80)}`].filter(Boolean)
       if (parts.length && !ev.reason) ev.reason = parts.join(' ')
     }

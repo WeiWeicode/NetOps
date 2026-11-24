@@ -245,6 +245,77 @@ describe('AD-6 關鍵欄位解析(沿用 ad_events 既有欄位)', () => {
     assert.equal(dns.account, undefined);
     assert.equal(isIssue(dns as never), false);
   });
+
+  it('5136 真實英文與繁體中文全文解析不被短標籤誤配(審查 Low 3)', () => {
+    const enFull = [
+      'A directory service object was modified.',
+      '',
+      'Subject:',
+      '\tSecurity ID:\t\tGSMC\\admin.lin',
+      '\tAccount Name:\t\tadmin.lin',
+      '\tAccount Domain:\t\tGSMC',
+      '\tLogon ID:\t\t0x1A2B3C',
+      '',
+      'Directory Service:',
+      '\tName:\tgsmc.com.tw',
+      '\tType:\tActive Directory Domain Services',
+      '',
+      'Object:',
+      '\tDN:\tCN={31B2F340-016D-11D2-945F-00C04FB984F9},CN=Policies,CN=System,DC=gsmc,DC=com,DC=tw',
+      '\tGUID:\t{12345678-1234-1234-1234-1234567890AB}',
+      '\tClass:\tgroupPolicyContainer',
+      '',
+      'Attribute:',
+      '\tLDAP Display Name:\tgPCFileSysPath',
+      '\tSyntax (OID):\t2.5.5.12',
+      '\tValue:\t\\\\gsmc.com.tw\\SysVol\\gsmc.com.tw\\Policies\\{31B2F340-016D-11D2-945F-00C04FB984F9}',
+      '',
+      'Operation:',
+      '\tType:\tValue Added',
+      '\tCorrelation ID:\t{ABCDEF01-2345-6789-ABCD-EF0123456789}',
+      '\tApplication Correlation ID:\t-',
+    ].join('\n');
+    const en = parseOne('Security', 5136, 'Audit Success', enFull);
+    assert.equal(en.actor, 'admin.lin');
+    assert.equal(en.target, 'CN={31B2F340-016D-11D2-945F-00C04FB984F9},CN=Policies,CN=System,DC=gsmc,DC=com,DC=tw');
+    assert.equal(
+      en.reason,
+      'gPCFileSysPath (groupPolicyContainer) = \\\\gsmc.com.tw\\SysVol\\gsmc.com.tw\\Policies\\{31B2F340-016D-11D2-945F-00C04FB984F9}',
+    );
+
+    const zhFull = [
+      '已修改目錄服務物件。',
+      '',
+      '主體:',
+      '\t安全性識別碼:\t\tGSMC\\admin.chen',
+      '\t帳戶名稱:\t\tadmin.chen',
+      '\t帳戶網域:\t\tGSMC',
+      '\t登入識別碼:\t\t0x9F12',
+      '',
+      '目錄服務:',
+      '\t名稱:\tgsmc.com.tw',
+      '\t類型:\tActive Directory 網域服務',
+      '',
+      '物件:',
+      '\tDN:\tCN=AdminSDHolder,CN=System,DC=gsmc,DC=com,DC=tw',
+      '\tGUID:\t{87654321-4321-4321-4321-BA0987654321}',
+      '\t類別:\tcontainer',
+      '',
+      '屬性:',
+      '\tLDAP 顯示名稱:\tnTSecurityDescriptor',
+      '\t語法 (OID):\t2.5.5.15',
+      '\t值:\tO:DAG:DAD:PAI(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;DA)',
+      '',
+      '作業:',
+      '\t類型:\t已新增值',
+      '\t關聯識別碼:\t{11111111-2222-3333-4444-555555555555}',
+      '\t應用程式關聯識別碼:\t-',
+    ].join('\n');
+    const zh = parseOne('Security', 5136, 'Audit Success', zhFull);
+    assert.equal(zh.actor, 'admin.chen');
+    assert.equal(zh.target, 'CN=AdminSDHolder,CN=System,DC=gsmc,DC=com,DC=tw');
+    assert.equal(zh.reason, 'nTSecurityDescriptor (container) = O:DAG:DAD:PAI(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;DA)');
+  });
 });
 
 describe('AD-6 FTP 對帳不受影響(只算 v3 的 23 種)', () => {

@@ -37,6 +37,8 @@ export interface IngestConfig {
   release: string;
   /** FTP 補漏(C3);null = 不執行補漏 */
   ftp: FtpConfig | null;
+  /** ad_events 保留天數(AD-3 FTP 補漏只補保留期內的日子;NETOPS_TTL_AD_DAYS,正式區 90、其他 3) */
+  adTtlDays: number;
   /** 冷歸檔(C4);null = 不執行 */
   archive: ArchiveConfig | null;
 }
@@ -89,6 +91,7 @@ export function loadIngestConfig(env: NodeJS.ProcessEnv = process.env): IngestCo
     batchMax: int(env, 'INGEST_BATCH_MAX', 5000, 100, 5000),
     release: str(env, 'RELEASE_SHA').slice(0, 40) || 'dev',
     ftp: loadIngestFtp(env, gwEnv),
+    adTtlDays: int(env, 'NETOPS_TTL_AD_DAYS', gwEnv === 'prod' ? 90 : 3, 1, 3650),
     archive: loadArchive(env, gwEnv, url),
   };
 }

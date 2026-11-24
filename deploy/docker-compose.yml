@@ -83,6 +83,11 @@ services:
       # AI 分析 / 問答 / 外部 IP 學習的資料來源(AC2,ARCHITECTURE D44):clickhouse 或 ftp;空白 = 依 GW_ENV(test → clickhouse、prod → ftp)。
       #   正式區在 C6(正式區 ClickHouse)之前沿用 ftp(需求方 2026-11-13 AQ4「Keep old path」);C6 上線後正式區 .env 設 NETOPS_AI_SOURCE=clickhouse
       NETOPS_AI_SOURCE: ${NETOPS_AI_SOURCE:-}
+      # AD-3(docs/AD-AGENT-PLAN.md §5):AD 總覽 / 明細 / 匯出 / AI 問答的資料來源。空白 = ftp(需求方 2026-11-24 D3);
+      #   clickhouse = 查 netops.ad_events(要有 CLICKHOUSE_URL)。只有 netops-api 讀這兩個設定,改 .env 只重建 netops-api(deploy/RUNBOOK-ad.md §8)
+      NETOPS_AD_SOURCE: ${NETOPS_AD_SOURCE:-}
+      #   ad_events 保留天數(AD 對帳 / 補漏只做保留期內的日子;空白 = 正式區 90、測試區 3,要和 apply-schema.sh 一致)
+      NETOPS_TTL_AD_DAYS: ${NETOPS_TTL_AD_DAYS:-}
       # PA log 查詢切換(C3,ARCHITECTURE D29、D42):唯讀帳號 netops_reader(readonly=2,上限由 users.d constraints 固定)
       #   ClickHouse 停止時只有用到它的查詢受影響:來源 auto 改查 FTP、指定 clickhouse 回 503(/readyz 不受影響)
       CLICKHOUSE_URL: http://netops-clickhouse:8123
@@ -251,6 +256,8 @@ services:
       FTP_PASSWORD_FILE: /run/secrets/ftp_password
       FTP_ROOT: ${FTP_ROOT:-}
       FTP_LOG_DIR: ${FTP_LOG_DIR:-}
+      # AD FTP 補漏(AD-3):讀 FTP_AD_DIR/yyyyMMdd/*.csv(只讀),只補寫 (computer, channel, log_epoch, record_id) 不在 ClickHouse 的列
+      FTP_AD_DIR: ${FTP_AD_DIR:-}
       # 冷歸檔(C4,手冊 §8):每天 02:30 匯出前一天的 TRAFFIC 與威脅類 Parquet → 本機暫存 → NAS(/archive),SHA-256、manifest、
       #   彙總表(熱力圖 5m / 1h / 1d、每小時 App / 來源)同時每天備份一個 Parquet(#5;只是備份,還原見 RUNBOOK-prod.md §4.3)、
       #   失敗每小時重試到資料被 TTL 刪除前(D+25 心跳告警 archiveState=late);讀回核對列數用 netops_cold;和冷明細共用冷查詢鎖

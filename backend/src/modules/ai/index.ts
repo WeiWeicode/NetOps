@@ -15,6 +15,7 @@ import { createLlm } from '../../infra/llm/index.js';
 import { createRdap } from '../../infra/rdap/index.js';
 import type { PaStore } from '../../infra/store/index.js';
 import { createEmbedder, createQdrant } from '../../infra/vector/index.js';
+import type { AdQuerySource } from '../ad/source.js';
 import type { AdImporter } from '../ad/importer.js';
 import { AUTHOR, createIpLearner, parseRdap, TAG } from '../iplearn/core/iplearn.js';
 import kbAiRoutes, { type IpLearner, type VectorIndex } from '../kb/ai-routes.js';
@@ -44,6 +45,8 @@ export interface AiDeps {
   traffic: TrafficImporter;
   events: EventImporter;
   ad: AdImporter;
+  /** AD 事件查詢來源(AD-3,NETOPS_AD_SOURCE);未給時用 ad */
+  adSource?: AdQuerySource;
   kb: KbService;
   ftp: Ftp;
   paStore: PaStore;
@@ -192,6 +195,7 @@ export async function registerAi(app: FastifyInstance, deps: AiDeps): Promise<{ 
     traffic,
     events,
     ad,
+    adSource: deps.adSource,
     kb,
     vector,
     ftp,

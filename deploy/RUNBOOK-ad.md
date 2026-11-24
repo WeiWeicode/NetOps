@@ -380,3 +380,28 @@ C="docker compose --env-file /srv/giganexus/deploy/netops.env -f deploy/docker-c
   正常:`Get-Service NetOpsAdAgent, NetOpsAdWatchdog` 找不到服務。移除過程出錯停下回報,不要手動 `sc delete`。
 
 **要記錄的數字**:安裝時間與版本、SHA-256、7.2 第 4 步水位、第 5 步兩次恢復秒數與 agent-events、第 6 步兩次記憶體 / CPU、第 7 步尖峰 / 離峰的每分 / 每小時 4624 筆數與 Agent 每小時筆數、第 8 步 Security Log 大小 / 筆數 / `wrapRisk`。
+
+## 8. AD-3:查詢來源切換(`NETOPS_AD_SOURCE`)與 FTP 對帳補漏
+
+> 依據:`docs/AD-AGENT-PLAN.md` §5、§6.1;需求方 2026-11-24 D1–D5。**AI 不執行本節的主機指令**。
+
+### 8.1 切換步驟(測試區;正式區等 AD Agent 與正式區 ClickHouse 上線後同樣做法)
+
+1. 先確認 ClickHouse 已有 AD 資料:畫面「AD › FTP Log 檔案」的對帳卡片(或 `GET /api/netops/ad/reconciliations`)昨天有 `ch` 筆數;`netops-api` 已設 `CLICKHOUSE_URL`(測試區已設)。
+2. 主機 `.env`(測試區 `/srv/giga-netops/test/.env`)加一行 `NETOPS_AD_SOURCE=clickhouse`。
+3. **只重建 `netops-api`**:`docker compose --env-file <.env> -f deploy/docker-compose.yml up -d --no-deps netops-api`。
+   - `NETOPS_AD_SOURCE`、`NETOPS_TTL_AD_DAYS` 只有 `netops-api` 的 environment 引用,**改這兩個設定不會讓 `netops-pa` 重建,Syslog 不會斷**。
+   - ⚠ **不要用不帶服務名稱的 `docker compose up -d`**:若同一次也改了 `netops-pa` 用到的設定,`netops-pa` 會被重建,PA-560 的 Syslog 連線會斷,要網通在場重新 Commit(`deploy/RUNBOOK-prod.md` §8)。
+4. 確認:`GET /api/netops/ad/days` 的 `source` 為 `clickhouse`;AD 事件總覽有今天的資料。
+5. 回復:`.env` 刪掉這行(或改 `ftp`),同第 3 步只重建 `netops-api`。
+
+### 8.2 每日對帳與補漏的判讀
+
+- 每天 08:10 PA 對帳與每日同步(含 AD 匯入)之後,接著對帳 AD:昨天以前、`ad_events` 與 FTP 保留期內的日子(測試區 TTL 3 天 → 只有前 2 天)。
+- 有缺口(`gap`)時自動送補漏給 `netops-ingest`(`NETOPS_RECON_AUTO_BACKFILL=0` 關閉),同一天每天最多自動送 1 次;也可在畫面手動送(權限 `netops.ftp.write`)。
+- 補漏工作的筆數:
+  - `inserted` 補寫(`source = 'ftp'`);`skipped` 已存在。
+  - `waitingAgent`:RecordID 大於 Agent 水位,Agent 之後還會送,這次不補;**隔天對帳再看**。Agent 長期離線時這些列一直不補(需求方 D5,剩餘風險)。
+  - `ambiguous`:判斷不出 Event Log 世代(DC 的 Security Log 被清除重編號、清除前後又沒有對得上的 Agent 列),**不寫入**;記 warn。需要時由需求方決定是否人工處理。
+- 未裝 Agent 的 DC:FTP 資料全量寫入 ClickHouse(世代 0;需求方 D2)。
+- 補漏只寫缺的列,`ad_heat_*` 由物化檢視自然累加(不要重建分桶);冷歸檔偵測到列數變了會自動重新歸檔。

@@ -128,6 +128,14 @@ export interface Config {
   paTtlDays: { traffic: number; threat: number };
   /** 冷明細(C4,帳號 netops_cold);NETOPS_ARCHIVE_ENABLED 不是 1 時為 null(冷路由回 409 NETOPS_COLD_ARCHIVE_DISABLED) */
   clickhouseCold: { url: string; user: string; password: string; timeoutMs: number } | null;
+  /**
+   * AD 事件(AD-3;docs/AD-AGENT-PLAN.md §5、ARCHITECTURE D49):
+   *   source:AD 總覽、明細、匯出、AI 問答的資料來源(NETOPS_AD_SOURCE=clickhouse|ftp;未設定一律 ftp,需求方 2026-11-24 D3)。
+   *     clickhouse 時必須有 ClickHouse 設定,否則啟動失敗
+   *   heartbeatStaleSec / heartbeatOfflineSec:DC Agent 心跳多久沒更新顯示「停止更新」/ 判定離線(AD3:AD_HEARTBEAT_STALE_SEC=90、AD_HEARTBEAT_OFFLINE_SEC=180)
+   *   ttlDays:ad_events 保留天數(對帳與補漏只做保留期內的日子;NETOPS_TTL_AD_DAYS,同 apply-schema.sh:正式區 90、其他 3)
+   */
+  ad: { source: 'clickhouse' | 'ftp'; heartbeatStaleSec: number; heartbeatOfflineSec: number; ttlDays: number };
   /** 啟動時要寫進服務日誌的設定提醒(例:不再使用的設定);不含機密 */
   startupWarnings?: string[];
 }
@@ -347,6 +355,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, cwd?: string): 
   const ai = loadAi(env, gateway.gwEnv);
   const ftp = loadFtp(env, gateway.gwEnv);
   const startupWarnings: string[] = [];
+  const clickhouse = loadClickHouse(env, gateway.gwEnv);
   // AC7(IMPL-PLAN):FTP 定時同步只剩 NETOPS_AI_SOURCE=ftp(正式區 C6 之前的 AI 舊路徑,AQ4「Keep old path」)用得到;
   // clickhouse 來源時 PA 查詢走 ClickHouse、解密 / GlobalProtect / User-ID / AD 由每日同步(AC1)匯入,FTP_SYNC_MINUTES 不再使用
   if (ftp && ai.source === 'clickhouse' && ftp.syncMinutes > 0) {
@@ -365,7 +374,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, cwd?: string): 
     ai,
     redisUrl: loadRedisUrl(env, gateway.gwEnv),
     geoipDb: str(env, 'GEOIP_DB') || null,
-    clickhouse: loadClickHouse(env, gateway.gwEnv),
+    clickhouse,
     // 正式區 TRAFFIC 保留 30 天(CQ12);測試區 TTL 3 天,多的天數只是查不到
     chSummary: { days: int(env, 'NETOPS_CH_SUMMARY_DAYS', 30, 1, 92), minutes: int(env, 'NETOPS_CH_SUMMARY_MINUTES', 5, 0, 60) },
     // 需求方 2026-11-13 決定 08:10 開始(PA 前一天的匯出檔實測約 07:45 才出現在 FTP);FTP 檔還沒有時每 10 分鐘再試(reconcile.ts)
@@ -376,8 +385,20 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, cwd?: string): 
     dailySync: boolDefault(env, 'NETOPS_DAILY_SYNC', true),
     paTtlDays: loadPaTtlDays(env, gateway.gwEnv),
     clickhouseCold: loadClickHouseCold(env, gateway.gwEnv),
+    ad: loadAd(env, gateway.gwEnv, Boolean(clickhouse)),
     startupWarnings,
   };
+}
+
+/** NETOPS_AD_SOURCE:clickhouse / ftp(未設定 ftp);其他值、或 clickhouse 卻沒有 CLICKHOUSE_URL 時啟動失敗 */
+export function loadAd(env: NodeJS.ProcessEnv, gwEnv: GwEnv, hasClickHouse: boolean): Config['ad'] {
+  const v = str(env, 'NETOPS_AD_SOURCE').toLowerCase() || 'ftp';
+  if (v !== 'clickhouse' && v !== 'ftp') throw new GatewayEnvError(`NETOPS_AD_SOURCE 只能是 clickhouse 或 ftp:${v}`);
+  if (v === 'clickhouse' && !hasClickHouse) throw new GatewayEnvError('NETOPS_AD_SOURCE=clickhouse 時必須設定 CLICKHOUSE_URL');
+  const heartbeatStaleSec = int(env, 'AD_HEARTBEAT_STALE_SEC', 90, 15, 3600);
+  const heartbeatOfflineSec = int(env, 'AD_HEARTBEAT_OFFLINE_SEC', 180, 30, 86400);
+  if (heartbeatOfflineSec <= heartbeatStaleSec) throw new GatewayEnvError('AD_HEARTBEAT_OFFLINE_SEC 必須大於 AD_HEARTBEAT_STALE_SEC');
+  return { source: v, heartbeatStaleSec, heartbeatOfflineSec, ttlDays: int(env, 'NETOPS_TTL_AD_DAYS', gwEnv === 'prod' ? 90 : 3, 1, 3650) };
 }
 
 /** ClickHouse 原始表保留天數(netops-api 的熱 / 冷分界、netops-ingest 的歸檔重試範圍共用) */

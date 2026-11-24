@@ -42,9 +42,26 @@ export function adContext(events, allDays, from, to, { ips = [], eventIds = [], 
   const days = allDays.filter((d) => d.day >= from.slice(0, 10) && d.day <= to.slice(0, 10))
   // 多台 DC 時加總每台的 Security 筆數
   const secEmpty = days.length && days.every((d) => d.files.filter((f) => f.channel === 'Security').reduce((a, f) => a + (f.rows ?? 0), 0) === 0)
+  // 問題中的 IP / 事件 ID 的明細
+  const acc = accounts.map((a) => a.toLowerCase())
+  const match = events.filter(
+    (e) =>
+      (eventIds.length && eventIds.includes(e.eventId)) ||
+      ips.some((ip) => (e.ip ?? '') === ip || e.message.includes(ip)) ||
+      acc.some((a) => [e.account, e.actor, e.target].some((x) => String(x ?? '').toLowerCase() === a) || e.message.toLowerCase().includes(a))
+  )
+  return adContextFromSummary(s, { computers: [...new Set(events.map((e) => e.computer))], secEmpty, from, to, ips, eventIds, accounts, full, match: match.slice(0, 25), matchTotal: match.length })
+}
+
+/**
+ * 統計(summarizeAd 同形狀)+ 符合問題的事件(新的在前,最多 25 筆)→ 給模型的文字(AD-3)。
+ * ClickHouse 來源由 SQL 算統計、另查符合的事件後呼叫;輸出格式與 adContext 相同
+ */
+export function adContextFromSummary(s, { computers, secEmpty, from, to, ips = [], eventIds = [], accounts = [], full = true, match = [], matchTotal = match.length }) {
+  if (!s.total) return ''
   const g = (x) => `- [${x.channel}] 事件 ${x.eventId}${x.name ? `（${x.name}）` : ''}｜${x.level}｜${x.n} 次｜${x.first.slice(5, 16)} ~ ${x.last.slice(5, 16)}｜${x.provider}｜${x.sample}`
   const lines = [
-    `## AD 網域控制站事件記錄（${from.slice(0, 10)} ~ ${to.slice(0, 10)}，主機 ${[...new Set(events.map((e) => e.computer))].join('、')}）`,
+    `## AD 網域控制站事件記錄（${from.slice(0, 10)} ~ ${to.slice(0, 10)}，主機 ${computers.join('、')}）`,
     `- 共 ${s.total} 筆：${Object.entries(s.byChannel).map(([c, n]) => `${c} ${n}`).join('、')}；等級：${Object.entries(s.byLevel).map(([l, n]) => `${l} ${n}`).join('、')}`,
     secEmpty ? '- ⚠ Security（安全性）記錄是空的：登入成功 / 失敗、帳號鎖定、帳號與群組異動都沒有資料，無法判斷這類問題' : '',
     '\n### 需要注意的事件（錯誤、警告、登入失敗、帳號異動）',
@@ -65,19 +82,11 @@ export function adContext(events, allDays, from, to, { ips = [], eventIds = [], 
   if (s.failAccounts.length) lines.push('\n### 登入失敗 / 鎖定最多的帳號', ...s.failAccounts.slice(0, 15).map((x) => `- ${x.key}｜${x.n} 次`))
   if (s.failIps.length) lines.push('\n### 登入失敗最多的來源 IP', ...s.failIps.slice(0, 15).map((x) => `- ${x.key}｜${x.n} 次`))
   if (s.failReasons.length) lines.push('\n### 登入失敗的原因', ...s.failReasons.slice(0, 10).map((x) => `- ${x.key}｜${x.n} 次`))
-  // 問題中的 IP / 事件 ID 的明細
-  const acc = accounts.map((a) => a.toLowerCase())
-  const match = events.filter(
-    (e) =>
-      (eventIds.length && eventIds.includes(e.eventId)) ||
-      ips.some((ip) => (e.ip ?? '') === ip || e.message.includes(ip)) ||
-      acc.some((a) => [e.account, e.actor, e.target].some((x) => String(x ?? '').toLowerCase() === a) || e.message.toLowerCase().includes(a))
-  )
   const asked = [...ips, ...accounts.map((a) => `帳號 ${a}`), ...eventIds.map((i) => `事件 ${i}`)]
-  if (asked.length && !match.length) lines.push(`\n### 與問題中的 ${asked.join('、')} 相關的事件\n（這段期間的 AD 事件中查無相關紀錄）`)
+  if (asked.length && !matchTotal) lines.push(`\n### 與問題中的 ${asked.join('、')} 相關的事件\n（這段期間的 AD 事件中查無相關紀錄）`)
   if (match.length) {
     lines.push(
-      `\n### 與問題中的 ${asked.join('、')} 相關的事件（共 ${match.length} 筆，列前 25 筆）`,
+      `\n### 與問題中的 ${asked.join('、')} 相關的事件（共 ${matchTotal} 筆，列前 25 筆）`,
       ...match.slice(0, 25).map((e) => `- ${e.time}｜[${e.channel}] ${e.eventId}｜${e.level}${e.account ? `｜帳號 ${e.account}` : ''}${e.ip ? `｜IP ${e.ip}` : ''}${e.reason ? `｜原因 ${e.reason}` : ''}｜${e.message.replace(/\s+/g, ' ').slice(0, 400)}`)
     )
   }

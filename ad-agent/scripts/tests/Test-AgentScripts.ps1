@@ -137,6 +137,17 @@ Write-Host '== 服務與目錄 ACL'
 Assert-True ($ServiceSddl -match '\(A;;CCLCSWLOCRRC;;;AU\)' -and $ServiceSddl -notmatch 'RPWP[^;]*;;;AU') '一般使用者只能查詢服務'
 Assert-True ($SidSystem -eq '*S-1-5-18' -and $SidAdmins -eq '*S-1-5-32-544') '目錄 ACL 用 SYSTEM / Administrators 的 SID'
 
+Write-Host '== 服務升級設定(含空白路徑不遺失雙引號,審查 M1)'
+$spaceExe = 'C:\Program Files\GigaNexus\NetOpsAdAgent\netops-ad-agent.exe'
+$spaceCfg = 'C:\Program Data\GigaNexus\NetOpsAdAgent\agent.toml'
+$binPath = New-ServiceBinaryPath -Exe $spaceExe -Mode 'agent' -Config $spaceCfg
+Assert-True ($binPath -eq "`"$spaceExe`" --mode agent --config `"$spaceCfg`"") '含空白路徑的 binPath 雙引號完整'
+$chg = New-ServiceChangeArguments -BinPath $binPath
+Assert-True ($chg.PathName -eq $binPath -and $chg.StartMode -eq 'Automatic' -and $chg.StartName -eq 'LocalSystem') 'CIM Win32_Service.Change 參數正確保留路徑雙引號與啟動模式'
+Assert-True (-not ($installText -match "Invoke-ScExe\s+@\('config'")) '升級服務不再經由 sc.exe config 傳遞內嵌雙引號 binPath'
+Assert-True ($installText -match 'Invoke-CimMethod\s+-InputObject\s+\$svc\s+-MethodName\s+Change' -and $installText -match '\$r\.ReturnValue\s+-ne\s+0') '升級服務改用 CIM Change 並驗證 ReturnValue == 0'
+Assert-Throws { Set-ExistingServiceConfig -Name 'bad name' -BinPath $binPath } '拒絕非法服務名稱' '*格式錯誤*'
+
 Write-Host ''
 Write-Host "通過 $script:passed、失敗 $script:failed"
 if ($script:failed -gt 0) { exit 1 }

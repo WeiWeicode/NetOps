@@ -68,6 +68,21 @@
 4. `filter.rs` 測試補 `"0x00000017"`、4662 大寫 GUID 與 `%{...}` 格式的案例(實作已能處理)。
 5. `is_weak_tgs_4769` 另外排除 `krbtgt/<REALM>`,合理,寫進測試報告。
 
+## 複審(2026-11-24 晚,Gemini 修正後)
+
+**結論:!189、!191 通過,可以合併。** 主串讀了關鍵修正的 diff;其餘依 Gemini 回報與 CI。
+
+- !189(`e8d0bea`):
+  - M1(`685d1b0`):只有本頁觀察到 `queued` / `running` 的工作轉成 `done` 才自動重新對帳;載入時已完成的不再送寫入請求。失敗寫進 `dayError[day]`,`ReconCard.vue` 顯示「重新對帳失敗」。另加進行中旗標與序號,避免頁面恢復可見時重疊請求。正確。
+  - M2(`9a1a69a`)、Low 2–6:依回報已修。
+  - CI:MR pipeline 1318 成功;分支 pipeline 1317 的 `check:frontend` 失敗,而包含相同前端變更的 !191 分支 pipeline 1319 `check:frontend` 成功,develop 先前(1316)也有同樣偶發失敗,判斷為偶發。**合併前請在 GitLab 重跑 1317 的 `check:frontend` 確認通過**。
+- !191(`a89f571`):
+  - M3(`acee3ae`):`SECURITY_ISSUE_IDS` 已改為既有 4 種 + 高風險 ID,4723、4742、4730、4734、4758、4735、4737、4755 不再列入;群組異動涉及特權群組時由 `privileged` 判為需要注意(`privileged` 只在群組事件設定),符合需求方決定。Security 專用條件已限 `channel === 'Security'`。
+  - B2 測試(`8baf819`):改為逐一比對舊 `SECURITY_EVENTS`、`ACCOUNT_CHANGES` 的**值**,只允許明列的 4723 改名例外。符合條件。
+  - M1、M2、M4、M5、Low 1–5:依回報已修。
+  - CI:分支 1319、MR 1320 成功。
+- 共同:`check:ad-agent` 是手動 job,要 `host2-windows` Runner 指派給 NetOps 後由 Maintainer 觸發;Gemini 已在本機跑相同腳本通過。
+
 ## 合併順序
 
 !184 → !186 → !187 → !189 → !191(!190 計畫書可先合併)。!184 合併前仍需需求方照 `RUNBOOK-ad.md` §2 做主機設定、主串唯讀確認資料表。

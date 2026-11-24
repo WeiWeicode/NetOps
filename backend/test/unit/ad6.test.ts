@@ -8,7 +8,9 @@
  *   - GET /v1/ad/days 回傳擴充後的 securityEvents 與 channelEvents
  */
 import assert from 'node:assert/strict';
+import path from 'node:path';
 import { describe, it } from 'node:test';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { ACCOUNT_CHANGE_IDS, createAdChReader, FTP_SECURITY_EVENT_IDS } from '../../src/infra/clickhouse/ad-reader.js';
 import { toAdRow } from '../../src/ingest/ad-rows.js';
 import {
@@ -315,6 +317,35 @@ describe('AD-6 關鍵欄位解析(沿用 ad_events 既有欄位)', () => {
     assert.equal(zh.actor, 'admin.chen');
     assert.equal(zh.target, 'CN=AdminSDHolder,CN=System,DC=gsmc,DC=com,DC=tw');
     assert.equal(zh.reason, 'nTSecurityDescriptor (container) = O:DAG:DAD:PAI(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;DA)');
+  });
+
+  it('已知行為變更(需求方 2026-11-24 接受,審查 M4):4768 成功、4624 登入類型與帳號異動目標帳戶的新舊比對', async () => {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const oldAdlog = await import(pathToFileURL(path.resolve(here, '../../../server/lib/adlog.js')).href);
+    const map = { time: 0, eventId: 1, level: 2, provider: 3, computer: 4, recordId: 5, message: 6 };
+    const parseOld = (eventId: number, level: string, message: string) =>
+      oldAdlog.enrichEvent(oldAdlog.toEvent(['2026-11-24T10:00:00', String(eventId), level, 'Microsoft-Windows-Security-Auditing', 'GSMC-DC1', '100', message], map, 'Security'));
+
+    // 1. 4768 成功(Result Code = 0x0, AES):舊版 reason='0x0',新版改為空白 ''
+    const msg4768Ok = 'A Kerberos authentication ticket (TGT) was requested.\nAccount Name:\t\talice\nResult Code:\t\t0x0\nTicket Encryption Type:\t0x12';
+    const old4768 = parseOld(4768, 'Audit Success', msg4768Ok);
+    const new4768 = parseOne('Security', 4768, 'Audit Success', msg4768Ok);
+    assert.equal(old4768.reason, '0x0');
+    assert.equal(new4768.reason, '');
+
+    // 2. 4624 含登入類型:舊版 reason='',新版補「登入類型 N（說明）」
+    const msg4624Rdp = '帳戶已成功登入。\n登入類型:\t\t10\n新登入:\n\t帳戶名稱:\t\talice\n來源網路位址:\t\t10.10.2.8';
+    const old4624 = parseOld(4624, 'Audit Success', msg4624Rdp);
+    const new4624 = parseOne('Security', 4624, 'Audit Success', msg4624Rdp);
+    assert.equal(old4624.reason, '');
+    assert.equal(new4624.reason, '登入類型 10（RDP 遠端互動）');
+
+    // 3. 帳號異動含「目標帳戶名稱」:新版優先取目標帳戶名稱而非重複取主體帳戶名稱
+    const msgTarget = '帳戶變更。\n主體:\n\t帳戶名稱:\t\tadmin\n目標:\n\t目標帳戶名稱:\t\tbob';
+    const oldChg = parseOld(4738, 'Audit Success', msgTarget);
+    const newChg = parseOne('Security', 4738, 'Audit Success', msgTarget);
+    assert.equal(oldChg.target, 'admin');
+    assert.equal(newChg.target, 'bob');
   });
 });
 

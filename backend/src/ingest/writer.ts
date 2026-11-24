@@ -52,7 +52,7 @@ export function sanitizeMessage(e: unknown): string {
 
 /** 心跳要顯示的狀態;main.ts 讀取 */
 export class WriterStatus {
-  readonly counts = Object.fromEntries(INGEST_TYPES.map((t) => [t, Object.fromEntries(COUNTERS.map((c) => [c, 0]))])) as Record<IngestType, Record<Counter, number>>;
+  readonly counts: Record<IngestType, Record<Counter, number>>;
   /** 每種類型最後 ACK 的 Stream ID(落後時間 = 現在 − 這個 ID 的毫秒) */
   readonly lastAcked: Partial<Record<IngestType, string>> = {};
   /** 目前的缺口(下一次偵測沒有就清掉;歷史在 Redis 的缺口清單) */
@@ -69,6 +69,10 @@ export class WriterStatus {
   /** 主迴圈最後一次推進的時間(健康檢查用) */
   aliveAt = Date.now();
 
+  constructor(types: readonly IngestType[] = INGEST_TYPES) {
+    this.counts = Object.fromEntries(types.map((t) => [t, Object.fromEntries(COUNTERS.map((c) => [c, 0]))])) as Record<IngestType, Record<Counter, number>>;
+  }
+
   add(t: IngestType, c: Counter, n = 1) {
     this.counts[t][c] += n;
   }
@@ -77,7 +81,7 @@ export class WriterStatus {
   }
 }
 
-const TABLE: Record<IngestType, TableKey> = { traffic: 'traffic', threat: 'threat', url: 'threat', data: 'threat', wildfire: 'threat' };
+const TABLE: Record<IngestType, TableKey> = { traffic: 'traffic', threat: 'threat', url: 'threat', data: 'threat', wildfire: 'threat', ad: 'ad' };
 
 /** 拆批後判定為結構性問題:整批改走重試(不 ACK) */
 class SchemaSuspectError extends Error {
@@ -104,7 +108,7 @@ export const sleep: Sleep = (ms, signal) =>
 const entryBytes = (e: RawEntry) => (e.data === null ? 0 : e.data.length * 2); // V8 字串最壞每字 2 bytes
 
 export class Writer {
-  readonly status = new WriterStatus();
+  readonly status: WriterStatus;
   private readonly opts: WriterOptions;
   /** 正在寫入(還沒 ACK)的批次第一筆 ID:ClickHouse 停太久、待處理條目被修剪時,這批還在記憶體裡,不算缺口 */
   private readonly inFlight: Partial<Record<IngestType, string>> = {};
@@ -117,13 +121,16 @@ export class Writer {
     opts: Partial<WriterOptions> = {},
     private readonly wait: Sleep = sleep,
     private readonly now: () => number = Date.now,
+    /** 這個 Writer 負責的 Stream(預設 PA 五種;AD 另開一個 Writer,AD-1) */
+    readonly types: readonly IngestType[] = INGEST_TYPES,
   ) {
     this.opts = { ...DEFAULT_WRITER_OPTIONS, ...opts };
+    this.status = new WriterStatus(types);
   }
 
   /** 建立 consumer group,並做一次缺口偵測 */
   async init(): Promise<void> {
-    for (const t of INGEST_TYPES) await this.redis.ensureGroup(t);
+    for (const t of this.types) await this.redis.ensureGroup(t);
     await this.checkGaps();
     this.status.ready = true;
   }
@@ -131,7 +138,7 @@ export class Writer {
   /** 缺口偵測:新的缺口(from 不同)才寫進缺口清單,同一個缺口只更新心跳;沒有缺口就清掉心跳上的舊值 */
   async checkGaps(): Promise<Gap[]> {
     const found: Gap[] = [];
-    for (const t of INGEST_TYPES) {
+    for (const t of this.types) {
       let g = await this.redis.detectGap(t);
       // 待處理條目被修剪,但那一批正在寫入(記憶體裡還有):寫成功就不會漏
       if (g?.kind === 'pending-trimmed' && this.inFlight[t] !== undefined && g.from === this.inFlight[t]) g = null;
@@ -151,7 +158,7 @@ export class Writer {
 
   /** 重啟後先寫完待處理清單;每一批單獨寫入(不混新資料,去重 token 才會和當機前相同) */
   async drainPending(signal: AbortSignal): Promise<void> {
-    for (const t of INGEST_TYPES) {
+    for (const t of this.types) {
       let after = '0';
       while (!signal.aborted) {
         const entries = await this.redis.readPending(t, after, this.opts.batchMax);
@@ -164,19 +171,19 @@ export class Writer {
 
   /** 讀一輪(最多 batchMs)並寫入;回傳這輪讀到的筆數 */
   async cycle(signal: AbortSignal): Promise<number> {
-    const buf = Object.fromEntries(INGEST_TYPES.map((t) => [t, [] as RawEntry[]])) as Record<IngestType, RawEntry[]>;
+    const buf = Object.fromEntries(this.types.map((t) => [t, [] as RawEntry[]])) as Record<IngestType, RawEntry[]>;
     const deadline = this.now() + this.opts.batchMs;
     let total = 0;
     let bytes = 0;
     while (!signal.aborted && bytes < MAX_BATCH_BYTES) {
       const remain = deadline - this.now();
       if (remain <= 0) break;
-      const room = Math.min(...INGEST_TYPES.map((t) => this.opts.batchMax - buf[t].length));
+      const room = Math.min(...this.types.map((t) => this.opts.batchMax - buf[t].length));
       if (room <= 0) break;
       // BLOCK 最多 1 秒:讓停止訊號與批次期限及時生效
-      const got = await this.redis.readNew(INGEST_TYPES, Math.min(1000, room), Math.max(1, Math.min(1000, remain)));
+      const got = await this.redis.readNew(this.types, Math.min(1000, room), Math.max(1, Math.min(1000, remain)));
       this.status.aliveAt = this.now();
-      for (const t of INGEST_TYPES) {
+      for (const t of this.types) {
         const rows = got[t];
         if (rows?.length) {
           buf[t].push(...rows);
@@ -186,7 +193,7 @@ export class Writer {
       }
     }
     // 停止時已讀到的仍寫完再 ACK(不寫也不會掉:未 ACK 的下次啟動從待處理清單補)
-    for (const t of INGEST_TYPES) if (buf[t].length) await this.flush(t, buf[t], signal);
+    for (const t of this.types) if (buf[t].length) await this.flush(t, buf[t], signal);
     return total;
   }
 

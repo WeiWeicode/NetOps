@@ -8,6 +8,8 @@
  *     (SELECT * REPLACE);AggregateFunction 欄位 Parquet 不支援 → 存成 hex(二進位狀態);IP 轉文字。還原見 deploy/RUNBOOK-prod.md §4.3
  *   - 路徑只由 ARCHIVE_KINDS 常數與驗證過的日期組成(file() 的路徑不接受外部字串);相對 ClickHouse 的 user_files(唯讀掛 archive/)
  *   - 歸檔狀態記在 netops.pa_archive_manifest(migrations/004;ReplacingMergeTree,查詢用 FINAL;table_name 是字串,新增種類不用 migration)
+ *   - AD 事件(AD-1,docs/AD-AGENT-PLAN.md AD7):ad_events_YYYY-MM-DD.parquet 放在另一個 NAS 目錄 ad-archive/YYYY/
+ *     (ClickHouse 唯讀掛在 user_files/ad-archive);由另一個 Archiver 處理(kinds = AD_ARCHIVE_KIND_LIST),manifest 共用(table_name = 'ad')
  * 寫入端(匯出、來源筆數、manifest 寫入)用 netops_writer;讀 Parquet(file())只有 netops_cold 可以(netops_reader 沒有 READ ON FILE)。
  */
 import { ClickHouseError, clickHouseBase, connectError, responseError, type ClickHouseConfig } from './index.js';
@@ -27,6 +29,8 @@ export interface KindDef {
   ips: readonly string[];
   /** AggregateFunction 欄位與型別(匯出成 hex;還原時 CAST(unhex(欄位) AS 型別)) */
   states: Readonly<Record<string, string>>;
+  /** ClickHouse user_files 底下的掛載目錄;不寫 = USER_FILES_DIR(pa-archive) */
+  userDir?: string;
 }
 const IP_COLS = ['src', 'dst', 'nat_src', 'nat_dst'] as const;
 const HEAT_STATES = {
@@ -45,9 +49,18 @@ export const ARCHIVE_KINDS = {
   heat_1d: heatKind('netops.pa_heat_1d', 'pa_heat_1d'),
   hourly_app: { source: 'netops.pa_traffic_hourly_app', file: 'pa_traffic_hourly_app', time: 'hour', derived: { window: 'traffic', deps: ['traffic'] }, ips: [], states: {} },
   hourly_src: { source: 'netops.pa_traffic_hourly_src', file: 'pa_traffic_hourly_src', time: 'hour', derived: { window: 'traffic', deps: ['traffic'] }, ips: ['src'], states: {} },
+  // AD 事件原始表(AD-1;ad_heat_* 不備份:可由 ad_events 重算)
+  ad: { source: 'netops.ad_events', file: 'ad_events', time: 'event_time', derived: null, ips: ['src_ip'], states: {}, userDir: 'ad-archive' },
 } as const satisfies Record<string, KindDef>;
 export type ArchiveKind = keyof typeof ARCHIVE_KINDS;
-export const ARCHIVE_KIND_LIST = Object.keys(ARCHIVE_KINDS) as ArchiveKind[];
+/** 所有種類(檔名解析、manifest 讀取) */
+const ALL_ARCHIVE_KINDS = Object.keys(ARCHIVE_KINDS) as ArchiveKind[];
+/** AD 事件的歸檔種類(另一個 Archiver、另一個 NAS 目錄) */
+export const AD_ARCHIVE_KIND_LIST: readonly ArchiveKind[] = ['ad'];
+/** PA 的歸檔種類(pa-archive;C4 起的既有行為) */
+export const ARCHIVE_KIND_LIST = ALL_ARCHIVE_KINDS.filter((k) => !AD_ARCHIVE_KIND_LIST.includes(k));
+/** 原始表保留天數的種類(歸檔重試範圍):PA 兩種 + AD */
+export type WindowKind = RawKind | 'ad';
 export const kindDef = (kind: ArchiveKind): KindDef => ARCHIVE_KINDS[kind];
 /** 原始表的時間欄位(冷查詢讀回時轉回台灣時區) */
 const RAW_TIMES: Record<RawKind, readonly string[]> = { traffic: ['event_time', 'session_start'], threat: ['event_time'] };
@@ -109,9 +122,9 @@ export const archiveFileName = (kind: ArchiveKind, day: string): string => `${AR
 /** 相對 pa-archive 的路徑:YYYY/pa_traffic_YYYY-MM-DD.parquet */
 export const archiveRelPath = (kind: ArchiveKind, day: string): string => `${day.slice(0, 4)}/${archiveFileName(kind, day)}`;
 /** 解析歸檔目錄裡的檔名(保留期限清理用);不是本系統的檔名回 null */
-const KIND_BY_FILE = new Map<string, ArchiveKind>(ARCHIVE_KIND_LIST.map((k) => [ARCHIVE_KINDS[k].file, k]));
+const KIND_BY_FILE = new Map<string, ArchiveKind>(ALL_ARCHIVE_KINDS.map((k) => [ARCHIVE_KINDS[k].file, k]));
 /** 檔名前綴(常數,只有英數與底線)的正規式片段;pa_traffic 和 pa_traffic_hourly_app 靠後面的 _YYYY-MM-DD 區分 */
-export const ARCHIVE_FILE_PREFIXES = ARCHIVE_KIND_LIST.map((k) => ARCHIVE_KINDS[k].file).join('|');
+export const ARCHIVE_FILE_PREFIXES = ALL_ARCHIVE_KINDS.map((k) => ARCHIVE_KINDS[k].file).join('|');
 const NAME_RE = new RegExp(`^(${ARCHIVE_FILE_PREFIXES})_(\\d{4}-\\d{2}-\\d{2})\\.parquet(\\.sha256|\\.tmp)?$`);
 export function parseArchiveName(name: string): { kind: ArchiveKind; day: string; ext: '' | '.sha256' | '.tmp' } | null {
   const m = NAME_RE.exec(name);
@@ -211,7 +224,7 @@ async function readManifest(c: ReturnType<typeof client>, days: readonly string[
     { days: `[${days.map((d) => `'${mustDay(d)}'`).join(',')}]` },
   );
   return rows
-    .filter((r) => (ARCHIVE_KIND_LIST as string[]).includes(r.table_name))
+    .filter((r) => (ALL_ARCHIVE_KINDS as string[]).includes(r.table_name))
     .map((r) => ({ day: r.d, kind: r.table_name as ArchiveKind, status: r.status as ArchiveStatus, rows: num(r.rows), bytes: num(r.bytes), sha256: r.sha256, path: r.path, error: r.error, updatedAt: num(r.t) }));
 }
 
@@ -303,7 +316,7 @@ export function createColdFileClient(cfg: ClickHouseConfig, fetchImpl: typeof fe
   const c = client(cfg, fetchImpl);
   return {
     async parquetCount(kind, day, tmp = false) {
-      const p = `${USER_FILES_DIR}/${archiveRelPath(kind, day)}${tmp ? '.tmp' : ''}`;
+      const p = `${kindDef(kind).userDir ?? USER_FILES_DIR}/${archiveRelPath(kind, day)}${tmp ? '.tmp' : ''}`;
       const r = await c.json<{ n: number }>(`SELECT count() AS n FROM file('${p}', 'Parquet')`, {}, { max_execution_time: '50' });
       return num(r[0]?.n);
     },

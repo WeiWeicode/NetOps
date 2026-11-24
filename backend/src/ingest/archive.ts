@@ -37,6 +37,7 @@ import {
   type ColdFileClient,
   type ManifestEntry,
   type RawKind,
+  type WindowKind,
 } from '../infra/clickhouse/archive.js';
 import type { ColdLock } from '../infra/redis/cold-lock.js';
 
@@ -78,8 +79,10 @@ export interface ArchiveOptions {
   keepDays: number;
   /** 前一天起算第幾天還沒歸檔成功就告警(正式區 25) */
   alertDays: number;
-  /** 原始表保留天數(重試範圍;彙總表跟著 TRAFFIC) */
-  ttlDays: Record<RawKind, number>;
+  /** 原始表保留天數(重試範圍;彙總表跟著 TRAFFIC);kinds 含 ad 時要有 ad */
+  ttlDays: Record<RawKind, number> & Partial<Record<WindowKind, number>>;
+  /** 這個 Archiver 負責的種類(預設 PA:ARCHIVE_KIND_LIST;AD 用 AD_ARCHIVE_KIND_LIST、dir 指到 ad-archive) */
+  kinds?: readonly ArchiveKind[];
   /** 單一檔案上限(位元組;超過就中止,資安審查 M2) */
   maxBytes: number;
 }
@@ -175,12 +178,18 @@ export class Archiver {
   /** manifest 每個 (類型, 日) 最後的 updated_at:ReplacingMergeTree 以它判斷新舊,時鐘回跳時仍要遞增(code review #2) */
   private readonly stamps = new Map<string, number>();
   private readonly now: () => number;
+  readonly kinds: readonly ArchiveKind[];
 
   constructor(
     private readonly d: ArchiveDeps,
     private readonly o: ArchiveOptions,
   ) {
     this.now = d.now ?? Date.now;
+    this.kinds = o.kinds ?? ARCHIVE_KIND_LIST;
+    for (const k of this.kinds) {
+      const w: WindowKind = kindDef(k).derived?.window ?? (k as WindowKind);
+      if (!o.ttlDays[w]) throw new Error(`歸檔設定缺少 ${w} 的原始表保留天數`);
+    }
   }
 
   private seen(entries: readonly ManifestEntry[]) {
@@ -219,10 +228,10 @@ export class Archiver {
     // 原始表 ok 紀錄的 updated_at(彙總表比它舊 = 原始表重新歸檔過,彙總表跟著重做);ARCHIVE_KIND_LIST 原始表在前
     const rawOk = new Map<string, number>();
     try {
-      for (const kind of ARCHIVE_KIND_LIST) {
+      for (const kind of this.kinds) {
         const def = kindDef(kind);
         // 原始表裡還完整的最早一天(同 netops-api 的熱 / 冷分界);彙總表跟著 TRAFFIC
-        const oldest = addDays(today, -(this.o.ttlDays[def.derived?.window ?? (kind as RawKind)] - 1));
+        const oldest = addDays(today, -(this.o.ttlDays[def.derived?.window ?? (kind as WindowKind)]! - 1));
         if (oldest > newest) continue;
         const days: string[] = [];
         for (let d = oldest; d <= newest; d = addDays(d, 1)) days.push(d);
@@ -478,37 +487,45 @@ export class Archiver {
   }
 }
 
-/** 心跳欄位(netops:ingest:heartbeat;和寫入管線同一個 Hash) */
-export function archiveHeartbeatFields(a: Archiver | null): Record<string, string> {
-  if (!a) return { archiveState: 'disabled' };
+/** 心跳欄位(netops:ingest:heartbeat;和寫入管線同一個 Hash)。AD 的 Archiver 用 prefix 'adArchive'(AD-1),欄位不和 PA 重疊 */
+export function archiveHeartbeatFields(a: Archiver | null, prefix = 'archive'): Record<string, string> {
+  if (!a) return { [`${prefix}State`]: 'disabled' };
   const s = a.status;
   const f: Record<string, string> = {
-    archiveState: s.state,
-    archiveLate: s.late.slice(0, LATE_SHOW).join(','),
-    archiveLateCount: String(s.late.length),
-    archiveArchived: String(s.archived),
-    archiveRunAt: s.lastRunAt ?? '',
+    [`${prefix}State`]: s.state,
+    [`${prefix}Late`]: s.late.slice(0, LATE_SHOW).join(','),
+    [`${prefix}LateCount`]: String(s.late.length),
+    [`${prefix}Archived`]: String(s.archived),
+    [`${prefix}RunAt`]: s.lastRunAt ?? '',
   };
-  for (const k of ARCHIVE_KIND_LIST) f[`archiveLastOk:${k}`] = s.lastOk[k] ?? '';
+  for (const k of a.kinds) f[`${prefix}LastOk:${k}`] = s.lastOk[k] ?? '';
   if (s.lastError) {
-    f.archiveError = s.lastError.message;
-    f.archiveErrorAt = s.lastError.at;
+    f[`${prefix}Error`] = s.lastError.message;
+    f[`${prefix}ErrorAt`] = s.lastError.at;
   }
   return f;
 }
 
-/** 排程迴圈:啟動時清暫存、先跑一輪,之後每 10 分鐘 */
-export async function archiveLoop(a: Archiver, signal: AbortSignal, log: ArchiveDeps['log'], tickMs = ARCHIVE_TICK_MS): Promise<void> {
-  try {
-    await a.cleanStaging();
-  } catch (e) {
-    log('warn', '清理歸檔暫存失敗', { error: brief(e) });
-  }
-  while (!signal.aborted) {
+/**
+ * 排程迴圈:啟動時清暫存、先跑一輪,之後每 10 分鐘。多個 Archiver(PA、AD;AD-1)在同一個迴圈依序執行:
+ * 共用暫存目錄與冷查詢鎖,不同時匯出(暫存只在開始時清一次,不會刪到另一個正在寫的檔)
+ */
+export async function archiveLoop(archivers: Archiver | readonly Archiver[], signal: AbortSignal, log: ArchiveDeps['log'], tickMs = ARCHIVE_TICK_MS): Promise<void> {
+  const list: readonly Archiver[] = archivers instanceof Archiver ? [archivers] : archivers;
+  for (const a of list)
     try {
-      await a.tick(signal);
+      await a.cleanStaging();
     } catch (e) {
-      log('warn', '歸檔排程發生非預期錯誤', { error: brief(e) });
+      log('warn', '清理歸檔暫存失敗', { error: brief(e) });
+    }
+  while (!signal.aborted) {
+    for (const a of list) {
+      if (signal.aborted) break;
+      try {
+        await a.tick(signal);
+      } catch (e) {
+        log('warn', '歸檔排程發生非預期錯誤', { error: brief(e) });
+      }
     }
     await new Promise<void>((r) => {
       const t = setTimeout(r, tickMs);

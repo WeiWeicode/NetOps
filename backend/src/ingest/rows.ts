@@ -12,7 +12,8 @@
  * - 數字:收集器已轉成非負整數;這裡再依欄位寬度檢查,超出寫 0。
  */
 import { isIPv4, isIPv6 } from 'node:net';
-import type { IngestType } from '../infra/redis/ingest.js';
+import type { IngestType, PaIngestType } from '../infra/redis/ingest.js';
+import { toAdRow } from './ad-rows.js';
 
 /** 事件時間和收到時間最多差多少(毫秒);PA 時鐘或轉送延遲超過就不信任 log 時間 */
 export const MAX_SKEW_MS = 7 * 86_400_000;
@@ -128,7 +129,7 @@ export function toTrafficRow(rec: Record<string, unknown>, receivedMs: number, i
 }
 
 /** 威脅類(HTTP:threat、url、data、wildfire 共用欄位)→ netops.pa_threat_logs */
-export function toThreatRow(type: Exclude<IngestType, 'traffic'>, rec: Record<string, unknown>, receivedMs: number, issues: RowIssues): Row {
+export function toThreatRow(type: Exclude<PaIngestType, 'traffic'>, rec: Record<string, unknown>, receivedMs: number, issues: RowIssues): Row {
   return {
     ...times(rec, receivedMs, issues),
     seqno: seqno(rec.seqno),
@@ -169,6 +170,8 @@ export function toThreatRow(type: Exclude<IngestType, 'traffic'>, rec: Record<st
  * receivedMs 取自 Stream ID。
  */
 export function toRow(type: IngestType, data: string, receivedMs: number, issues: RowIssues): Row | null {
+  // AD 事件(AD-1):欄位與檢查不同,另寫在 ad-rows.ts
+  if (type === 'ad') return toAdRow(data, receivedMs, issues);
   let rec: unknown;
   try {
     rec = JSON.parse(data);

@@ -11,6 +11,8 @@
 export const TABLES = {
   traffic: 'netops.pa_traffic_logs',
   threat: 'netops.pa_threat_logs',
+  /** AD 事件(AD-1;migrations/005) */
+  ad: 'netops.ad_events',
 } as const;
 export type TableKey = keyof typeof TABLES;
 

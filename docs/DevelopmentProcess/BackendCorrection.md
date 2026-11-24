@@ -2,6 +2,12 @@
 
 > `backend/`、`deploy/` 的修改;新紀錄加在最上方,格式見 `AGENT.md` §11。
 
+## 2026-11-23 AD 事件接收容器與 ClickHouse 寫入(AD-1)
+- 工作項目:AD-1(`docs/AD-AGENT-PLAN.md` §8;ARCHITECTURE D49、審查 H1–H4、M2)
+- 內容:新增 `netops-ad-receiver`(`backend/src/ad-receiver/`,netops-api 同映像另一個進入點,port 51295 只發佈 127.0.0.1):每台 DC 一把 Token(對應表只存 SHA-256)、核對 `computer` / `domain`、預設拒絕(只有 `/healthz` 免 Token)、每台 DC 每分鐘 120 個請求、單批 1,000 筆 / 4 MB;Redis Lua 依 `(computer, channel, log_epoch)` 水位去重後才寫 Stream `netops:ad:log:events`。`netops-ingest` 加第二個 Writer(只讀 AD Stream,失敗不卡住 PA)寫 `netops.ad_events`、第二個 Archiver 每天 02:30 匯出 `ad-archive/YYYY/ad_events_YYYY-MM-DD.parquet`。ClickHouse `migrations/005-ad1-ad-events.sql`(`ad_events`、`ad_heat_5m` / `1h` / `1d`、3 個 MV);`apply-schema.sh` 的 TTL 佔位符也代入 migrations(`{{TTL_AD_RAW}}`)。Compose、CI(測試區每次只重建 receiver、`--no-deps`;正式區 `NETOPS_AD_RECEIVER` 開關)、`host2/3-set-ad-secrets.sh`、`host2-setup-pa-archive.sh ad`、`deploy/RUNBOOK-ad.md`。**不改 `pa-collector/`,不重建 `netops-pa`**。
+- 檔案:`backend/src/ad-receiver/`、`backend/src/infra/redis/{ad-receiver,ingest}.ts`、`backend/src/infra/clickhouse/{index,archive}.ts`、`backend/src/ingest/{ad-rows,rows,writer,main,config,archive}.ts`、`deploy/clickhouse/`、`deploy/docker-compose.yml`、`deploy/*.env.example`、`deploy/host2-set-ad-secrets.sh`、`deploy/host3-set-ad-secrets.sh`、`deploy/RUNBOOK-ad.md`、`.gitlab-ci.yml`
+- 驗證:見 `docs/test-reports/2026-11-23-ad-1.md`
+
 ## 2026-11-20 威脅特徵碼後端、收集器與驗收修正(TS-1~TS-3、ts-fix-1)
 - 工作項目:TS-1、TS-2、TS-3、ts-fix-1(`docs/THREAT-SIGNATURE-PLAN.md`)
 - 內容:收集器 `pa-collector/netops_pa/signatures.py`(`PA_SIGNATURE_*` 預設關閉,CPU 保護含讀大清單前重查,失敗保留快照,心跳 `signature*` 欄位,按需 `show threat id`);後端 `modules/pa-signature/`(14 條 API、D1 / D2 版本差異歷史與 `rebuilt`、命中比對雙路由 TS-Q8、規則覆蓋、`forAi`、戰情室 `newSignatureHits`)、`infra/{redis,store}/pa-signature.ts`、`ClickHouseReader.signatureHitCounts` / `signatureHits` / `topApps`;`kind: 'pa-signature'` AI 摘要;`deploy/gateway-rbac.yaml` 新增 `netops.pa-signature-page.*`、`deploy/kb-backup/backup.sh` 加 `pa-signature`、`deploy/docker-compose.yml` 與 env 範本加 `PA_SIGNATURE_*`(預設 0);ts-fix-1:Unknown 佔位視為查無(收集器與後端讀取端)、`hits30d`、AI 摘要零新增措辭。合併 `develop` 會重建 `netops-pa`(PA Syslog 中斷,需網通重新 Commit)。

@@ -2,6 +2,12 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。
 
+## 2026-11-23 AD 事件即時接收(AD-1)
+- 工作項目:AD-1(`docs/AD-AGENT-PLAN.md`,ARCHITECTURE D49)
+- 內容:DC Agent(AD-2)用的接收端 `netops-ad-receiver`(`POST /ad/v1/logs`、`/ad/v1/heartbeat`,port 51295)與 AD 事件進 ClickHouse / Parquet 的資料層。查詢切換、FTP 對帳補漏在 AD-3;第一台試裝 DC `GSMC-DC1`(`gsmc.com.tw`、`10.10.130.3`)。主機設定 `deploy/RUNBOOK-ad.md`。
+- 檔案:見 BackendCorrection 同日紀錄
+- 驗證:見 `docs/test-reports/2026-11-23-ad-1.md`
+
 ## 2026-11-23 跨頁規則抽屜(Log 明細查詢、戰情室)
 - 內容:Log 明細查詢、戰情室 Traffic Log 表與即時排行的規則名稱可點開安全規則內容抽屜(PR-4 原列「規則名稱可點開」的畫面接線)。沒有 `netops.pa-policy.read` 與預設規則顯示純文字;找不到規則或無快照時維持跳出提示、不開抽屜(需求方 2026-11-23 決定)。同批戰情室頂列整併(!179)。本筆補文件。
 - 檔案:`docs/WARROOM-PLAN.md`、`docs/WARROOM-DIRECTION-POLICY-PLAN.md` §3.3、`docs/PROJECT-MAP.md`、`docs/HANDOFF.md`;程式見 FrontendCorrection 同批 MR(!179、!180)

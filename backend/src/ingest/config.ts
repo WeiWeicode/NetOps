@@ -18,10 +18,14 @@
  *   INGEST_ARCHIVE_MAX_MB           單一 Parquet 上限(預設 4096 MB;平常一天 0.2–0.4 GB,流量暴增時不塞滿暫存與 NAS)
  *   CLICKHOUSE_COLD_USER / CLICKHOUSE_COLD_PASSWORD_FILE  讀回核對 Parquet 列數(netops_cold;只有它能用 file())
  *   NETOPS_TTL_TRAFFIC_DAYS / NETOPS_TTL_THREAT_DAYS      原始表保留天數(重試範圍;同 netops-api)
+ * AD 事件(AD-1,docs/AD-AGENT-PLAN.md AD7):Stream netops:ad:log:events 由另一個 Writer 寫 netops.ad_events(一律執行);
+ *   冷歸檔開啟時另一個 Archiver 每天匯出 ad_events_YYYY-MM-DD.parquet 到:
+ *   INGEST_AD_ARCHIVE_DIR           NAS ad-archive 掛載點(預設 /archive-ad;同樣要有標記檔 .giga-netops-archive)
+ *   NETOPS_TTL_AD_DAYS              ad_events 保留天數(重試範圍;正式區預設 90、其他 3,同 apply-schema.sh 的 TTL_AD_RAW)
  */
 import type { GwEnv } from '@giganexus/backend-sdk';
 import { archiveEnabled, loadFtp, loadPaTtlDays, readSecret, type FtpConfig } from '../config.js';
-import type { RawKind } from '../infra/clickhouse/archive.js';
+import type { RawKind, WindowKind } from '../infra/clickhouse/archive.js';
 import { defaultAlertDays } from './archive.js';
 
 export interface IngestConfig {
@@ -39,10 +43,12 @@ export interface IngestConfig {
 
 export interface ArchiveConfig {
   dir: string;
+  /** AD 事件的歸檔目錄(AD-1) */
+  adDir: string;
   staging: string;
   keepDays: number;
   alertDays: number;
-  ttlDays: Record<RawKind, number>;
+  ttlDays: Record<RawKind, number> & Record<WindowKind, number>;
   maxBytes: number;
   cold: { url: string; user: string; password: string };
 }
@@ -95,10 +101,10 @@ const absDir = (env: NodeJS.ProcessEnv, k: string, fallback: string) => {
 
 function loadArchive(env: NodeJS.ProcessEnv, gwEnv: GwEnv, chUrl: string): ArchiveConfig | null {
   let enabled: boolean;
-  let ttlDays: Record<RawKind, number>;
+  let ttlDays: ArchiveConfig['ttlDays'];
   try {
     enabled = archiveEnabled(env);
-    ttlDays = loadPaTtlDays(env, gwEnv);
+    ttlDays = { ...loadPaTtlDays(env, gwEnv), ad: int(env, 'NETOPS_TTL_AD_DAYS', gwEnv === 'prod' ? 90 : 3, 1, 3650) };
   } catch (e) {
     throw new IngestConfigError((e as Error).message);
   }
@@ -107,7 +113,7 @@ function loadArchive(env: NodeJS.ProcessEnv, gwEnv: GwEnv, chUrl: string): Archi
   // 正式區 Parquet 至少保留 1 年(CQ12)
   if (gwEnv === 'prod' && keepDays > 0 && keepDays < 366) throw new IngestConfigError(`正式區 INGEST_ARCHIVE_KEEP_DAYS 只能是 0(不刪)或至少 366(CQ12):${keepDays}`);
   // 保留期限不能短於原始表保留:還在熱資料範圍的日子被刪檔標成 expired 後就不再歸檔(code review #9)
-  const maxTtl = Math.max(ttlDays.traffic, ttlDays.threat);
+  const maxTtl = Math.max(ttlDays.traffic, ttlDays.threat, ttlDays.ad);
   if (keepDays > 0 && keepDays < maxTtl) throw new IngestConfigError(`INGEST_ARCHIVE_KEEP_DAYS 不能少於原始表保留天數 ${maxTtl}:${keepDays}`);
   let password: string;
   try {
@@ -120,6 +126,7 @@ function loadArchive(env: NodeJS.ProcessEnv, gwEnv: GwEnv, chUrl: string): Archi
   if (!/^[\w-]{1,64}$/.test(user)) throw new IngestConfigError('CLICKHOUSE_COLD_USER 只能是英數、底線、-');
   return {
     dir: absDir(env, 'INGEST_ARCHIVE_DIR', '/archive'),
+    adDir: absDir(env, 'INGEST_AD_ARCHIVE_DIR', '/archive-ad'),
     staging: absDir(env, 'INGEST_ARCHIVE_STAGING', '/var/lib/netops-ingest/staging'),
     keepDays,
     alertDays: int(env, 'INGEST_ARCHIVE_ALERT_DAYS', defaultAlertDays(ttlDays.traffic), 1, 3650),

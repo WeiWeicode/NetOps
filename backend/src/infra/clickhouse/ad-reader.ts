@@ -167,8 +167,9 @@ export function adWhere(f: AdChFilter, bag = paramBag(), withFilters = true): { 
     }
     const q = String(f.q ?? '').trim();
     if (q) w.push(`positionCaseInsensitiveUTF8(concat(message, '\\n', provider, '\\n', toString(event_id)), ${p(q, 'String')}) > 0`);
-    if (f.computer) w.push(`computer = ${p(f.computer, 'String')}`);
-    if (f.dcDomain) w.push(`ad_domain = ${p(f.dcDomain, 'String')}`);
+    // DC 主機名忽略大小寫與網域後段、網域忽略大小寫(與 FTP 來源一致;審查 M2)
+    if (f.computer) w.push(`upper(splitByChar('.', computer)[1]) = ${p(f.computer.trim().split('.')[0]!.toUpperCase(), 'String')}`);
+    if (f.dcDomain) w.push(`lower(ad_domain) = ${p(f.dcDomain.trim().toLowerCase(), 'String')}`);
     if (f.ipRanges) {
       const valid = f.ipRanges.filter(([a, b]) => IPV4.test(a) && IPV4.test(b));
       if (!valid.length) w.push('0');

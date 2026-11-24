@@ -195,5 +195,8 @@ describe('AD ClickHouse 總覽 = summarizeAd(同一份事件)', () => {
       ov.accountChanges.map((c) => [c.time, c.eventId, c.action, c.target]),
       js.accountChanges.map((c) => [c.time, c.eventId, c.action, c.target]),
     );
+    // 審查 M2:computer(小寫 / FQDN)與 dcDomain(大寫)正規化在真 ClickHouse 查詢結果一致
+    assert.equal((await reader.search({ fromMs, toMs, computer: DCO.toLowerCase(), dcDomain: 'IT.LOCAL' }, 0, 100)).total, rows.length);
+    assert.equal((await reader.search({ fromMs, toMs, computer: `${DCO}.it.local` }, 0, 100)).total, rows.length);
   });
 });

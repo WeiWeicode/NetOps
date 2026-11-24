@@ -159,8 +159,9 @@ export function createChAdSource(reader: AdChReader): AdQuerySource {
     account: q.account,
     ip: q.ip,
     issueOnly: q.issueOnly,
-    computer: q.computer,
-    dcDomain: q.dcDomain,
+    // 正規化與 FTP 來源一致:DC 忽略大小寫與網域後段,dcDomain 轉小寫(審查 M2)
+    computer: q.computer ? dcKey(q.computer) : undefined,
+    dcDomain: q.dcDomain ? q.dcDomain.trim().toLowerCase() : undefined,
     ipRanges: q.ipRanges,
   });
   return {

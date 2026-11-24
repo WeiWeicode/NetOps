@@ -61,6 +61,17 @@ describe('AD ClickHouse 查詢條件', () => {
     assert.match(adWhere({ fromMs: 0, toMs: 1, eventId: ',' }).where, / AND 0$/);
     assert.match(adWhere({ fromMs: 0, toMs: 1, ipRanges: [['bad', 'x']] }).where, / AND 0$/);
   });
+
+  it('computer 與 dcDomain 正規化(小寫、FQDN、大寫網域)並使用 query_params(審查 M2)', () => {
+    const a = adWhere({ fromMs: 0, toMs: 1000, computer: 'gsmc-dc1', dcDomain: 'GSMC.COM.TW' });
+    assert.match(a.where, /upper\(splitByChar\('\.', computer\)\[1\]\) = \{p\d+:String\}/);
+    assert.match(a.where, /lower\(ad_domain\) = \{p\d+:String\}/);
+    assert.ok(Object.values(a.params).includes('GSMC-DC1'));
+    assert.ok(Object.values(a.params).includes('gsmc.com.tw'));
+    const b = adWhere({ fromMs: 0, toMs: 1000, computer: 'GSMC-DC1.gsmc.com.tw' });
+    assert.ok(Object.values(b.params).includes('GSMC-DC1'));
+    assert.ok(!b.where.includes('GSMC-DC1'));
+  });
 });
 
 describe('DC Agent 狀態', () => {
@@ -470,7 +481,7 @@ function fakeReader(): AdChReader & { calls: string[] } {
     calls,
     days: async () => (calls.push('days'), [{ day: '2026/11/23', events: 1, agent: 1, ftp: 0, computers: ['GSMC-DC1'] }]),
     overview: async () => (calls.push('overview'), ov),
-    search: async (f, offset, limit) => (calls.push(`search:${f.computer ?? ''}:${f.ipRanges ? 'ranges' : ''}:${offset}:${limit}`), { rows: [ev], total: 1, scanned: 5 }),
+    search: async (f, offset, limit) => (calls.push(`search:${f.computer ?? ''}:${f.dcDomain ?? ''}:${f.ipRanges ? 'ranges' : ''}:${offset}:${limit}`), { rows: [ev], total: 1, scanned: 5 }),
     computers: async () => [{ computer: 'GSMC-DC1', dcDomain: 'gsmc.com.tw', events: 1 }],
     aiMatches: async () => ({ rows: [], total: 0 }),
     hasIp: async () => false,
@@ -529,7 +540,14 @@ describe('AD 路由(clickhouse 來源)', () => {
     const b = ev.json();
     assert.equal(b.items[0].time, '2026-11-23T08:00:00+08:00');
     assert.deepEqual([b.items[0].source, b.items[0].dcDomain, b.items[0].logEpoch, b.scanned], ['agent', 'gsmc.com.tw', 0, 5]);
-    assert.ok(reader.calls.includes('search:GSMC-DC1::10:10'));
+    assert.ok(reader.calls.includes('search:GSMC-DC1:::10:10'));
+    // 小寫、FQDN、大寫網域都會正規化後才進 reader.search(審查 M2)
+    const norm1 = await t.call({ url: '/v1/ad/events?from=2026-11-23T00:00:00%2B08:00&to=2026-11-23T23:59:00%2B08:00&computer=gsmc-dc1&dcDomain=GSMC.COM.TW' });
+    assert.equal(norm1.statusCode, 200, norm1.body);
+    assert.ok(reader.calls.includes('search:GSMC-DC1:gsmc.com.tw::0:50'));
+    const norm2 = await t.call({ url: '/v1/ad/events?from=2026-11-23T00:00:00%2B08:00&to=2026-11-23T23:59:00%2B08:00&computer=GSMC-DC1.gsmc.com.tw' });
+    assert.equal(norm2.statusCode, 200, norm2.body);
+    assert.ok(reader.calls.includes('search:GSMC-DC1:::0:50'));
     const bad = await t.call({ url: '/v1/ad/events?from=2026-11-23T00:00:00%2B08:00&to=2026-11-23T23:59:00%2B08:00&computer=a%20b' });
     assert.equal(bad.statusCode, 400);
     const noName = await t.call({ url: '/v1/ad/events?from=2026-11-23T00:00:00%2B08:00&to=2026-11-23T23:59:00%2B08:00&name=nobody' });

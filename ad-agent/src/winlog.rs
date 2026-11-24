@@ -12,10 +12,10 @@ use windows_sys::Win32::Foundation::{
 };
 use windows_sys::Win32::System::EventLog::{
     EVT_HANDLE, EVT_VARIANT, EvtChannelLoggingConfigMaxSize, EvtClose, EvtFormatMessage,
-    EvtFormatMessageEvent, EvtGetChannelConfigProperty, EvtGetLogInfo, EvtLogFileSize,
-    EvtLogNumberOfLogRecords, EvtLogOldestRecordNumber, EvtNext, EvtOpenChannelConfig,
-    EvtOpenChannelPath, EvtOpenLog, EvtOpenPublisherMetadata, EvtQuery, EvtQueryChannelPath,
-    EvtQueryForwardDirection, EvtRender, EvtRenderEventXml,
+    EvtFormatMessageEvent, EvtGetChannelConfigProperty, EvtGetLogInfo, EvtLogFileSize, EvtNext,
+    EvtOpenChannelConfig, EvtOpenChannelPath, EvtOpenLog, EvtOpenPublisherMetadata, EvtQuery,
+    EvtQueryChannelPath, EvtQueryForwardDirection, EvtQueryReverseDirection, EvtRender,
+    EvtRenderEventXml,
 };
 
 const ERROR_EVT_CHANNEL_NOT_FOUND: u32 = 15007;
@@ -70,18 +70,11 @@ impl WinEventLog {
     }
 
     /// None = Channel 不存在
-    fn query(&self, c: Channel, xpath: &str) -> Result<Option<Handle>, String> {
+    fn query_dir(&self, c: Channel, xpath: &str, dir: u32) -> Result<Option<Handle>, String> {
         let path = wide(c.log_name());
         let q = wide(xpath);
         // SAFETY:字串以 NUL 結尾且活到呼叫結束;回傳的控制代碼由 Handle 關閉
-        let h = unsafe {
-            EvtQuery(
-                0,
-                path.as_ptr(),
-                q.as_ptr(),
-                EvtQueryChannelPath | EvtQueryForwardDirection,
-            )
-        };
+        let h = unsafe { EvtQuery(0, path.as_ptr(), q.as_ptr(), EvtQueryChannelPath | dir) };
         if h == 0 {
             let e = last_error();
             if e == ERROR_EVT_CHANNEL_NOT_FOUND {
@@ -90,6 +83,25 @@ impl WinEventLog {
             return Err(format!("查詢 {} 失敗(錯誤 {e})", c.log_name()));
         }
         Ok(Some(Handle(h)))
+    }
+
+    fn query(&self, c: Channel, xpath: &str) -> Result<Option<Handle>, String> {
+        self.query_dir(c, xpath, EvtQueryForwardDirection)
+    }
+
+    /// 以反向查詢讀最新 1 筆事件的真實 EventRecordID(無兩次 EvtGetLogInfo 的覆寫競態;審查 M2)
+    /// None = Channel 不存在;Some(0) = Channel 目前沒有任何事件
+    fn newest_record_id(&self, c: Channel) -> Result<Option<u64>, String> {
+        let Some(rs) = self.query_dir(c, "*", EvtQueryReverseDirection)? else {
+            return Ok(None);
+        };
+        let Some(ev) = self.next(&rs, c, 1)?.into_iter().next() else {
+            return Ok(Some(0));
+        };
+        let xml = Self::render_xml(&ev)?;
+        let parsed = crate::parser::parse_event_xml(&xml)
+            .map_err(|e| format!("{} 最新事件 XML 解析失敗:{e}", c.log_name()))?;
+        Ok(Some(parsed.record_id))
     }
 
     fn next(&self, rs: &Handle, c: Channel, n: usize) -> Result<Vec<Handle>, String> {
@@ -242,10 +254,11 @@ impl EventSource for WinEventLog {
         }
         // SAFETY:EVT_VARIANT 緩衝與大小一致
         let prop = |id| get_u64(|v, size, used| unsafe { EvtGetLogInfo(log.0, id, size, v, used) });
-        let count = prop(EvtLogNumberOfLogRecords).unwrap_or(0);
-        let oldest = prop(EvtLogOldestRecordNumber).unwrap_or(0);
         let file_size = prop(EvtLogFileSize).unwrap_or(0);
-        let newest = if count == 0 { 0 } else { oldest + count - 1 };
+        // 反向 EvtQuery 直接讀最新 1 筆 EventRecordID,避免 oldest + count - 1 在覆寫中途誤判換世代(審查 M2)
+        let Some(newest) = self.newest_record_id(c)? else {
+            return Ok(None);
+        };
         let max_size = if c == Channel::Security {
             // SAFETY:同上
             let cfg = Handle(unsafe { EvtOpenChannelConfig(0, path.as_ptr(), 0) });
@@ -271,6 +284,10 @@ impl EventSource for WinEventLog {
             file_size,
             max_size,
         }))
+    }
+
+    fn confirm_newest_record_id(&mut self, c: Channel) -> Result<Option<u64>, String> {
+        self.newest_record_id(c)
     }
 
     fn read_after(&mut self, c: Channel, after: u64, max: usize) -> Result<Vec<RawEvent>, String> {

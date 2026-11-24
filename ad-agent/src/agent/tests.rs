@@ -15,6 +15,9 @@ struct FakeLog {
     /// 這些 RecordID 的 XML 給壞的(模擬無法解析)
     bad_xml: Vec<u64>,
     since_calls: Vec<(Channel, i64)>,
+    /// 模擬覆寫中途 log_info 回傳偏小的假 newest_record_id(confirm_newest_record_id 仍回真實最大值;審查 M2)
+    fake_log_info_newest: HashMap<Channel, u64>,
+    confirm_calls: u32,
 }
 
 #[derive(Clone, Default)]
@@ -43,16 +46,30 @@ impl EventSource for Source {
         if g.absent.contains(&c) {
             return Ok(None);
         }
-        let newest = g
-            .events
-            .get(&c)
-            .and_then(|v| v.iter().map(|e| e.0).max())
-            .unwrap_or(0);
+        let newest = g.fake_log_info_newest.get(&c).copied().unwrap_or_else(|| {
+            g.events
+                .get(&c)
+                .and_then(|v| v.iter().map(|e| e.0).max())
+                .unwrap_or(0)
+        });
         Ok(Some(LogInfo {
             newest_record_id: newest,
             file_size: 20 * 1_048_576,
             max_size: Some(128 * 1_048_576),
         }))
+    }
+    fn confirm_newest_record_id(&mut self, c: Channel) -> Result<Option<u64>, String> {
+        let mut g = self.0.lock().unwrap();
+        g.confirm_calls += 1;
+        if g.absent.contains(&c) {
+            return Ok(None);
+        }
+        Ok(Some(
+            g.events
+                .get(&c)
+                .and_then(|v| v.iter().map(|e| e.0).max())
+                .unwrap_or(0),
+        ))
     }
     fn read_after(&mut self, c: Channel, after: u64, max: usize) -> Result<Vec<RawEvent>, String> {
         let g = self.0.lock().unwrap();
@@ -685,4 +702,35 @@ fn 心跳503時不決定起點_恢復後照後端世代接續() {
         sent_ids(&be, 0),
         (4801..=4805).map(|r| (r, 2)).collect::<Vec<_>>()
     );
+}
+
+#[test]
+fn 覆寫中途假newest小於水位_二次確認正常時不得觸發換世代() {
+    // 模擬 Security Log 覆寫中途 log_info 回傳偏小值(小於水位 500),但反向查詢 confirm_newest_record_id 讀到真實最大 502(審查 M2)
+    let d = tempfile::tempdir().unwrap();
+    let (src, be) = (Source::default(), Backend::default());
+    seed(d.path(), Channel::Security, 0, 500);
+    for r in 495..=502 {
+        src.push(Channel::Security, r, T0, 4625);
+    }
+    src.0
+        .lock()
+        .unwrap()
+        .fake_log_info_newest
+        .insert(Channel::Security, 480);
+    let mut a = agent(d.path(), &src, &be, vec![Channel::Security], T0);
+    a.step(T0);
+    assert_eq!(src.0.lock().unwrap().confirm_calls, 1, "應呼叫二次確認");
+    let mark = a.bookmarks().get(Channel::Security).unwrap();
+    assert_eq!(mark.log_epoch, 0, "不可誤觸世代 +1");
+    assert_eq!(mark.last_record_id, 502, "應正常送出 501、502 並前進水位");
+    assert_eq!(sent_ids(&be, 0), vec![(501, 0), (502, 0)]);
+    // 心跳不得帶 log_record_id_reset
+    a.step(T0 + 15_000);
+    let has_reset = be.0.lock().unwrap().heartbeats.iter().any(|hb| {
+        hb["watchdogEvents"]
+            .as_array()
+            .is_some_and(|arr| arr.iter().any(|e| e["type"] == "log_record_id_reset"))
+    });
+    assert!(!has_reset, "覆寫中途假資料不應發出 log_record_id_reset");
 }

@@ -51,6 +51,10 @@ pub trait EventSource {
     fn first_record_since(&mut self, c: Channel, since_ms: i64) -> Result<Option<u64>, String>;
     /// 最舊一筆事件的時間(Security 涵蓋時數)
     fn oldest_event_ms(&mut self, c: Channel) -> Result<Option<i64>, String>;
+    /// 二次確認目前最大 RecordID(偵測到 newest < 水位時呼叫,防止覆寫中途假資料誤觸 log_epoch + 1;審查 M2)
+    fn confirm_newest_record_id(&mut self, c: Channel) -> Result<Option<u64>, String> {
+        Ok(self.log_info(c)?.map(|i| i.newest_record_id))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -423,17 +427,33 @@ impl<S: EventSource, T: Transport> Agent<S, T> {
                 }
             };
             self.present.insert(c, true);
-            if self.bookmarks.get(c).is_none() {
+            let Some(mark) = self.bookmarks.get(c) else {
                 continue;
-            }
-            if let Some(r) = self.bookmarks.detect_reset(c, info.newest_record_id) {
-                self.on_reset(now_ms, &r);
-                reset = true;
+            };
+            let mut newest = info.newest_record_id;
+            if newest < mark.last_record_id {
+                // 覆寫中途可能出現短暫偏差:先以反向 EvtQuery 二次確認最新 EventRecordID,仍小於水位才觸發世代 +1(審查 M2)
+                self.status.touch();
+                match self.source.confirm_newest_record_id(c) {
+                    Ok(Some(confirmed)) => newest = confirmed,
+                    Ok(None) => {
+                        self.present.insert(c, false);
+                        continue;
+                    }
+                    Err(e) => {
+                        self.warn_throttled(now_ms, &e);
+                        continue;
+                    }
+                }
+                if let Some(r) = self.bookmarks.detect_reset(c, newest) {
+                    self.on_reset(now_ms, &r);
+                    reset = true;
+                }
             }
             let Some(mark) = self.bookmarks.get(c) else {
                 continue;
             };
-            if info.newest_record_id <= mark.last_record_id {
+            if newest <= mark.last_record_id {
                 continue;
             }
             let capacity = self.cfg.max_batch_events.saturating_sub(events.len());

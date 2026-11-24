@@ -437,6 +437,7 @@ C="docker compose --env-file /srv/giganexus/deploy/netops.env -f deploy/docker-c
 
 | 大類(Category) | 子類別(Subcategory) | 建議設定 | 對應 Event ID |
 | --- | --- | --- | --- |
+| Account Logon | Credential Validation | Failure(或 Success, Failure) | `4776`(NTLM 認證;Agent 只收失敗) |
 | Account Logon | Kerberos Authentication Service | Success, Failure | `4768`(失敗或弱加密 `0x17`)、`4771` |
 | Account Logon | Kerberos Service Ticket Operations | Success, Failure | `4769`(§9.3 開關 `include_kerberos_weak_tgs`) |
 | Account Management | Computer Account Management | Success, Failure | `4741`、`4742`、`4743` |
@@ -449,6 +450,7 @@ C="docker compose --env-file /srv/giganexus/deploy/netops.env -f deploy/docker-c
 | Object Access | Other Object Access Events | Success, Failure | `4698`、`4699`、`4700`、`4701`、`4702`(排程工作) |
 | Policy Change | Audit Policy Change | Success, Failure | `4719`(系統稽核原則變更) |
 | Policy Change | Authentication Policy Change | Success, Failure | `4713`(Kerberos 原則)、`4706`、`4707`、`4716`(信任關係)、`4739`(網域原則) |
+| Policy Change | Authorization Policy Change | Success, Failure | `4704`(指派使用者權限) |
 | System | Security State Change | Success | `4616`(系統時間變更)、`1100`(事件記錄服務關閉) |
 | System | Security System Extension | Success | `4697`(安裝服務) |
 
@@ -475,7 +477,7 @@ C="docker compose --env-file /srv/giganexus/deploy/netops.env -f deploy/docker-c
 
 ### 9.3 Security Log 容量上限
 
-- 建議每台 DC 的 `Security` Event Log 上限調整為 **至少 1–4 GB**(依 DC 負荷調整;可在 DC GPO `Computer Configuration → Policies → Administrative Templates → Windows Components → Event Log Service → Security → Specify the maximum log file size (KB)` 設定 `1048576`–`4194304`,或在 DC 以系統管理員 PowerShell 執行 `wevtutil sl Security /ms:4294967296`)。
+- 建議每台 DC 的 `Security` Event Log 上限調整為 **至少 1–4 GB**(依 DC 負荷調整;可在 DC GPO `Computer Configuration → Policies → Administrative Templates → Windows Components → Event Log Service → Security → Specify the maximum log file size (KB)` 設定 `1048576`–`4194240` KB(64 KB 倍數),或在 DC 以系統管理員 PowerShell 執行 `wevtutil sl Security /ms:4293918720`;**請 IT 在 DC 確認實際可設的最大值**)。
 - 啟用任何 §9.3 高量開關後,依 §7.2 第 7、8 步持續觀察心跳 `channels.Security.coverageHours` 與 `wrapRisk`,確保覆寫時間維持 **>= 24 小時**(`wrapRisk: false`),並留意是否出現事件 `1104`(Security Log 已滿)。
 
 ### 9.4 查核指令與預期輸出
@@ -507,7 +509,9 @@ Account Management
 Policy Change
   Audit Policy Change                     Success and Failure
   Authentication Policy Change            Success and Failure
+  Authorization Policy Change             Success and Failure
 Account Logon
+  Credential Validation                   Failure (or Success and Failure)
   Kerberos Authentication Service         Success and Failure
   Kerberos Service Ticket Operations      Success and Failure
 ```

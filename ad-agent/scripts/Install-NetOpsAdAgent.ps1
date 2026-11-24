@@ -234,11 +234,35 @@ function Invoke-ScExe {
     if ($LASTEXITCODE -ne 0) { throw "sc.exe $($Arguments -join ' ') 失敗($LASTEXITCODE):$out" }
 }
 
+function New-ServiceBinaryPath {
+    param([Parameter(Mandatory = $true)][string]$Exe, [Parameter(Mandatory = $true)][string]$Mode, [Parameter(Mandatory = $true)][string]$Config)
+    "`"$Exe`" --mode $Mode --config `"$Config`""
+}
+
+# 升級既有服務用 CIM Win32_Service.Change 的參數:避免 PowerShell 5.1 傳給 sc.exe config 時吞掉路徑內嵌雙引號(審查 M1)
+function New-ServiceChangeArguments {
+    param([Parameter(Mandatory = $true)][string]$BinPath)
+    @{
+        PathName  = $BinPath
+        StartMode = 'Automatic'
+        StartName = 'LocalSystem'
+    }
+}
+
+function Set-ExistingServiceConfig {
+    param([Parameter(Mandatory = $true)][string]$Name, [Parameter(Mandatory = $true)][string]$BinPath)
+    if ($Name -notmatch '^[A-Za-z0-9_-]+$') { throw "服務名稱格式錯誤:$Name" }
+    $svc = Get-CimInstance -ClassName Win32_Service -Filter "Name='$Name'" -ErrorAction Stop
+    if (-not $svc) { throw "找不到服務 $Name 的 CIM 物件" }
+    $r = Invoke-CimMethod -InputObject $svc -MethodName Change -Arguments (New-ServiceChangeArguments -BinPath $BinPath)
+    if ($r.ReturnValue -ne 0) { throw "更新服務 $Name 設定失敗(Win32_Service.Change ReturnValue=$($r.ReturnValue))" }
+}
+
 function Register-AdAgentService {
     param([Parameter(Mandatory = $true)][string]$Name, [Parameter(Mandatory = $true)][string]$Mode, [Parameter(Mandatory = $true)][string]$Exe, [Parameter(Mandatory = $true)][string]$Config, [Parameter(Mandatory = $true)][string]$Display, [Parameter(Mandatory = $true)][string]$Description)
-    $bin = "`"$Exe`" --mode $Mode --config `"$Config`""
+    $bin = New-ServiceBinaryPath -Exe $Exe -Mode $Mode -Config $Config
     if (Get-Service -Name $Name -ErrorAction SilentlyContinue) {
-        Invoke-ScExe @('config', $Name, 'binPath=', $bin, 'start=', 'auto', 'obj=', 'LocalSystem')
+        Set-ExistingServiceConfig -Name $Name -BinPath $bin
     } else {
         New-Service -Name $Name -BinaryPathName $bin -DisplayName $Display -Description $Description -StartupType Automatic | Out-Null
     }

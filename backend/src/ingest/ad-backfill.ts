@@ -85,8 +85,13 @@ export async function backfillGroup(
   const c = { skipped: 0, inserted: 0, waitingAgent: 0, ambiguous: 0 };
   const { q } = deps;
   const name = deps.dcName;
-  const rids = items.map((x) => x.row.rid);
-  const [keys, epochs] = await Promise.all([q.keysInRange(name, key.channel, Math.min(...rids), Math.max(...rids)), q.agentEpochs(name, key.channel)]);
+  let minRid = Infinity;
+  let maxRid = -Infinity;
+  for (const x of items) {
+    if (x.row.rid < minRid) minRid = x.row.rid;
+    if (x.row.rid > maxRid) maxRid = x.row.rid;
+  }
+  const [keys, epochs] = await Promise.all([q.keysInRange(name, key.channel, minRid, maxRid), q.agentEpochs(name, key.channel)]);
   // 有效水位:ClickHouse 已寫入的 Agent 最大 RecordID(程式碼審查 M2)。不採信 Redis 接收端水位:
   //   它在收到時就前進(事件可能還在 Stream),而且 netops-redis 沒有 ACL,竄改後會讓缺口永遠補不回來(資安審查 M1)
   const watermark = new Map<number, number>();

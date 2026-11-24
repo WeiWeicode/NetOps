@@ -22,7 +22,7 @@ import { adContext, adContextFromSummary } from '../../src/modules/ad/core/ad-ai
 import { compareAd, filesFor, ftpCounts } from '../../src/modules/ad/reconcile.js';
 import { dcKey, extraFilter } from '../../src/modules/ad/source.js';
 import { anchorKey, decide, segmentEpochs, splitSegments, type CsvRow, type EpochContext } from '../../src/ingest/ad-epoch.js';
-import { runAdBackfill, validateAdJob } from '../../src/ingest/ad-backfill.js';
+import { backfillGroup, runAdBackfill, validateAdJob } from '../../src/ingest/ad-backfill.js';
 import { csvTimeSec, csvToAdRow } from '../../src/ingest/ad-rows.js';
 import { createFakeFtp } from '../fixtures/fake-ftp.js';
 import { createTestApp, type TestApp } from '../helpers.js';
@@ -419,6 +419,44 @@ describe('AD FTP 補漏執行', () => {
     assert.match(validateAdJob(job([file], [{ computer: 'A', channel: 'Evil' }]), rules)!, /範圍/);
     const j = await run([], job(['/etc/passwd']), {}, {});
     assert.equal(j.state, 'failed');
+  });
+
+  it('20 萬筆以上大量列:segmentEpochs 與 backfillGroup 不觸發 RangeError(審查 M1)', async () => {
+    const N = 200_005;
+    const baseT = Math.floor(NOW / 1000) - 3600;
+    const rows: CsvRow[] = Array.from({ length: N }, (_, i) => ({ t: baseT + Math.floor(i / 100), rid: 1000 + i, eventId: 4625 }));
+    const ctx: EpochContext = {
+      hasAgent: true,
+      anchors: new Map(),
+      prevAgent: () => ({ epoch: 2, rid: 500 }),
+      nextAgent: () => null,
+      watermark: new Map([[2, 999]]),
+    };
+    const segs = segmentEpochs(rows, ctx);
+    assert.equal(segs.length, 1);
+    assert.deepEqual([segs[0]!.epoch, segs[0]!.by, segs[0]!.rows.length], [2, 'prev', N]);
+
+    let rangeSeen: [number, number] | null = null;
+    const q: AdBackfillCh = {
+      agentComputers: async () => [],
+      keysInRange: async (_c, _ch, lo, hi) => ((rangeSeen = [lo, hi]), []),
+      agentEpochs: async () => [{ epoch: 2, maxRid: 999 }],
+      agentBefore: async () => ({ epoch: 2, rid: 500 }),
+      agentAfter: async () => null,
+    };
+    const dayStr = tpDay(NOW - DAY_MS);
+    const items = rows.map((row) => ({
+      ev: { time: `${dayStr} 08:00:00`, eventId: 4625, level: 'audit_failure', levelText: '', provider: 'p', computer: 'GSMC-DC1', recordId: String(row.rid), channel: 'Security', message: '' },
+      rawComputer: 'GSMC-DC1',
+      row,
+    }));
+    const r = await backfillGroup(
+      { computer: 'GSMC-DC1', channel: 'Security' },
+      items,
+      { ch: { insertJson: async () => undefined }, q, jobId: 'big-1', domain: 'gsmc.com.tw', now: NOW, dcName: 'GSMC-DC1' },
+    );
+    assert.deepEqual(rangeSeen, [1000, 1000 + N - 1]);
+    assert.equal(r.waitingAgent, N);
   });
 });
 

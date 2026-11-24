@@ -81,6 +81,17 @@ export function splitSegments(rows: readonly CsvRow[]): CsvRow[][] {
   return out;
 }
 
+/** 迴圈計算 min/max RecordID(避免 Math.min(...arr) 超過 ~10 萬筆觸發 V8 RangeError;審查 M1) */
+export function ridBounds(rows: readonly { rid: number }[]): [number, number] {
+  let min = Infinity;
+  let max = -Infinity;
+  for (const r of rows) {
+    if (r.rid < min) min = r.rid;
+    if (r.rid > max) max = r.rid;
+  }
+  return [min, max];
+}
+
 /** 每一段的世代 */
 export function segmentEpochs(rows: readonly CsvRow[], ctx: EpochContext): Segment[] {
   return splitSegments(rows).map((seg) => {
@@ -89,8 +100,7 @@ export function segmentEpochs(rows: readonly CsvRow[], ctx: EpochContext): Segme
       if (e !== undefined) return { rows: seg, epoch: e, by: 'anchor' as const };
     }
     if (!ctx.hasAgent) return { rows: seg, epoch: 0, by: 'no-agent' as const };
-    const minRid = Math.min(...seg.map((r) => r.rid));
-    const maxRid = Math.max(...seg.map((r) => r.rid));
+    const [minRid, maxRid] = ridBounds(seg);
     const prev = ctx.prevAgent(seg[0]!.t);
     if (prev) return prev.rid < minRid ? { rows: seg, epoch: prev.epoch, by: 'prev' as const } : { rows: seg, epoch: null, by: 'ambiguous' as const };
     const next = ctx.nextAgent(seg[seg.length - 1]!.t);

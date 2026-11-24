@@ -67,6 +67,8 @@ impl StartType {
 pub struct Probe {
     pub pid: u32,
     pub last_collect_tick_ms: i64,
+    /// Agent 以單調時鐘算的「距上次 tick 毫秒數」;有就用它判斷停滯(不受校時影響,審查 M3)
+    pub tick_age_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -186,7 +188,9 @@ impl Monitor {
                 match &obs.probe {
                     Some(Ok(p)) => {
                         self.fails = 0;
-                        let idle = now_ms - p.last_collect_tick_ms;
+                        let idle = p
+                            .tick_age_ms
+                            .unwrap_or(now_ms - p.last_collect_tick_ms);
                         if idle > STALE_MS {
                             Action::KillHung {
                                 pid,
@@ -290,6 +294,7 @@ mod tests {
             Ok(Probe {
                 pid,
                 last_collect_tick_ms: tick,
+                tick_age_ms: None,
             }),
         )
     }
@@ -493,6 +498,33 @@ mod tests {
         assert!(matches!(
             m.decide(&fail(11), t + 90_000),
             Action::KillHung { pid: 11, .. }
+        ));
+    }
+
+    #[test]
+    fn 有單調時鐘tick_age時以它判斷_系統時間跳動不誤殺() {
+        let mut m = Monitor::new(T);
+        let probe = |age: Option<i64>| {
+            Observation::running(
+                7,
+                Ok(Probe {
+                    pid: 7,
+                    // 壁鐘看起來停滯 2 小時(校時往前跳)
+                    last_collect_tick_ms: T - 7_200_000,
+                    tick_age_ms: age,
+                }),
+            )
+        };
+        assert_eq!(m.decide(&probe(Some(1_000)), T), Action::None);
+        assert!(matches!(
+            m.decide(&probe(Some(STALE_MS + 1)), T + 15_000),
+            Action::KillHung { pid: 7, .. }
+        ));
+        // 舊版 Agent 沒有 tickAgeMs:沿用壁鐘
+        let mut m = Monitor::new(T);
+        assert!(matches!(
+            m.decide(&probe(None), T),
+            Action::KillHung { .. }
         ));
     }
 }

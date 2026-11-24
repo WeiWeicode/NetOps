@@ -168,6 +168,30 @@ pub struct Agent<S: EventSource, T: Transport> {
     last_warn: BTreeMap<String, i64>,
     sysinfo: Option<SysInfo>,
     pid: u32,
+    /// 啟動後累計因 XML 無法解析而略過的事件(心跳 skippedEvents;審查 M5)
+    skipped_events: u64,
+    /// 同一批連續被後端以 4xx(429 以外)拒收的次數(心跳 sendRejectStreak;審查 M4)
+    reject_streak: u32,
+}
+
+/// 心跳回應 `channels` → 後端水位。`channels` 不是物件、或認得的 Channel 內容格式錯誤時回 Err,
+/// 呼叫端**不可**把它當成「後端沒有紀錄」(否則 bookmarks 遺失時會以世代 0 重讀;審查 H1)。
+/// `channels` 是物件但沒有某個 Channel = 後端確實沒有它的紀錄。
+pub fn parse_server_marks(body: Option<&Value>) -> Result<BTreeMap<Channel, ServerMark>, String> {
+    let chs = body
+        .and_then(|b| b.get("channels"))
+        .and_then(Value::as_object)
+        .ok_or("回應沒有 channels 物件")?;
+    let mut marks = BTreeMap::new();
+    for (k, v) in chs {
+        let Some(c) = Channel::from_name(k) else {
+            continue;
+        };
+        let m = serde_json::from_value::<ServerMark>(v.clone())
+            .map_err(|e| format!("{k} 格式錯誤:{e}"))?;
+        marks.insert(c, m);
+    }
+    Ok(marks)
 }
 
 fn trunc(s: &str, n: usize) -> String {
@@ -202,6 +226,8 @@ impl<S: EventSource, T: Transport> Agent<S, T> {
             last_warn: BTreeMap::new(),
             sysinfo: None,
             pid: std::process::id(),
+            skipped_events: 0,
+            reject_streak: 0,
         };
         if let Some(w) = warn {
             log::warn!("{w}");
@@ -308,6 +334,7 @@ impl<S: EventSource, T: Transport> Agent<S, T> {
             if self.bookmarks.get(c).is_some() {
                 continue;
             }
+            self.status.touch();
             let info = match self.source.log_info(c) {
                 Ok(Some(i)) => i,
                 Ok(None) => {
@@ -320,6 +347,7 @@ impl<S: EventSource, T: Transport> Agent<S, T> {
                 }
             };
             let since = now_ms - self.cfg.initial_lookback_minutes as i64 * 60_000;
+            self.status.touch();
             let lookback = match self.source.first_record_since(c, since) {
                 Ok(r) => r,
                 Err(e) => {
@@ -382,6 +410,7 @@ impl<S: EventSource, T: Transport> Agent<S, T> {
                 break;
             }
             let c = self.cfg.channels[(self.rotate + i) % n];
+            self.status.touch();
             let info = match self.source.log_info(c) {
                 Ok(Some(i)) => i,
                 Ok(None) => {
@@ -411,6 +440,7 @@ impl<S: EventSource, T: Transport> Agent<S, T> {
             if capacity == 0 {
                 break;
             }
+            self.status.touch();
             let raws = match self.source.read_after(c, mark.last_record_id, capacity) {
                 Ok(r) => r,
                 Err(e) => {
@@ -423,7 +453,12 @@ impl<S: EventSource, T: Transport> Agent<S, T> {
                 let ev = match parse_event_xml(&raw.xml) {
                     Ok(ev) => ev,
                     Err(e) => {
-                        log::warn!("{} 事件無法解析,略過:{e}", c.log_name());
+                        // 解析失敗的那筆不送(水位仍會越過它,由 AD-3 FTP 對帳補回);計數隨心跳上報(審查 M5)
+                        self.skipped_events = self.skipped_events.saturating_add(1);
+                        self.warn_throttled(
+                            now_ms,
+                            &format!("{} 事件無法解析,略過:{e}", c.log_name()),
+                        );
                         continue;
                     }
                 };
@@ -495,6 +530,7 @@ impl<S: EventSource, T: Transport> Agent<S, T> {
             "agentVersion": VERSION,
             "events": batch.events,
         });
+        self.status.touch();
         match self.transport.post("/ad/v1/logs", &body) {
             HttpResult::Status {
                 code: 200, body, ..
@@ -513,6 +549,7 @@ impl<S: EventSource, T: Transport> Agent<S, T> {
                 }
                 let n = batch.events.len() as u64;
                 self.backoff.reset();
+                self.reject_streak = 0;
                 self.status.update(|d| {
                     d.last_send_ok_ms = Some(now_ms);
                     d.last_error.clear();
@@ -527,7 +564,22 @@ impl<S: EventSource, T: Transport> Agent<S, T> {
                 body,
                 retry_after_sec,
             } => {
-                let msg = Self::describe(code, &body);
+                let mut msg = Self::describe(code, &body);
+                if (400..500).contains(&code) && code != 429 {
+                    // 確定性拒收(400 / 413 等):重送同一批不會成功,要人處理。把次數與範圍放進 lastError / 心跳(審查 M4)
+                    self.reject_streak = self.reject_streak.saturating_add(1);
+                    let range: Vec<String> = batch
+                        .marks
+                        .iter()
+                        .map(|(c, e, t)| format!("{}@{e}..{t}", c.wire_name()))
+                        .collect();
+                    msg = format!(
+                        "{msg}(同一批連續拒收 {} 次,{} 筆,範圍 {})",
+                        self.reject_streak,
+                        batch.events.len(),
+                        range.join(",")
+                    );
+                }
                 let delay = self
                     .backoff
                     .fail(now_ms, if code == 429 { retry_after_sec } else { None });
@@ -562,6 +614,7 @@ impl<S: EventSource, T: Transport> Agent<S, T> {
                 o.insert("present".into(), json!(p));
             }
             if c == Channel::Security {
+                self.status.touch();
                 if let Ok(Some(info)) = self.source.log_info(c) {
                     o.insert(
                         "fileSizeMb".into(),
@@ -574,6 +627,7 @@ impl<S: EventSource, T: Transport> Agent<S, T> {
                         );
                     }
                 }
+                self.status.touch();
                 match self.source.oldest_event_ms(c) {
                     Ok(Some(oldest)) => {
                         let (hours, risk) = coverage(now_ms, oldest);
@@ -601,6 +655,8 @@ impl<S: EventSource, T: Transport> Agent<S, T> {
             "lastError": d.last_error,
             "pendingEvents": d.pending_events,
             "sentEvents": d.sent_events,
+            "skippedEvents": self.skipped_events,
+            "sendRejectStreak": self.reject_streak,
             "startedAt": iso_ms(d.started_at_ms),
         });
         let mut extra = self.sysinfo.as_mut().map(|f| f()).unwrap_or_default();
@@ -628,6 +684,7 @@ impl<S: EventSource, T: Transport> Agent<S, T> {
 
     fn heartbeat(&mut self, now_ms: i64) {
         let (body, sent_notices) = self.heartbeat_body(now_ms);
+        self.status.touch();
         match self.transport.post("/ad/v1/heartbeat", &body) {
             HttpResult::Status {
                 code: 200, body, ..
@@ -635,25 +692,16 @@ impl<S: EventSource, T: Transport> Agent<S, T> {
                 for _ in 0..sent_notices {
                     self.notices.pop_front();
                 }
-                let mut marks = BTreeMap::new();
-                if let Some(chs) = body
-                    .as_ref()
-                    .and_then(|b| b.get("channels"))
-                    .and_then(Value::as_object)
-                {
-                    for (k, v) in chs {
-                        if let (Some(c), Ok(m)) = (
-                            Channel::from_name(k),
-                            serde_json::from_value::<ServerMark>(v.clone()),
-                        ) {
-                            marks.insert(c, m);
+                match parse_server_marks(body.as_ref()) {
+                    Ok(marks) => {
+                        if self.server_marks.is_none() {
+                            log::info!("心跳成功;後端水位 {marks:?}");
                         }
+                        self.server_marks = Some(marks);
                     }
+                    // 回應不可信(缺 channels、型別不符):不當成「後端沒有紀錄」,沿用上次結果,下次心跳再試(審查 H1)
+                    Err(e) => self.warn_throttled(now_ms, &format!("心跳回應的水位無法使用:{e}")),
                 }
-                if self.server_marks.is_none() {
-                    log::info!("心跳成功;後端水位 {marks:?}");
-                }
-                self.server_marks = Some(marks);
             }
             HttpResult::Status { code, body, .. } => {
                 let msg = Self::describe(code, &body);

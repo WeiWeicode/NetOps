@@ -89,6 +89,27 @@ try {
     Remove-Item -LiteralPath $tmp -Recurse -Force
 }
 
+Write-Host '== 既有目錄的擁有者與 junction(資安審查 M-1)、SHA256SUMS 位置(L-3)'
+Assert-True (Test-TrustedOwnerSid 'S-1-5-18') 'SYSTEM 是可信擁有者'
+Assert-True (Test-TrustedOwnerSid 'S-1-5-32-544') 'Administrators 是可信擁有者'
+Assert-True (-not (Test-TrustedOwnerSid 'S-1-5-32-545')) 'Users 不是可信擁有者'
+Assert-True (-not (Test-TrustedOwnerSid ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value))) '一般帳號不是可信擁有者'
+$tmp = Join-Path ([IO.Path]::GetTempPath()) ("netops-ad-test-" + [guid]::NewGuid())
+$fakeData = Join-Path $tmp 'GigaNexus\NetOpsAdAgent'
+New-Item -ItemType Directory -Path $fakeData | Out-Null
+try {
+    # 測試目錄的擁有者是目前帳號(模擬一般使用者預先建立)→ 中止
+    Assert-Throws { Assert-TrustedTree $fakeData } '一般使用者建立的目錄中止安裝' '*中止安裝*'
+    Assert-True ($null -eq (Find-ReleaseSums -Dir $fakeData)) '沒有 SHA256SUMS.txt 回 null'
+    Set-Content -LiteralPath (Join-Path $tmp 'GigaNexus\SHA256SUMS.txt') -Value 'x' -Encoding ASCII
+    Assert-True ((Find-ReleaseSums -Dir $fakeData) -like '*GigaNexus\SHA256SUMS.txt') '上一層的 SHA256SUMS.txt 也找得到'
+} finally {
+    Remove-Item -LiteralPath $tmp -Recurse -Force
+}
+$installText = Get-Content -LiteralPath $install -Raw
+Assert-True (($installText -match '& \$staged --version') -and ($installText -match '& \$Staged --check-config')) '執行檔驗證後只從受保護的暫存目錄執行(M-2)'
+Assert-True ($installText -match 'installed\.sha256') '-Resume 前核對安裝時的雜湊(M-2)'
+
 Write-Host '== Token 與設定'
 Assert-True (Test-AgentToken ('a' * 64)) '64 字十六進位 Token 合法'
 Assert-True (-not (Test-AgentToken 'change-me')) '太短的 Token 不合法'

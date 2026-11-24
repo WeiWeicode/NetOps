@@ -122,11 +122,46 @@ function New-AgentConfigText {
     ) -join "`r`n"
 }
 
-# 目錄 ACL:只允許 SYSTEM 與 Administrators,不繼承上層
+# 擁有者只能是 SYSTEM 或 Administrators(資安審查 M-1)
+function Test-TrustedOwnerSid {
+    param([string]$Sid)
+    return ($Sid -eq 'S-1-5-18' -or $Sid -eq 'S-1-5-32-544')
+}
+
+# 安裝前檢查既有目錄(資安審查 M-1):一般使用者可以在 %ProgramData% 先建立 GigaNexus\NetOpsAdAgent 並成為擁有者,
+# 預先放 agent.toml(把 server_url 指到別處)或 junction(把 Token 寫到別處)。
+# 上一層 GigaNexus、目錄本身與裡面所有項目:不可是 reparse point(junction / 符號連結),擁有者必須是 SYSTEM 或 Administrators;
+# 不符就中止,請管理員檢查後移除
+function Assert-TrustedTree {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $items = @()
+    $parent = Split-Path -Parent $Path
+    if (Test-Path -LiteralPath $parent) { $items += Get-Item -LiteralPath $parent -Force }
+    if (Test-Path -LiteralPath $Path) {
+        $items += Get-Item -LiteralPath $Path -Force
+        # PowerShell 5.1 的 -Recurse 不進入 junction;junction 本身會列出,下面一律中止
+        $items += @(Get-ChildItem -LiteralPath $Path -Recurse -Force -ErrorAction Stop)
+    }
+    foreach ($i in $items) {
+        if ($i.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+            throw "$($i.FullName) 是 junction / 符號連結,中止安裝(可能被預先放置;請管理員檢查後移除)"
+        }
+        $owner = (Get-Acl -LiteralPath $i.FullName).GetOwner([Security.Principal.SecurityIdentifier]).Value
+        if (-not (Test-TrustedOwnerSid $owner)) {
+            throw "$($i.FullName) 的擁有者是 $owner,不是 SYSTEM / Administrators,中止安裝(可能被一般使用者預先建立;請管理員檢查後移除)"
+        }
+    }
+}
+
+# 目錄 ACL:只允許 SYSTEM 與 Administrators,不繼承上層;子項目的明確 ACE 全部重設成只從本目錄繼承(資安審查 M-1)
 function Set-PrivateAcl {
     param([Parameter(Mandatory = $true)][string]$Path)
     & icacls.exe $Path /inheritance:r /grant:r "$($SidSystem):(OI)(CI)F" "$($SidAdmins):(OI)(CI)F" /Q | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "icacls 設定 $Path 失敗($LASTEXITCODE)" }
+    if (Get-ChildItem -LiteralPath $Path -Force) {
+        & icacls.exe (Join-Path $Path '*') /reset /T /C /Q | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "icacls 重設 $Path 子項目失敗($LASTEXITCODE)" }
+    }
 }
 
 function Read-AgentToken {
@@ -183,6 +218,11 @@ function Suspend-NetOpsAdAgent {
 }
 
 function Resume-NetOpsAdAgent {
+    # 安裝時記下的雜湊:執行檔被換掉就不啟動(資安審查 M-2)
+    $recorded = Join-Path $DataDir 'installed.sha256'
+    if (Test-Path -LiteralPath $recorded) {
+        Test-FileSha256 -Path (Join-Path $InstallDir $ExeName) -Expected ((Get-Content -LiteralPath $recorded -TotalCount 1).Trim()) | Out-Null
+    }
     Write-Host '恢復 AD Agent:'
     foreach ($s in Get-ResumeSteps) { Invoke-ServiceStep $s }
     Write-Host '已恢復。Agent 會從 bookmarks.json 的水位接著讀,暫停期間的事件會補送。' -ForegroundColor Green
@@ -214,18 +254,48 @@ function Stop-AdAgentForUpgrade {
     }
 }
 
+# 發佈資料夾的 SHA256SUMS.txt 在 exe 所在資料夾或上一層(build-release.ps1 放在上一層);都沒有時回 $null(資安審查 L-3)
+function Find-ReleaseSums {
+    param([Parameter(Mandatory = $true)][string]$Dir)
+    foreach ($d in @($Dir, (Split-Path -Parent $Dir))) {
+        if ($d -and (Test-Path -LiteralPath (Join-Path $d 'SHA256SUMS.txt') -PathType Leaf)) { return (Join-Path $d 'SHA256SUMS.txt') }
+    }
+    return $null
+}
+
 function Install-NetOpsAdAgent {
     Assert-Administrator
     $src = Join-Path $SourceDir $ExeName
-    $hash = Test-FileSha256 -Path $src -Expected $ExpectedSha256
-    if (Test-ReleaseSums -SumsPath (Join-Path $SourceDir 'SHA256SUMS.txt') -FileName $ExeName -Expected $ExpectedSha256) {
-        Write-Host 'SHA256SUMS.txt 一致'
+    Test-FileSha256 -Path $src -Expected $ExpectedSha256 | Out-Null
+    $sums = Find-ReleaseSums -Dir $SourceDir
+    if ($sums -and (Test-ReleaseSums -SumsPath $sums -FileName $ExeName -Expected $ExpectedSha256)) {
+        Write-Host "SHA256SUMS.txt 一致($sums)"
+    } else {
+        Write-Warning '找不到 SHA256SUMS.txt,只核對 -ExpectedSha256'
     }
-    $version = (& $src --version).Trim()
-    Write-Host "執行檔驗證通過:$ExeName $version(SHA-256 $hash)" -ForegroundColor Green
 
+    foreach ($d in @($InstallDir, $DataDir)) { Assert-TrustedTree $d }
     foreach ($d in @($InstallDir, $DataDir)) { New-Item -ItemType Directory -Force -Path $d | Out-Null; Set-PrivateAcl $d }
     foreach ($d in @('secrets', 'state', 'logs')) { New-Item -ItemType Directory -Force -Path (Join-Path $DataDir $d) | Out-Null }
+
+    # 先複製到只有 SYSTEM / Administrators 可存取的暫存目錄,驗證與執行都用暫存檔(資安審查 M-2:來源資料夾可能被他人改寫)
+    $staging = Join-Path $InstallDir 'staging'
+    if (Test-Path -LiteralPath $staging) { Remove-Item -LiteralPath $staging -Recurse -Force }
+    New-Item -ItemType Directory -Path $staging | Out-Null
+    $staged = Join-Path $staging $ExeName
+    try {
+        Copy-Item -LiteralPath $src -Destination $staged -Force
+        $hash = Test-FileSha256 -Path $staged -Expected $ExpectedSha256
+        $version = (& $staged --version).Trim()
+        Write-Host "執行檔驗證通過:$ExeName $version(SHA-256 $hash)" -ForegroundColor Green
+        Install-FromStaged -Staged $staged -Hash $hash
+    } finally {
+        if (Test-Path -LiteralPath $staging) { Remove-Item -LiteralPath $staging -Recurse -Force }
+    }
+}
+
+function Install-FromStaged {
+    param([Parameter(Mandatory = $true)][string]$Staged, [Parameter(Mandatory = $true)][string]$Hash)
 
     $tokenFile = Join-Path $DataDir 'secrets\ad_agent.token'
     if ($ReplaceToken -or -not (Test-Path -LiteralPath $tokenFile)) {
@@ -242,14 +312,31 @@ function Install-NetOpsAdAgent {
         Write-Utf8NoBom -Path $config -Text (New-AgentConfigText -Url $ServerUrl -ComputerName $Computer -DomainName $Domain -Include4624 $IncludeUserLogon4624.IsPresent)
         Write-Host "已寫入 $config"
     }
-    $check = & $src --check-config --config $config 2>&1
+    $check = & $Staged --check-config --config $config 2>&1
     if ($LASTEXITCODE -ne 0) { throw "設定檢查失敗:$check" }
     Write-Host $check
 
-    Stop-AdAgentForUpgrade
+    $wasInstalled = [bool](Get-Service -Name $AgentService -ErrorAction SilentlyContinue)
     $dst = Join-Path $InstallDir $ExeName
-    Copy-Item -LiteralPath $src -Destination $dst -Force
-    Test-FileSha256 -Path $dst -Expected $ExpectedSha256 | Out-Null
+    try {
+        Stop-AdAgentForUpgrade
+        Copy-Item -LiteralPath $Staged -Destination $dst -Force
+        Test-FileSha256 -Path $dst -Expected $Hash | Out-Null
+    } catch {
+        # 停服務或換檔失敗:雜湊不符的檔案不留在服務路徑上(資安審查 M-2);舊版還在就恢復監控(審查 L13)
+        $err = $_
+        if (Test-Path -LiteralPath $dst) {
+            $now = (Get-FileHash -LiteralPath $dst -Algorithm SHA256).Hash
+            $recorded = Join-Path $DataDir 'installed.sha256'
+            $old = if (Test-Path -LiteralPath $recorded) { (Get-Content -LiteralPath $recorded -TotalCount 1).Trim() } else { '' }
+            if ($now -ne $Hash -and $now -ne $old) { Remove-Item -LiteralPath $dst -Force }
+        }
+        if ($wasInstalled -and (Test-Path -LiteralPath $dst)) {
+            try { Resume-NetOpsAdAgent } catch { Write-Warning "恢復舊版失敗:$_" }
+        }
+        throw $err
+    }
+    Write-Utf8NoBom -Path (Join-Path $DataDir 'installed.sha256') -Text $Hash
 
     Register-AdAgentService -Name $AgentService -Mode 'agent' -Exe $dst -Config $config -Display 'NetOps AD Agent' -Description 'GigaNexus NetOps:讀取 AD Event Log 並送到 netops-ad-receiver(AD-2)'
     Register-AdAgentService -Name $WatchdogService -Mode 'watchdog' -Exe $dst -Config $config -Display 'NetOps AD Watchdog' -Description 'GigaNexus NetOps:看守 NetOpsAdAgent(停止回應時重啟並上報)'

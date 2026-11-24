@@ -263,6 +263,7 @@ pub fn parse_status(line: &str) -> Result<Probe, String> {
             .get("lastCollectTickMs")
             .and_then(|t| t.as_i64())
             .ok_or("管道回應缺少 lastCollectTickMs")?,
+        tick_age_ms: v.get("tickAgeMs").and_then(|t| t.as_i64()),
     })
 }
 
@@ -301,9 +302,15 @@ mod tests {
             p,
             Probe {
                 pid: 4120,
-                last_collect_tick_ms: 1_763_616_000_000
+                last_collect_tick_ms: 1_763_616_000_000,
+                tick_age_ms: None
             }
         );
+        let p = parse_status(
+            r#"{"type":"status","pid":1,"lastCollectTickMs":5,"tickAgeMs":1200}"#,
+        )
+        .unwrap();
+        assert_eq!(p.tick_age_ms, Some(1200));
         assert!(parse_status(r#"{"type":"error","message":"x"}"#).is_err());
         assert!(parse_status(r#"{"type":"status","pid":1}"#).is_err());
         assert!(parse_status("garbage").is_err());
@@ -337,13 +344,9 @@ mod tests {
         }
         match last {
             Ok(p) => {
-                assert_eq!(
-                    p,
-                    Probe {
-                        pid: me,
-                        last_collect_tick_ms: 42
-                    }
-                );
+                assert_eq!(p.pid, me);
+                assert_eq!(p.last_collect_tick_ms, 42);
+                assert!(p.tick_age_ms.is_some_and(|a| a >= 0));
                 let e = request_status(me + 1, Duration::from_secs(5)).unwrap_err();
                 assert!(e.contains("冒充"), "{e}");
             }

@@ -7,7 +7,8 @@ use crate::bookmark::Mark;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use std::time::Instant;
 
 #[derive(Debug, Default, Clone)]
 pub struct StatusData {
@@ -21,10 +22,24 @@ pub struct StatusData {
     pub sent_events: u64,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct SharedStatus {
     tick_ms: AtomicI64,
+    /// 單調時鐘:`base` 起算的毫秒數。Watchdog 用 `tickAgeMs` 判斷停滯,不受系統校時(NTP / PDC)跳動影響(審查 M3)
+    base: Instant,
+    mono_ms: AtomicU64,
     data: Mutex<StatusData>,
+}
+
+impl Default for SharedStatus {
+    fn default() -> Self {
+        Self {
+            tick_ms: AtomicI64::new(0),
+            base: Instant::now(),
+            mono_ms: AtomicU64::new(0),
+            data: Mutex::new(StatusData::default()),
+        }
+    }
 }
 
 pub fn iso_ms(ms: i64) -> String {
@@ -47,6 +62,20 @@ impl SharedStatus {
 
     pub fn tick(&self, now_ms: i64) {
         self.tick_ms.store(now_ms, Ordering::Relaxed);
+        self.touch();
+    }
+
+    /// 只更新單調時鐘:每個可能阻塞的呼叫(Event Log、HTTP)之前都呼叫,
+    /// 一輪內多個呼叫各自逾時累加超過 90 秒時不會被誤判停滯;單一呼叫卡死仍會(審查 M2)
+    pub fn touch(&self) {
+        self.mono_ms
+            .store(self.base.elapsed().as_millis() as u64, Ordering::Relaxed);
+    }
+
+    /// 距離上一次 tick / touch 的毫秒數(單調時鐘)
+    pub fn tick_age_ms(&self) -> i64 {
+        let now = self.base.elapsed().as_millis() as u64;
+        now.saturating_sub(self.mono_ms.load(Ordering::Relaxed)) as i64
     }
 
     pub fn last_tick(&self) -> i64 {
@@ -72,6 +101,7 @@ impl SharedStatus {
             "version": version,
             "startedAt": iso_ms(d.started_at_ms),
             "lastCollectTickMs": self.last_tick(),
+            "tickAgeMs": self.tick_age_ms(),
             "lastSendOkAt": d.last_send_ok_ms.map(iso_ms).unwrap_or_default(),
             "lastError": d.last_error,
             "pendingEvents": d.pending_events,

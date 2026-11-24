@@ -16,7 +16,8 @@
 .EXAMPLE
   powershell -NoProfile -ExecutionPolicy Bypass -File ad-agent\scripts\build-release.ps1 -OutDir release-out
 #>
-param([string]$OutDir = 'release-out')
+# -TestOnly:只跑步驟 1–3 與 release 建置,不輸出發佈資料夾(分支 pipeline 用;資安審查 M-3:只有受保護 tag 的 pipeline 產出可安裝的 exe)
+param([string]$OutDir = 'release-out', [switch]$TestOnly)
 $ErrorActionPreference = 'Stop'
 $out = if ([IO.Path]::IsPathRooted($OutDir)) { $OutDir } else { Join-Path (Get-Location) $OutDir }
 $crate = Split-Path -Parent $PSScriptRoot   # ad-agent\
@@ -46,6 +47,10 @@ Invoke-Cargo @('build', '--release', '--locked')
 $exe = Join-Path $crate 'target\release\netops-ad-agent.exe'
 $v = (& $exe --version).Trim()
 if ($v -ne $version) { throw "執行檔版本 $v 與 Cargo.toml $version 不符" }
+if ($TestOnly) {
+    Write-Host "測試與建置通過($version,$((Get-Item $exe).Length) bytes);-TestOnly 不輸出發佈資料夾" -ForegroundColor Green
+    exit 0
+}
 
 $pkg = "netops-ad-agent-$version"
 $dir = Join-Path $out $pkg

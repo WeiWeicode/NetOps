@@ -12,6 +12,8 @@ struct FakeLog {
     /// Channel → (RecordID, 時間 ms, EventID)
     events: HashMap<Channel, Vec<(u64, i64, u32)>>,
     absent: Vec<Channel>,
+    /// 這些 RecordID 的 XML 給壞的(模擬無法解析)
+    bad_xml: Vec<u64>,
     since_calls: Vec<(Channel, i64)>,
 }
 
@@ -61,7 +63,11 @@ impl EventSource for Source {
                     .filter(|e| e.0 > after)
                     .take(max)
                     .map(|e| RawEvent {
-                        xml: sample(e.2, e.0, "0x8010000000000000", &[]),
+                        xml: if g.bad_xml.contains(&e.0) {
+                            "<Event><broken".into()
+                        } else {
+                            sample(e.2, e.0, "0x8010000000000000", &[])
+                        },
                         message: format!("msg {}", e.0),
                     })
                     .collect()
@@ -87,6 +93,8 @@ struct Server {
     log_codes: VecDeque<u16>,
     /// 心跳回應的 channels
     marks: Value,
+    /// 有值時心跳直接回這個 body(模擬缺 channels、型別不符的回應)
+    hb_body: Option<Value>,
     logs: Vec<Value>,
     heartbeats: Vec<Value>,
     down: bool,
@@ -103,6 +111,13 @@ impl Transport for Backend {
         }
         if path == "/ad/v1/heartbeat" {
             g.heartbeats.push(body.clone());
+            if let Some(b) = g.hb_body.clone() {
+                return HttpResult::Status {
+                    code: 200,
+                    body: Some(b),
+                    retry_after_sec: None,
+                };
+            }
             let marks = if g.marks.is_null() {
                 json!({})
             } else {
@@ -308,6 +323,7 @@ fn 後端503或斷線時採集迴圈tick照常前進() {
                 Ok(crate::watchdog::Probe {
                     pid: 4120,
                     last_collect_tick_ms: status.last_tick(),
+                    tick_age_ms: None,
                 }),
             );
             assert_eq!(wd.decide(&obs, now), crate::watchdog::Action::None);
@@ -532,4 +548,102 @@ fn 一批不超過上限筆數() {
             .collect::<Vec<_>>(),
         vec![500, 500, 200]
     );
+}
+
+#[test]
+fn 心跳200但回應缺channels或格式錯誤時不決定起點() {
+    for bad in [
+        json!({ "ok": true }),
+        json!({ "ok": true, "channels": [] }),
+        json!({ "ok": true, "channels": { "Security": { "logEpoch": "2", "lastRecordId": 4800 } } }),
+    ] {
+        let d = tempfile::tempdir().unwrap();
+        let (src, be) = (Source::default(), Backend::default());
+        for r in 4795..=4805 {
+            src.push(Channel::Security, r, T0 - 1_000, 4625);
+        }
+        be.0.lock().unwrap().hb_body = Some(bad.clone());
+        let mut a = agent(d.path(), &src, &be, vec![Channel::Security], T0);
+        for k in 0..20 {
+            a.step(T0 + k * 1_000);
+        }
+        assert!(
+            a.bookmarks().get(Channel::Security).is_none(),
+            "不可當成後端沒有紀錄而以世代 0 開始:{bad}"
+        );
+        assert!(be.0.lock().unwrap().logs.is_empty());
+
+        // 回應恢復正常後照後端世代接續
+        {
+            let mut g = be.0.lock().unwrap();
+            g.hb_body = None;
+            g.marks = json!({ "Security": { "logEpoch": 2, "lastRecordId": 4800 } });
+        }
+        for k in 20..40 {
+            a.step(T0 + k * 1_000);
+        }
+        assert_eq!(
+            sent_ids(&be, 0),
+            (4801..=4805).map(|r| (r, 2)).collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
+fn 心跳channels是物件但沒有該channel時視為後端沒有紀錄() {
+    assert!(parse_server_marks(Some(&json!({ "channels": {} }))).unwrap().is_empty());
+    let m = parse_server_marks(Some(&json!({ "channels": { "Unknown": 1, "DNS_Server": { "logEpoch": 1, "lastRecordId": 7 } } }))).unwrap();
+    assert_eq!(m.len(), 1);
+    assert!(parse_server_marks(None).is_err());
+}
+
+#[test]
+fn 後端持續4xx拒收時水位不動_心跳回報連續拒收次數與範圍() {
+    let d = tempfile::tempdir().unwrap();
+    let (src, be) = (Source::default(), Backend::default());
+    seed(d.path(), Channel::Security, 0, 10);
+    src.push(Channel::Security, 11, T0, 4625);
+    be.0.lock().unwrap().log_codes = VecDeque::from([400; 10]);
+    let mut a = agent(d.path(), &src, &be, vec![Channel::Security], T0);
+    for k in 0..=15 {
+        a.step(T0 + k * 1_000);
+    }
+    assert_eq!(
+        a.bookmarks().get(Channel::Security).unwrap().last_record_id,
+        10
+    );
+    let hb = be.0.lock().unwrap().heartbeats.last().unwrap().clone();
+    let streak = hb["agent"]["sendRejectStreak"].as_u64().unwrap();
+    assert!(streak >= 3, "{hb}");
+    let err = hb["agent"]["lastError"].as_str().unwrap();
+    assert!(err.contains("連續拒收") && err.contains("Security@0..11"), "{err}");
+
+    // 恢復 200 後歸零
+    be.0.lock().unwrap().log_codes.clear();
+    for k in 16..=80 {
+        a.step(T0 + k * 1_000);
+    }
+    let hb = be.0.lock().unwrap().heartbeats.last().unwrap().clone();
+    assert_eq!(hb["agent"]["sendRejectStreak"], 0);
+    assert_eq!(
+        a.bookmarks().get(Channel::Security).unwrap().last_record_id,
+        11
+    );
+}
+
+#[test]
+fn 無法解析的事件略過並計數_隨心跳上報() {
+    let d = tempfile::tempdir().unwrap();
+    let (src, be) = (Source::default(), Backend::default());
+    seed(d.path(), Channel::Security, 0, 0);
+    for r in 1..=3 {
+        src.push(Channel::Security, r, T0, 4625);
+    }
+    src.0.lock().unwrap().bad_xml.push(2);
+    let mut a = agent(d.path(), &src, &be, vec![Channel::Security], T0);
+    a.step(T0);
+    assert_eq!(sent_ids(&be, 0), vec![(1, 0), (3, 0)]);
+    a.step(T0 + 15_000);
+    let hb = be.0.lock().unwrap().heartbeats.last().unwrap().clone();
+    assert_eq!(hb["agent"]["skippedEvents"], 1);
 }

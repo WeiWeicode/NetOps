@@ -15,9 +15,9 @@
 | 項目 | 通過 | 失敗 | 略過 |
 | --- | --- | --- | --- |
 | `npm run typecheck` | 通過 | — | — |
-| `npm test`(全部 47 測試檔) | 372 | 0 | 0 |
-| ├ 新增 `test/ad3.test.ts`(純函式、輪詢生命週期、`GSourceBadge`) | 6 | 0 | 0 |
-| ├ 新增 `test/ad3.mount.test.ts`(4 個畫面掛載與錯誤 / 權限 / XSS 測試) | 8 | 0 | 0 |
+| `npm test`(全部 47 測試檔) | 374 | 0 | 0 |
+| ├ 新增 `test/ad3.test.ts`(純函式、輪詢生命週期、`GSourceBadge`) | 7 | 0 | 0 |
+| ├ 新增 `test/ad3.mount.test.ts`(4 個畫面掛載與錯誤 / 權限 / XSS 測試) | 9 | 0 | 0 |
 | `npm run build` | 通過 | — | — |
 | 本機 `MOCK=admin` 瀏覽器 4 畫面巡檢與截圖 | 通過(0 console error) | 0 | — |
 
@@ -46,6 +46,5 @@
 
 ## 5. 建議的處理項目
 
-1. 下午交由 Claude 審查本 MR。
-2. 依序合併 !184 → !186 → !187 → 本 MR 後,在測試區驗證真後端的 4 個畫面(特別確認 `NETOPS_AD_SOURCE=ftp` 預設模式與切換 `clickhouse` 後的畫面切換、對帳補漏與 IP 名稱顯示)。
-3. 後續 docs MR 補記 `docs/PROJECT-MAP.md` 中本次新增的 `AgentBar.vue`、`ReconCard.vue`、`adAgents.ts`、`adReconcile.ts`。
+1. 依序合併 !184 → !186 → !187 → 本 MR 後,在測試區驗證真後端的 4 個畫面(特別確認 `NETOPS_AD_SOURCE=ftp` 預設模式與切換 `clickhouse` 後的畫面切換、對帳補漏與 IP 名稱顯示)。
+2. 後續 docs MR 補記 `docs/PROJECT-MAP.md` 中本次新增的 `AgentBar.vue`、`ReconCard.vue`、`adAgents.ts`、`adReconcile.ts`。

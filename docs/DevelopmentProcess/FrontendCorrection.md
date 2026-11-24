@@ -2,6 +2,19 @@
 
 > 新紀錄加在最上方;格式見 `AGENT.md` §11。範圍:`frontend/`。
 
+## 2026-11-24 AD-3 前端 Claude 審查修正(!189)
+- 工作項目:AD-3 前端審查修正(`docs/reviews/2026-11-24-ad-gemini-fix-fe-ad6.md` !189 M1–M2、Low 1–6)
+- 內容:
+  - M1 / Low 1(`adReconcile.ts`、`ReconCard.vue`):載入時已完成的補漏工作只顯示結果不打 `POST /ad/reconciliations`,僅本頁觀察到 `queued` / `running` → `done` 且 `day` 非空才自動重新對帳;自動重新對帳失敗寫入 `dayError` 顯示於該日(不再 `.catch(() => undefined)` 吞掉);輪詢加上進行中與序號保護防重疊請求。
+  - M2(`ad3.mount.test.ts`):補齊匯出 422(`NETOPS_EXPORT_TOO_LARGE`)與補漏 409 三種錯誤碼(`NETOPS_RECON_PENDING` / `NETOPS_BACKFILL_NOTHING` / `NETOPS_BACKFILL_BUSY`)的錯誤碼與顯示文字斷言。
+  - Low 2(`Events.vue`):503 錯誤卡片移除重複 `GAlert`,僅留 `GEmpty` 與重試按鈕。
+  - Low 3(`GSourceBadge.vue`、`viz-types.ts`、`Search.vue`):新增 `live` 屬性(表格列傳 `false` 不建立 `role="status"` live region)、FTP 補寫改用獨立 `.is-ftp` 樣式並同步 `GSourceBadgeProps`。
+  - Low 4(`Search.vue`、`adEvents.ts`):`collectDcOptions` 納入目前 `form.computer`,網址帶入未知 DC 不再顯示空白。
+  - Low 5(`adEvents.ts`):`isClickHouseUnavailable` 改以 `code === 'NETOPS_CLICKHOUSE_UNAVAILABLE'` 判斷,避免誤判其他 503。
+  - Low 6(`docs/test-reports/2026-11-24-ad-3-frontend.md`):刪除暫時字句並更新測試數。
+- 檔案:`frontend/src/{composables/adReconcile.ts,composables/adEvents.ts,pages/ad/ReconCard.vue,pages/ad/Events.vue,pages/ad/Search.vue,ui/components/GSourceBadge.vue,ui/charts/viz-types.ts}`、`frontend/test/{ad3.test.ts,ad3.mount.test.ts}`、`docs/test-reports/2026-11-24-ad-3-frontend.md`
+- 驗證:`frontend/` `npm run typecheck`、`npm test`(47 檔 / 374 通過 / 0 失敗)、`npm run build` 通過
+
 ## 2026-11-24 AD-3 前端畫面(DC Agent 即時狀態列、總覽 IP 名稱、明細 DC / 名稱篩選、ClickHouse 對帳與補漏)
 - 工作項目:AD-3 前端(`docs/AD-AGENT-PLAN.md` §6.1、§8;依賴 !184、!186、!187;Gemini 實作,待 Claude 審查)
 - 內容:

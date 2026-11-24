@@ -242,14 +242,20 @@ describe('useAdReconcile 補漏工作輪詢與錯誤工具', () => {
 });
 
 describe('GSourceBadge 支援 AD 資料來源與原有 PA 熱冷標記', () => {
-  it('agent → 即時、ftp → FTP 補寫、hot/cold 維持不變', () => {
-    const a = mount(GSourceBadge, { props: { source: 'agent' } });
+  it('agent → 即時、ftp → FTP 補寫(獨立 .is-ftp 樣式)、hot/cold 維持不變;live=false 不加 role="status"(審查 Low 3)', () => {
+    const a = mount(GSourceBadge, { props: { source: 'agent', live: false } });
     expect(a.text()).toContain('即時');
-    const f = mount(GSourceBadge, { props: { source: 'ftp' } });
+    expect(a.attributes('role')).toBeUndefined();
+    const f = mount(GSourceBadge, { props: { source: 'ftp', live: false } });
     expect(f.text()).toContain('FTP 補寫');
+    expect(f.find('.is-ftp').exists()).toBe(true);
+    expect(f.find('.is-cold').exists()).toBe(false);
+    expect(f.attributes('role')).toBeUndefined();
     const h = mount(GSourceBadge, { props: { source: 'hot' } });
     expect(h.text()).toContain('即時熱資料');
+    expect(h.attributes('role')).toBe('status');
     const c = mount(GSourceBadge, { props: { source: 'cold' } });
     expect(c.text()).toContain('歷史冷歸檔');
+    expect(c.find('.is-cold').exists()).toBe(true);
   });
 });

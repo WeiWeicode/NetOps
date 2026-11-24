@@ -262,7 +262,7 @@ const rows = computed(() => (result.value?.items ?? []).map((e, i) => ({ ...e, _
           <GIpLabel :ip="asRow(row).ip" inline />
         </template>
         <template #cell-source="{ row }">
-          <GSourceBadge :source="asRow(row).source === 'agent' ? 'agent' : 'ftp'" />
+          <GSourceBadge :source="asRow(row).source === 'agent' ? 'agent' : 'ftp'" :live="false" />
         </template>
         <template #cell-message="{ row }">
           <span class="msg small">{{ asRow(row).message.split('\n')[0] }}</span>

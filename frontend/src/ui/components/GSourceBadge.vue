@@ -2,15 +2,16 @@
 /**
  * 資料來源徽章:
  *   - 時段明細(V-b2):hot「⚡ 即時熱資料」、cold「🧊 歷史冷歸檔」、mixed 兩個都顯示
- *   - AD 事件(AD-3):agent「⚡ 即時」、ftp「FTP 補寫」
- *   色用 --badge-hot、--badge-cold,文字對比 ≥ 4.5:1。
+ *   - AD 事件(AD-3):agent「⚡ 即時」、ftp「FTP 補寫」(中性色,與冷歸檔區隔)
+ *   - 表格列內多筆重複顯示時傳 :live="false",不加 role="status"(避免數十個 live region;審查 Low 3)
+ *   色用 --badge-hot、--badge-cold、--text-2,文字對比 ≥ 4.5:1。
  */
 import { computed } from 'vue';
 import type { SliceSource } from '@/api/slice';
 
 export type SourceBadgeKind = SliceSource | 'agent' | 'ftp';
 
-const props = defineProps<{ source: SourceBadgeKind }>();
+const props = withDefaults(defineProps<{ source: SourceBadgeKind; live?: boolean }>(), { live: true });
 
 const ariaLabel = computed(() => {
   switch (props.source) {
@@ -29,12 +30,12 @@ const ariaLabel = computed(() => {
 </script>
 
 <template>
-  <span class="g-source" role="status" :aria-label="ariaLabel">
+  <span class="g-source" :role="live ? 'status' : undefined" :aria-label="ariaLabel">
     <template v-if="source === 'agent'">
       <span class="g-source__b is-hot">⚡ 即時</span>
     </template>
     <template v-else-if="source === 'ftp'">
-      <span class="g-source__b is-cold">FTP 補寫</span>
+      <span class="g-source__b is-ftp">FTP 補寫</span>
     </template>
     <template v-else>
       <span v-if="source !== 'cold'" class="g-source__b is-hot">⚡ 即時熱資料</span>
@@ -72,5 +73,10 @@ const ariaLabel = computed(() => {
   color: var(--badge-cold);
   background: color-mix(in srgb, var(--badge-cold) 12%, var(--glass-strong));
   border-color: color-mix(in srgb, var(--badge-cold) 32%, transparent);
+}
+.is-ftp {
+  color: var(--text-2);
+  background: var(--glass-soft);
+  border-color: var(--line-strong, var(--line));
 }
 </style>

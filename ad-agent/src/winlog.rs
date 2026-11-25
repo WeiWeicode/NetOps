@@ -164,15 +164,15 @@ impl WinEventLog {
         count: u64,
         after: u64,
     ) -> Result<(), String> {
+        if count == 0 {
+            return Err(format!("{} 取不到筆數", c.log_name()));
+        }
         let pos = seek::seek_position_after(count, after, |p| {
             Self::seek_to_position(rs, c, p)?;
             self.read_one(rs, c, &format!("第 {p} 筆")).map(|r| r.0)
         })?;
-        if pos >= count {
-            // 沒有事件:留在結尾(EvtNext 回 NO_MORE_ITEMS)
-            return Ok(());
-        }
-        Self::seek_to_position(rs, c, pos)
+        // pos 已往前退 POSITION_MARGIN 筆,一定 < count
+        Self::seek_to_position(rs, c, pos.min(count - 1))
     }
 
     /// 把查詢定位到 `record_id` 那一筆(下一次 EvtNext 回傳它);那一筆不存在時失敗(EvtSeekStrict)
@@ -211,9 +211,15 @@ impl WinEventLog {
         match seek::plan_start(after, oldest) {
             StartPlan::FromOldest => Ok(Some(rs)),
             StartPlan::AtRecord(id) => {
-                if let Err(e) = Self::seek_to(&rs, c, id) {
-                    log::warn!("{e};改依第幾筆定位(共 {count} 筆)");
-                    self.seek_after_by_position(&rs, c, count, after)?;
+                let Err(e) = Self::seek_to(&rs, c, id) else {
+                    return Ok(Some(rs));
+                };
+                log::warn!("{e};改依第幾筆定位(共 {count} 筆)");
+                if let Err(e) = self.seek_after_by_position(&rs, c, count, after) {
+                    // 最後退路:重新查詢從最舊一筆讀(查詢位置已不確定,不沿用 rs);略過受 SKIP_BUDGET 限制,不會卡住整個週期
+                    log::warn!("{e};改從最舊一筆找水位");
+                    drop(rs);
+                    return self.query_dir(c, "*", EvtQueryForwardDirection);
                 }
                 Ok(Some(rs))
             }

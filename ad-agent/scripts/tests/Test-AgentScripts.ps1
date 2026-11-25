@@ -134,9 +134,9 @@ Assert-Throws { New-AgentConfigText -Url 'http://h:1' -ComputerName 'DC 1' -Doma
 
 Write-Host '== -Pause / -Resume 順序(M5)'
 $p = @(Get-PauseSteps | ForEach-Object { "$($_.Service):$($_.Action)" })
-Assert-True (($p -join ',') -eq 'NetOpsAdWatchdog:Manual,NetOpsAdWatchdog:Stop,NetOpsAdAgent:Manual,NetOpsAdAgent:Stop') "暫停先處理 Watchdog($($p -join ','))"
+Assert-True (($p -join ',') -eq 'NetOpsAdWatchdog:Manual,NetOpsAdWatchdog:NoRecovery,NetOpsAdWatchdog:Stop,NetOpsAdAgent:Manual,NetOpsAdAgent:NoRecovery,NetOpsAdAgent:Stop') "暫停先處理 Watchdog,停止前關閉失敗復原($($p -join ','))"
 $r = @(Get-ResumeSteps | ForEach-Object { "$($_.Service):$($_.Action)" })
-Assert-True (($r -join ',') -eq 'NetOpsAdAgent:Automatic,NetOpsAdAgent:Start,NetOpsAdWatchdog:Automatic,NetOpsAdWatchdog:Start') "恢復先啟動 Agent($($r -join ','))"
+Assert-True (($r -join ',') -eq 'NetOpsAdAgent:Recovery,NetOpsAdAgent:Automatic,NetOpsAdAgent:Start,NetOpsAdWatchdog:Recovery,NetOpsAdWatchdog:Automatic,NetOpsAdWatchdog:Start') "恢復先啟動 Agent,啟動前設回失敗復原($($r -join ','))"
 Assert-True ((@(Get-UninstallOrder) -join ',') -eq 'NetOpsAdWatchdog,NetOpsAdAgent') '移除先停 Watchdog'
 Assert-Throws { Invoke-ServiceStep @{ Service = 'NetOpsAdAgent-不存在'; Action = 'Stop' } } '服務不存在時明確失敗' '*不存在*'
 
@@ -152,8 +152,99 @@ Assert-True ($binPath -eq "`"$spaceExe`" --mode agent --config `"$spaceCfg`"") '
 $chg = New-ServiceChangeArguments -BinPath $binPath
 Assert-True ($chg.PathName -eq $binPath -and $chg.StartMode -eq 'Automatic' -and $chg.StartName -eq 'LocalSystem') 'CIM Win32_Service.Change 參數正確保留路徑雙引號與啟動模式'
 Assert-True (-not ($installText -match "Invoke-ScExe\s+@\('config'")) '升級服務不再經由 sc.exe config 傳遞內嵌雙引號 binPath'
+Assert-True (-not ($installText -match 'Stop-Service\s+-') -and -not ((Get-Content -LiteralPath $uninstall -Raw) -match 'Stop-Service\s+-')) '停止服務一律經 Stop-AdServiceSafely(不直接 Stop-Service)'
 Assert-True ($installText -match 'Invoke-CimMethod\s+-InputObject\s+\$svc\s+-MethodName\s+Change' -and $installText -match '\$r\.ReturnValue\s+-ne\s+0') '升級服務改用 CIM Change 並驗證 ReturnValue == 0'
 Assert-Throws { Set-ExistingServiceConfig -Name 'bad name' -BinPath $binPath } '拒絕非法服務名稱' '*格式錯誤*'
+
+Write-Host '== 停不下來時安全收尾(0.1.1,DC1 實測 0.1.0 Stop-Service 失敗)'
+# 兩支腳本的共用區塊必須相同
+$blockRe = '(?s)# ===== 安全停止服務\(Install / Uninstall 兩支腳本共用.*?# ===== 安全停止服務\(共用\)結束 ====='
+$bi = [regex]::Match($installText, $blockRe).Value
+$bu = [regex]::Match((Get-Content -LiteralPath $uninstall -Raw), $blockRe).Value
+Assert-True ($bi.Length -gt 0 -and $bi -ceq $bu) 'Install / Uninstall 的安全停止區塊內容相同'
+Assert-Throws { Assert-AdServiceName 'Spooler' } '只處理 NetOps AD 服務' '*拒絕*'
+Assert-Throws { Assert-AdServiceName 'netopsadagent' } '服務名稱大小寫也要相符' '*拒絕*'
+Assert-Throws { Disable-AdServiceRecovery -Name 'W32Time' } '關閉失敗復原拒絕其他服務' '*拒絕*'
+Assert-Throws { Stop-AdServiceSafely -Name 'W32Time' -ExpectedExe 'C:\x.exe' } '安全停止拒絕其他服務' '*拒絕*'
+Assert-True ((Get-RecoveryNoneCommand -Name 'NetOpsAdAgent') -ceq 'sc.exe failure NetOpsAdAgent reset= 0 actions= ""') '關閉失敗復原用 actions= ""(經 cmd.exe 傳空字串)'
+$ra = @(Get-RecoveryArguments -Name 'NetOpsAdWatchdog')
+Assert-True ($ra.Count -eq 2 -and ($ra[0] -join ' ') -eq 'failure NetOpsAdWatchdog reset= 86400 actions= restart/10000/restart/30000/restart/60000' -and ($ra[1] -join ' ') -eq 'failureflag NetOpsAdWatchdog 1') '恢復失敗復原:10 / 30 / 60 秒與 failureflag 1'
+
+function New-FailureBlob {
+    param([int[]]$Types)
+    $b = New-Object byte[] (20 + 8 * $Types.Count)
+    [BitConverter]::GetBytes([uint32]86400).CopyTo($b, 0)
+    [BitConverter]::GetBytes([uint32]$Types.Count).CopyTo($b, 12)
+    for ($i = 0; $i -lt $Types.Count; $i++) {
+        [BitConverter]::GetBytes([uint32]$Types[$i]).CopyTo($b, 20 + 8 * $i)
+        [BitConverter]::GetBytes([uint32]10000).CopyTo($b, 24 + 8 * $i)
+    }
+    , $b
+}
+Assert-True (Test-FailureActionsNone $null) '沒有 FailureActions 值 = 已關閉'
+Assert-True (Test-FailureActionsNone (New-FailureBlob @())) '0 個動作 = 已關閉'
+Assert-True (Test-FailureActionsNone (New-FailureBlob @(0, 0, 0))) '全部 SC_ACTION_NONE = 已關閉'
+Assert-True (-not (Test-FailureActionsNone (New-FailureBlob @(1, 1, 1)))) '安裝時的 restart × 3 = 未關閉'
+Assert-True (-not (Test-FailureActionsNone (New-FailureBlob @(0, 1)))) '只要有一個 restart 就未關閉'
+Assert-True (-not (Test-FailureActionsNone ([byte[]](1, 2, 3)))) '格式不對視為未關閉'
+$bad = New-FailureBlob @(0); [BitConverter]::GetBytes([uint32]5).CopyTo($bad, 12)
+Assert-True (-not (Test-FailureActionsNone $bad)) '動作數超過資料長度視為未關閉'
+
+$exe = 'C:\Program Files\GigaNexus\NetOpsAdAgent\netops-ad-agent.exe'
+Assert-True (Test-OwnServiceProcess -ProcessPath 'c:\program files\GigaNexus\NetOpsAdAgent\NETOPS-AD-AGENT.EXE' -ExpectedExe $exe) '行程路徑相同(不分大小寫)才結束'
+Assert-True (-not (Test-OwnServiceProcess -ProcessPath 'C:\Windows\System32\svchost.exe' -ExpectedExe $exe)) '其他行程不結束'
+Assert-True (-not (Test-OwnServiceProcess -ProcessPath '' -ExpectedExe $exe)) '取不到路徑不結束'
+
+# 以假的 Get-Service / CIM / Stop-Process 驗證流程順序(不碰真的服務)
+$script:calls = New-Object System.Collections.ArrayList
+function New-FakeController {
+    param([bool]$GracefulOk)
+    $o = [pscustomobject]@{ Status = 'Running'; GracefulOk = $GracefulOk; Killed = $false }
+    $o | Add-Member ScriptMethod Stop { [void]$script:calls.Add('Stop') }
+    $o | Add-Member ScriptMethod Refresh { if ($this.Killed) { $this.Status = 'Stopped' } }
+    $o | Add-Member ScriptMethod WaitForStatus {
+        param($s, $t)
+        [void]$script:calls.Add('Wait')
+        if (-not $this.GracefulOk -and -not $this.Killed) { throw 'Time out has expired' }
+    }
+    $o
+}
+function global:Get-Service { param($Name, $ErrorAction) $script:fake }
+function global:Disable-AdServiceRecovery { param($Name) [void]$script:calls.Add("NoRecovery:$Name") }
+function global:Get-CimInstance {
+    param($ClassName, $Filter, $ErrorAction)
+    if ($ClassName -eq 'Win32_Service') { [pscustomobject]@{ ProcessId = 4242 } }
+    else { [pscustomobject]@{ ExecutablePath = $script:fakePath } }
+}
+function global:Stop-Process { param($Id, [switch]$Force, $ErrorAction) [void]$script:calls.Add("Kill:$Id"); $script:fake.Killed = $true }
+function global:Wait-Process { param($Id, $Timeout, $ErrorAction) }
+function global:Get-Process { param($Id, $ErrorAction) $null }
+try {
+    $script:fake = New-FakeController -GracefulOk $true
+    Stop-AdServiceSafely -Name 'NetOpsAdAgent' -ExpectedExe $exe -TimeoutSec 1
+    Assert-True (($script:calls -join ',') -eq 'Stop,Wait') "正常停止不結束行程($($script:calls -join ','))"
+
+    $script:calls.Clear(); $script:fakePath = $exe
+    $script:fake = New-FakeController -GracefulOk $false
+    Stop-AdServiceSafely -Name 'NetOpsAdAgent' -ExpectedExe $exe -TimeoutSec 1 3>$null 6>$null
+    Assert-True (($script:calls -join ',') -eq 'Stop,Wait,NoRecovery:NetOpsAdAgent,Kill:4242,Wait') "停不下來:先關閉失敗復原再結束行程並等待停止($($script:calls -join ','))"
+
+    $script:calls.Clear(); $script:fakePath = 'C:\Windows\System32\svchost.exe'
+    $script:fake = New-FakeController -GracefulOk $false
+    Assert-Throws { Stop-AdServiceSafely -Name 'NetOpsAdAgent' -ExpectedExe $exe -TimeoutSec 1 3>$null } '行程不是安裝目錄的 exe 時不結束' '*不結束*'
+    Assert-True (-not ($script:calls -match '^Kill')) '路徑不符時沒有結束任何行程'
+
+    $script:calls.Clear()
+    $script:fake = New-FakeController -GracefulOk $true; $script:fake.Status = 'Stopped'
+    Stop-AdServiceSafely -Name 'NetOpsAdWatchdog' -ExpectedExe $exe -TimeoutSec 1
+    Assert-True ($script:calls.Count -eq 0) '已停止的服務不動作'
+} finally {
+    foreach ($f in 'Get-Service', 'Disable-AdServiceRecovery', 'Get-CimInstance', 'Stop-Process', 'Wait-Process', 'Get-Process') {
+        Remove-Item -Path "function:global:$f" -ErrorAction SilentlyContinue
+    }
+    # 測試替換了 Disable-AdServiceRecovery:重新載入腳本的版本
+    $null = Import-ScriptParts $install
+}
 
 Write-Host ''
 Write-Host "通過 $script:passed、失敗 $script:failed"

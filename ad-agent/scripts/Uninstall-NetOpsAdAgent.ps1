@@ -113,7 +113,10 @@ function Stop-AdServiceSafely {
     $procId = [int](Get-CimInstance -ClassName Win32_Service -Filter "Name='$Name'" -ErrorAction Stop).ProcessId
     $proc = if ($procId -gt 0) { Get-Process -Id $procId -ErrorAction SilentlyContinue } else { $null }
     if ($proc) {
-        $null = $proc.Handle
+        # LocalSystem 服務的行程:取得 handle 需要 SeDebugPrivilege(系統管理員有但預設未啟用;資安複審 3)
+        $debug = $false
+        try { [Diagnostics.Process]::EnterDebugMode(); $debug = $true } catch { Write-Verbose "無法啟用 SeDebugPrivilege:$_" }
+        try { $null = $proc.Handle } finally { if ($debug) { [Diagnostics.Process]::LeaveDebugMode() } }
         # handle 保住後 PID 不會被重用;Path(MainModule)讀不到時改用 CIM 的 ExecutablePath
         $path = $proc.Path
         if (-not $path) { $path = (Get-CimInstance -ClassName Win32_Process -Filter "ProcessId=$procId" -ErrorAction Stop).ExecutablePath }

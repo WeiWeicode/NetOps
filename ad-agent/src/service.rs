@@ -96,7 +96,7 @@ fn expire_stop(handle: Arc<OnceLock<ServiceStatusHandle>>) {
     {
         log::error!("回報 STOPPED 失敗:{e}");
     }
-    log::logger().flush();
+    // 不呼叫 logger().flush():要拿 logger 的鎖,卡住的執行緒持有時會停在這裡(日誌寫入沒有緩衝,不需要 flush;資安複審 1)
     // TerminateProcess:不跑 DLL_PROCESS_DETACH。卡住的執行緒可能持有 wevtapi / RPC 內部的鎖,
     // ExitProcess 會因此卡住,舊行程留著時新行程又被啟動(資安審查 M-2)
     // SAFETY:結束自己的行程

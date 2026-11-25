@@ -59,34 +59,66 @@ fn service_status(
     }
 }
 
-/// 停止期限:到期主迴圈還沒結束就回報 STOPPED 並結束行程(只啟動一次)
-fn spawn_stop_deadline(handle: Arc<OnceLock<ServiceStatusHandle>>, done: Arc<AtomicBool>) {
+/// 停止期限:`deadline_ms` 內 `done` 沒設定就執行 `on_expire`(服務:回報 STOPPED 並結束行程)。
+/// 回傳執行緒,測試用來等結果
+fn spawn_stop_deadline(
+    done: Arc<AtomicBool>,
+    deadline_ms: u64,
+    on_expire: impl FnOnce() + Send + 'static,
+) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
-        let mut left = STOP_DEADLINE_MS;
+        let mut left = deadline_ms;
         while left > 0 && !done.load(Ordering::Relaxed) {
             let d = left.min(200);
             std::thread::sleep(Duration::from_millis(d));
             left -= d;
         }
-        if done.load(Ordering::Relaxed) {
-            return;
+        if !done.load(Ordering::Relaxed) {
+            on_expire();
         }
-        log::warn!(
-            "收到停止後 {} 秒主迴圈仍未結束(可能卡在 Event Log 或網路呼叫),直接結束行程",
-            STOP_DEADLINE_MS / 1000
-        );
-        log::logger().flush();
-        if let Some(h) = handle.get() {
-            let _ = h.set_service_status(service_status(
-                ServiceState::Stopped,
-                ServiceControlAccept::empty(),
-                ServiceExitCode::Win32(0),
-                0,
-                0,
-            ));
-        }
-        std::process::exit(0);
-    });
+    })
+}
+
+/// 期限到:回報 STOPPED(結束代碼 0,SCM 不執行失敗復原)後結束行程。bookmarks.json、outbox 都是原子寫入,中途結束只會留下舊檔或新檔
+fn expire_stop(handle: Arc<OnceLock<ServiceStatusHandle>>) {
+    log::warn!(
+        "收到停止後 {} 秒主迴圈仍未結束(可能卡在 Event Log 或網路呼叫),直接結束行程",
+        STOP_DEADLINE_MS / 1000
+    );
+    if let Some(h) = handle.get()
+        && let Err(e) = h.set_service_status(service_status(
+            ServiceState::Stopped,
+            ServiceControlAccept::empty(),
+            ServiceExitCode::Win32(0),
+            0,
+            0,
+        ))
+    {
+        log::error!("回報 STOPPED 失敗:{e}");
+    }
+    log::logger().flush();
+    // TerminateProcess:不跑 DLL_PROCESS_DETACH。卡住的執行緒可能持有 wevtapi / RPC 內部的鎖,
+    // ExitProcess 會因此卡住,舊行程留著時新行程又被啟動(資安審查 M-2)
+    // SAFETY:結束自己的行程
+    unsafe {
+        windows_sys::Win32::System::Threading::TerminateProcess(
+            windows_sys::Win32::System::Threading::GetCurrentProcess(),
+            0,
+        )
+    };
+    std::process::exit(0);
+}
+
+fn report_stop_pending(h: &ServiceStatusHandle) {
+    if let Err(e) = h.set_service_status(service_status(
+        ServiceState::StopPending,
+        ServiceControlAccept::empty(),
+        ServiceExitCode::Win32(0),
+        1,
+        STOP_WAIT_HINT_MS,
+    )) {
+        log::warn!("回報 STOP_PENDING 失敗:{e}");
+    }
 }
 
 fn now_ms() -> i64 {
@@ -140,18 +172,15 @@ fn service_main(_args: Vec<OsString>) {
     let (s, d, hc) = (stop.clone(), done.clone(), cell.clone());
     let handler = move |c| match c {
         ServiceControl::Stop | ServiceControl::Shutdown => {
-            // 第一次收到才回報 STOP_PENDING 並啟動期限;主迴圈在讀取中也會在 0.5 秒內看到停止訊號
+            // 第一次收到才回報 STOP_PENDING 並啟動期限;取消進行中的 EvtNext(Event Log 服務端掃大型 Log 時不受分段等待影響),
+            // 主迴圈在讀取中也會在 0.5 秒內看到停止訊號
             if !s.swap(true, Ordering::Relaxed) {
                 if let Some(h) = hc.get() {
-                    let _ = h.set_service_status(service_status(
-                        ServiceState::StopPending,
-                        ServiceControlAccept::empty(),
-                        ServiceExitCode::Win32(0),
-                        1,
-                        STOP_WAIT_HINT_MS,
-                    ));
+                    report_stop_pending(h);
                 }
-                spawn_stop_deadline(hc.clone(), d.clone());
+                crate::winlog::cancel_active_read();
+                let hc2 = hc.clone();
+                spawn_stop_deadline(d.clone(), STOP_DEADLINE_MS, move || expire_stop(hc2));
             }
             ServiceControlHandlerResult::NoError
         }
@@ -161,7 +190,6 @@ fn service_main(_args: Vec<OsString>) {
     let Ok(h) = service_control_handler::register(name, handler) else {
         return;
     };
-    let _ = cell.set(h);
     let _ = h.set_service_status(service_status(
         ServiceState::Running,
         ServiceControlAccept::STOP | ServiceControlAccept::SHUTDOWN,
@@ -169,6 +197,12 @@ fn service_main(_args: Vec<OsString>) {
         0,
         0,
     ));
+    // 先回報 Running 再存 handle:Stop 若在這之前到達(handler 拿不到 handle),這裡補報 STOP_PENDING,
+    // 不會被 Running 蓋掉(審查 1);之後到達的由 handler 自己回報
+    let _ = cell.set(h);
+    if stop.load(Ordering::Relaxed) {
+        report_stop_pending(&h);
+    }
     let code = run_mode(&mode, &config, &stop, false);
     done.store(true, Ordering::Relaxed);
     let exit = if code == 0 {
@@ -431,11 +465,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn 期限內主迴圈結束就不結束行程() {
-        let done = Arc::new(AtomicBool::new(true));
-        let cell = Arc::new(OnceLock::new());
-        // done 已設定:期限執行緒立即返回,不呼叫 process::exit(否則測試行程會結束)
-        spawn_stop_deadline(cell, done);
+    fn 期限內主迴圈結束就不執行期限動作() {
+        let done = Arc::new(AtomicBool::new(false));
+        let fired = Arc::new(AtomicBool::new(false));
+        let f = fired.clone();
+        let t = spawn_stop_deadline(done.clone(), 2_000, move || {
+            f.store(true, Ordering::Relaxed)
+        });
         std::thread::sleep(Duration::from_millis(300));
+        done.store(true, Ordering::Relaxed);
+        t.join().unwrap();
+        assert!(!fired.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn 期限到主迴圈沒結束就執行期限動作() {
+        let done = Arc::new(AtomicBool::new(false));
+        let fired = Arc::new(AtomicBool::new(false));
+        let f = fired.clone();
+        let start = std::time::Instant::now();
+        spawn_stop_deadline(done, 300, move || f.store(true, Ordering::Relaxed))
+            .join()
+            .unwrap();
+        assert!(fired.load(Ordering::Relaxed));
+        assert!(start.elapsed() >= Duration::from_millis(300));
     }
 }

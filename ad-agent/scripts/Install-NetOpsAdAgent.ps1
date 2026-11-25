@@ -213,19 +213,25 @@ function Test-FailureActionsNone {
     return $true
 }
 
-# actions= "" 清除失敗復原動作。經 cmd.exe 傳:PowerShell 5.1 呼叫外部程式時會丟掉空字串參數
-function Get-RecoveryNoneCommand {
+# sc.exe 一律用完整路徑(不從目前目錄找執行檔;資安審查 M-1)
+function Get-ScExePath { Join-Path $env:SystemRoot 'System32\sc.exe' }
+
+# actions= "" 清除失敗復原動作。以 Start-Process 傳整段參數字串:PowerShell 5.1 呼叫外部程式時會丟掉空字串參數
+function Get-RecoveryNoneArguments {
     param([Parameter(Mandatory = $true)][string]$Name)
     Assert-AdServiceName $Name
-    "sc.exe failure $Name reset= 0 actions= `"`""
+    "failure $Name reset= 0 actions= `"`""
 }
 
 function Disable-AdServiceRecovery {
     param([Parameter(Mandatory = $true)][string]$Name)
     Assert-AdServiceName $Name
-    $out = & cmd.exe /d /c (Get-RecoveryNoneCommand -Name $Name) 2>&1
-    if ($LASTEXITCODE -ne 0) { throw "關閉 $Name 的失敗復原動作失敗($LASTEXITCODE):$out" }
-    $out = & sc.exe failureflag $Name 0 2>&1
+    $sc = Get-ScExePath
+    $p = Start-Process -FilePath $sc -ArgumentList (Get-RecoveryNoneArguments -Name $Name) -WorkingDirectory (Split-Path -Parent $sc) -NoNewWindow -PassThru
+    $null = $p.Handle
+    $p.WaitForExit()
+    if ($p.ExitCode -ne 0) { throw "關閉 $Name 的失敗復原動作失敗($($p.ExitCode))" }
+    $out = & $sc failureflag $Name 0 2>&1
     if ($LASTEXITCODE -ne 0) { throw "sc.exe failureflag $Name 0 失敗($LASTEXITCODE):$out" }
     $key = "HKLM:\SYSTEM\CurrentControlSet\Services\$Name"
     $blob = (Get-ItemProperty -LiteralPath $key -Name FailureActions -ErrorAction SilentlyContinue).FailureActions
@@ -239,7 +245,8 @@ function Test-OwnServiceProcess {
     try { return ([IO.Path]::GetFullPath($ProcessPath) -ieq [IO.Path]::GetFullPath($ExpectedExe)) } catch { return $false }
 }
 
-# 先正常停止;$TimeoutSec 內沒停(或停止要求失敗)→ 關閉失敗復原 → 結束該服務的行程 → 等 SCM 顯示 Stopped
+# 先正常停止;$TimeoutSec 內沒停(或停止要求失敗)→ 關閉失敗復原 → 結束該服務的行程 → 等 SCM 顯示 Stopped。
+# 結束行程時先取得行程物件並保住 handle(PID 不會被重用),在同一個物件上比對路徑、再確認服務的 PID 沒變才結束(資安審查 L-1)
 function Stop-AdServiceSafely {
     param([Parameter(Mandatory = $true)][string]$Name, [Parameter(Mandatory = $true)][string]$ExpectedExe, [int]$TimeoutSec = 30)
     Assert-AdServiceName $Name
@@ -251,23 +258,32 @@ function Stop-AdServiceSafely {
         $ctl.WaitForStatus('Stopped', $wait)
         return
     } catch {
-        Write-Warning "$Name 未在 $TimeoutSec 秒內停止($($_.Exception.Message.Split("`n")[0])),改為結束該服務的行程"
+        $msg = $_.Exception.Message.Split("`n")[0]
+        $ctl.Refresh()
+        # 停止要求送出前服務剛好自己停了:不必結束行程(審查 6)
+        if ($ctl.Status -eq 'Stopped') { return }
+        Write-Warning "$Name 未在 $TimeoutSec 秒內停止($msg),改為結束該服務的行程"
     }
     Disable-AdServiceRecovery -Name $Name
-    $svc = Get-CimInstance -ClassName Win32_Service -Filter "Name='$Name'" -ErrorAction Stop
-    $procId = [int]$svc.ProcessId
-    if ($procId -gt 0) {
-        $proc = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId=$procId" -ErrorAction Stop
-        if (-not (Test-OwnServiceProcess -ProcessPath $proc.ExecutablePath -ExpectedExe $ExpectedExe)) {
-            throw "$Name 的行程 $procId($($proc.ExecutablePath))不是 $ExpectedExe,不結束"
+    $procId = [int](Get-CimInstance -ClassName Win32_Service -Filter "Name='$Name'" -ErrorAction Stop).ProcessId
+    $proc = if ($procId -gt 0) { Get-Process -Id $procId -ErrorAction SilentlyContinue } else { $null }
+    if ($proc) {
+        $null = $proc.Handle
+        # handle 保住後 PID 不會被重用;Path(MainModule)讀不到時改用 CIM 的 ExecutablePath
+        $path = $proc.Path
+        if (-not $path) { $path = (Get-CimInstance -ClassName Win32_Process -Filter "ProcessId=$procId" -ErrorAction Stop).ExecutablePath }
+        if (-not (Test-OwnServiceProcess -ProcessPath $path -ExpectedExe $ExpectedExe)) {
+            throw "$Name 的行程 $procId($path)不是 $ExpectedExe,不結束"
         }
-        Stop-Process -Id $procId -Force -ErrorAction Stop
-        Wait-Process -Id $procId -Timeout $TimeoutSec -ErrorAction SilentlyContinue
-        if (Get-Process -Id $procId -ErrorAction SilentlyContinue) { throw "$Name 的行程 $procId 沒有結束" }
+        $again = [int](Get-CimInstance -ClassName Win32_Service -Filter "Name='$Name'" -ErrorAction Stop).ProcessId
+        if ($again -ne $procId) { throw "$Name 的行程已改變($procId → $again),不結束,請重新執行" }
+        $proc.Kill()
+        if (-not $proc.WaitForExit($TimeoutSec * 1000)) { throw "$Name 的行程 $procId 沒有結束" }
     }
     $ctl.Refresh()
     $ctl.WaitForStatus('Stopped', $wait)
-    Write-Host "  $Name 已結束行程 $procId 並停止" -ForegroundColor Yellow
+    if ($proc) { Write-Host "  $Name 已結束行程 $procId 並停止" -ForegroundColor Yellow }
+    else { Write-Host "  $Name 已停止" }
 }
 # ===== 安全停止服務(共用)結束 =====
 
@@ -312,8 +328,26 @@ function Invoke-ServiceStep {
 
 function Suspend-NetOpsAdAgent {
     Write-Host '暫停 AD Agent(維護模式):'
-    foreach ($s in Get-PauseSteps) { Invoke-ServiceStep $s }
+    try {
+        foreach ($s in Get-PauseSteps) { Invoke-ServiceStep $s }
+    } catch {
+        # 停不下來(例:行程路徑不符):還在執行的服務設回失敗復原,不留「執行中但當掉不會被拉起」的狀態(審查 5、資安 L-2)
+        $err = $_
+        Restore-RunningServiceRecovery
+        Write-Warning '暫停未完成:請查看上面的錯誤,排除後重新執行 -Pause;要恢復監控請執行 -Resume。'
+        throw $err
+    }
     Write-Host '已暫停。心跳中斷超過 180 秒畫面會顯示離線;維護完成後執行 -Resume。' -ForegroundColor Yellow
+}
+
+# 還在執行(沒停下來)的服務設回失敗復原;個別失敗只警告
+function Restore-RunningServiceRecovery {
+    foreach ($n in @($WatchdogService, $AgentService)) {
+        $svc = Get-Service -Name $n -ErrorAction SilentlyContinue
+        if ($svc -and $svc.Status -ne 'Stopped') {
+            try { Set-AdServiceRecovery -Name $n; Write-Host "  $n 仍在執行,已設回失敗復原" } catch { Write-Warning "$n 設回失敗復原失敗:$_" }
+        }
+    }
 }
 
 function Resume-NetOpsAdAgent {
@@ -329,7 +363,7 @@ function Resume-NetOpsAdAgent {
 
 function Invoke-ScExe {
     param([Parameter(Mandatory = $true)][string[]]$Arguments)
-    $out = & sc.exe @Arguments 2>&1
+    $out = & (Get-ScExePath) @Arguments 2>&1
     if ($LASTEXITCODE -ne 0) { throw "sc.exe $($Arguments -join ' ') 失敗($LASTEXITCODE):$out" }
 }
 
@@ -468,7 +502,13 @@ function Install-FromStaged {
             if ($now -ne $Hash -and $now -ne $old) { Remove-Item -LiteralPath $dst -Force }
         }
         if ($wasInstalled -and (Test-Path -LiteralPath $dst)) {
-            try { Resume-NetOpsAdAgent } catch { Write-Warning "恢復舊版失敗:$_" }
+            try { Resume-NetOpsAdAgent } catch {
+                Write-Warning "恢復舊版失敗:$_"
+                # 至少把失敗復原設回,不留無人看守的狀態(資安 L-2)
+                foreach ($n in @($AgentService, $WatchdogService)) {
+                    try { Set-AdServiceRecovery -Name $n } catch { Write-Warning "$n 設回失敗復原失敗:$_" }
+                }
+            }
         }
         throw $err
     }

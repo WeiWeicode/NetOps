@@ -166,7 +166,12 @@ Assert-Throws { Assert-AdServiceName 'Spooler' } '只處理 NetOps AD 服務' '*
 Assert-Throws { Assert-AdServiceName 'netopsadagent' } '服務名稱大小寫也要相符' '*拒絕*'
 Assert-Throws { Disable-AdServiceRecovery -Name 'W32Time' } '關閉失敗復原拒絕其他服務' '*拒絕*'
 Assert-Throws { Stop-AdServiceSafely -Name 'W32Time' -ExpectedExe 'C:\x.exe' } '安全停止拒絕其他服務' '*拒絕*'
-Assert-True ((Get-RecoveryNoneCommand -Name 'NetOpsAdAgent') -ceq 'sc.exe failure NetOpsAdAgent reset= 0 actions= ""') '關閉失敗復原用 actions= ""(經 cmd.exe 傳空字串)'
+Assert-True ((Get-RecoveryNoneArguments -Name 'NetOpsAdAgent') -ceq 'failure NetOpsAdAgent reset= 0 actions= ""') '關閉失敗復原用 actions= ""(Start-Process 整段參數傳空字串)'
+Assert-True ((Get-ScExePath) -ieq (Join-Path $env:SystemRoot 'System32\sc.exe')) 'sc.exe 用完整路徑(資安 M-1)'
+foreach ($p2 in @($install, $uninstall)) {
+    $raw2 = Get-Content -LiteralPath $p2 -Raw
+    Assert-True (-not ($raw2 -match '&\s+sc\.exe') -and -not ($raw2 -match 'cmd\.exe')) "$(Split-Path -Leaf $p2) 不經 cmd.exe、不以相對名稱呼叫 sc.exe"
+}
 $ra = @(Get-RecoveryArguments -Name 'NetOpsAdWatchdog')
 Assert-True ($ra.Count -eq 2 -and ($ra[0] -join ' ') -eq 'failure NetOpsAdWatchdog reset= 86400 actions= restart/10000/restart/30000/restart/60000' -and ($ra[1] -join ' ') -eq 'failureflag NetOpsAdWatchdog 1') '恢復失敗復原:10 / 30 / 60 秒與 failureflag 1'
 
@@ -195,12 +200,15 @@ Assert-True (Test-OwnServiceProcess -ProcessPath 'c:\program files\GigaNexus\Net
 Assert-True (-not (Test-OwnServiceProcess -ProcessPath 'C:\Windows\System32\svchost.exe' -ExpectedExe $exe)) '其他行程不結束'
 Assert-True (-not (Test-OwnServiceProcess -ProcessPath '' -ExpectedExe $exe)) '取不到路徑不結束'
 
-# 以假的 Get-Service / CIM / Stop-Process 驗證流程順序(不碰真的服務)
+# 以假的 Get-Service / CIM / Get-Process 驗證流程順序(不碰真的服務與行程)
 $script:calls = New-Object System.Collections.ArrayList
 function New-FakeController {
-    param([bool]$GracefulOk)
-    $o = [pscustomobject]@{ Status = 'Running'; GracefulOk = $GracefulOk; Killed = $false }
-    $o | Add-Member ScriptMethod Stop { [void]$script:calls.Add('Stop') }
+    param([bool]$GracefulOk, [string]$Status = 'Running', [bool]$StopsBySelf = $false)
+    $o = [pscustomobject]@{ Status = $Status; GracefulOk = $GracefulOk; Killed = $false; StopsBySelf = $StopsBySelf }
+    $o | Add-Member ScriptMethod Stop {
+        [void]$script:calls.Add('Stop')
+        if ($this.StopsBySelf) { $this.Status = 'Stopped'; throw 'Cannot stop: service not started' }
+    }
     $o | Add-Member ScriptMethod Refresh { if ($this.Killed) { $this.Status = 'Stopped' } }
     $o | Add-Member ScriptMethod WaitForStatus {
         param($s, $t)
@@ -209,40 +217,74 @@ function New-FakeController {
     }
     $o
 }
+function New-FakeProcess {
+    param([string]$Path)
+    $o = [pscustomobject]@{ Id = 4242; Path = $Path; Handle = 1 }
+    $o | Add-Member ScriptMethod Kill { [void]$script:calls.Add("Kill:$($this.Id)"); $script:fake.Killed = $true }
+    $o | Add-Member ScriptMethod WaitForExit { param($ms) $true }
+    $o
+}
 function global:Get-Service { param($Name, $ErrorAction) $script:fake }
 function global:Disable-AdServiceRecovery { param($Name) [void]$script:calls.Add("NoRecovery:$Name") }
 function global:Get-CimInstance {
     param($ClassName, $Filter, $ErrorAction)
-    if ($ClassName -eq 'Win32_Service') { [pscustomobject]@{ ProcessId = 4242 } }
-    else { [pscustomobject]@{ ExecutablePath = $script:fakePath } }
+    if ($ClassName -eq 'Win32_Service') { $script:pids.Dequeue() } else { [pscustomobject]@{ ExecutablePath = $script:cimPath } }
 }
-function global:Stop-Process { param($Id, [switch]$Force, $ErrorAction) [void]$script:calls.Add("Kill:$Id"); $script:fake.Killed = $true }
-function global:Wait-Process { param($Id, $Timeout, $ErrorAction) }
-function global:Get-Process { param($Id, $ErrorAction) $null }
+function global:Get-Process { param($Id, $ErrorAction) [void]$script:calls.Add("Open:$Id"); New-FakeProcess -Path $script:fakePath }
+function Reset-Fake {
+    param([int[]]$Pids = @(4242, 4242))
+    $script:calls.Clear()
+    $script:pids = New-Object System.Collections.Queue
+    foreach ($x in $Pids) { $script:pids.Enqueue([pscustomobject]@{ ProcessId = $x }) }
+}
 try {
+    Reset-Fake
     $script:fake = New-FakeController -GracefulOk $true
     Stop-AdServiceSafely -Name 'NetOpsAdAgent' -ExpectedExe $exe -TimeoutSec 1
     Assert-True (($script:calls -join ',') -eq 'Stop,Wait') "正常停止不結束行程($($script:calls -join ','))"
 
-    $script:calls.Clear(); $script:fakePath = $exe
+    Reset-Fake; $script:fakePath = $exe
     $script:fake = New-FakeController -GracefulOk $false
     Stop-AdServiceSafely -Name 'NetOpsAdAgent' -ExpectedExe $exe -TimeoutSec 1 3>$null 6>$null
-    Assert-True (($script:calls -join ',') -eq 'Stop,Wait,NoRecovery:NetOpsAdAgent,Kill:4242,Wait') "停不下來:先關閉失敗復原再結束行程並等待停止($($script:calls -join ','))"
+    Assert-True (($script:calls -join ',') -eq 'Stop,Wait,NoRecovery:NetOpsAdAgent,Open:4242,Kill:4242,Wait') "停不下來:先關閉失敗復原再結束行程並等待停止($($script:calls -join ','))"
 
-    $script:calls.Clear(); $script:fakePath = 'C:\Windows\System32\svchost.exe'
+    Reset-Fake; $script:fakePath = $null; $script:cimPath = $exe
+    $script:fake = New-FakeController -GracefulOk $false
+    Stop-AdServiceSafely -Name 'NetOpsAdAgent' -ExpectedExe $exe -TimeoutSec 1 3>$null 6>$null
+    Assert-True ($script:calls -contains 'Kill:4242') '行程 Path 讀不到時改用 CIM 路徑比對'
+
+    Reset-Fake; $script:fakePath = 'C:\Windows\System32\svchost.exe'
     $script:fake = New-FakeController -GracefulOk $false
     Assert-Throws { Stop-AdServiceSafely -Name 'NetOpsAdAgent' -ExpectedExe $exe -TimeoutSec 1 3>$null } '行程不是安裝目錄的 exe 時不結束' '*不結束*'
     Assert-True (-not ($script:calls -match '^Kill')) '路徑不符時沒有結束任何行程'
 
-    $script:calls.Clear()
-    $script:fake = New-FakeController -GracefulOk $true; $script:fake.Status = 'Stopped'
+    Reset-Fake -Pids @(4242, 5555); $script:fakePath = $exe
+    $script:fake = New-FakeController -GracefulOk $false
+    Assert-Throws { Stop-AdServiceSafely -Name 'NetOpsAdAgent' -ExpectedExe $exe -TimeoutSec 1 3>$null } '服務的 PID 在比對期間改變時不結束(PID 重用)' '*已改變*'
+    Assert-True (-not ($script:calls -match '^Kill')) 'PID 改變時沒有結束任何行程'
+
+    Reset-Fake
+    $script:fake = New-FakeController -GracefulOk $false -StopsBySelf $true
+    Stop-AdServiceSafely -Name 'NetOpsAdAgent' -ExpectedExe $exe -TimeoutSec 1 3>$null
+    Assert-True (($script:calls -join ',') -eq 'Stop') "送出停止前服務已自己停下:不關閉失敗復原、不結束行程($($script:calls -join ','))"
+
+    Reset-Fake
+    $script:fake = New-FakeController -GracefulOk $true -Status 'Stopped'
     Stop-AdServiceSafely -Name 'NetOpsAdWatchdog' -ExpectedExe $exe -TimeoutSec 1
     Assert-True ($script:calls.Count -eq 0) '已停止的服務不動作'
+
+    # -Pause 失敗:還在執行的服務設回失敗復原後再拋出(審查 5、資安 L-2)
+    Reset-Fake
+    $script:fake = New-FakeController -GracefulOk $true
+    function global:Invoke-ServiceStep { param($Step) if ($Step.Action -eq 'Stop' -and $Step.Service -eq 'NetOpsAdAgent') { throw '模擬停止失敗' } }
+    function global:Set-AdServiceRecovery { param($Name) [void]$script:calls.Add("Recovery:$Name") }
+    Assert-Throws { Suspend-NetOpsAdAgent 3>$null 6>$null } '-Pause 停止失敗時拋出錯誤' '*模擬停止失敗*'
+    Assert-True (($script:calls -join ',') -eq 'Recovery:NetOpsAdWatchdog,Recovery:NetOpsAdAgent') "-Pause 失敗時還在執行的服務設回失敗復原($($script:calls -join ','))"
 } finally {
-    foreach ($f in 'Get-Service', 'Disable-AdServiceRecovery', 'Get-CimInstance', 'Stop-Process', 'Wait-Process', 'Get-Process') {
+    foreach ($f in 'Get-Service', 'Disable-AdServiceRecovery', 'Get-CimInstance', 'Get-Process', 'Invoke-ServiceStep', 'Set-AdServiceRecovery') {
         Remove-Item -Path "function:global:$f" -ErrorAction SilentlyContinue
     }
-    # 測試替換了 Disable-AdServiceRecovery:重新載入腳本的版本
+    # 測試替換了腳本的函式:重新載入
     $null = Import-ScriptParts $install
 }
 

@@ -12,15 +12,15 @@ use crate::agent::{EventSource, LogInfo, RawEvent};
 use crate::channel::Channel;
 use crate::seek::{self, ReadEnd, StartPlan};
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use windows_sys::Win32::Foundation::{
-    ERROR_INSUFFICIENT_BUFFER, ERROR_NO_MORE_ITEMS, GetLastError,
+    ERROR_CANCELLED, ERROR_INSUFFICIENT_BUFFER, ERROR_NO_MORE_ITEMS, GetLastError,
 };
 use windows_sys::Win32::System::EventLog::{
-    EVT_HANDLE, EVT_VARIANT, EvtChannelLoggingConfigMaxSize, EvtClose, EvtCreateBookmark,
-    EvtFormatMessage, EvtFormatMessageEvent, EvtGetChannelConfigProperty, EvtGetLogInfo,
-    EvtLogFileSize, EvtLogNumberOfLogRecords, EvtLogOldestRecordNumber, EvtNext,
+    EVT_HANDLE, EVT_VARIANT, EvtCancel, EvtChannelLoggingConfigMaxSize, EvtClose,
+    EvtCreateBookmark, EvtFormatMessage, EvtFormatMessageEvent, EvtGetChannelConfigProperty,
+    EvtGetLogInfo, EvtLogFileSize, EvtLogNumberOfLogRecords, EvtLogOldestRecordNumber, EvtNext,
     EvtOpenChannelConfig, EvtOpenChannelPath, EvtOpenLog, EvtOpenPublisherMetadata, EvtQuery,
     EvtQueryChannelPath, EvtQueryForwardDirection, EvtQueryReverseDirection, EvtRender,
     EvtRenderEventXml, EvtSeek, EvtSeekRelativeToBookmark, EvtSeekRelativeToFirst, EvtSeekStrict,
@@ -53,6 +53,22 @@ fn wide(s: &str) -> Vec<u16> {
 fn last_error() -> u32 {
     // SAFETY:只讀執行緒的最後錯誤碼
     unsafe { GetLastError() }
+}
+
+/// 正在 `EvtNext` 的查詢(0 = 沒有)。服務收到停止時由 SCM 的執行緒呼叫 [`cancel_active_read`] 取消:
+/// Event Log 服務端掃描大型 Log 時,`EvtNext` 不一定在分段等待時間內返回(DC1 實測 0.1.0 停不下來)。
+/// 設定 / 清除 / 取消都持有同一把鎖,取消時查詢控制代碼一定還沒關閉
+static ACTIVE_READ: Mutex<EVT_HANDLE> = Mutex::new(0);
+
+/// 取消進行中的 Event Log 讀取;沒有進行中的讀取回 false
+pub fn cancel_active_read() -> bool {
+    let g = ACTIVE_READ.lock().unwrap_or_else(|e| e.into_inner());
+    // SAFETY:*g 非 0 時是 next_ex 正在使用、尚未關閉的查詢控制代碼(清除前會先取得這把鎖)
+    *g != 0 && unsafe { EvtCancel(*g) } != 0
+}
+
+fn set_active_read(h: EVT_HANDLE) {
+    *ACTIVE_READ.lock().unwrap_or_else(|e| e.into_inner()) = h;
 }
 
 /// EVT_HANDLE 的 RAII
@@ -370,7 +386,7 @@ impl WinEventLog {
 
     fn next_ex(&self, rs: &Handle, c: Channel, n: usize) -> Result<Next, String> {
         let mut buf = vec![0isize; n];
-        let mut returned = 0u32;
+        let mut returned: u32;
         let mut waited = 0u32;
         loop {
             if self.stopping() {
@@ -379,13 +395,30 @@ impl WinEventLog {
             let Some(slice) = seek::next_slice_ms(waited, NEXT_TIMEOUT_MS, NEXT_SLICE_MS) else {
                 return Ok(Next::TimedOut);
             };
-            // SAFETY:buf 長度與 eventssize 一致
-            let ok = unsafe { EvtNext(rs.0, n as u32, buf.as_mut_ptr(), slice, 0, &mut returned) };
+            returned = 0;
+            set_active_read(rs.0);
+            // 設定後再檢查一次:停止訊號在設定前到達時,取消可能落空
+            let ok = if self.stopping() {
+                0
+            } else {
+                // SAFETY:buf 長度與 eventssize 一致
+                unsafe { EvtNext(rs.0, n as u32, buf.as_mut_ptr(), slice, 0, &mut returned) }
+            };
+            let err = if ok == 0 { last_error() } else { 0 };
+            set_active_read(0);
             if ok != 0 {
                 break;
             }
-            match last_error() {
+            // 失敗時理論上不會有事件;有的話關閉,不洩漏控制代碼(審查 3)
+            for h in &buf[..(returned as usize).min(buf.len())] {
+                drop(Handle(*h));
+            }
+            if self.stopping() {
+                return Err(STOPPING.into());
+            }
+            match err {
                 ERROR_NO_MORE_ITEMS => return Ok(Next::NoMore),
+                ERROR_CANCELLED => return Err(format!("讀取 {} 被取消", c.log_name())),
                 // 這一段沒等到:檢查停止訊號後接著等(查詢狀態保留)
                 ERROR_TIMEOUT => waited = waited.saturating_add(slice),
                 e => return Err(format!("讀取 {} 失敗(錯誤 {e})", c.log_name())),

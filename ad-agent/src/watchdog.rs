@@ -188,9 +188,7 @@ impl Monitor {
                 match &obs.probe {
                     Some(Ok(p)) => {
                         self.fails = 0;
-                        let idle = p
-                            .tick_age_ms
-                            .unwrap_or(now_ms - p.last_collect_tick_ms);
+                        let idle = p.tick_age_ms.unwrap_or(now_ms - p.last_collect_tick_ms);
                         if idle > STALE_MS {
                             Action::KillHung {
                                 pid,
@@ -522,9 +520,6 @@ mod tests {
         ));
         // 舊版 Agent 沒有 tickAgeMs:沿用壁鐘
         let mut m = Monitor::new(T);
-        assert!(matches!(
-            m.decide(&probe(None), T),
-            Action::KillHung { .. }
-        ));
+        assert!(matches!(m.decide(&probe(None), T), Action::KillHung { .. }));
     }
 }

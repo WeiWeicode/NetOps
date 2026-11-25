@@ -133,7 +133,9 @@ impl Transport for Backend {
             if let Some(code) = g.hb_code {
                 return HttpResult::Status {
                     code,
-                    body: Some(json!({ "code": "NETOPS_AD_UNAVAILABLE", "message": "暫時無法接收,請稍後重送" })),
+                    body: Some(
+                        json!({ "code": "NETOPS_AD_UNAVAILABLE", "message": "暫時無法接收,請稍後重送" }),
+                    ),
                     retry_after_sec: None,
                 };
             }
@@ -617,7 +619,11 @@ fn 心跳200但回應缺channels或格式錯誤時不決定起點() {
 
 #[test]
 fn 心跳channels是物件但沒有該channel時視為後端沒有紀錄() {
-    assert!(parse_server_marks(Some(&json!({ "channels": {} }))).unwrap().is_empty());
+    assert!(
+        parse_server_marks(Some(&json!({ "channels": {} })))
+            .unwrap()
+            .is_empty()
+    );
     let m = parse_server_marks(Some(&json!({ "channels": { "Unknown": 1, "DNS_Server": { "logEpoch": 1, "lastRecordId": 7 } } }))).unwrap();
     assert_eq!(m.len(), 1);
     assert!(parse_server_marks(None).is_err());
@@ -642,7 +648,10 @@ fn 後端持續4xx拒收時水位不動_心跳回報連續拒收次數與範圍(
     let streak = hb["agent"]["sendRejectStreak"].as_u64().unwrap();
     assert!(streak >= 3, "{hb}");
     let err = hb["agent"]["lastError"].as_str().unwrap();
-    assert!(err.contains("連續拒收") && err.contains("Security@0..11"), "{err}");
+    assert!(
+        err.contains("連續拒收") && err.contains("Security@0..11"),
+        "{err}"
+    );
 
     // 恢復 200 後歸零
     be.0.lock().unwrap().log_codes.clear();
@@ -689,7 +698,10 @@ fn 心跳503時不決定起點_恢復後照後端世代接續() {
     }
     assert!(a.bookmarks().get(Channel::Security).is_none());
     assert!(be.0.lock().unwrap().logs.is_empty());
-    assert!(be.0.lock().unwrap().heartbeats.len() >= 2, "下一次心跳照常重試");
+    assert!(
+        be.0.lock().unwrap().heartbeats.len() >= 2,
+        "下一次心跳照常重試"
+    );
     {
         let mut g = be.0.lock().unwrap();
         g.hb_code = None;

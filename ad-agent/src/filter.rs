@@ -111,9 +111,7 @@ fn is_weak_tgs_4769(e: &ParsedEvent) -> bool {
     if svc.ends_with('$') || svc.eq_ignore_ascii_case("krbtgt") {
         return false;
     }
-    if svc.len() > 7
-        && svc.as_bytes()[..7].eq_ignore_ascii_case(b"krbtgt/")
-    {
+    if svc.len() > 7 && svc.as_bytes()[..7].eq_ignore_ascii_case(b"krbtgt/") {
         return false;
     }
     true
@@ -199,7 +197,9 @@ mod tests {
             assert!(f.accept(Channel::Security, &ev(id, &[])), "AD-6 {id} 應收");
         }
         // §9.4 不收 + §9.3 預設關 + 4624 缺 LogonType
-        for id in [4634, 4648, 4688, 5145, 4770, 4673, 4674, 4769, 4662, 5136, 4624] {
+        for id in [
+            4634, 4648, 4688, 5145, 4770, 4673, 4674, 4769, 4662, 5136, 4624,
+        ] {
             assert!(!f.accept(Channel::Security, &ev(id, &[])), "{id} 不應收");
         }
     }
@@ -262,10 +262,7 @@ mod tests {
                 ]
             )
         ));
-        assert!(!f.accept(
-            s,
-            &ev(4616, &[("SubjectUserName", "local service")])
-        ));
+        assert!(!f.accept(s, &ev(4616, &[("SubjectUserName", "local service")])));
         // 中文版 Windows 名稱被翻譯時以 SID 排除
         assert!(!f.accept(
             s,
@@ -341,7 +338,10 @@ mod tests {
         // 4768 失敗不論加密類型都收
         assert!(f.accept(
             s,
-            &ev(4768, &[("Status", "0x18"), ("TicketEncryptionType", "0x12")])
+            &ev(
+                4768,
+                &[("Status", "0x18"), ("TicketEncryptionType", "0x12")]
+            )
         ));
         assert!(f.accept(s, &ev(4768, &[])), "缺 Status 時保守收下");
     }

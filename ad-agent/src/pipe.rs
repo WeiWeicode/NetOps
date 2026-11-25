@@ -306,10 +306,8 @@ mod tests {
                 tick_age_ms: None
             }
         );
-        let p = parse_status(
-            r#"{"type":"status","pid":1,"lastCollectTickMs":5,"tickAgeMs":1200}"#,
-        )
-        .unwrap();
+        let p = parse_status(r#"{"type":"status","pid":1,"lastCollectTickMs":5,"tickAgeMs":1200}"#)
+            .unwrap();
         assert_eq!(p.tick_age_ms, Some(1200));
         assert!(parse_status(r#"{"type":"error","message":"x"}"#).is_err());
         assert!(parse_status(r#"{"type":"status","pid":1}"#).is_err());

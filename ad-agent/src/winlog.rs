@@ -12,6 +12,8 @@ use crate::agent::{EventSource, LogInfo, RawEvent};
 use crate::channel::Channel;
 use crate::seek::{self, ReadEnd, StartPlan};
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use windows_sys::Win32::Foundation::{
     ERROR_INSUFFICIENT_BUFFER, ERROR_NO_MORE_ITEMS, GetLastError,
 };
@@ -32,6 +34,10 @@ const ERROR_TIMEOUT: u32 = 1460;
 /// EvtNext 等待上限(毫秒)。逾時:已讀到的事件先交出;一筆都沒讀到才回錯誤,查詢保留到下個週期接著等
 /// (連續 [`seek::MAX_EMPTY_TIMEOUTS`] 次才丟掉重開)
 const NEXT_TIMEOUT_MS: u32 = 10_000;
+/// EvtNext 單次等待(毫秒):分段等,每段之間檢查停止訊號,服務停止不必等滿 10 秒(0.1.1,DC1 停止失敗)
+const NEXT_SLICE_MS: u32 = 500;
+/// 停止中:讀取、定位、二分搜尋都立即結束
+pub const STOPPING: &str = "服務停止中,中斷讀取";
 const CHUNK: usize = 64;
 /// 一次 read_after 最多略過幾筆(≤ 水位或無法轉換的事件);超過就保留查詢,下個週期接著讀。
 /// 正常只會略過水位那一筆與第幾筆定位多退的 [`seek::POSITION_MARGIN`] 筆
@@ -88,11 +94,24 @@ enum Next {
 pub struct WinEventLog {
     publishers: HashMap<String, Handle>,
     cursors: HashMap<Channel, Cursor>,
+    stop: Option<Arc<AtomicBool>>,
 }
 
 impl WinEventLog {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// 服務的停止訊號:設定後 EvtNext 等待、定位與二分搜尋都會中斷(回 [`STOPPING`] 錯誤)
+    pub fn with_stop(mut self, stop: Arc<AtomicBool>) -> Self {
+        self.stop = Some(stop);
+        self
+    }
+
+    fn stopping(&self) -> bool {
+        self.stop
+            .as_ref()
+            .is_some_and(|s| s.load(Ordering::Relaxed))
     }
 
     /// None = Channel 不存在
@@ -214,8 +233,14 @@ impl WinEventLog {
                 let Err(e) = Self::seek_to(&rs, c, id) else {
                     return Ok(Some(rs));
                 };
+                if self.stopping() {
+                    return Err(STOPPING.into());
+                }
                 log::warn!("{e};改依第幾筆定位(共 {count} 筆)");
                 if let Err(e) = self.seek_after_by_position(&rs, c, count, after) {
+                    if self.stopping() {
+                        return Err(STOPPING.into());
+                    }
                     // 最後退路:重新查詢從最舊一筆讀(查詢位置已不確定,不沿用 rs);略過受 SKIP_BUDGET 限制,不會卡住整個週期
                     log::warn!("{e};改從最舊一筆找水位");
                     drop(rs);
@@ -346,23 +371,25 @@ impl WinEventLog {
     fn next_ex(&self, rs: &Handle, c: Channel, n: usize) -> Result<Next, String> {
         let mut buf = vec![0isize; n];
         let mut returned = 0u32;
-        // SAFETY:buf 長度與 eventssize 一致
-        let ok = unsafe {
-            EvtNext(
-                rs.0,
-                n as u32,
-                buf.as_mut_ptr(),
-                NEXT_TIMEOUT_MS,
-                0,
-                &mut returned,
-            )
-        };
-        if ok == 0 {
-            return match last_error() {
-                ERROR_NO_MORE_ITEMS => Ok(Next::NoMore),
-                ERROR_TIMEOUT => Ok(Next::TimedOut),
-                e => Err(format!("讀取 {} 失敗(錯誤 {e})", c.log_name())),
+        let mut waited = 0u32;
+        loop {
+            if self.stopping() {
+                return Err(STOPPING.into());
+            }
+            let Some(slice) = seek::next_slice_ms(waited, NEXT_TIMEOUT_MS, NEXT_SLICE_MS) else {
+                return Ok(Next::TimedOut);
             };
+            // SAFETY:buf 長度與 eventssize 一致
+            let ok = unsafe { EvtNext(rs.0, n as u32, buf.as_mut_ptr(), slice, 0, &mut returned) };
+            if ok != 0 {
+                break;
+            }
+            match last_error() {
+                ERROR_NO_MORE_ITEMS => return Ok(Next::NoMore),
+                // 這一段沒等到:檢查停止訊號後接著等(查詢狀態保留)
+                ERROR_TIMEOUT => waited = waited.saturating_add(slice),
+                e => return Err(format!("讀取 {} 失敗(錯誤 {e})", c.log_name())),
+            }
         }
         Ok(Next::Events(
             buf[..returned as usize]
@@ -537,7 +564,7 @@ impl EventSource for WinEventLog {
             },
         };
         let (mut out, mut consumed, mut end, mut err) = self.drain(&rs, c, after, max);
-        if seek::should_reopen(reused, !out.is_empty(), end) {
+        if seek::should_reopen(reused, !out.is_empty(), end) && !self.stopping() {
             // 保留的查詢讀不到事件(例:等待期間 Log 被覆寫或清除):當次重新定位一次(審查 2)
             log::warn!(
                 "{} 保留的查詢讀不到事件({}),重新定位",
@@ -606,6 +633,7 @@ impl EventSource for WinEventLog {
         });
         match by_id {
             Ok(r) => Ok(r),
+            Err(e) if self.stopping() => Err(e),
             Err(e) => {
                 // 搜尋期間 Log 被覆寫、RecordID 有跳號等:改依第幾筆二分搜尋(審查 4)
                 log::warn!("{e};往回找起點改依第幾筆搜尋(共 {count} 筆)");
@@ -744,6 +772,43 @@ mod tests {
         assert!(!got.is_empty() && got[0] > after && got.iter().all(|id| *id > after));
         assert!(consumed >= newest);
         assert!(oldest <= after);
+    }
+
+    /// 0.1.1:停止訊號設定後,讀取與往回找都立即中斷(DC1 停止失敗)
+    #[test]
+    fn 停止訊號中斷讀取與往回找_本機system_log() {
+        let stop = Arc::new(AtomicBool::new(false));
+        let mut w = WinEventLog::new().with_stop(stop.clone());
+        let newest = w
+            .log_info(Channel::System)
+            .unwrap()
+            .unwrap()
+            .newest_record_id;
+        assert!(
+            w.read_after(Channel::System, newest.saturating_sub(3), 2)
+                .is_ok()
+        );
+        stop.store(true, Ordering::Relaxed);
+        let t = std::time::Instant::now();
+        assert_eq!(
+            w.read_after(Channel::System, newest.saturating_sub(10), 5),
+            Err(STOPPING.to_string())
+        );
+        // 保留的查詢沿用時也中斷
+        assert_eq!(
+            w.read_after(Channel::System, newest.saturating_sub(10), 5),
+            Err(STOPPING.to_string())
+        );
+        assert_eq!(
+            w.first_record_since(Channel::System, 0),
+            Err(STOPPING.to_string())
+        );
+        assert!(w.oldest_event_ms(Channel::System).is_err());
+        assert!(
+            t.elapsed() < std::time::Duration::from_secs(2),
+            "{:?}",
+            t.elapsed()
+        );
     }
 
     /// 0.1.1:往回找改二分搜尋;結果的前一筆時間早於 since

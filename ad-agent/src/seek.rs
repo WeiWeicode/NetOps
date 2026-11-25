@@ -66,6 +66,12 @@ pub fn can_reuse(cursor_after: Option<u64>, after: u64) -> bool {
     cursor_after == Some(after)
 }
 
+/// `EvtNext` 分段等待:已等 `waited` 毫秒、上限 `total`,下一段等多久;None = 已到上限(逾時)
+pub fn next_slice_ms(waited: u32, total: u32, slice: u32) -> Option<u32> {
+    let left = total.saturating_sub(waited);
+    (left > 0).then(|| left.min(slice.max(1)))
+}
+
 /// `EvtCreateBookmark` 用的書籤 XML(指到 `record_id` 那一筆)
 pub fn bookmark_xml(log_name: &str, record_id: u64) -> String {
     let mut name = String::with_capacity(log_name.len());
@@ -225,6 +231,22 @@ mod tests {
         assert!(!can_reuse(Some(10), 9));
         assert!(!can_reuse(Some(10), 11));
         assert!(!can_reuse(None, 10));
+    }
+
+    #[test]
+    fn evtnext分段等待() {
+        assert_eq!(next_slice_ms(0, 10_000, 500), Some(500));
+        assert_eq!(next_slice_ms(9_800, 10_000, 500), Some(200));
+        assert_eq!(next_slice_ms(10_000, 10_000, 500), None);
+        assert_eq!(next_slice_ms(12_000, 10_000, 500), None);
+        assert_eq!(next_slice_ms(0, 10_000, 0), Some(1));
+        // 分段加總剛好是上限,段數 = 20
+        let (mut w, mut n) = (0, 0);
+        while let Some(s) = next_slice_ms(w, 10_000, 500) {
+            w += s;
+            n += 1;
+        }
+        assert_eq!((w, n), (10_000, 20));
     }
 
     #[test]

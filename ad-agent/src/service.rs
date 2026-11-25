@@ -4,6 +4,8 @@
 //!   `-Pause` 把它改成手動,維護期間不會被拉起,M5)
 //! - `--mode watchdog`:每 15 秒看守 Agent(Monitor 判斷,這裡執行 SCM 動作與上報)
 //! - 設定錯誤時以非 0 結束代碼停止(安裝腳本設定 failureflag,SCM 失敗復原照樣重試)
+//! - 停止(0.1.1,DC1 實測 0.1.0 停不下來):收到 Stop 立即回報 STOP_PENDING;Event Log 讀取每 0.5 秒檢查停止訊號。
+//!   [`STOP_DEADLINE_MS`] 內主迴圈還沒結束(例:卡在 wevtapi 或 HTTP 呼叫)就回報 STOPPED(結束代碼 0,不觸發 SCM 失敗復原)後結束行程
 
 use crate::agent::{Agent, AgentSettings, VERSION};
 use crate::config::Config;
@@ -25,11 +27,67 @@ use std::time::Duration;
 use windows_service::service::{
     ServiceControl, ServiceControlAccept, ServiceExitCode, ServiceState, ServiceStatus, ServiceType,
 };
-use windows_service::service_control_handler::{self, ServiceControlHandlerResult};
+use windows_service::service_control_handler::{
+    self, ServiceControlHandlerResult, ServiceStatusHandle,
+};
 use windows_service::{define_windows_service, service_dispatcher};
 
 static MODE: OnceLock<(String, PathBuf)> = OnceLock::new();
 const REVERSE_WATCH_MS: i64 = 60_000;
+/// 收到 Stop 後最多等主迴圈多久(毫秒);要小於 SCM 等待服務停止的時間(關機時預設 20 秒)
+pub const STOP_DEADLINE_MS: u64 = 15_000;
+/// 回報 STOP_PENDING 的 wait hint(毫秒):比期限多一點,SCM 不會先判定停止失敗
+pub const STOP_WAIT_HINT_MS: u64 = STOP_DEADLINE_MS + 5_000;
+// SCM 關機時等服務停止預設 20 秒;期限要在那之前
+const _: () = assert!(STOP_DEADLINE_MS < 20_000 && STOP_WAIT_HINT_MS > STOP_DEADLINE_MS);
+
+fn service_status(
+    state: ServiceState,
+    accept: ServiceControlAccept,
+    exit: ServiceExitCode,
+    checkpoint: u32,
+    wait_hint_ms: u64,
+) -> ServiceStatus {
+    ServiceStatus {
+        service_type: ServiceType::OWN_PROCESS,
+        current_state: state,
+        controls_accepted: accept,
+        exit_code: exit,
+        checkpoint,
+        wait_hint: Duration::from_millis(wait_hint_ms),
+        process_id: None,
+    }
+}
+
+/// 停止期限:到期主迴圈還沒結束就回報 STOPPED 並結束行程(只啟動一次)
+fn spawn_stop_deadline(handle: Arc<OnceLock<ServiceStatusHandle>>, done: Arc<AtomicBool>) {
+    std::thread::spawn(move || {
+        let mut left = STOP_DEADLINE_MS;
+        while left > 0 && !done.load(Ordering::Relaxed) {
+            let d = left.min(200);
+            std::thread::sleep(Duration::from_millis(d));
+            left -= d;
+        }
+        if done.load(Ordering::Relaxed) {
+            return;
+        }
+        log::warn!(
+            "收到停止後 {} 秒主迴圈仍未結束(可能卡在 Event Log 或網路呼叫),直接結束行程",
+            STOP_DEADLINE_MS / 1000
+        );
+        log::logger().flush();
+        if let Some(h) = handle.get() {
+            let _ = h.set_service_status(service_status(
+                ServiceState::Stopped,
+                ServiceControlAccept::empty(),
+                ServiceExitCode::Win32(0),
+                0,
+                0,
+            ));
+        }
+        std::process::exit(0);
+    });
+}
 
 fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
@@ -77,10 +135,24 @@ fn service_main(_args: Vec<OsString>) {
         WATCHDOG_SERVICE
     };
     let stop = Arc::new(AtomicBool::new(false));
-    let s = stop.clone();
+    let done = Arc::new(AtomicBool::new(false));
+    let cell: Arc<OnceLock<ServiceStatusHandle>> = Arc::new(OnceLock::new());
+    let (s, d, hc) = (stop.clone(), done.clone(), cell.clone());
     let handler = move |c| match c {
         ServiceControl::Stop | ServiceControl::Shutdown => {
-            s.store(true, Ordering::Relaxed);
+            // 第一次收到才回報 STOP_PENDING 並啟動期限;主迴圈在讀取中也會在 0.5 秒內看到停止訊號
+            if !s.swap(true, Ordering::Relaxed) {
+                if let Some(h) = hc.get() {
+                    let _ = h.set_service_status(service_status(
+                        ServiceState::StopPending,
+                        ServiceControlAccept::empty(),
+                        ServiceExitCode::Win32(0),
+                        1,
+                        STOP_WAIT_HINT_MS,
+                    ));
+                }
+                spawn_stop_deadline(hc.clone(), d.clone());
+            }
             ServiceControlHandlerResult::NoError
         }
         ServiceControl::Interrogate => ServiceControlHandlerResult::NoError,
@@ -89,30 +161,27 @@ fn service_main(_args: Vec<OsString>) {
     let Ok(h) = service_control_handler::register(name, handler) else {
         return;
     };
-    let status = |state, accept, exit| ServiceStatus {
-        service_type: ServiceType::OWN_PROCESS,
-        current_state: state,
-        controls_accepted: accept,
-        exit_code: exit,
-        checkpoint: 0,
-        wait_hint: Duration::from_secs(10),
-        process_id: None,
-    };
-    let _ = h.set_service_status(status(
+    let _ = cell.set(h);
+    let _ = h.set_service_status(service_status(
         ServiceState::Running,
         ServiceControlAccept::STOP | ServiceControlAccept::SHUTDOWN,
         ServiceExitCode::Win32(0),
+        0,
+        0,
     ));
     let code = run_mode(&mode, &config, &stop, false);
+    done.store(true, Ordering::Relaxed);
     let exit = if code == 0 {
         ServiceExitCode::Win32(0)
     } else {
         ServiceExitCode::ServiceSpecific(code as u32)
     };
-    let _ = h.set_service_status(status(
+    let _ = h.set_service_status(service_status(
         ServiceState::Stopped,
         ServiceControlAccept::empty(),
         exit,
+        0,
+        0,
     ));
 }
 
@@ -173,7 +242,7 @@ fn run_agent(cfg: &Config, stop: &Arc<AtomicBool>) -> i32 {
     });
     let mut agent = match Agent::new(
         AgentSettings::from_config(cfg),
-        WinEventLog::new(),
+        WinEventLog::new().with_stop(stop.clone()),
         HttpTransport::new(&cfg.server_url, &cfg.token),
         status,
         now_ms(),
@@ -355,4 +424,18 @@ fn run_watchdog(cfg: &Config, stop: &Arc<AtomicBool>) -> i32 {
         sleep_unless_stopped(stop, PROBE_INTERVAL_MS as u64);
     }
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn 期限內主迴圈結束就不結束行程() {
+        let done = Arc::new(AtomicBool::new(true));
+        let cell = Arc::new(OnceLock::new());
+        // done 已設定:期限執行緒立即返回,不呼叫 process::exit(否則測試行程會結束)
+        spawn_stop_deadline(cell, done);
+        std::thread::sleep(Duration::from_millis(300));
+    }
 }

@@ -3,6 +3,7 @@
 //! 0.1.0 用 XPath `EventRecordID > N`、`timediff(...)` 篩選:Windows 從最舊一筆依序比對,
 //! 3 GB 的 Security Log `EvtNext` 10 秒內找不到第一筆就逾時,而且每個週期重查一次(GSMC-DC1 實測 2026-11-25)。
 //! 0.1.1 改成查詢不帶篩選(`*`),以書籤 `EvtSeek` 直接定位到水位;往回 60 分鐘用 RecordID 二分搜尋。
+//! 書籤定位失敗(水位那一筆不存在)時,改用「第幾筆」(`EvtSeekRelativeToFirst`)二分搜尋,也不線性掃描。
 
 /// 增量讀取的起點
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -16,10 +17,10 @@ pub enum StartPlan {
 /// `after` = 水位(已讀到的最後 RecordID),`oldest` = Log 目前最舊一筆的 RecordID(0 = 不明或沒有事件)
 ///
 /// - 水位 0(世代剛重設或從頭讀):從最舊一筆
-/// - 水位比最舊一筆還小(已被覆寫):從最舊一筆;跳號由既有行為處理(與 0.1.0 `EventRecordID > N` 結果相同)
-/// - 其他:定位到水位那一筆
+/// - 水位比最舊一筆還小(已被覆寫):從最舊一筆,不必略過任何事件;跳號由既有行為處理(與 0.1.0 `EventRecordID > N` 結果相同)
+/// - 其他(含最舊不明):定位到水位那一筆;定位失敗由呼叫端改用第幾筆二分搜尋
 pub fn plan_start(after: u64, oldest: u64) -> StartPlan {
-    if after == 0 || oldest == 0 || after < oldest {
+    if after == 0 || (oldest != 0 && after < oldest) {
         StartPlan::FromOldest
     } else {
         StartPlan::AtRecord(after)
@@ -41,9 +42,23 @@ pub enum ReadEnd {
     Failed,
 }
 
-/// 讀完後是否保留查詢(下個週期水位相同就接著讀,不重新查詢、不重新掃描)
-pub fn keep_cursor(end: ReadEnd) -> bool {
-    matches!(end, ReadEnd::Full | ReadEnd::TimedOut | ReadEnd::SkipBudget)
+/// 保留的查詢連續幾次「逾時且一筆都沒讀到」就丟掉重開
+pub const MAX_EMPTY_TIMEOUTS: u32 = 3;
+
+/// 讀完後是否保留查詢(下個週期水位相同就接著讀,不重新查詢、不重新掃描)。
+/// `empty_timeouts` = 含這次在內,連續逾時且沒讀到事件的次數
+pub fn keep_cursor(end: ReadEnd, empty_timeouts: u32) -> bool {
+    match end {
+        ReadEnd::Full | ReadEnd::SkipBudget => true,
+        ReadEnd::TimedOut => empty_timeouts < MAX_EMPTY_TIMEOUTS,
+        ReadEnd::Exhausted | ReadEnd::Failed => false,
+    }
+}
+
+/// 沿用保留的查詢卻一筆都沒讀到(呼叫端只在最新 RecordID > 水位時才讀,所以讀到結尾也算異常,
+/// 例:等待期間 Log 被清除或覆寫):當次重新定位一次
+pub fn should_reopen(reused: bool, got_events: bool, end: ReadEnd) -> bool {
+    reused && !got_events && matches!(end, ReadEnd::Exhausted | ReadEnd::Failed)
 }
 
 /// 保留的查詢能不能接著用:查詢停在 `cursor_after` 之後,這次要讀 `after` 之後
@@ -69,6 +84,41 @@ pub fn bookmark_xml(log_name: &str, record_id: u64) -> String {
     )
 }
 
+/// `[lo, hi)` 中第一個讓 `pred` 成立的值(`pred` 須單調:先 false 後 true);都不成立回 `hi`。
+/// 讀取次數約 log2(hi - lo)。
+pub fn lower_bound<E>(
+    lo: u64,
+    hi: u64,
+    mut pred: impl FnMut(u64) -> Result<bool, E>,
+) -> Result<u64, E> {
+    let (mut lo, mut hi) = (lo, hi);
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if pred(mid)? {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    Ok(lo)
+}
+
+/// 書籤定位失敗時的退路:依「第幾筆」(0 起算,共 `count` 筆)二分搜尋第一筆 RecordID > `after` 的位置。
+/// 同一個 Log 內 RecordID 隨位置遞增,有跳號也成立。回傳往前退 [`POSITION_MARGIN`] 筆的位置
+/// (搜尋期間 Log 被覆寫、位置往前移時不漏讀;多讀的由呼叫端丟掉 ≤ 水位的事件)。
+pub fn seek_position_after<E>(
+    count: u64,
+    after: u64,
+    id_at: impl FnMut(u64) -> Result<u64, E>,
+) -> Result<u64, E> {
+    let mut id_at = id_at;
+    let pos = lower_bound(0, count, |p| Ok(id_at(p)? > after))?;
+    Ok(pos.saturating_sub(POSITION_MARGIN))
+}
+
+/// 第幾筆定位往前多退的筆數
+pub const POSITION_MARGIN: u64 = 256;
+
 /// 首次啟動往回讀:時間 ≥ `since_ms` 的第一筆 RecordID(沒有就 None)。
 ///
 /// 在 `[oldest, newest]` 依 RecordID 二分搜尋,`time_at(id)` 讀那一筆的時間;最多約 log2(筆數) + 1 次
@@ -86,17 +136,8 @@ pub fn first_id_since<E>(
     if time_at(newest)? < since_ms {
         return Ok(None);
     }
-    // 不變式:time(hi) ≥ since_ms,答案在 [lo, hi]
-    let (mut lo, mut hi) = (oldest, newest);
-    while lo < hi {
-        let mid = lo + (hi - lo) / 2;
-        if time_at(mid)? >= since_ms {
-            hi = mid;
-        } else {
-            lo = mid + 1;
-        }
-    }
-    Ok(Some(lo))
+    // time(newest) ≥ since_ms,答案在 [oldest, newest]
+    lower_bound(oldest, newest, |id| Ok(time_at(id)? >= since_ms)).map(Some)
 }
 
 #[cfg(test)]
@@ -116,18 +157,66 @@ mod tests {
     }
 
     #[test]
-    fn 起點_水位0或最舊不明就從最舊一筆() {
+    fn 起點_水位0從最舊一筆_最舊不明仍定位到水位() {
         assert_eq!(plan_start(0, 100), StartPlan::FromOldest);
-        assert_eq!(plan_start(500, 0), StartPlan::FromOldest);
+        assert_eq!(plan_start(0, 0), StartPlan::FromOldest);
+        // 取不到最舊 RecordID 時不從最舊一筆找水位(大型 Log 會卡住;審查 3)
+        assert_eq!(plan_start(500, 0), StartPlan::AtRecord(500));
     }
 
     #[test]
     fn 逾時與讀滿保留查詢_讀完與錯誤丟掉() {
-        assert!(keep_cursor(ReadEnd::TimedOut));
-        assert!(keep_cursor(ReadEnd::Full));
-        assert!(keep_cursor(ReadEnd::SkipBudget));
-        assert!(!keep_cursor(ReadEnd::Exhausted));
-        assert!(!keep_cursor(ReadEnd::Failed));
+        assert!(keep_cursor(ReadEnd::TimedOut, 1));
+        assert!(keep_cursor(ReadEnd::Full, 0));
+        assert!(keep_cursor(ReadEnd::SkipBudget, 0));
+        assert!(!keep_cursor(ReadEnd::Exhausted, 0));
+        assert!(!keep_cursor(ReadEnd::Failed, 0));
+    }
+
+    #[test]
+    fn 連續空逾時達上限就丟掉查詢() {
+        assert!(keep_cursor(ReadEnd::TimedOut, MAX_EMPTY_TIMEOUTS - 1));
+        assert!(!keep_cursor(ReadEnd::TimedOut, MAX_EMPTY_TIMEOUTS));
+    }
+
+    #[test]
+    fn 沿用查詢卻讀不到才當次重新定位() {
+        assert!(should_reopen(true, false, ReadEnd::Exhausted));
+        assert!(should_reopen(true, false, ReadEnd::Failed));
+        assert!(!should_reopen(true, true, ReadEnd::Exhausted));
+        assert!(!should_reopen(false, false, ReadEnd::Exhausted));
+        assert!(!should_reopen(true, false, ReadEnd::TimedOut));
+        assert!(!should_reopen(true, false, ReadEnd::Full));
+    }
+
+    #[test]
+    fn 二分搜尋上下界() {
+        assert_eq!(lower_bound::<()>(0, 10, |x| Ok(x >= 7)), Ok(7));
+        assert_eq!(lower_bound::<()>(0, 10, |_| Ok(true)), Ok(0));
+        assert_eq!(lower_bound::<()>(0, 10, |_| Ok(false)), Ok(10));
+        assert_eq!(lower_bound::<()>(5, 5, |_| panic!("不應讀取")), Ok(5));
+    }
+
+    #[test]
+    fn 依位置找水位_有跳號也找得到並往前多退() {
+        // 位置 p 的 RecordID:1000 起,位置 5000 之後跳號 +100
+        let id_at = |p: u64| -> Result<u64, ()> { Ok(if p < 5000 { 1000 + p } else { 1100 + p }) };
+        let mut probes = 0;
+        let pos = seek_position_after(1_000_000, 6_050, |p| {
+            probes += 1;
+            id_at(p)
+        })
+        .unwrap();
+        // 位置 4999 是 RecordID 5999,位置 5000 是 6100:第一筆 > 6050 在位置 5000
+        assert_eq!(pos, 5000 - POSITION_MARGIN);
+        assert!(probes <= 21, "probes = {probes}");
+        // 水位比全部都舊 → 位置 0;比全部都新 → count 往前退
+        assert_eq!(seek_position_after(100, 0, id_at), Ok(0));
+        assert_eq!(
+            seek_position_after(1000, u64::MAX, id_at),
+            Ok(1000 - POSITION_MARGIN)
+        );
+        assert_eq!(seek_position_after(0, 5, id_at), Ok(0));
     }
 
     #[test]

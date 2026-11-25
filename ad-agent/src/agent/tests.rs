@@ -527,7 +527,7 @@ fn 心跳帶security容量與wrap_risk() {
     assert_eq!(s["coverageHours"], 10.0);
     assert_eq!(s["wrapRisk"], true);
     assert_eq!(s["maxSizeMb"], 128.0);
-    assert_eq!(hb["agentVersion"], "0.1.0");
+    assert_eq!(hb["agentVersion"], VERSION);
     assert_eq!(hb["agent"]["statusOk"], true);
 }
 

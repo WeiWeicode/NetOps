@@ -18,10 +18,10 @@ use windows_sys::Win32::Foundation::{
 use windows_sys::Win32::System::EventLog::{
     EVT_HANDLE, EVT_VARIANT, EvtChannelLoggingConfigMaxSize, EvtClose, EvtCreateBookmark,
     EvtFormatMessage, EvtFormatMessageEvent, EvtGetChannelConfigProperty, EvtGetLogInfo,
-    EvtLogFileSize, EvtLogOldestRecordNumber, EvtNext, EvtOpenChannelConfig, EvtOpenChannelPath,
-    EvtOpenLog, EvtOpenPublisherMetadata, EvtQuery, EvtQueryChannelPath, EvtQueryForwardDirection,
-    EvtQueryReverseDirection, EvtRender, EvtRenderEventXml, EvtSeek, EvtSeekRelativeToBookmark,
-    EvtSeekStrict,
+    EvtLogFileSize, EvtLogNumberOfLogRecords, EvtLogOldestRecordNumber, EvtNext,
+    EvtOpenChannelConfig, EvtOpenChannelPath, EvtOpenLog, EvtOpenPublisherMetadata, EvtQuery,
+    EvtQueryChannelPath, EvtQueryForwardDirection, EvtQueryReverseDirection, EvtRender,
+    EvtRenderEventXml, EvtSeek, EvtSeekRelativeToBookmark, EvtSeekRelativeToFirst, EvtSeekStrict,
 };
 
 const ERROR_EVT_CHANNEL_NOT_FOUND: u32 = 15007;
@@ -29,10 +29,12 @@ const ERROR_EVT_UNRESOLVED_VALUE_INSERT: u32 = 15029;
 const ERROR_EVT_UNRESOLVED_PARAMETER_INSERT: u32 = 15030;
 const ERROR_EVT_MAX_INSERTS_REACHED: u32 = 15031;
 const ERROR_TIMEOUT: u32 = 1460;
-/// EvtNext 等待上限(毫秒):超過視為 Event Log 服務異常,回錯誤(主迴圈照常前進)
+/// EvtNext 等待上限(毫秒)。逾時:已讀到的事件先交出;一筆都沒讀到才回錯誤,查詢保留到下個週期接著等
+/// (連續 [`seek::MAX_EMPTY_TIMEOUTS`] 次才丟掉重開)
 const NEXT_TIMEOUT_MS: u32 = 10_000;
 const CHUNK: usize = 64;
-/// 一次 read_after 最多略過幾筆 ≤ 水位的事件(書籤定位失敗、改從最舊一筆找水位時);超過就保留查詢,下個週期接著找
+/// 一次 read_after 最多略過幾筆(≤ 水位或無法轉換的事件);超過就保留查詢,下個週期接著讀。
+/// 正常只會略過水位那一筆與第幾筆定位多退的 [`seek::POSITION_MARGIN`] 筆
 const SKIP_BUDGET: usize = 4096;
 const MAX_PUBLISHERS: usize = 256;
 /// 訊息緩衝上限(字元);送出前再截斷到 3,000 字
@@ -71,6 +73,8 @@ fn get_u64(f: impl FnOnce(*mut EVT_VARIANT, u32, *mut u32) -> i32) -> Option<u64
 struct Cursor {
     rs: Handle,
     after: u64,
+    /// 連續逾時且沒讀到事件的次數
+    empty_timeouts: u32,
 }
 
 /// `EvtNext` 的結果
@@ -106,18 +110,69 @@ impl WinEventLog {
         Ok(Some(log))
     }
 
-    /// 最舊一筆的 RecordID(0 = 不明或沒有事件);None = Channel 不存在
-    fn oldest_record_id(c: Channel) -> Result<Option<u64>, String> {
+    /// (最舊一筆的 RecordID, 筆數);取不到的值為 0。None = Channel 不存在
+    fn log_range(c: Channel) -> Result<Option<(u64, u64)>, String> {
         let Some(log) = Self::open_log(c)? else {
             return Ok(None);
         };
         // SAFETY:EVT_VARIANT 緩衝與大小一致
-        Ok(Some(
-            get_u64(|v, size, used| unsafe {
-                EvtGetLogInfo(log.0, EvtLogOldestRecordNumber, size, v, used)
-            })
-            .unwrap_or(0),
-        ))
+        let prop = |id| get_u64(|v, size, used| unsafe { EvtGetLogInfo(log.0, id, size, v, used) });
+        Ok(Some((
+            prop(EvtLogOldestRecordNumber).unwrap_or(0),
+            prop(EvtLogNumberOfLogRecords).unwrap_or(0),
+        )))
+    }
+
+    #[cfg(test)]
+    fn oldest_record_id(c: Channel) -> Result<Option<u64>, String> {
+        Ok(Self::log_range(c)?.map(|r| r.0))
+    }
+
+    /// 把查詢定位到第 `pos` 筆(0 起算;EvtSeekRelativeToFirst)
+    fn seek_to_position(rs: &Handle, c: Channel, pos: u64) -> Result<(), String> {
+        let offset = i64::try_from(pos).map_err(|_| format!("{} 位置 {pos} 過大", c.log_name()))?;
+        // SAFETY:rs 是有效的查詢控制代碼;不用書籤時 bookmark 為 0;timeout 保留參數必須為 0
+        let ok = unsafe { EvtSeek(rs.0, offset, 0, 0, EvtSeekRelativeToFirst | EvtSeekStrict) };
+        if ok == 0 {
+            return Err(format!(
+                "{} 定位到第 {pos} 筆失敗(錯誤 {})",
+                c.log_name(),
+                last_error()
+            ));
+        }
+        Ok(())
+    }
+
+    /// 讀目前位置的 1 筆:(RecordID, XML)
+    fn read_one(&self, rs: &Handle, c: Channel, at: &str) -> Result<(u64, String), String> {
+        let ev = self
+            .next(rs, c, 1)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| format!("{} 定位到{at}後讀不到事件", c.log_name()))?;
+        let xml = Self::render_xml(&ev)?;
+        let p = crate::parser::parse_event_xml(&xml)
+            .map_err(|e| format!("{} {at} XML 解析失敗:{e}", c.log_name()))?;
+        Ok((p.record_id, xml))
+    }
+
+    /// 書籤定位失敗時的退路:依第幾筆二分搜尋,把 `rs` 定位到第一筆 RecordID > `after` 之前一點
+    fn seek_after_by_position(
+        &self,
+        rs: &Handle,
+        c: Channel,
+        count: u64,
+        after: u64,
+    ) -> Result<(), String> {
+        let pos = seek::seek_position_after(count, after, |p| {
+            Self::seek_to_position(rs, c, p)?;
+            self.read_one(rs, c, &format!("第 {p} 筆")).map(|r| r.0)
+        })?;
+        if pos >= count {
+            // 沒有事件:留在結尾(EvtNext 回 NO_MORE_ITEMS)
+            return Ok(());
+        }
+        Self::seek_to_position(rs, c, pos)
     }
 
     /// 把查詢定位到 `record_id` 那一筆(下一次 EvtNext 回傳它);那一筆不存在時失敗(EvtSeekStrict)
@@ -145,9 +200,9 @@ impl WinEventLog {
     }
 
     /// 開一個新的增量查詢,定位到水位 `after`(含)附近;None = Channel 不存在。
-    /// 定位失敗(水位剛好被覆寫)時改從最舊一筆讀,呼叫端會丟掉 ≤ 水位的事件。
+    /// 書籤定位失敗(水位那一筆不存在)時改依第幾筆二分搜尋,不從最舊一筆線性掃描;呼叫端會丟掉 ≤ 水位的事件。
     fn open_after(&self, c: Channel, after: u64) -> Result<Option<Handle>, String> {
-        let Some(oldest) = Self::oldest_record_id(c)? else {
+        let Some((oldest, count)) = Self::log_range(c)? else {
             return Ok(None);
         };
         let Some(rs) = self.query_dir(c, "*", EvtQueryForwardDirection)? else {
@@ -155,14 +210,13 @@ impl WinEventLog {
         };
         match seek::plan_start(after, oldest) {
             StartPlan::FromOldest => Ok(Some(rs)),
-            StartPlan::AtRecord(id) => match Self::seek_to(&rs, c, id) {
-                Ok(()) => Ok(Some(rs)),
-                Err(e) => {
-                    log::warn!("{e};改從最舊一筆讀");
-                    drop(rs);
-                    self.query_dir(c, "*", EvtQueryForwardDirection)
+            StartPlan::AtRecord(id) => {
+                if let Err(e) = Self::seek_to(&rs, c, id) {
+                    log::warn!("{e};改依第幾筆定位(共 {count} 筆)");
+                    self.seek_after_by_position(&rs, c, count, after)?;
                 }
-            },
+                Ok(Some(rs))
+            }
         }
     }
 
@@ -177,31 +231,50 @@ impl WinEventLog {
         let mut out = Vec::new();
         let mut consumed = after;
         let mut skipped = 0usize;
-        while out.len() < max {
+        let mut render_failed = 0usize;
+        let mut last_render_err = String::new();
+        let end = loop {
+            if out.len() >= max {
+                break (ReadEnd::Full, None);
+            }
+            // 一個 chunk 整批處理完才檢查略過上限:查詢已越過這些事件,中途返回會漏讀(審查 1)
+            if skipped + render_failed >= SKIP_BUDGET {
+                log::info!(
+                    "{} 本週期略過 {skipped} 筆 ≤ 水位 {after}、{render_failed} 筆無法轉換,下個週期接著讀",
+                    c.log_name()
+                );
+                break (ReadEnd::SkipBudget, None);
+            }
             let evs = match self.next_ex(rs, c, CHUNK.min(max - out.len())) {
                 Ok(Next::Events(evs)) => evs,
-                Ok(Next::NoMore) => return (out, consumed, ReadEnd::Exhausted, None),
+                Ok(Next::NoMore) => break (ReadEnd::Exhausted, None),
                 Ok(Next::TimedOut) => {
-                    let e = format!("讀取 {} 逾時", c.log_name());
-                    return (out, consumed, ReadEnd::TimedOut, Some(e));
+                    let e = if out.is_empty() {
+                        format!("讀取 {} 逾時", c.log_name())
+                    } else {
+                        format!(
+                            "讀取 {} 逾時(先送出已讀到的 {} 筆)",
+                            c.log_name(),
+                            out.len()
+                        )
+                    };
+                    break (ReadEnd::TimedOut, Some(e));
                 }
-                Err(e) => return (out, consumed, ReadEnd::Failed, Some(e)),
+                Err(e) => break (ReadEnd::Failed, Some(e)),
             };
             for ev in evs {
                 let xml = match Self::render_xml(&ev) {
                     Ok(x) => x,
                     Err(e) => {
-                        log::warn!("{} {e},略過一筆", c.log_name());
+                        render_failed += 1;
+                        last_render_err = e;
                         continue;
                     }
                 };
-                // 定位到水位那一筆、或從最舊一筆找水位時:丟掉 ≤ 水位的事件(不算在 max 內,但有上限)
+                // 定位到水位那一筆、或第幾筆定位多退的事件:丟掉 ≤ 水位的(不算在 max 內,但有上限)
                 if let Ok(p) = crate::parser::parse_event_xml(&xml) {
                     if p.record_id <= after {
                         skipped += 1;
-                        if skipped >= SKIP_BUDGET {
-                            return (out, consumed, ReadEnd::SkipBudget, None);
-                        }
                         continue;
                     }
                     consumed = consumed.max(p.record_id);
@@ -210,8 +283,15 @@ impl WinEventLog {
                 let message = self.format_message(&ev, &provider);
                 out.push(RawEvent { xml, message });
             }
+        };
+        if render_failed > 0 {
+            // 彙總成一行,不逐筆寫日誌(資安審查 L-1)
+            log::warn!(
+                "{} 有 {render_failed} 筆事件無法轉換,略過(最後一個錯誤:{last_render_err})",
+                c.log_name()
+            );
         }
-        (out, consumed, ReadEnd::Full, None)
+        (out, consumed, end.0, end.1)
     }
 
     /// None = Channel 不存在
@@ -443,34 +523,41 @@ impl EventSource for WinEventLog {
         // 上個週期讀滿或逾時、水位相同:接著用同一個查詢,不重新查詢
         let kept = self.cursors.remove(&c);
         let reused = seek::can_reuse(kept.as_ref().map(|k| k.after), after);
-        let mut rs = match kept {
-            Some(k) if reused => k.rs,
+        let (mut rs, mut empty_timeouts) = match kept {
+            Some(k) if reused => (k.rs, k.empty_timeouts),
             _ => match self.open_after(c, after)? {
-                Some(rs) => rs,
+                Some(rs) => (rs, 0),
                 None => return Ok(Vec::new()),
             },
         };
         let (mut out, mut consumed, mut end, mut err) = self.drain(&rs, c, after, max);
-        if reused && end == ReadEnd::Failed && out.is_empty() {
-            // 保留的查詢失效(例:等待期間 Log 被覆寫或清除):重新定位一次
+        if seek::should_reopen(reused, !out.is_empty(), end) {
+            // 保留的查詢讀不到事件(例:等待期間 Log 被覆寫或清除):當次重新定位一次(審查 2)
             log::warn!(
-                "{} 保留的查詢無法使用({}),重新定位",
+                "{} 保留的查詢讀不到事件({}),重新定位",
                 c.log_name(),
-                err.as_deref().unwrap_or("")
+                err.as_deref().unwrap_or("已到結尾")
             );
             drop(rs);
             rs = match self.open_after(c, after)? {
                 Some(rs) => rs,
                 None => return Ok(Vec::new()),
             };
+            empty_timeouts = 0;
             (out, consumed, end, err) = self.drain(&rs, c, after, max);
         }
-        if seek::keep_cursor(end) {
+        empty_timeouts = if end == ReadEnd::TimedOut && out.is_empty() {
+            empty_timeouts.saturating_add(1)
+        } else {
+            0
+        };
+        if seek::keep_cursor(end, empty_timeouts) {
             self.cursors.insert(
                 c,
                 Cursor {
                     rs,
                     after: consumed,
+                    empty_timeouts,
                 },
             );
         }
@@ -478,7 +565,7 @@ impl EventSource for WinEventLog {
             // 已讀到的事件先交出去(水位照常前進);沒讀到才回錯誤,查詢保留到下個週期
             Some(e) if out.is_empty() => Err(e),
             Some(e) => {
-                log::warn!("{e},先送出已讀到的 {} 筆", out.len());
+                log::warn!("{e}");
                 Ok(out)
             }
             None => Ok(out),
@@ -486,7 +573,7 @@ impl EventSource for WinEventLog {
     }
 
     fn first_record_since(&mut self, c: Channel, since_ms: i64) -> Result<Option<u64>, String> {
-        let Some(oldest) = Self::oldest_record_id(c)? else {
+        let Some((oldest, count)) = Self::log_range(c)? else {
             return Ok(None);
         };
         let Some(newest) = self.newest_record_id(c)? else {
@@ -495,27 +582,40 @@ impl EventSource for WinEventLog {
         let Some(rs) = self.query_dir(c, "*", EvtQueryForwardDirection)? else {
             return Ok(None);
         };
+        let time_of = |id: u64, xml: &str| {
+            crate::parser::event_time_ms(xml)
+                .ok_or_else(|| format!("{} RecordID {id} 沒有時間", c.log_name()))
+        };
         // 依 RecordID 二分搜尋,每次以書籤定位讀 1 筆的時間(不用 timediff 掃整個 Log)
-        seek::first_id_since(oldest, newest, since_ms, |id| {
+        let by_id = seek::first_id_since(oldest, newest, since_ms, |id| {
             Self::seek_to(&rs, c, id)?;
-            let ev = self
-                .next(&rs, c, 1)?
-                .into_iter()
-                .next()
-                .ok_or_else(|| format!("{} 定位到 RecordID {id} 後讀不到事件", c.log_name()))?;
-            let xml = Self::render_xml(&ev)?;
-            let p = crate::parser::parse_event_xml(&xml)
-                .map_err(|e| format!("{} RecordID {id} XML 解析失敗:{e}", c.log_name()))?;
-            if p.record_id != id {
+            let (got, xml) = self.read_one(&rs, c, &format!(" RecordID {id} "))?;
+            if got != id {
                 return Err(format!(
-                    "{} 定位到 RecordID {id} 卻讀到 {}",
-                    c.log_name(),
-                    p.record_id
+                    "{} 定位到 RecordID {id} 卻讀到 {got}",
+                    c.log_name()
                 ));
             }
-            crate::parser::event_time_ms(&xml)
-                .ok_or_else(|| format!("{} RecordID {id} 沒有時間", c.log_name()))
-        })
+            time_of(got, &xml)
+        });
+        match by_id {
+            Ok(r) => Ok(r),
+            Err(e) => {
+                // 搜尋期間 Log 被覆寫、RecordID 有跳號等:改依第幾筆二分搜尋(審查 4)
+                log::warn!("{e};往回找起點改依第幾筆搜尋(共 {count} 筆)");
+                let pos = seek::lower_bound(0, count, |p| -> Result<bool, String> {
+                    Self::seek_to_position(&rs, c, p)?;
+                    let (id, xml) = self.read_one(&rs, c, &format!("第 {p} 筆"))?;
+                    Ok(time_of(id, &xml)? >= since_ms)
+                })?;
+                if pos >= count {
+                    return Ok(None);
+                }
+                Self::seek_to_position(&rs, c, pos)?;
+                self.read_one(&rs, c, &format!("第 {pos} 筆"))
+                    .map(|r| Some(r.0))
+            }
+        }
     }
 
     fn oldest_event_ms(&mut self, c: Channel) -> Result<Option<i64>, String> {
@@ -611,6 +711,33 @@ mod tests {
         if e.len() < 1000 {
             assert!(!w.cursors.contains_key(&Channel::System));
         }
+    }
+
+    /// 0.1.1:書籤定位失敗時的退路(第幾筆二分搜尋)在真的 Log 上定位正確
+    #[test]
+    fn 依第幾筆定位_本機system_log() {
+        let mut w = WinEventLog::new();
+        let (oldest, count) = WinEventLog::log_range(Channel::System).unwrap().unwrap();
+        let newest = w.newest_record_id(Channel::System).unwrap().unwrap();
+        if count < 20 {
+            return;
+        }
+        let after = newest - 5;
+        let rs = w
+            .query_dir(Channel::System, "*", EvtQueryForwardDirection)
+            .unwrap()
+            .unwrap();
+        // 不存在的 RecordID 書籤定位會失敗(Strict)
+        assert!(WinEventLog::seek_to(&rs, Channel::System, newest + 1_000_000).is_err());
+        w.seek_after_by_position(&rs, Channel::System, count, after)
+            .unwrap();
+        let (evs, consumed, end, err) = w.drain(&rs, Channel::System, after, 100);
+        assert!(err.is_none(), "{err:?}");
+        assert_eq!(end, ReadEnd::Exhausted);
+        let got = ids(&evs);
+        assert!(!got.is_empty() && got[0] > after && got.iter().all(|id| *id > after));
+        assert!(consumed >= newest);
+        assert!(oldest <= after);
     }
 
     /// 0.1.1:往回找改二分搜尋;結果的前一筆時間早於 since

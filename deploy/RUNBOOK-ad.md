@@ -136,7 +136,7 @@ $C exec -T netops-redis redis-cli del netops:ad:heartbeat:<COMPUTER> netops:ad:r
 ### 7.0 共用:取得執行檔與雜湊
 
 1. 發佈資料夾來源(擇一):
-   - CI(正式做法):需求方在 develop 上建立 tag `netops-ad-v<Cargo.toml 版本>`(例 `netops-ad-v0.1.0`),tag pipeline 的 `build:ad-agent` 自動執行 → 下載 artifact `release-out/`。job 記錄最後一行是 `-ExpectedSha256` 的值。
+   - CI(正式做法):需求方在 develop 上建立 tag `netops-ad-v<Cargo.toml 版本>`(例 `netops-ad-v0.1.1`;`netops-ad-v0.1.0` 已用過,不可重用。0.1.1 修正大型 Security Log 讀取逾時,GSMC-DC1 以 0.1.1 升級安裝),tag pipeline 的 `build:ad-agent` 自動執行 → 下載 artifact `release-out/`。job 記錄最後一行是 `-ExpectedSha256` 的值。
      前提(需求方在 GitLab 設定):`host2-windows` Runner 指派給 `giganexus/NetOps`;`netops-ad-v*` 設為 **Protected tag**(只有 Maintainer 能建立)。分支 / MR 的 `check:ad-agent` 只跑測試、不產出 exe,**DC 只安裝受保護 tag pipeline 的產物**(資安審查 M-3)。
    - 測試 VM 可用開發機建置(需求方自己的電腦;不要用在 GSMC-DC1):在 NetOps repo 根目錄執行下面指令,輸出在 `release-out\`:
      ```powershell

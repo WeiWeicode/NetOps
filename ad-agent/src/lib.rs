@@ -13,6 +13,7 @@ pub mod http;
 pub mod logging;
 pub mod outbox;
 pub mod parser;
+pub mod seek;
 pub mod status;
 pub mod watchdog;
 

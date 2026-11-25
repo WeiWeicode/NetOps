@@ -1,6 +1,6 @@
 [package]
 name = "netops-ad-agent"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "NetOps AD Agent 與 Watchdog(AD-2;docs/AD-AGENT-PLAN.md §3、ARCHITECTURE D49):DC 上增量讀 Windows Event Log 送到 netops-ad-receiver"
 publish = false
